@@ -12,6 +12,13 @@ import type { FromWorklet, ToWorklet } from './protocol.ts';
 /** The port HO[LO] Engine listens on, on 127.0.0.1 only. */
 export const COMPANION_PORT = 47830;
 
+/**
+ * How deep the device's buffer is, as a multiple of its shortest period: 1 (the lowest latency), 2
+ * or 4. The companion chooses it from how the device behaves and remembers it; the studio's latency
+ * setting puts a floor under it (Lowest 1, Balanced 2, Safe 4).
+ */
+export type Depth = 1 | 2 | 4;
+
 /** The companion's sound device, as it opened it. */
 export interface CompanionDevice {
   /** The device's own rate: the studio compiles the song (and decodes its samples) at it. */
@@ -19,6 +26,8 @@ export interface CompanionDevice {
   /** Frames the device asks for at a time, and the frames it holds before they're heard. */
   period: number;
   buffer: number;
+  /** The period as a multiple of the device's shortest: deeper after trouble (see Depth). */
+  depth: Depth;
   /** 'exclusive': WASAPI exclusive mode; 'shared': the OS mixer (in its low-latency mode where it has one). */
   mode: 'exclusive' | 'shared';
   /** miniaudio's name for the audio API: WASAPI, Core Audio, ALSA, PulseAudio, JACK, Null. */
@@ -44,6 +53,10 @@ export interface CompanionStats {
   underruns: number;
   /** Frames rendered ahead of the device: 0 while it keeps up, more after underruns. */
   cushion: number;
+  /** How it's buffering and why, in words ("deepened after the device ran short"). */
+  why: string;
+  /** The floor the studio's latency setting puts under the depth. */
+  floor: Depth;
   /**
    * Rendering ahead on its own worker threads: each one's share of a block's time (smoothed), and
    * the blocks the render thread waited for them (played as silence) since it started.
@@ -53,8 +66,12 @@ export interface CompanionStats {
 
 export type ToCompanion =
   | ToWorklet
-  /** Open the sound and the MIDI devices (the studio that sends it takes the companion over). */
-  | { type: 'open'; exclusive: boolean }
+  /**
+   * Open the sound and the MIDI devices (the studio that sends it takes the companion over). `floor`
+   * is the studio's latency setting as a depth; `manual` marks the user's own choice of mode, which
+   * stands over what failed before.
+   */
+  | { type: 'open'; exclusive: boolean; floor?: Depth; manual?: boolean }
   /** Where live MIDI goes: the same rule the studio follows with the browser's own MIDI. */
   | { type: 'routes'; routes: LiveRoutes }
   /** The round trip, measured natively: clicks out of the speakers, heard by the default microphone. */

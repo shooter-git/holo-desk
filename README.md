@@ -108,7 +108,7 @@ finds, as they're plugged in. Notes go where the browser would send them: armed 
 channel, else the selected track. What you play comes back to the studio, timed as you heard it, for
 recording. On Windows it has the sound device to itself while the studio is open (exclusive mode: other
 apps are silent); tick **Share the sound device with other apps** in Audio & MIDI settings to let them
-play too, for a few milliseconds more. [Latency and devices](docs/latency-and-devices.md#holo-engine)
+play too, for a few milliseconds more. How deep it buffers is its own business: it keeps a period in hand, deepens when the device runs short or the computer comes close, opens the device at a longer period when that persists, and remembers what each device needed. [Latency and devices](docs/latency-and-devices.md#holo-engine)
 has the details.
 
 From the repository: `pnpm engine:build` once (it needs [Zig 0.16](https://ziglang.org/download/), or a

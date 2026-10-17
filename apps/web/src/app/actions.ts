@@ -312,6 +312,7 @@ export function ensureAudio(): Promise<void> {
 
 export async function setLatencyMode(mode: AppStateLatency): Promise<void> {
   store.set({ latencyMode: mode, roundTrip: null });
+  companion.setFloor(mode);
   if (engine.ctx) {
     await engine.start(mode);
     engine.setMetronome(store.get().metronome);
@@ -354,6 +355,7 @@ export function findCompanion(): void {
     if (store.get().playing) stop();
     await engine.close();
   };
+  companion.setFloor(store.get().latencyMode);
   void companion.find(!store.get().shareDevice);
 }
 

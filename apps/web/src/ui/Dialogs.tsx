@@ -190,7 +190,7 @@ function DspReadout() {
     const block = (128 / engine.sampleRate) * 1000;
     if (line.current)
       line.current.textContent = d.fine
-        ? `${Math.round(d.load * 100)}% average, ${Math.round(d.peak * 100)}% peak, ${d.overloads} overload${d.overloads === 1 ? '' : 's'} (blocks of ${block.toFixed(1)} ms)`
+        ? `${Math.round(d.load * 100)}% average, ${Math.round(d.peak * 100)}% peak, ${d.overloads} overload${d.overloads === 1 ? '' : 's'} (${engine.remote ? 'periods' : 'blocks'} of ${block.toFixed(1)} ms)`
         : `${Math.round(d.load * 100)}% average (this browser's audio thread can't time a single block, so no peak)`;
     if (ahead.current)
       ahead.current.textContent = d.ahead
@@ -261,9 +261,16 @@ function EngineLink() {
         <span style={{ fontWeight: 600 }}>HO[LO] Engine</span>
         <span className="muted">
           plays this studio through {d.name}: {d.backend} {d.mode === 'exclusive' ? 'exclusive mode' : 'shared'},{' '}
-          {d.rate} Hz, {ms(d.period)} ms period
+          {d.rate} Hz, {ms(d.period)} ms period{d.depth > 1 ? ` (${d.depth}× its shortest)` : ''}
         </span>
       </div>
+      {c.stats?.why && (
+        <span className="muted" style={{ fontSize: 11 }}>
+          Buffering: {c.stats.why}. It deepens by itself when the device runs short or this computer comes close, never
+          again below what ran short, and remembers what this device needed. Lowest, Balanced and Safe (above) are a
+          floor under that.
+        </span>
+      )}
       {d.backend === 'WASAPI' && (
         <label
           className="hstack"

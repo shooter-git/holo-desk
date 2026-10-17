@@ -11,6 +11,7 @@ import {
   type CompanionDevice,
   type CompanionPort,
   type CompanionStats,
+  type Depth,
   decodeMessage,
   encodeMessage,
   type FromCompanion,
@@ -41,6 +42,8 @@ class Companion {
   private snap: CompanionSnapshot = { device: null, ports: [], stats: null, version: '', note: null, looking: false };
   private ws: WebSocket | null = null;
   private exclusive = true;
+  /** The studio's latency setting as a floor under the companion's buffer depth. */
+  private floor: Depth = 1;
   private routes: LiveRoutes = { armed: [], selected: null };
   private retry = 2000;
   private timer = 0;
@@ -92,7 +95,14 @@ class Companion {
   /** Exclusive mode (the lowest latency, no other app's sound) or the shared device. */
   setExclusive(on: boolean): void {
     this.exclusive = on;
-    if (this.snap.device) this.send({ type: 'open', exclusive: on });
+    if (this.snap.device) this.send({ type: 'open', exclusive: on, floor: this.floor, manual: true });
+  }
+  /** The studio's latency setting: Lowest lets the companion start at the shortest period; Balanced and Safe start deeper. */
+  setFloor(mode: 'lowest' | 'balanced' | 'safe'): void {
+    const floor: Depth = mode === 'safe' ? 4 : mode === 'balanced' ? 2 : 1;
+    if (floor === this.floor) return;
+    this.floor = floor;
+    if (this.snap.device) this.send({ type: 'open', exclusive: this.exclusive, floor });
   }
 
   /** Where live MIDI from its devices goes (sent again whenever it connects). */
@@ -161,7 +171,7 @@ class Companion {
       case 'hello':
         this.set({ version: msg.version, note: null });
         void (this.beforeOpen?.() ?? Promise.resolve()).finally(() =>
-          this.send({ type: 'open', exclusive: this.exclusive }),
+          this.send({ type: 'open', exclusive: this.exclusive, floor: this.floor }),
         );
         return;
       case 'device':

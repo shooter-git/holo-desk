@@ -5,6 +5,7 @@
  * is open.
  */
 import { type MessagePort, receiveMessageOnPort, workerData } from 'node:worker_threads';
+import { fileMemory, inMemory } from './memory.ts';
 import { loadNative } from './native.ts';
 import { Renderer, type ToRenderer } from './renderer.ts';
 import { warmUp } from './warmup.ts';
@@ -16,6 +17,8 @@ export interface RenderData {
   doorbell: SharedArrayBuffer;
   nullAudio: boolean;
   shared: boolean;
+  /** Where each device's buffer depth is remembered (null: this run only). */
+  memoryPath: string | null;
 }
 
 const data = workerData as RenderData;
@@ -23,11 +26,14 @@ const { port } = data;
 const native = loadNative(data.addon);
 const log = (line: string) => port.postMessage({ type: 'log', line });
 const priority = native.boost();
+const memory = data.memoryPath ? fileMemory(data.memoryPath) : inMemory();
 const renderer = new Renderer(native, (msg, transfer) => port.postMessage(msg, transfer ?? []), {
   nullAudio: data.nullAudio,
   shared: data.shared,
+  memory,
   log,
 });
+if (memory.where) log(`What each sound device needs is remembered in ${memory.where}`);
 // before anyone listens: every instrument and plugin played once, so none is slow the first time
 const warm = warmUp(300);
 log(`Render thread ready (${priority}; the engine warmed up in ${(warm / 1000).toFixed(1)} s)`);

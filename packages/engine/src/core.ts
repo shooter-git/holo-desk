@@ -1503,8 +1503,11 @@ export class EngineCore implements Host {
   private loadPeak = 0;
   private overloads = 0;
 
+  /** Frames a block has to be rendered in, when it isn't the block itself (HO[LO] Engine: the device's period). */
+  budgetFrames: number | null = null;
+
   private measure(ms: number, n: number): void {
-    const budget = (n / this.sr) * 1000;
+    const budget = ((this.budgetFrames ?? n) / this.sr) * 1000;
     const share = ms / budget;
     // about half a second to settle; the peak falls back over about a second and a half
     const blocksPerSecond = this.sr / n;

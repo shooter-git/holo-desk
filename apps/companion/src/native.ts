@@ -7,6 +7,8 @@ export interface OpenedDevice {
   rate: number;
   period: number;
   buffer: number;
+  /** The period as a multiple of the device's shortest (exclusive mode) or of a block: as asked. */
+  depth: number;
   exclusive: boolean;
   backend: string;
   name: string;
@@ -21,8 +23,11 @@ export interface NativePort {
 }
 
 export interface Native {
-  /** The default output at its own rate; WASAPI exclusive mode when asked (and it can). Throws when it can't. */
-  audioOpen(opts: { exclusive: boolean; null?: boolean }): OpenedDevice;
+  /**
+   * The default output at its own rate; WASAPI exclusive mode when asked (and it can), at `depth`
+   * times its shortest period (elsewhere, `depth` blocks a period). Throws when it can't.
+   */
+  audioOpen(opts: { exclusive: boolean; depth?: 1 | 2 | 4; null?: boolean }): OpenedDevice;
   audioClose(): void;
   /** Frames to render now: what a waiting callback needs, or the cushion to top up (waits up to `ms` for either). */
   renderWait(ms: number): number;

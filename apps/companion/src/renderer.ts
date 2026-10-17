@@ -6,29 +6,41 @@
  * It runs on a worker thread of its own (render.ts) and takes the studio's messages between blocks.
  * When the song is rendered ahead (ahead.ts), workers play it and this plays the master and every
  * live note, as the studio's audio thread does (@holo/engine's AheadPlayer).
+ *
+ * How deep it buffers is its own business, not the user's: it keeps a period in hand, more when its
+ * own blocks come close to the period or the device runs short, never again less than what ran
+ * short on this device; it opens the device at a longer period (twice, then four times its
+ * shortest) when running short or stopping persists, shares the device when even that fails, and
+ * remembers what each device needed for the next time (memory.ts). The studio's latency setting is
+ * a floor under all of that.
  */
 import { AheadLink, AheadPlayer, EngineCore, METER_FLOATS } from '@holo/engine';
 import {
   type CompanionDevice,
   type CompanionPort,
+  type Depth,
   type FromCompanion,
   type LiveRoutes,
   routeLive,
   type ToCompanion,
 } from '@holo/engine/companion';
+import type { DeviceMemory } from './memory.ts';
 import type { Native, OpenedDevice } from './native.ts';
 
 const BLOCK = 128;
 /**
  * Frames rendered ahead of the device: one period to start with (a block late is then still in
- * time), a block more each time it runs short after that, up to MAX_LEVEL.
+ * time), a block more each time it runs short or comes close after that, up to MAX_LEVEL.
  */
 const MIN_LEVEL = 1;
 const MAX_LEVEL = 4;
 /** A message that takes this long (ms) is the studio handing over a song: the device may run short meanwhile. */
 const BUSY_MS = 1;
-/** Without running short for this long (µs), the cushion comes down a step. */
-const CALM_US = 30e6;
+/** Without trouble for this long (µs), the cushion comes down a step: minutes, not seconds. */
+const CALM_US = 300e6;
+/** The render thread's slowest block taking this share of the period, this many stats in a row, deepens the cushion early. */
+const HOT_SHARE = 0.7;
+const HOT_HOLD = 2;
 
 export type Post = (msg: FromCompanion, transfer?: ArrayBuffer[]) => void;
 
@@ -43,7 +55,14 @@ export interface RendererOptions {
   nullAudio?: boolean;
   /** Overrides what the studio asks for: shared mode always. */
   shared?: boolean;
+  /** What each device needed last time (none: nothing is remembered). */
+  memory?: DeviceMemory;
   log?: (line: string) => void;
+}
+
+/** The next depth up: twice the shortest period, then four times. */
+function deeper(d: Depth): Depth {
+  return d === 1 ? 2 : 4;
 }
 
 export class Renderer {
@@ -53,6 +72,8 @@ export class Renderer {
   private link: AheadLink | null = null;
   private aheadWorkers = 0;
   private device: CompanionDevice | null = null;
+  /** What the studio asked for, and what the device is open as. */
+  private asked = true;
   private exclusive = false;
   /** Engine frames rendered so far: the engine's clock (its "context frame"). */
   private rendered = 0;
@@ -77,6 +98,26 @@ export class Renderer {
   private nextReopen = 0;
   private underrunsSeen = 0;
   private level = MIN_LEVEL;
+  /** Never again below this: the level after one that ran short on this device (this session). */
+  private minLevel = MIN_LEVEL;
+  /** The device's period as a multiple of its shortest, and the floor the studio's latency setting puts under it. */
+  private depth: Depth = 1;
+  private floor: Depth = 1;
+  /** The depth that ran short or stopped on this device (0: none yet): it's never opened that shallow again. */
+  private failedDepth = 0;
+  /** Times the device stopped under an exclusive stream, this device. */
+  private stops = 0;
+  /** Shared because exclusive mode kept failing (until the user chooses exclusive again). */
+  private sharedByForce = false;
+  /** The studio's current message is the user's own choice of mode. */
+  private manual = false;
+  /** Backend and name of the device open now: what the memory is kept by. */
+  private deviceKey = '';
+  /** How it's buffering and why, in words. */
+  private why = '';
+  /** The render thread's slowest block (ms) since the last stats, and how long it has been close to the period. */
+  private peakMs = 0;
+  private hot = 0;
   /** Until then, running short isn't the device's fault (a song arriving, the device just opened). */
   private quietUntil = 0;
   private calmSince = 0;
@@ -106,9 +147,18 @@ export class Renderer {
 
   private handle(msg: ToRenderer): void {
     switch (msg.type) {
-      case 'open':
-        this.openDevice(msg.exclusive && !this.opts.shared);
+      case 'open': {
+        const floor: Depth = msg.floor === 2 || msg.floor === 4 ? msg.floor : 1;
+        const changed = floor !== this.floor;
+        this.floor = floor;
+        this.asked = msg.exclusive && !this.opts.shared;
+        this.manual = msg.manual === true;
+        // the user's own choice of exclusive mode stands over what failed before
+        if (this.manual && this.asked) this.sharedByForce = false;
+        this.openDevice(changed || this.manual);
+        this.manual = false;
         return;
+      }
       case 'close':
         this.closeAll();
         return;
@@ -163,13 +213,16 @@ export class Renderer {
       this.takeMidi(core);
       if (this.input) this.native.inputRead(this.input[0] as Float32Array, this.input[1] as Float32Array);
       const player = this.player;
+      const t0 = performance.now();
       if (player) {
         const taken = player.taken;
-        const t0 = performance.now();
         player.process(this.left, this.right, this.input ?? undefined, this.rendered);
         // the studio's messages are taken in here, before the block they belong to: a song arriving
         if (player.taken !== taken && performance.now() - t0 > BUSY_MS) this.quietUntil = this.native.now() + 1e6;
       } else core.process(this.left, this.right, this.input ?? undefined, this.rendered);
+      // how close this thread comes to the period: what deepens the cushion before anything is heard
+      const took = performance.now() - t0;
+      if (took > this.peakMs) this.peakMs = took;
       this.native.renderWrite(this.left, this.right);
       this.rendered += BLOCK;
     }
@@ -231,13 +284,8 @@ export class Renderer {
       // the device went away (unplugged, or another app took it), or the system plays through another
       // one now: open the default one again
       this.nextReopen = now + 1e6;
-      this.log(lost ? 'The sound device stopped: opening it again' : 'The default output changed: opening it');
-      const input = this.input !== null;
-      this.input = null;
-      this.native.audioClose();
-      this.device = null;
-      this.openDevice(this.exclusive);
-      this.setInput(input);
+      if (lost && this.exclusive) this.afterStop();
+      this.reopen(lost ? 'The sound device stopped: opening it again' : 'The default output changed: opening it');
       return;
     }
     if (now >= this.nextStats) {
@@ -253,6 +301,8 @@ export class Renderer {
             : null,
           underruns: this.status[1] as number,
           cushion: this.cushion(),
+          why: this.why,
+          floor: this.floor,
           ...(this.link ? { ahead: this.aheadStats(this.link) } : {}),
         },
       });
@@ -260,30 +310,97 @@ export class Renderer {
   }
 
   /**
-   * When the device runs short while playing (not while a song arrives), keep more rendered ahead;
-   * after a calm half minute, a step less again.
+   * Buffering, decided here and nowhere else: when the device runs short while playing (not while a
+   * song arrives), or this thread's blocks come close to the period, keep more rendered ahead, and
+   * never again less than what ran short; when the deepest cushion still runs short, open the device
+   * at a longer period, and share it when even that fails. After a calm five minutes, a step less.
    */
   private adapt(now: number): void {
+    const device = this.device;
+    if (!device) return;
     const underruns = this.status[1] as number;
     const fresh = underruns - this.underrunsSeen;
     this.underrunsSeen = underruns;
+    const periodMs = (device.period / device.rate) * 1000;
+    const close = this.peakMs > HOT_SHARE * periodMs;
+    this.peakMs = 0;
     if (now < this.quietUntil || now - this.openedAt < 1e6) {
       this.calmSince = now;
+      this.hot = 0;
       return;
     }
     if (fresh > 0) {
       this.calmSince = now;
+      this.hot = 0;
+      this.minLevel = Math.min(MAX_LEVEL, Math.max(this.minLevel, this.level + 1));
       if (this.level < MAX_LEVEL) {
         this.level++;
         this.native.setCushion(this.cushion());
-        this.log(`The sound ran short ${fresh} time(s): now rendering ${this.cushion()} frames ahead`);
+        this.why = 'deepened after the device ran short';
+        this.log(
+          `The sound ran short ${fresh} time${fresh === 1 ? '' : 's'}: now rendering ${this.cushion()} frames ahead, and never less than that on this device today`,
+        );
+        this.remember();
+      } else {
+        this.failedDepth = this.depth;
+        if (this.exclusive && this.depth < 4) {
+          this.why = 'deepened after the device ran short';
+          this.reopen(
+            `The sound ran short ${fresh} time${fresh === 1 ? '' : 's'} even with ${this.cushion()} frames ahead: opening the device at a longer period`,
+          );
+        } else if (this.exclusive) {
+          this.sharedByForce = true;
+          this.why = 'shared, after exclusive mode kept running short on this device';
+          this.reopen('The sound still ran short at the longest period: sharing the device instead');
+        }
       }
-    } else if (this.level > MIN_LEVEL && now - this.calmSince > CALM_US) {
+      return;
+    }
+    if (close) {
+      if (++this.hot >= HOT_HOLD && this.level < MAX_LEVEL) {
+        this.hot = 0;
+        this.calmSince = now;
+        this.level++;
+        this.native.setCushion(this.cushion());
+        this.why = 'deepened before the device could run short';
+        this.log(
+          `The render thread came close to the period: now rendering ${this.cushion()} frames ahead, before anything is heard`,
+        );
+        this.remember();
+      }
+      return;
+    }
+    this.hot = 0;
+    if (this.level > this.minLevel && now - this.calmSince > CALM_US) {
       this.calmSince = now;
       this.level--;
       this.native.setCushion(this.cushion());
       this.log(`Steady for a while: now rendering ${this.cushion()} frames ahead`);
+      this.remember();
     }
+  }
+
+  /** The device stopped under an exclusive stream: the next open goes deeper, and after the deepest, shared. */
+  private afterStop(): void {
+    this.stops++;
+    this.failedDepth = this.depth;
+    if (this.depth < 4) {
+      this.why = 'deepened after the device stopped';
+    } else {
+      this.sharedByForce = true;
+      this.why = `shared, after the device stopped ${this.stops} times in exclusive mode`;
+    }
+  }
+
+  /** The device opened again as it now should be (the input along with it). */
+  private reopen(line: string): void {
+    this.log(line);
+    const input = this.input !== null;
+    this.input = null;
+    this.native.audioClose();
+    this.device = null;
+    this.openDevice(true);
+    this.setInput(input);
   }
 
   private aheadStats(link: AheadLink): { loads: number[]; stalls: number } {
@@ -295,8 +412,37 @@ export class Renderer {
     return this.level === 0 ? 0 : period + (this.level - 1) * BLOCK;
   }
 
-  private openDevice(exclusive: boolean): void {
-    if (this.device && this.exclusive === exclusive) {
+  private remembered(key = this.deviceKey) {
+    return key && this.opts.memory ? this.opts.memory.get(key) : null;
+  }
+
+  private remember(): void {
+    const m = this.opts.memory;
+    if (!m || !this.deviceKey) return;
+    m.set(this.deviceKey, { depth: this.depth, level: this.level, shared: this.sharedByForce });
+  }
+
+  /** The depth to open at: the studio's floor, what failed on this device, and what's remembered for it. */
+  private wantDepth(key: string): Depth {
+    let d: Depth = this.floor;
+    const mem = this.remembered(key);
+    if (mem && mem.depth > d) d = mem.depth;
+    if (this.failedDepth && deeper(this.failedDepth as Depth) > d) d = deeper(this.failedDepth as Depth);
+    return d;
+  }
+
+  /**
+   * The sound device, as it now should be: at the depth this device needs, exclusive unless that
+   * keeps failing or the studio (or what's remembered) says shared. Opens again only when something
+   * about that has changed, or when told to.
+   */
+  private openDevice(force = false): void {
+    // before the device is named, what the one opened last time needed is the best guess
+    const guess = this.deviceKey || this.opts.memory?.last() || '';
+    const known = this.remembered(guess);
+    const exclusive = this.asked && !this.sharedByForce && !(known?.shared === true && !this.manual);
+    const depth = this.wantDepth(guess);
+    if (this.device && this.exclusive === exclusive && this.depth === depth && !force) {
       this.post({ type: 'device', device: this.device });
       return;
     }
@@ -304,29 +450,92 @@ export class Renderer {
       this.native.audioClose();
       this.device = null;
     }
-    this.exclusive = exclusive;
+    let opened = this.openOnce(exclusive, depth);
+    if (!opened) return;
+    // the device named: if it's a known one with other needs, open it as it held last time
+    const key = `${opened.device.backend}|${opened.device.name}`;
+    const fresh = key !== this.deviceKey;
+    if (fresh) {
+      this.deviceKey = key;
+      this.minLevel = MIN_LEVEL;
+      this.failedDepth = 0;
+      this.stops = 0;
+      this.hot = 0;
+      if (!this.manual) this.sharedByForce = false;
+      const mem = this.remembered(key);
+      const shareIt = this.asked && mem?.shared === true && !this.manual;
+      const want = this.wantDepth(key);
+      if (shareIt) this.sharedByForce = true;
+      if ((shareIt && opened.device.mode === 'exclusive') || want !== opened.device.depth) {
+        this.native.audioClose();
+        opened = this.openOnce(this.asked && !this.sharedByForce, want);
+        if (!opened) return;
+      }
+      this.opts.memory?.setLast(key);
+      if (mem)
+        this.why =
+          mem.shared && opened.device.mode === 'shared'
+            ? 'shared, as this device needed last time'
+            : 'remembered for this device';
+      else if (opened.device.depth > 1 && opened.device.depth === this.floor) this.why = 'the latency setting';
+      else this.why = 'the shortest the device offers';
+    } else if (!this.why) {
+      this.why = depth > 1 && depth === this.floor ? 'the latency setting' : 'the shortest the device offers';
+    }
+    const { device, note } = opened;
+    this.exclusive = device.mode === 'exclusive';
+    this.depth = device.depth;
+    if (!this.core || this.core.sr !== device.rate) this.newCore(device.rate);
+    if (this.core) this.core.budgetFrames = device.period;
+    this.device = device;
+    this.ringBase = this.rendered;
+    this.openedAt = this.native.now();
+    const mem = this.remembered(key);
+    this.level = Math.max(this.minLevel, Math.min(MAX_LEVEL, mem?.level ?? MIN_LEVEL));
+    this.native.setCushion(this.cushion());
+    this.underrunsSeen = 0;
+    this.calmSince = this.openedAt;
+    this.peakMs = 0;
+    if (!this.midiOn) {
+      this.native.midiOpen();
+      this.midiOn = true;
+      this.nextScan = 0;
+    }
+    this.remember();
+    this.log(
+      `Playing through ${device.name}: ${device.backend} ${device.mode}, ${device.rate} Hz, ` +
+        `${ms(device.period, device.rate)} ms period${device.depth > 1 ? ` (${device.depth}× its shortest)` : ''}, ` +
+        `${ms(device.buffer, device.rate)} ms buffer, ${this.cushion()} frames in hand (${this.why})` +
+        (note ? `. ${note}` : ''),
+    );
+    this.post({ type: 'device', device });
+  }
+
+  /** One attempt at the device, shared when exclusive mode isn't possible; null (and the studio told) when neither opens. */
+  private openOnce(exclusive: boolean, depth: Depth): { device: CompanionDevice; note?: string } | null {
     let opened: OpenedDevice;
     let note: string | undefined;
     try {
-      opened = this.openSoon(exclusive);
+      opened = this.openSoon(exclusive, depth);
     } catch (err) {
       if (!exclusive) {
         this.deviceError(err);
-        return;
+        return null;
       }
       // exclusive mode wasn't possible (another app has the device that way, or its format): share it
       note = `Exclusive mode wasn’t possible (${message(err)}), so the device is shared`;
       try {
-        opened = this.native.audioOpen({ exclusive: false, null: this.opts.nullAudio });
+        opened = this.native.audioOpen({ exclusive: false, depth, null: this.opts.nullAudio });
       } catch (err2) {
         this.deviceError(err2);
-        return;
+        return null;
       }
     }
     const device: CompanionDevice = {
       rate: opened.rate,
       period: opened.period,
       buffer: opened.buffer,
+      depth: opened.depth === 2 || opened.depth === 4 ? opened.depth : depth,
       mode: opened.exclusive ? 'exclusive' : 'shared',
       backend: opened.backend,
       name: opened.name,
@@ -338,35 +547,17 @@ export class Renderer {
           ? { note }
           : {}),
     };
-    if (!this.core || this.core.sr !== device.rate) this.newCore(device.rate);
-    this.device = device;
-    this.ringBase = this.rendered;
-    this.openedAt = this.native.now();
-    this.level = MIN_LEVEL;
-    this.native.setCushion(this.cushion());
-    this.underrunsSeen = 0;
-    this.calmSince = this.openedAt;
-    if (!this.midiOn) {
-      this.native.midiOpen();
-      this.midiOn = true;
-      this.nextScan = 0;
-    }
-    this.log(
-      `Playing through ${device.name}: ${device.backend} ${device.mode}, ${device.rate} Hz, ` +
-        `${ms(device.period, device.rate)} ms period, ${ms(device.buffer, device.rate)} ms buffer` +
-        (note ? `. ${note}` : ''),
-    );
-    this.post({ type: 'device', device });
+    return { device, ...(note ? { note } : {}) };
   }
 
   /**
    * The device, in exclusive mode tried for a second: the browser that just let go of it may take a
    * moment to close its own stream.
    */
-  private openSoon(exclusive: boolean): OpenedDevice {
+  private openSoon(exclusive: boolean, depth: Depth): OpenedDevice {
     for (let tries = 0; ; tries++) {
       try {
-        return this.native.audioOpen({ exclusive, null: this.opts.nullAudio });
+        return this.native.audioOpen({ exclusive, depth, null: this.opts.nullAudio });
       } catch (err) {
         if (!exclusive || tries >= 4) throw err;
         Atomics.wait(PAUSE, 0, 0, 250);

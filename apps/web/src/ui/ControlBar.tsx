@@ -302,7 +302,7 @@ function MidiLight() {
 export function dspSummary(d: ReturnType<typeof engine.dsp>): string {
   const pct = (x: number) => `${Math.round(x * 100)}%`;
   const audio =
-    `${engine.remote ? 'HO[LO] Engine’s render thread' : 'the audio thread'} ${pct(d.load)} of each block's time` +
+    `${engine.remote ? 'HO[LO] Engine’s render thread' : 'the audio thread'} ${pct(d.load)} of each ${engine.remote ? 'period' : 'block'}'s time` +
     (d.fine ? ` (peak ${pct(d.peak)}), ${d.overloads} overload${d.overloads === 1 ? '' : 's'}` : '');
   if (!d.ahead) return audio;
   const n = d.ahead.loads.length;

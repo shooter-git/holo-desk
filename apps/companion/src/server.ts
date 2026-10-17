@@ -15,6 +15,7 @@ import {
 } from '@holo/engine/companion';
 import { type WebSocket, WebSocketServer } from 'ws';
 import { AheadRelay, aheadThreads } from './ahead.ts';
+import { memoryPath } from './memory.ts';
 import type { RenderData } from './render.ts';
 import type { ToRenderer } from './renderer.ts';
 
@@ -94,9 +95,17 @@ export function run(
   const doorbell = new SharedArrayBuffer(4);
   const bell = new Int32Array(doorbell);
   const channel = new MessageChannel();
-  const worker = threads.render({ addon, port: channel.port2, doorbell, nullAudio: o.nullAudio, shared: o.shared }, [
-    channel.port2,
-  ]);
+  const worker = threads.render(
+    {
+      addon,
+      port: channel.port2,
+      doorbell,
+      nullAudio: o.nullAudio,
+      shared: o.shared,
+      memoryPath: o.nullAudio ? null : memoryPath(),
+    },
+    [channel.port2],
+  );
   worker.on('error', (err) => {
     log(`The render thread stopped: ${err.stack ?? err.message}`);
     process.exitCode = 1;

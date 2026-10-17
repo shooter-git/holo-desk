@@ -115,20 +115,32 @@ What **Audio & MIDI** settings shows while it plays:
 
 **Exclusive or shared.** On Windows HO[LO] Engine opens the default output in exclusive mode, at the
 device's own shortest period: the lowest latency WASAPI has, and no other app can make a sound while the
-studio is open. **Share the sound device with other apps** uses Windows' shared low-latency mode instead
-(a few milliseconds more, depending on the driver). If exclusive mode isn't possible (another app has
-the device that way), it shares the device and says why. It lets go of the device, and the MIDI
-devices, when the studio closes.
+studio is open. **Share the sound device with other apps** uses Windows' shared mode instead, at the
+mixer's period (10 ms on many drivers). If exclusive mode isn't possible (another app has the device
+that way), it shares the device and says why. It lets go of the device, and the MIDI devices, when the
+studio closes.
 
-**If the computer can't keep up.** Each block is rendered when the device asks for it. If one isn't
-ready in time (a busy computer, a very heavy song), HO[LO] Engine renders a period ahead from then on, a
-block more each time it happens again, and a step less after half a minute without; the settings show
-it ("ahead since it ran short"). Taking in a new song doesn't count. The song plays on worker threads
-(the computer's cores but two, at most six: `--threads n` for another number, `--threads 0` for one
-thread), which keep 85 ms ahead and go further when they fall behind, as in the studio; who plays what
-is laid out by HO[LO] Engine itself, from the song as it arrives and from how long each track and bus
-takes as it plays. ASIO isn't used: WASAPI exclusive mode reaches the same few milliseconds on most
-devices with nothing to install.
+**How deep it buffers is its own decision, not yours.** It starts with one period rendered ahead of
+the device, so a block that's late is still in time. From there it watches two things: its own render
+thread (when the slowest block of the last half second takes more than 70% of the period, twice
+running, it keeps a block more in hand before anything is heard) and the device (when the device runs
+short, a block more at once, and never again fewer than that on this device). When the deepest
+cushion still runs short, or the device itself stops under the exclusive stream, it opens the device
+again at twice its shortest period, then four times; when even that fails, it shares the device and
+says so. After a calm five minutes it eases off a step, never below what ran short. Taking in a new
+song doesn't count. It remembers what each device needed, in its own settings folder (its log says
+where), so the next launch starts there; choosing exclusive mode again in the settings stands over a
+share it fell back to.
+
+The studio's **Lowest / Balanced / Safe** is a floor under all of that: Lowest lets it start at the
+shortest period, Balanced starts at twice it, Safe at four times. Audio & MIDI settings show the depth
+in use and why ("deepened after the device ran short", "remembered for this device").
+
+The song plays on worker threads (the computer's cores but two, at most six: `--threads n` for another
+number, `--threads 0` for one thread), which keep 85 ms ahead and go further when they fall behind, as
+in the studio; who plays what is laid out by HO[LO] Engine itself, from the song as it arrives and from
+how long each track and bus takes as it plays. ASIO isn't used: WASAPI exclusive mode reaches the same
+few milliseconds on most devices with nothing to install.
 
 **When something's off:**
 
@@ -147,12 +159,14 @@ devices with nothing to install.
 - *Bluetooth headphones.* Their own radio link adds 100–250 ms, which no app can see or take away.
   HO[LO] Engine shares them (exclusive mode makes them stall and crackle) and the settings say so: to
   play, use the computer's speakers or wired headphones.
-- *Crackles.* The settings say how often the device ran short. It renders further ahead when that
-  happens, so a few at the start are harmless; many more mean the computer can't keep up: try
-  **Share the sound device with other apps** (a longer period), or a lighter song. A USB audio device
-  at its shortest period (3 ms on many) under a heavy song is the usual case: the computer's built-in
-  output, or wired headphones in its jack, hold their longer period where the USB device doesn't (see
-  the table above), and sharing the device always works. The DSP meter says
+- *Crackles.* The settings say how often the device ran short and what HO[LO] Engine did about it: it
+  keeps more in hand, opens the device at a longer period, and shares it as a last resort, by itself.
+  A few shortfalls at the start are harmless; if they keep coming at the longest period, the computer
+  can't keep up with the song: try a lighter song, or **Safe** as a floor. A USB audio device at its
+  shortest period (3 ms on many) under a heavy song is the usual case: it's opened at twice or four
+  times that after its first shortfall and remembered that way; the computer's built-in output, or
+  wired headphones in its jack, usually hold their longer period from the start (see the table
+  above). The DSP meter says
   which thread is the busy one: the render thread (the live notes and the master) or one of the
   threads the song plays on (a track or bus too heavy for one thread, which freezing would help).
 

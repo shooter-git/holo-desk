@@ -1087,6 +1087,11 @@ static int opt_bool(napi_env env, napi_value obj, const char *key, int fallback)
   if (!obj || p_napi_get_named_property(env, obj, key, &v) != 0) return fallback;
   return p_napi_get_value_bool(env, v, &b) == 0 ? b : fallback;
 }
+static double opt_num(napi_env env, napi_value obj, const char *key, double fallback) {
+  napi_value v;
+  if (!obj || p_napi_get_named_property(env, obj, key, &v) != 0) return fallback;
+  return arg_num(env, v, fallback);
+}
 static void *typed(napi_env env, napi_value v, napi_typedarray_type want, size_t *length) {
   napi_typedarray_type type;
   void *data = NULL;
@@ -1101,12 +1106,15 @@ static void set(napi_env env, napi_value obj, const char *key, napi_value v) {
 
 /* ---- the calls ---- */
 
-/* audioOpen({ exclusive, null }): the default output, at its own rate. */
+/* audioOpen({ exclusive, depth, null }): the default output, at its own rate; `depth` (1, 2 or 4) times
+ * its shortest period in exclusive mode, that many blocks a period elsewhere. */
 static napi_value js_audio_open(napi_env env, napi_callback_info info) {
   napi_value argv[1] = {NULL};
   args(env, info, argv, 1);
   int exclusive = opt_bool(env, argv[0], "exclusive", 0);
   int null_backend = opt_bool(env, argv[0], "null", 0);
+  int depth = (int)opt_num(env, argv[0], "depth", 1);
+  if (depth != 2 && depth != 4) depth = 1;
   if (A.dev_ok) return fail(env, "The sound device is already open");
   if (A.ctx_ok && A.ctx_null != null_backend) {
     ma_context_uninit(&A.ctx);
@@ -1130,7 +1138,7 @@ static napi_value js_audio_open(napi_env env, napi_callback_info info) {
   dc.performanceProfile = ma_performance_profile_low_latency;
   dc.noFixedSizedCallback = MA_TRUE;
   dc.noPreSilencedOutputBuffer = MA_TRUE;
-  dc.periodSizeInFrames = BLOCK;
+  dc.periodSizeInFrames = BLOCK * depth;
   dc.periods = 2;
   dc.wasapi.usage = ma_wasapi_usage_pro_audio;
   dc.wasapi.noAutoConvertSRC = MA_TRUE;
@@ -1138,10 +1146,11 @@ static napi_value js_audio_open(napi_env env, napi_callback_info info) {
 #if defined(_WIN32)
   if (!null_backend) bluetooth = default_is_bluetooth(&A.ctx);
   if (exclusive && !null_backend && !bluetooth) {
-    /* one buffer of the device's shortest period (ask for less and WASAPI doubles it) */
+    /* one buffer of the device's shortest period (ask for less and WASAPI doubles it), or a
+     * multiple of it when the device needs the room */
     dc.playback.shareMode = ma_share_mode_exclusive;
     uint32_t p = exclusive_period(&A.ctx);
-    if (p) dc.periodSizeInFrames = p;
+    if (p) dc.periodSizeInFrames = p * depth;
     dc.periods = 1;
   }
 #else
@@ -1187,6 +1196,7 @@ static napi_value js_audio_open(napi_env env, napi_callback_info info) {
   set(env, out, "rate", num(env, A.rate));
   set(env, out, "period", num(env, A.period));
   set(env, out, "buffer", num(env, A.buffer));
+  set(env, out, "depth", num(env, depth));
   set(env, out, "exclusive", jsbool(env, A.dev.playback.shareMode == ma_share_mode_exclusive));
   set(env, out, "backend", str(env, ma_get_backend_name(A.ctx.backend)));
   set(env, out, "name", str(env, A.dev.playback.name));

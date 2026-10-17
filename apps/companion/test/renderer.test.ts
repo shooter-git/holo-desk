@@ -17,6 +17,7 @@ import { decodeMessage, encodeMessage, type FromCompanion } from '@holo/engine/c
 import { newBus, newPlugin, newProject, newRegion, newTrack, PPQ } from '@holo/session';
 import { describe, expect, it } from 'vitest';
 import { AheadRelay } from '../src/ahead.ts';
+import { inMemory } from '../src/memory.ts';
 import type { Native, NativePort, OpenedDevice } from '../src/native.ts';
 import { nativeName } from '../src/native.ts';
 import { Renderer } from '../src/renderer.ts';
@@ -35,6 +36,7 @@ class FakeNative implements Native {
     rate: 48000,
     period: 144,
     buffer: 144,
+    depth: 1,
     exclusive: true,
     backend: 'WASAPI',
     name: 'Speakers',
@@ -52,11 +54,21 @@ class FakeNative implements Native {
   lost = 0;
   defaultChanged = 0;
   time = 1e6;
-  opened: { exclusive: boolean }[] = [];
-  audioOpen(o: { exclusive: boolean }): OpenedDevice {
+  opened: { exclusive: boolean; depth?: number }[] = [];
+  audioOpen(o: { exclusive: boolean; depth?: number }): OpenedDevice {
     this.opened.push(o);
     if (o.exclusive && this.refuseExclusive) throw new Error('Device in use');
-    return { ...this.device, exclusive: o.exclusive };
+    // as the native piece: a fresh count of shortfalls and stops, and a period `depth` times the shortest
+    this.underruns = 0;
+    this.lost = 0;
+    const depth = o.depth ?? 1;
+    return {
+      ...this.device,
+      exclusive: o.exclusive,
+      depth,
+      period: this.device.period * depth,
+      buffer: this.device.buffer * depth,
+    };
   }
   audioClose(): void {}
   renderWait(): number {
@@ -278,9 +290,10 @@ describe('the companion’s renderer', () => {
     expect(posts.some((m) => m.type === 'midi')).toBe(true);
   });
 
-  it('keeps a period in hand, more after running short while playing, and comes back down when calm', () => {
+  it('keeps a period in hand, more after running short, and never again less than what ran short', () => {
     const fake = new FakeNative();
-    const r = new Renderer(fake, () => undefined);
+    const posts: FromCompanion[] = [];
+    const r = new Renderer(fake, (m) => posts.push(m));
     r.receive({ type: 'open', exclusive: true });
     expect(fake.cushion).toBe(144);
     const step = (us: number) => {
@@ -291,14 +304,130 @@ describe('the companion’s renderer', () => {
     fake.underruns = 3;
     step(6e5);
     expect(fake.cushion).toBe(144 + 128);
-    fake.underruns = 4;
-    step(6e5);
-    expect(fake.cushion).toBe(144 + 256);
-    for (let i = 0; i < 60; i++) step(6e5);
+    const why = posts.filter((m) => m.type === 'stats').at(-1);
+    expect(why?.type === 'stats' && why.stats.why).toMatch(/ran short/);
+    // calm for well over five minutes: it ran short with one period in hand, so it never goes back there
+    for (let i = 0; i < 600; i++) step(6e5);
     expect(fake.cushion).toBe(144 + 128);
-    // never below the one period
-    for (let i = 0; i < 200; i++) step(6e5);
+  });
+
+  it('deepens the cushion before the device can run short, when its own blocks come close to the period, and eases off after a calm while', () => {
+    const fake = new FakeNative();
+    const r = new Renderer(fake, () => undefined);
+    r.receive({ type: 'open', exclusive: true });
+    const step = (us: number) => {
+      fake.time += us;
+      r.tick(0);
+    };
+    step(2e6);
+    // each block takes 2.2 ms of a 3 ms period (the two clock readings around it 2.2 ms apart)
+    const realNow = performance.now;
+    let fakeNow = 0;
+    performance.now = () => (fakeNow += 1.1);
+    try {
+      for (let i = 0; i < 2; i++) {
+        fake.want = 128;
+        step(6e5);
+      }
+    } finally {
+      performance.now = realNow;
+    }
+    expect(fake.cushion).toBe(144 + 128);
+    expect(fake.underruns).toBe(0);
+    // nothing ran short, so after a calm five minutes it comes back to one period
+    for (let i = 0; i < 600; i++) step(6e5);
     expect(fake.cushion).toBe(144);
+  });
+
+  it('opens the device at a longer period when the deepest cushion still runs short, and shares it when even that fails', () => {
+    const fake = new FakeNative();
+    const r = new Renderer(fake, () => undefined);
+    r.receive({ type: 'open', exclusive: true });
+    const step = (us: number) => {
+      fake.time += us;
+      r.tick(0);
+    };
+    const ranShort = () => {
+      step(2e6);
+      fake.underruns++;
+      step(6e5);
+    };
+    for (let i = 0; i < 3; i++) ranShort();
+    expect(fake.cushion).toBe(144 + 3 * 128);
+    expect(fake.opened).toHaveLength(1);
+    // the deepest cushion ran short: twice the shortest period, the cushion a period again
+    ranShort();
+    expect(fake.opened.at(-1)).toEqual({ exclusive: true, depth: 2, null: undefined });
+    expect(fake.cushion).toBe(288 + 3 * 128);
+    ranShort();
+    expect(fake.opened.at(-1)).toEqual({ exclusive: true, depth: 4, null: undefined });
+    // and when four times the shortest still runs short, the device is shared
+    ranShort();
+    expect(fake.opened.at(-1)).toEqual({ exclusive: false, depth: 4, null: undefined });
+  });
+
+  it('opens the device deeper when it stops under an exclusive stream, shares it after the deepest, and takes the user’s word for exclusive again', () => {
+    const fake = new FakeNative();
+    const posts: FromCompanion[] = [];
+    const r = new Renderer(fake, (m) => posts.push(m));
+    r.receive({ type: 'open', exclusive: true });
+    const stops = () => {
+      fake.lost = 1;
+      fake.time += 2e6;
+      r.tick(0);
+    };
+    stops();
+    expect(fake.opened.at(-1)).toMatchObject({ exclusive: true, depth: 2 });
+    stops();
+    expect(fake.opened.at(-1)).toMatchObject({ exclusive: true, depth: 4 });
+    stops();
+    expect(fake.opened.at(-1)).toMatchObject({ exclusive: false });
+    fake.time += 6e5;
+    r.tick(0);
+    const why = posts.filter((m) => m.type === 'stats').at(-1);
+    expect(why?.type === 'stats' && why.stats.why).toMatch(/shared/);
+    // the user chooses exclusive mode again: that stands, at the depth that held
+    r.receive({ type: 'open', exclusive: true, manual: true });
+    expect(fake.opened.at(-1)).toMatchObject({ exclusive: true, depth: 4 });
+  });
+
+  it('remembers what a device needed, and starts there the next time', () => {
+    const memory = inMemory();
+    const fake = new FakeNative();
+    const first = new Renderer(fake, () => undefined, { memory });
+    first.receive({ type: 'open', exclusive: true });
+    fake.lost = 1;
+    fake.time += 2e6;
+    first.tick(0);
+    expect(fake.opened.at(-1)).toMatchObject({ depth: 2 });
+    fake.time += 2e6;
+    fake.underruns = 1;
+    fake.time += 6e5;
+    first.tick(0);
+    expect(fake.cushion).toBe(288 + 128);
+    first.receive({ type: 'close' });
+    // the next launch: the same device, opened once, as deep as it held, with the same cushion
+    const next = new FakeNative();
+    const posts: FromCompanion[] = [];
+    const second = new Renderer(next, (m) => posts.push(m), { memory });
+    second.receive({ type: 'open', exclusive: true });
+    expect(next.opened).toEqual([{ exclusive: true, depth: 2, null: undefined }]);
+    expect(next.cushion).toBe(288 + 128);
+    expect(posts.find((m) => m.type === 'device')).toMatchObject({ device: { depth: 2 } });
+  });
+
+  it('takes the studio’s latency setting as a floor under the depth', () => {
+    const fake = new FakeNative();
+    const r = new Renderer(fake, () => undefined);
+    r.receive({ type: 'open', exclusive: true, floor: 2 });
+    expect(fake.opened.at(-1)).toMatchObject({ depth: 2 });
+    expect(fake.cushion).toBe(288);
+    r.receive({ type: 'open', exclusive: true, floor: 4 });
+    expect(fake.opened.at(-1)).toMatchObject({ depth: 4 });
+    // back to Lowest: nothing has failed, so the shortest period again
+    r.receive({ type: 'open', exclusive: true, floor: 1 });
+    expect(fake.opened.at(-1)).toMatchObject({ depth: 1 });
+    expect(fake.opened).toHaveLength(3);
   });
 
   it('doesn’t count running short while a song is being handed over', () => {

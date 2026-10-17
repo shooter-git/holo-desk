@@ -11,6 +11,8 @@
  */
 #if defined(__linux__)
 #define _GNU_SOURCE /* RTLD_DEFAULT */
+#elif defined(__APPLE__)
+#define _DARWIN_C_SOURCE /* RTLD_DEFAULT, which -std=c11 would otherwise hide */
 #endif
 #define MA_NO_DECODING
 #define MA_NO_ENCODING
@@ -49,6 +51,7 @@
 #include <CoreFoundation/CoreFoundation.h>
 #include <CoreMIDI/CoreMIDI.h>
 #include <dispatch/dispatch.h>
+#include <dlfcn.h>
 #include <mach/mach_time.h>
 #include <pthread.h>
 #else

@@ -1,7 +1,7 @@
 # HO[LO] Desk: the server and the built studio in one small image.
 # Built by `pnpm up` (deploy/compose.yml). The data folder (projects, sample packs) is a volume.
 
-FROM node:24-alpine@sha256:ebfe2f90462722a7a4de65e91990e97fe0d401c70e0e762c5b53302f905ec1c1 AS base
+FROM node:24-alpine@sha256:44fce696f38ba8c987c4db89954051000bbd05ffd8d8659ba15ed4a8602e937f AS base
 ENV PNPM_HOME=/pnpm PATH=/pnpm:$PATH
 RUN corepack enable && corepack prepare pnpm@10.13.1 --activate
 WORKDIR /app

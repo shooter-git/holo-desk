@@ -1,0 +1,26 @@
+# HTTPS for devices on your local network that aren't on a tailnet (`pnpm lan on`).
+# Caddy makes its own certificate authority; install its root certificate on each device once
+# (served at http://<this machine>:47844/holo-ca.crt). HOLO_LAN_SITES is written by tools/lan.mjs.
+{
+	auto_https disable_redirects
+	skip_install_trust
+	admin off
+	# a device opening the bare IP address sends no name: answer with that address's certificate
+	default_sni {$HOLO_LAN_DEFAULT_SNI}
+}
+
+{$HOLO_LAN_SITES} {
+	tls internal
+	reverse_proxy holo:47800
+}
+
+# the root certificate, for devices to install (plain HTTP: it's public, and it's how trust begins)
+http://:47844 {
+	handle /holo-ca.crt {
+		root * /data/caddy/pki/authorities/local
+		rewrite * /root.crt
+		header Content-Type application/x-x509-ca-cert
+		file_server
+	}
+	respond "HO[LO] Desk on your network: install /holo-ca.crt, then open the https address." 200
+}

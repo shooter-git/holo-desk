@@ -1,0 +1,35 @@
+# Monthly updates for everything pinned: workflow actions (by commit), the base image (by digest) and
+# npm packages. Minor and patch updates come grouped; major ones each get their own pull request.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    groups:
+      actions:
+        update-types: [minor, patch]
+
+  - package-ecosystem: docker
+    directory: /deploy
+    schedule:
+      interval: monthly
+    groups:
+      base-images:
+        update-types: [minor, patch]
+    ignore:
+      # the studio runs on Node's even-numbered (LTS) lines; the next line is a deliberate move
+      - dependency-name: node
+        update-types: [version-update:semver-major]
+
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: monthly
+    groups:
+      npm:
+        update-types: [minor, patch]
+    ignore:
+      # Node's types follow the Node line the studio runs on, not the newest release
+      - dependency-name: "@types/node"
+        update-types: [version-update:semver-major]

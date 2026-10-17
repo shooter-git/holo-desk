@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content" />
+    <title>HO[LO] Desk</title>
+    <meta name="description" content="A studio in the browser for writing, playing and mixing music, with live MIDI and an AI collaborator." />
+    <meta name="theme-color" content="#111317" />
+    <meta name="color-scheme" content="dark" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="HO[LO]" />
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <script>
+      // HO[LO] Remote installs as an app of its own (its name, and it opens on the remote)
+      if (/^\/remote\/?$/.test(location.pathname)) {
+        document.querySelector('link[rel="manifest"]').href = '/remote.webmanifest';
+        document.querySelector('meta[name="apple-mobile-web-app-title"]').content = 'HO[LO] Remote';
+        document.title = 'HO[LO] Remote';
+      }
+    </script>
+    <link rel="icon" href="/icons/favicon.png" type="image/png" />
+    <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

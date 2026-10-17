@@ -1,0 +1,4 @@
+#!/bin/sh
+# Enabled with: git config core.hooksPath .githooks
+# Stops a commit that would publish a secret, a personal email address or a home-folder path.
+exec node tools/scan-secrets.mjs --staged

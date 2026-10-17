@@ -1,0 +1,23 @@
+{
+  "name": "@holo/server",
+  "private": true,
+  "version": "0.1.0",
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "dev": "node --env-file-if-exists=../../.env --disable-warning=ExperimentalWarning --watch src/main.ts",
+    "start": "node --disable-warning=ExperimentalWarning src/main.ts",
+    "typecheck": "tsc -p ."
+  },
+  "dependencies": {
+    "@fastify/static": "10.1.6",
+    "@fastify/websocket": "11.3.4",
+    "@holo/engine": "workspace:*",
+    "@holo/music": "workspace:*",
+    "@holo/session": "workspace:*",
+    "fastify": "5.12.7"
+  },
+  "devDependencies": {
+    "@types/ws": "8.18.2"
+  }
+}

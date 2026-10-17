@@ -1,0 +1,47 @@
+{
+  "name": "holo-desk",
+  "private": true,
+  "version": "0.1.0",
+  "description": "HO[LO] Desk: Headphones On [Lights Out]. A studio in the browser for writing, playing and mixing music, with live MIDI and an AI collaborator.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/shooter-git/holo-desk.git"
+  },
+  "homepage": "https://github.com/shooter-git/holo-desk#readme",
+  "bugs": "https://github.com/shooter-git/holo-desk/issues",
+  "packageManager": "pnpm@10.13.1",
+  "engines": {
+    "node": ">=24"
+  },
+  "type": "module",
+  "scripts": {
+    "dev": "pnpm -r --parallel --filter \"./apps/*\" dev",
+    "build": "pnpm --filter @holo/web build",
+    "start": "pnpm --filter @holo/server start",
+    "typecheck": "pnpm -r typecheck",
+    "test": "vitest run",
+    "lint": "biome check .",
+    "format": "biome check --write .",
+    "check:secrets": "node tools/scan-secrets.mjs --all",
+    "tailnet": "node --env-file-if-exists=.env tools/tailnet.mjs",
+    "packs": "node --env-file-if-exists=.env --disable-warning=ExperimentalWarning apps/server/src/packs-cli.ts",
+    "holo": "node --env-file-if-exists=.env --disable-warning=ExperimentalWarning packages/cli/src/main.ts",
+    "up": "node tools/engine-stamp.mjs && docker compose --project-directory . -f deploy/compose.yml --env-file .env up -d --build",
+    "down": "docker compose --project-directory . -f deploy/compose.yml --env-file .env down",
+    "skill:install": "node tools/install-skill.mjs",
+    "lan": "node --env-file-if-exists=.env tools/lan.mjs",
+    "runner": "node --env-file-if-exists=.env --disable-warning=ExperimentalWarning packages/cli/src/main.ts runner",
+    "netmidi": "node --env-file-if-exists=.env tools/netmidi.mjs",
+    "banner": "node tools/banner.mjs",
+    "bench": "node --disable-warning=ExperimentalWarning packages/engine/bench/scale.ts",
+    "engine": "node --disable-warning=ExperimentalWarning apps/companion/src/main.ts",
+    "engine:build": "node apps/companion/build.mjs"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.5.15",
+    "@types/node": "22.20.5",
+    "typescript": "7.0.2",
+    "vitest": "5.0.4"
+  }
+}

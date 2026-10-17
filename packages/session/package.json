@@ -1,0 +1,14 @@
+{
+  "name": "@holo/session",
+  "private": true,
+  "version": "0.1.0",
+  "license": "MIT",
+  "type": "module",
+  "description": "The HO[LO] session format: types, timing, operations, notation and MIDI files.",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p ."
+  }
+}

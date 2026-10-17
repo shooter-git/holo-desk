@@ -1,0 +1,47 @@
+# HO[LO] Desk in Docker. Run from the repository's root (pnpm up / pnpm down do):
+#   docker compose --project-directory . -f deploy/compose.yml --env-file .env up -d --build
+# Paths below are relative to the repository's root. Settings come from .env (see .env.example).
+name: holo
+
+services:
+  holo:
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile
+    image: holo-desk:local
+    restart: unless-stopped
+    # writes files as you, so sessions it sends into your creations stay yours
+    user: "${HOLO_UID:-1000}:${HOLO_GID:-1000}"
+    environment:
+      HOLO_PORT: "47800"
+      HOLO_LOG: ${HOLO_LOG:-warn}
+      # network MIDI listens in here; the ports below decide who can reach it (pnpm netmidi on / off)
+      HOLO_NETWORK_MIDI: "on"
+      HOLO_NETWORK_MIDI_REACH: ${HOLO_NETWORK_MIDI_BIND:-127.0.0.1}
+    # this machine only: your devices reach it over HTTPS on your tailnet (pnpm tailnet on)
+    ports:
+      - "127.0.0.1:${HOLO_PORT:-47800}:47800"
+      # network MIDI (RTP-MIDI): control and data, this machine only until pnpm netmidi on
+      - "${HOLO_NETWORK_MIDI_BIND:-127.0.0.1}:5004:5004/udp"
+      - "${HOLO_NETWORK_MIDI_BIND:-127.0.0.1}:5005:5005/udp"
+    volumes:
+      - ${HOLO_DATA_DIR:-./data}:/data
+      - ${HOLO_CREATIONS_DIR:-./data/creations}:/creations
+
+  # HTTPS on your local network, for devices that aren't on a tailnet (pnpm lan on / off)
+  lan:
+    profiles: ["lan"]
+    image: caddy:2.11-alpine@sha256:d8542f48d34a9cf4e4c11a478865229840e87e4c96ea3f439101f31a5d35f75f
+    restart: unless-stopped
+    depends_on: [holo]
+    user: "${HOLO_UID:-1000}:${HOLO_GID:-1000}"
+    environment:
+      XDG_CONFIG_HOME: /data/config
+      HOLO_LAN_SITES: ${HOLO_LAN_SITES:-https://localhost:47843}
+      HOLO_LAN_DEFAULT_SNI: ${HOLO_LAN_DEFAULT_SNI:-localhost}
+    ports:
+      - "${HOLO_LAN_BIND:-0.0.0.0}:${HOLO_LAN_HTTPS:-47843}:47843"
+      - "${HOLO_LAN_BIND:-0.0.0.0}:${HOLO_LAN_CA:-47844}:47844"
+    volumes:
+      - ./deploy/Caddyfile.lan:/etc/caddy/Caddyfile:ro
+      - ${HOLO_DATA_DIR:-./data}/caddy:/data

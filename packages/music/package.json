@@ -1,0 +1,22 @@
+{
+  "name": "@holo/music",
+  "private": true,
+  "version": "0.1.0",
+  "license": "MIT",
+  "type": "module",
+  "description": "Music for an experience: the build a project carries (a pinned copy of HO[LO]'s engine) to make its songs without HO[LO] Desk.",
+  "exports": {
+    ".": "./src/index.ts",
+    "./pin": "./src/pin.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p ."
+  },
+  "dependencies": {
+    "@holo/engine": "workspace:*",
+    "@holo/session": "workspace:*"
+  },
+  "devDependencies": {
+    "rolldown": "1.2.14"
+  }
+}

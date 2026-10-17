@@ -1,0 +1,19 @@
+{
+  "name": "@holo/cli",
+  "private": true,
+  "version": "0.1.0",
+  "license": "MIT",
+  "type": "module",
+  "description": "holo: the command line for HO[LO] Desk (what the AI skill uses to work in the studio live).",
+  "bin": {
+    "holo": "./src/main.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p ."
+  },
+  "dependencies": {
+    "@holo/engine": "workspace:*",
+    "@holo/music": "workspace:*",
+    "@holo/session": "workspace:*"
+  }
+}

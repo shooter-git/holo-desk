@@ -1,0 +1,21 @@
+{
+  "name": "@holo/companion",
+  "private": true,
+  "version": "0.1.0",
+  "license": "MIT",
+  "type": "module",
+  "description": "HO[LO] Engine: HO[LO] Desk's sound and MIDI, native, on the device you play on.",
+  "scripts": {
+    "typecheck": "tsc -p ."
+  },
+  "dependencies": {
+    "@holo/engine": "workspace:*",
+    "@holo/session": "workspace:*",
+    "ws": "8.22.0"
+  },
+  "devDependencies": {
+    "@types/ws": "8.18.2",
+    "postject": "1.0.0-alpha.6",
+    "rolldown": "1.2.14"
+  }
+}

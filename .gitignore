@@ -1,0 +1,46 @@
+# Dependencies & builds
+node_modules/
+dist/
+*.tsbuildinfo
+coverage/
+
+# Environment & secrets: only .env.example is ever committed
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+
+# HO[LO]'s own data: the database, projects and sample packs (HOLO_DATA_DIR)
+/data/
+
+# The engine's commit and date, left for the studio's image by pnpm up (it has no git)
+packages/music/engine-stamp.json
+
+# Your own tools for your own creations (importers, builders): kept on your machine, never shipped
+/local/
+
+# Local Docker overrides (your own mounts and paths)
+deploy/compose.local.yml
+
+# Python
+__pycache__/
+.venv/
+
+# Editors and systems
+.DS_Store
+*.log
+.vscode/
+.idea/
+
+# Claude Code's local state (the skill itself lives in skills/)
+.claude/*
+!.claude/skills/
+
+# Your own extra patterns for the secrets check
+.scan-secrets.local
+
+# HO[LO] Engine's builds: the native piece for this computer and the Node binaries downloads start from
+apps/companion/native/build/
+apps/companion/.cache/

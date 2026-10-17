@@ -1,0 +1,19 @@
+{
+  "name": "@holo/engine",
+  "private": true,
+  "version": "0.1.0",
+  "license": "MIT",
+  "type": "module",
+  "description": "HO[LO]'s audio engine: the instruments, effects and mix the studio plays live, bounces and renders headless, the same code everywhere.",
+  "exports": {
+    ".": "./src/index.ts",
+    "./node": "./src/node.ts",
+    "./companion": "./src/companion.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p ."
+  },
+  "dependencies": {
+    "@holo/session": "workspace:*"
+  }
+}

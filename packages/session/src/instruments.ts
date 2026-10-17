@@ -1,0 +1,53 @@
+/** The built-in synthesiser's presets: always there, before any sample pack is installed. */
+export const SYNTH_PRESETS = [
+  'Soft Keys',
+  'Electric Piano',
+  'Warm Pad',
+  'Glass Bells',
+  'Analog Bass',
+  'Sub Bass',
+  'Bright Lead',
+  'Pluck',
+  'Strings Ensemble',
+  'Drum Synth',
+] as const;
+
+export type SynthPreset = (typeof SYNTH_PRESETS)[number];
+
+/** General MIDI drum notes, as drum pads usually send them. */
+export const GM_DRUMS: Record<number, string> = {
+  35: 'Kick 2',
+  36: 'Kick',
+  37: 'Side Stick',
+  38: 'Snare',
+  39: 'Clap',
+  40: 'Snare 2',
+  41: 'Low Floor Tom',
+  42: 'Closed Hat',
+  43: 'High Floor Tom',
+  44: 'Pedal Hat',
+  45: 'Low Tom',
+  46: 'Open Hat',
+  47: 'Low-Mid Tom',
+  48: 'Hi-Mid Tom',
+  49: 'Crash',
+  50: 'High Tom',
+  51: 'Ride',
+  52: 'China',
+  53: 'Ride Bell',
+  54: 'Tambourine',
+  55: 'Splash',
+  56: 'Cowbell',
+  57: 'Crash 2',
+  59: 'Ride 2',
+  60: 'Hi Bongo',
+  61: 'Low Bongo',
+  62: 'Mute Hi Conga',
+  63: 'Open Hi Conga',
+  64: 'Low Conga',
+  69: 'Cabasa',
+  70: 'Maracas',
+  75: 'Claves',
+  76: 'Hi Wood Block',
+  77: 'Low Wood Block',
+};

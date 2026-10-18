@@ -89,7 +89,7 @@ export async function buildApp(config: Config): Promise<{ app: FastifyInstance; 
 
   app.get('/api/health', async () => ({
     ok: true,
-    version: '0.1.0',
+    version: '0.1.1',
     engine: { ...studio, label: engineLabel(studio) },
   }));
 

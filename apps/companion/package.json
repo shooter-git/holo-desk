@@ -1,7 +1,7 @@
 {
   "name": "@holo/companion",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.1.1",
   "license": "MIT",
   "type": "module",
   "description": "HO[LO] Engine: HO[LO] Desk's sound and MIDI, native, on the device you play on.",

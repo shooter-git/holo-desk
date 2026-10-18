@@ -1,7 +1,7 @@
 {
   "name": "@holo/music",
   "private": true,
-  "version": "0.1.1",
+  "version": "0.2.0",
   "license": "MIT",
   "type": "module",
   "description": "Music for an experience: the build a project carries (a pinned copy of HO[LO]'s engine) to make its songs without HO[LO] Desk.",

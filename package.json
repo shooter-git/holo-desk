@@ -1,7 +1,7 @@
 {
   "name": "holo-desk",
   "private": true,
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "HO[LO] Desk: Headphones On [Lights Out]. A studio in the browser for writing, playing and mixing music, with live MIDI and an AI collaborator.",
   "license": "MIT",
   "repository": {

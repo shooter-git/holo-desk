@@ -94,7 +94,7 @@ export function tickToBarBeat(meter: readonly MeterPoint[], tick: number): BarBe
       bar: barsSoFar + bar,
       beat: beat + 1,
       div: div + 1,
-      tick: Math.round(inBeat - div * sixteenth),
+      tick: Math.floor(inBeat - div * sixteenth),
     };
   }
   return { bar: 1, beat: 1, div: 1, tick: 0 };

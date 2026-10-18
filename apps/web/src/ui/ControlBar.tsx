@@ -69,7 +69,7 @@ const NARROW_BAR = '(max-width: 900px), (max-width: 1100px) and (pointer: coarse
 
 /** "9 1 1 7" as "  9 1 1   7": every digit keeps its place while the song plays. */
 function padPosition(text: string): string {
-  const [bar = '', beat = '', div = '', tick] = text.split(' ');
+  const [bar = '', beat = '', div = '', tick] = text.trim().split(/\s+/);
   const head = `${bar.padStart(3)} ${beat} ${div}`;
   return tick === undefined ? head : `${head} ${tick.padStart(3)}`;
 }

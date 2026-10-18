@@ -5,8 +5,9 @@ export const gainToDb = (g: number): number => (g <= 1e-9 ? -180 : 20 * Math.log
 
 /** A one-pole smoother for parameters, so a moved fader never clicks. */
 export class Smooth {
-  value: number;
-  target: number;
+  // (numbers written per sample are declared with a value: made by a later assignment, V8 keeps them boxed)
+  value = 0;
+  target = 0;
   private coef: number;
   constructor(value: number, sr: number, ms = 20) {
     this.value = value;
@@ -20,6 +21,10 @@ export class Smooth {
   next(): number {
     this.value = this.target + (this.value - this.target) * this.coef;
     return this.value;
+  }
+  /** As next(), leaving the result in `value`: a call that returns a double allocates when it isn't inlined. */
+  step(): void {
+    this.value = this.target + (this.value - this.target) * this.coef;
   }
   get settled(): boolean {
     return Math.abs(this.value - this.target) < 1e-6;
@@ -35,6 +40,8 @@ export class Biquad {
   b2 = 0;
   a1 = 0;
   a2 = 0;
+  /** The last sample run() made. */
+  y = 0;
   private zl1 = 0;
   private zl2 = 0;
   private zr1 = 0;
@@ -155,34 +162,16 @@ export class Biquad {
     return y;
   }
 
+  /** As tick(), the result left in `y` (the same arithmetic): per sample, a returned double is boxed unless inlined. */
+  run(x: number): void {
+    const y = this.b0 * x + this.zl1;
+    this.zl1 = this.b1 * x - this.a1 * y + this.zl2;
+    this.zl2 = this.b2 * x - this.a2 * y;
+    this.y = y;
+  }
+
   reset(): void {
     this.zl1 = this.zl2 = this.zr1 = this.zr2 = 0;
-  }
-}
-
-/** A delay line with fractional (linear) reads. */
-export class DelayLine {
-  readonly buf: Float32Array;
-  private w = 0;
-  constructor(size: number) {
-    this.buf = new Float32Array(Math.max(4, size));
-  }
-  write(x: number): void {
-    this.buf[this.w] = x;
-    this.w = (this.w + 1) % this.buf.length;
-  }
-  /** `d` samples ago (≥ 1). */
-  read(d: number): number {
-    const len = this.buf.length;
-    const pos = this.w - d;
-    const i = Math.floor(pos);
-    const f = pos - i;
-    const a = this.buf[((i % len) + len) % len] as number;
-    const b = this.buf[(((i + 1) % len) + len) % len] as number;
-    return a + (b - a) * f;
-  }
-  clear(): void {
-    this.buf.fill(0);
   }
 }
 
@@ -219,7 +208,7 @@ export class Svf {
 
 /** A fast, seeded noise source (xorshift), −1..1. */
 export class Noise {
-  private s: number;
+  private s = 1;
   constructor(seed = 22222) {
     this.s = seed | 0 || 1;
   }
@@ -230,6 +219,17 @@ export class Noise {
     s ^= s << 5;
     this.s = s;
     return (s | 0) / 2147483648;
+  }
+  /** The last draw step() made. */
+  value = 0;
+  /** As next(), the draw left in `value` (a voice reads it once a sample: no boxed return). */
+  step(): void {
+    let s = this.s;
+    s ^= s << 13;
+    s ^= s >>> 17;
+    s ^= s << 5;
+    this.s = s;
+    this.value = (s | 0) / 2147483648;
   }
 }
 

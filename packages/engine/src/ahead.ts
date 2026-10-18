@@ -410,10 +410,12 @@ export function aheadOwners(graph: GraphSpec, workers: number, cost: (num: numbe
 
 /**
  * Workers to render ahead with on a computer with this many cores: the cores but two (the audio
- * thread's, and the page's or the companion's own), at most six.
+ * thread's, and the page's or the companion's own), at most six. With eight cores or fewer, one
+ * less again: the browser's own threads want a core too, and each worker waits on the ones before
+ * it, so one held off its core holds up the chain.
  */
 export function aheadWorkersFor(cores: number): number {
-  return Math.max(0, Math.min(6, cores - 2));
+  return Math.max(0, Math.min(6, cores - (cores <= 8 ? 3 : 2)));
 }
 
 /** A copy in shared memory (so every thread reads the same samples, and none holds its own). */
@@ -507,6 +509,8 @@ export class AheadPool {
   private parts = new Map<number, number>();
   /** When the strips last moved (ms). */
   private moved = Number.NEGATIVE_INFINITY;
+  /** The owners were laid out from guesses (strips not yet timed): laid out again as soon as they all have been. */
+  private guessed = false;
 
   constructor(count: number, start: (spec: AheadSpec) => AheadThread) {
     this.count = count;
@@ -567,10 +571,34 @@ export class AheadPool {
   check(playing: boolean, now: number): ToWorklet[] {
     this.remember();
     const busiest = Math.max(...this.loads());
+    // a layout from guesses (they run far from the mark): once every strip has been timed playing,
+    // laid out by the timings without waiting for a worker to fall behind
+    if (this.guessed && playing && this.allTimed()) {
+      this.guessed = false;
+      const msgs = this.rebalance(1.2);
+      if (msgs.length) this.moved = now;
+      return msgs;
+    }
     if (busiest < 0.75 || (playing && now - this.moved < 10_000)) return [];
     const msgs = this.rebalance(1.2);
     if (msgs.length) this.moved = now;
     return msgs;
+  }
+
+  /** Whether every strip a worker plays has been timed there. */
+  private allTimed(): boolean {
+    const graph = this.graph;
+    if (!graph) return false;
+    for (const s of [...graph.tracks, ...graph.buses]) {
+      if ((this.owners[s.num] ?? -1) >= 0 && this.link.cost(s.num) <= 0) return false;
+    }
+    return true;
+  }
+
+  /** Whether a strip's share is still a guess (it hasn't been timed playing, and its notes say nothing). */
+  private isGuess(num: number): boolean {
+    const timed = Math.max(this.link.cost(num), this.seen.get(num) ?? 0);
+    return !this.parts.has(num) && timed <= 0.002;
   }
 
   /** How long the busiest worker would take a block for, with these owners. */
@@ -595,6 +623,7 @@ export class AheadPool {
     const shape = shapeOf(graph);
     if (shape === this.shape) return [];
     this.shape = shape;
+    this.guessed = [...graph.tracks, ...graph.buses].some((s) => this.isGuess(s.num));
     const fresh = aheadOwners(graph, this.count, (num) => this.cost(num));
     const kept =
       playing && this.owners.length

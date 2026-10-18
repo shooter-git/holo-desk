@@ -86,9 +86,26 @@ class Companion {
     if (!ask && !(await mayLook())) return;
     if (!this.snap.looking) {
       this.set({ looking: true });
-      window.addEventListener('focus', () => this.connect());
-      document.addEventListener('visibilitychange', () => document.visibilityState === 'visible' && this.connect());
+      window.addEventListener('focus', () => this.wake());
+      document.addEventListener('visibilitychange', () => document.visibilityState === 'visible' && this.wake());
     }
+    // asked for: a fresh start, whatever came of the looking so far
+    if (ask) this.failing = 0;
+    this.connect();
+  }
+
+  /**
+   * The window came to the front: worth another look (someone may just have started it), but not
+   * every time: at most one a half minute, and once the looking has given up, only after a long while
+   * away (the browser logs each failed connection as an error).
+   */
+  private wake(): void {
+    if (this.ws || !this.snap.looking) return;
+    const since = Date.now() - this.tried;
+    if (this.timer === 0 && this.failing) {
+      if (since < LONG_AWAY) return;
+      this.failing = 0;
+    } else if (since < 30_000) return;
     this.connect();
   }
 
@@ -137,6 +154,9 @@ class Companion {
   private connect(): void {
     if (this.ws || !this.snap.looking) return;
     window.clearTimeout(this.timer);
+    this.timer = 0;
+    this.tried = Date.now();
+    if (!this.failing) this.failing = this.tried;
     let ws: WebSocket;
     try {
       ws = new WebSocket(`ws://127.0.0.1:${COMPANION_PORT}`);
@@ -160,15 +180,26 @@ class Companion {
     };
   }
 
+  /**
+   * Again after a while, less and less often; after a few minutes of nothing there, no more until the
+   * window comes back from a long while away or Audio & MIDI settings ask (each try the browser
+   * logs as a failed connection).
+   */
   private later(): void {
     window.clearTimeout(this.timer);
+    this.timer = 0;
+    if (this.failing && Date.now() - this.failing > GIVE_UP) return;
     this.timer = window.setTimeout(() => this.connect(), this.retry);
-    this.retry = Math.min(30_000, this.retry * 2);
+    this.retry = Math.min(60_000, this.retry * 2);
   }
+  /** When the last try was made, and when the run of tries that found nothing began (0: none). */
+  private tried = 0;
+  private failing = 0;
 
   private receive(msg: FromCompanion): void {
     switch (msg.type) {
       case 'hello':
+        this.failing = 0;
         this.set({ version: msg.version, note: null });
         void (this.beforeOpen?.() ?? Promise.resolve()).finally(() =>
           this.send({ type: 'open', exclusive: this.exclusive, floor: this.floor }),
@@ -206,6 +237,9 @@ class Companion {
 }
 
 const REPLACED = 'HO[LO] Engine is playing another studio tab now: reload this one to bring it back here.';
+/** How long to keep looking for it when it isn't there, and how long away makes another look worth it. */
+const GIVE_UP = 5 * 60_000;
+const LONG_AWAY = 2 * 60_000;
 
 /**
  * Browsers ask before a public site reaches this computer's own addresses, so from one the studio

@@ -56,7 +56,14 @@ wraps `EngineCore` from `@holo/engine`):
 - **Meters and the playhead** come back through shared memory, read by the screen every frame.
 - **With shared memory, the song itself is played ahead** by worker threads on the other cores, and
   the audio thread plays the master and whatever comes in live (see Scaling, below).
-- Nothing allocates on the audio thread except a voice object per note. All buffers are preallocated.
+- Nothing allocates on the audio thread except a voice object per note. All buffers are preallocated,
+  and the per-sample helpers pass their numbers through fields and typed arrays rather than returning
+  them: a call the JavaScript engine doesn't inline boxes every raw double it takes or returns, and the
+  garbage that makes costs a collection pause every few blocks.
+- **Convolution is spread over the period.** A hall's long partitions take their forward transform,
+  the sum over the spectrum and the inverse transform in about-equal pieces, one or two per block,
+  so no single block pays for a 32768-point transform; the output lands in the same block as before,
+  so the numbers don't change.
 
 ## Scaling
 

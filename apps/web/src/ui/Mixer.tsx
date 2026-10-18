@@ -1,6 +1,7 @@
 /** The mixer: a channel strip per track, then the buses and the master; and the plugin windows. */
 import { bandsResponse, peqBands } from '@holo/engine';
 import {
+  type Bus,
   type Channel,
   type Op,
   type ParamDef,
@@ -18,9 +19,9 @@ import {
   type Track,
 } from '@holo/session';
 import { Headphones, Power, X } from 'lucide-react';
-import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react';
+import { memo, type ReactNode, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react';
 import {
-  addBus,
+  addBusWithSend,
   addPlugin,
   apply,
   beginGesture,
@@ -35,7 +36,7 @@ import { isPhone, useLayout } from '../app/layout.ts';
 import { store, useApp } from '../app/store.ts';
 import { engine } from '../audio/engine.ts';
 import { library } from '../audio/samples.ts';
-import { Fader, formatDb, Knob, Meter, PanKnob, startDrag } from './controls.tsx';
+import { Fader, formatDb, Knob, Meter, PanKnob, startDrag, TAP } from './controls.tsx';
 import { prepare, useFrame, useSize } from './frame.ts';
 import { openMenu, openMenuAt } from './menu.tsx';
 import { inputLabel, instrumentLabel, instrumentMenu } from './Tracks.tsx';
@@ -86,20 +87,13 @@ function PluginSlot({ target, plugin }: { target: string; plugin: Plugin }) {
     >
       <button
         type="button"
+        className="slot-power"
         tabIndex={-1}
         title="Bypass"
         aria-label={plugin.bypass ? 'Turn on' : 'Bypass'}
         onClick={(e) => {
           e.stopPropagation();
           apply([{ op: 'updatePlugin', target, plugin: plugin.id, patch: { bypass: !plugin.bypass } }], 'Bypass');
-        }}
-        style={{
-          display: 'inline-flex',
-          padding: 0,
-          border: 0,
-          background: 'none',
-          cursor: 'pointer',
-          opacity: plugin.bypass ? 0.4 : 0.9,
         }}
       >
         <Power size={10} />
@@ -134,17 +128,32 @@ interface StripProps {
   selected?: boolean;
 }
 
-export function Strip({ id, kind, name, color, channel, track, selected }: StripProps) {
-  const buses = useApp((s) => s.project?.buses ?? []);
+const NO_BUSES: Bus[] = [];
+
+/**
+ * One channel strip. Memoised: a song's edits leave the other strips' channel and track
+ * objects as they were, so only the strip that changed is drawn again.
+ */
+export const Strip = memo(function Strip({ id, kind, name, color, channel, track, selected }: StripProps) {
+  const buses = useApp((s) => s.project?.buses ?? NO_BUSES);
   const show = useApp((s) => s.show);
   const set = (patch: Partial<Channel>) => gestureChange([{ op: 'updateChannel', target: id, patch }]);
   // the fader takes whatever height is left; the slots above scroll when the strip is short
   const faderBox = useRef<HTMLDivElement>(null);
   const faderHeight = Math.max(56, useSize(faderBox).h - 2);
+  // a tap on the strip selects its track; a scroll, a fader drag or a right-click doesn't
+  const press = useRef<{ x: number; y: number } | null>(null);
   return (
     <section
       className={`strip ${kind}${selected ? ' selected' : ''}`}
-      onPointerDown={() => kind === 'track' && selectTrack(id)}
+      onPointerDown={(e) => {
+        press.current = e.button === 0 ? { x: e.clientX, y: e.clientY } : null;
+      }}
+      onPointerUp={(e) => {
+        const p = press.current;
+        press.current = null;
+        if (p && kind === 'track' && Math.hypot(e.clientX - p.x, e.clientY - p.y) < TAP) selectTrack(id);
+      }}
       aria-label={`${name} channel strip`}
     >
       <div className="strip-top">
@@ -215,9 +224,10 @@ export function Strip({ id, kind, name, color, channel, track, selected }: Strip
               return (
                 <div
                   key={s.bus}
-                  className="slot send"
+                  className="slot send drag"
                   title={`Send to ${bus?.name ?? 'bus'}: drag to set the level, right-click for more`}
                   onPointerDown={(e) => {
+                    if (e.button !== 0) return;
                     e.stopPropagation();
                     let level = s.level;
                     beginGesture('Send Level');
@@ -283,15 +293,8 @@ export function Strip({ id, kind, name, color, channel, track, selected }: Strip
                   'sep' as const,
                   {
                     label: 'New bus…',
-                    onSelect: () => {
-                      const busId = addBus(`Bus ${buses.length + 1}`);
-                      if (busId)
-                        updateChannel(
-                          id,
-                          { sends: [...channel.sends, { bus: busId, level: -12, pre: false }] },
-                          'Add Send',
-                        );
-                    },
+                    // the bus and its send are one step, so undo takes both back together
+                    onSelect: () => addBusWithSend(id, `Bus ${buses.length + 1}`, -12),
                   },
                 ])
               }
@@ -306,16 +309,23 @@ export function Strip({ id, kind, name, color, channel, track, selected }: Strip
           <span className="label">Stage</span>
           {channel.stage ? (
             <div
-              className="slot send"
+              className="slot send drag"
               title="Stage: drag to move it nearer or further back, click for its seats, right-click for more"
               onPointerDown={(e) => {
+                if (e.button !== 0) return;
                 e.stopPropagation();
                 const stage = channel.stage as Stage;
                 let d = stage.distance;
+                // a tap opens the seats; the distance only moves once the finger has clearly dragged
+                let tx = 0;
+                let ty = 0;
                 let moved = false;
                 beginGesture('Distance');
                 startDrag(e, {
                   onMove: (dx, dy) => {
+                    tx += dx;
+                    ty += dy;
+                    if (!moved && Math.hypot(tx, ty) < TAP) return;
                     moved = true;
                     d = Math.max(0, Math.min(1, d + (dx - dy) * 0.004));
                     gestureChange([
@@ -326,9 +336,10 @@ export function Strip({ id, kind, name, color, channel, track, selected }: Strip
                       },
                     ]);
                   },
-                  onEnd: () => {
+                  onEnd: (cancelled) => {
                     endGesture();
-                    if (!moved) store.set({ stage: id });
+                    // a scroll that began on the slot is cancelled by the browser: not a tap
+                    if (!moved && !cancelled) store.set({ stage: id });
                   },
                 });
               }}
@@ -362,11 +373,10 @@ export function Strip({ id, kind, name, color, channel, track, selected }: Strip
       )}
       {kind !== 'master' && show.stripOutput && (
         <select
-          className="select"
+          className="select strip-output"
           value={channel.output || 'master'}
           aria-label="Output"
           title="Output"
-          style={{ height: 22, fontSize: 10.5 }}
           onChange={(e) => updateChannel(id, { output: e.target.value }, 'Output')}
         >
           <option value="master">Stereo Out</option>
@@ -379,7 +389,7 @@ export function Strip({ id, kind, name, color, channel, track, selected }: Strip
             ))}
         </select>
       )}
-      <div style={{ display: show.stripPan ? 'flex' : 'none', justifyContent: 'center' }}>
+      <div className={`strip-pan${show.stripPan ? '' : ' off'}`}>
         <PanKnob
           value={channel.pan}
           onBegin={() => beginGesture('Pan')}
@@ -392,13 +402,14 @@ export function Strip({ id, kind, name, color, channel, track, selected }: Strip
         <Fader
           db={channel.volume}
           height={faderHeight}
+          label={`${name} volume`}
           onBegin={() => beginGesture('Volume')}
           onEnd={endGesture}
           onChange={(v) => set({ volume: v })}
         />
         <Meter id={id} height={Math.max(40, faderHeight - 8)} width={12} />
       </div>
-      <div style={{ display: 'flex', justifyContent: 'center', gap: 3 }}>
+      <div className="strip-chips">
         {kind !== 'master' && (
           <>
             <button
@@ -434,15 +445,27 @@ export function Strip({ id, kind, name, color, channel, track, selected }: Strip
       </div>
     </section>
   );
-}
+});
+
+/** The editor pane's height the mixer wants at least: its slots, a fader and the name, all in view. */
+const MIXER_PANE = 420;
 
 export function Mixer() {
-  const project = useApp((s) => s.project);
+  // the slices are stable while something else changes, so an edit redraws one strip, not the row
+  const tracks = useApp((s) => s.project?.tracks);
+  const buses = useApp((s) => s.project?.buses);
+  const master = useApp((s) => s.project?.master);
   const selected = useApp((s) => s.selectedTrack);
-  if (!project) return null;
+  const phone = isPhone(useLayout());
+  // in the editor pane (not a phone's own tab) the mixer opens tall enough to use
+  useEffect(() => {
+    if (phone) return;
+    store.set((s) => ({ editorHeight: Math.max(s.editorHeight, Math.min(MIXER_PANE, window.innerHeight - 180)) }));
+  }, [phone]);
+  if (!tracks || !buses || !master) return null;
   return (
     <div className="mixer">
-      {project.tracks.map((t) => (
+      {tracks.map((t) => (
         <Strip
           key={t.id}
           id={t.id}
@@ -454,10 +477,10 @@ export function Mixer() {
           selected={t.id === selected}
         />
       ))}
-      {project.buses.map((b) => (
+      {buses.map((b) => (
         <Strip key={b.id} id={b.id} kind="bus" name={b.name} color={b.color} channel={b.channel} />
       ))}
-      <Strip id="master" kind="master" name="Stereo Out" color="#e9d8b4" channel={project.master} />
+      <Strip id="master" kind="master" name="Stereo Out" color="#e9d8b4" channel={master} />
     </div>
   );
 }
@@ -726,7 +749,7 @@ function PeqBands({
               if (!p) return null;
               const dim = !on || (k === 'g' && !PEQ_GAINED.has(kind));
               return (
-                <div key={k} style={{ opacity: dim ? 0.35 : 1 }}>
+                <div key={k} className={`peq-knob${dim ? ' dim' : ''}`}>
                   <Knob
                     def={p}
                     value={paramValue('peq', params, p.id)}
@@ -752,40 +775,126 @@ function GainReduction({ target, plugin }: { target: string; plugin: string }) {
   const text = useRef<HTMLSpanElement>(null);
   // this plugin's own reduction, not the channel's deepest (a gate beside a compressor would show)
   useEffect(() => engine.watchPlugin(target, plugin), [target, plugin]);
+  // written to a tenth of a dB, and only when that changes: a steady reading costs no layout
+  const shown = useRef(Number.NaN);
   useFrame(() => {
-    const gr = engine.pluginGr(target);
+    const gr = Math.round(engine.pluginGr(target) * 10) / 10;
+    if (gr === shown.current) return;
+    shown.current = gr;
     if (bar.current) bar.current.style.width = `${Math.min(100, (-gr / 30) * 100)}%`;
     if (text.current) text.current.textContent = `${gr.toFixed(1)} dB`;
   });
   return (
-    <div style={{ padding: '10px 12px' }}>
-      <div className="hstack" style={{ justifyContent: 'space-between' }}>
-        <span className="label" style={{ color: 'var(--lcd-dim)' }}>
-          Gain reduction
-        </span>
-        <span ref={text} className="mono" style={{ color: 'var(--lcd-text)' }} />
+    <div className="gr">
+      <div className="gr-head">
+        <span className="label gr-label">Gain reduction</span>
+        <span ref={text} className="mono gr-value" />
       </div>
-      <div
-        style={{
-          height: 8,
-          marginTop: 6,
-          borderRadius: 4,
-          background: '#13171b',
-          overflow: 'hidden',
-          direction: 'rtl',
-        }}
-      >
-        <div
-          ref={bar}
-          style={{
-            height: '100%',
-            width: 0,
-            background: 'linear-gradient(90deg, #ff4f5e, #f6c453)',
-            boxShadow: '0 0 8px rgba(246,196,83,0.5)',
-          }}
-        />
+      <div className="gr-track">
+        <div ref={bar} className="gr-bar" />
       </div>
     </div>
+  );
+}
+
+/** The window's size, so a floating window stays on screen when it changes (a window resized, a phone turned). */
+function useViewport(): { w: number; h: number } {
+  const [v, setV] = useState(() => ({ w: window.innerWidth, h: window.innerHeight }));
+  useEffect(() => {
+    const on = () =>
+      setV((s) =>
+        s.w === window.innerWidth && s.h === window.innerHeight ? s : { w: window.innerWidth, h: window.innerHeight },
+      );
+    window.addEventListener('resize', on);
+    window.addEventListener('orientationchange', on);
+    return () => {
+      window.removeEventListener('resize', on);
+      window.removeEventListener('orientationchange', on);
+    };
+  }, []);
+  return v;
+}
+
+/**
+ * A plugin's or a stage's window: it floats where it was put (its header drags it), and on a
+ * phone it is a sheet up from the bottom, with a scrim behind it that closes it. Keyed by what
+ * it shows, so a new one opens centred and takes the keyboard; closing gives the keyboard back.
+ */
+function Floating({
+  width,
+  phone,
+  className,
+  label,
+  header,
+  onClose,
+  children,
+}: {
+  width: number;
+  phone: boolean;
+  className?: string;
+  label: string;
+  header: ReactNode;
+  onClose: () => void;
+  children: ReactNode;
+}) {
+  const vp = useViewport();
+  const win = useRef<HTMLDivElement>(null);
+  const [pos, setPos] = useState(() => ({
+    x: Math.max(8, window.innerWidth / 2 - width / 2),
+    y: Math.max(60, window.innerHeight / 2 - 220),
+  }));
+  useEffect(() => {
+    const before = document.activeElement;
+    win.current?.focus({ preventScroll: true });
+    return () => {
+      if (before instanceof HTMLElement && before.isConnected) before.focus({ preventScroll: true });
+    };
+  }, []);
+  // kept on screen however the window was left (a smaller window, a phone turned)
+  const left = Math.max(0, Math.min(vp.w - 120, pos.x));
+  const top = Math.max(0, Math.min(vp.h - 40, pos.y));
+  return (
+    <>
+      {phone && <button type="button" className="sheet-scrim" aria-label="Close" tabIndex={-1} onClick={onClose} />}
+      <div
+        ref={win}
+        className={`plugin-window${phone ? ' sheet' : ''}${className ? ` ${className}` : ''}`}
+        style={phone ? undefined : { left, top, width }}
+        role="dialog"
+        aria-label={label}
+        tabIndex={-1}
+        onKeyDown={(e) => {
+          if (e.key !== 'Escape') return;
+          e.stopPropagation();
+          onClose();
+        }}
+      >
+        <header
+          onPointerDown={(e) => {
+            if (phone || e.button !== 0 || (e.target as HTMLElement).closest('button')) return;
+            const el = win.current;
+            if (!el) return;
+            // the window follows the pointer as a transform, and its place is kept once it's let go
+            let tx = 0;
+            let ty = 0;
+            startDrag(e, {
+              onMove: (dx, dy) => {
+                tx += dx;
+                ty += dy;
+                el.style.transform = `translate(${tx}px, ${ty}px)`;
+              },
+              onEnd: () => {
+                el.style.transform = '';
+                setPos({ x: left + tx, y: top + ty });
+              },
+            });
+          }}
+        >
+          {header}
+        </header>
+        <div className="plugin-body">{children}</div>
+      </div>
+    </>
   );
 }
 
@@ -794,8 +903,7 @@ export function PluginWindow() {
   const project = useApp((s) => s.project);
   const layout = useLayout();
   const phone = isPhone(layout);
-  const [pos, setPos] = useState({ x: 0, y: 0 });
-  const placed = useRef<string | null>(null);
+  const vp = useViewport();
   if (!open || !project) return null;
   const { target, id } = open;
   const owner =
@@ -810,60 +918,39 @@ export function PluginWindow() {
   const plugin = owner?.list.find((p) => p.id === id);
   const def = plugin ? pluginDef(plugin.type) : undefined;
   if (!owner || !plugin || !def) return null;
-  if (placed.current !== id) {
-    placed.current = id;
-    const x = Math.max(8, window.innerWidth / 2 - (plugin.type === 'peq' ? 300 : 230));
-    const y = Math.max(60, window.innerHeight / 2 - 220);
-    if (pos.x !== x || pos.y !== y) setPos({ x, y });
-  }
   // Parametric EQ's eight bands want more room than a row of knobs
-  const width = phone ? window.innerWidth : plugin.type === 'peq' ? 600 : 460;
+  const width = phone ? vp.w : plugin.type === 'peq' ? 600 : 460;
   const change = (param: string, value: number) =>
     gestureChange([{ op: 'updatePlugin', target, plugin: id, patch: { params: { [param]: value } } } satisfies Op]);
-  const style = phone
-    ? {
-        left: 0,
-        right: 0,
-        bottom: 0,
-        top: 'auto',
-        width: '100%',
-        maxWidth: '100%',
-        borderRadius: '16px 16px 0 0',
-        paddingBottom: 'var(--safe-bottom)',
-      }
-    : { left: pos.x, top: pos.y, width };
+  const close = () => store.set({ plugin: null });
   return (
-    <div className="plugin-window" style={style} role="dialog" aria-label={def.name}>
-      <header
-        onPointerDown={(e) => {
-          if (phone || (e.target as HTMLElement).closest('button')) return;
-          let { x, y } = pos;
-          startDrag(e, {
-            onMove: (dx, dy) => {
-              x = Math.max(0, Math.min(window.innerWidth - 120, x + dx));
-              y = Math.max(0, Math.min(window.innerHeight - 40, y + dy));
-              setPos({ x, y });
-            },
-          });
-        }}
-      >
-        <button
-          type="button"
-          className={`btn icon${plugin.bypass ? '' : ' on'}`}
-          title={plugin.bypass ? 'Turn on' : 'Bypass'}
-          style={{ height: 24, minWidth: 24 }}
-          onClick={() =>
-            apply([{ op: 'updatePlugin', target, plugin: id, patch: { bypass: !plugin.bypass } }], 'Bypass')
-          }
-        >
-          <Power />
-        </button>
-        <span className="name">{def.name}</span>
-        <span className="muted">{owner.name}</span>
-        <button type="button" className="btn ghost icon" title="Close" onClick={() => store.set({ plugin: null })}>
-          <X />
-        </button>
-      </header>
+    <Floating
+      key={id}
+      width={width}
+      phone={phone}
+      label={def.name}
+      onClose={close}
+      header={
+        <>
+          <button
+            type="button"
+            className={`btn icon power${plugin.bypass ? '' : ' on'}`}
+            title={plugin.bypass ? 'Turn on' : 'Bypass'}
+            aria-label={plugin.bypass ? 'Turn on' : 'Bypass'}
+            onClick={() =>
+              apply([{ op: 'updatePlugin', target, plugin: id, patch: { bypass: !plugin.bypass } }], 'Bypass')
+            }
+          >
+            <Power />
+          </button>
+          <span className="name">{def.name}</span>
+          <span className="muted">{owner.name}</span>
+          <button type="button" className="btn ghost icon" title="Close" aria-label="Close" onClick={close}>
+            <X />
+          </button>
+        </>
+      }
+    >
       {plugin.type === 'eq' && (
         <div className="display">
           <EqDisplay params={plugin.params} width={width - 30} />
@@ -916,7 +1003,7 @@ export function PluginWindow() {
           .filter(() => plugin.type !== 'wow' || !plugin.settings?.curve)
           .map((p) =>
             p.options && p.options.length <= 3 ? (
-              <div key={p.id} className="knob" style={{ cursor: 'default', justifyContent: 'center' }}>
+              <div key={p.id} className="knob choice">
                 <button
                   type="button"
                   className={`btn${paramValue(def.type, plugin.params, p.id) >= 0.5 ? ' on' : ''}`}
@@ -951,15 +1038,13 @@ export function PluginWindow() {
                 onBegin={() => beginGesture(`${def.name}: ${p.name}`)}
                 onEnd={endGesture}
                 onChange={(v) => change(p.id, v)}
-                color={def.kind === 'midi' ? '#c792ff' : '#5cb8ff'}
+                color={def.kind === 'midi' ? 'var(--ai)' : 'var(--accent)'}
               />
             ),
           )}
       </div>
-      <div className="muted" style={{ padding: '0 14px 12px' }}>
-        {def.description}
-      </div>
-    </div>
+      <div className="muted plugin-note">{def.description}</div>
+    </Floating>
   );
 }
 
@@ -979,18 +1064,10 @@ export function StageWindow() {
   const project = useApp((s) => s.project);
   const layout = useLayout();
   const phone = isPhone(layout);
-  const [pos, setPos] = useState({ x: 0, y: 0 });
-  const placed = useRef<string | null>(null);
   if (!target || !project) return null;
   const owner = project.tracks.find((t) => t.id === target) ?? project.buses.find((b) => b.id === target) ?? null;
   const stage = owner?.channel.stage;
   if (!owner || !stage) return null;
-  if (placed.current !== target) {
-    placed.current = target;
-    const x = Math.max(8, window.innerWidth / 2 - 230);
-    const y = Math.max(60, window.innerHeight / 2 - 220);
-    if (pos.x !== x || pos.y !== y) setPos({ x, y });
-  }
   const setStage = (next: Stage) => gestureChange([{ op: 'updateChannel', target, patch: { stage: next } }]);
   const applyStage = (next: Stage, label: string) => updateChannel(target, { stage: next }, label);
   const seat = (which: 'near' | 'far') => {
@@ -1060,30 +1137,25 @@ export function StageWindow() {
       </div>
     );
   };
-  const style = phone
-    ? { left: 0, right: 0, bottom: 0, top: 'auto', width: '100%', maxWidth: '100%', borderRadius: '16px 16px 0 0' }
-    : { left: pos.x, top: pos.y };
+  const close = () => store.set({ stage: null });
   return (
-    <div className="plugin-window stage-window" style={style} role="dialog" aria-label="Stage">
-      <header
-        onPointerDown={(e) => {
-          if (phone || (e.target as HTMLElement).closest('button')) return;
-          let { x, y } = pos;
-          startDrag(e, {
-            onMove: (dx, dy) => {
-              x = Math.max(0, Math.min(window.innerWidth - 120, x + dx));
-              y = Math.max(0, Math.min(window.innerHeight - 40, y + dy));
-              setPos({ x, y });
-            },
-          });
-        }}
-      >
-        <span className="name">Stage</span>
-        <span className="muted">{owner.name}</span>
-        <button type="button" className="btn ghost icon" title="Close" onClick={() => store.set({ stage: null })}>
-          <X />
-        </button>
-      </header>
+    <Floating
+      key={target}
+      width={460}
+      phone={phone}
+      className="stage-window"
+      label="Stage"
+      onClose={close}
+      header={
+        <>
+          <span className="name">Stage</span>
+          <span className="muted">{owner.name}</span>
+          <button type="button" className="btn ghost icon" title="Close" aria-label="Close" onClick={close}>
+            <X />
+          </button>
+        </>
+      }
+    >
       <div className="stage-distance">
         <span className="muted">Near</span>
         <Knob
@@ -1100,11 +1172,11 @@ export function StageWindow() {
         {seat('near')}
         {seat('far')}
       </div>
-      <div className="muted" style={{ padding: '0 14px 12px' }}>
+      <div className="muted plugin-note">
         Distance moves the sound between its seats at equal power (and can be automated). Depth sets a seat back: its
         direct sound darker and quieter. The seats’ sends are the sound as it reaches them, so further back is wetter.
       </div>
-    </div>
+    </Floating>
   );
 }
 
@@ -1177,7 +1249,7 @@ function SpacePicker({ target, plugin }: { target: string; plugin: Plugin }) {
           </select>
         </label>
       )}
-      <span className="muted" style={{ fontSize: 11 }}>
+      <span className="muted plugin-hint">
         {space >= SPACE_FILE
           ? 'A recorded or exported response, played as it is.'
           : 'Generated to a design: Variation picks another room of the same kind, Decay scales how long it rings.'}

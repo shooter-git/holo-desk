@@ -32,14 +32,17 @@ import { engine } from '../audio/engine.ts';
 import { audioFiles } from '../audio/files.ts';
 import { Knob } from './controls.tsx';
 import { alpha, prepare, useFrame, useSize } from './frame.ts';
+import { capture, edgeScroll, type Gesture, Pinch, screenDpr, useWheel } from './gesture.ts';
 import { chooseAudioFiles, inputLabel } from './Tracks.tsx';
-import { gridStep, Viewport } from './view.ts';
+import { gridStep, Viewport, WHEEL_ZOOM, ZOOM } from './view.ts';
 import { drawClipWave, drawFades, fadeTo, fileSpan, setStretch, trimEnd, trimStart } from './wave.ts';
 
 export const audioView = new Viewport(120);
 
 const GAIN: ParamDef = { id: 'gain', name: 'Gain', min: -24, max: 24, default: 0, step: 0.1, unit: 'dB' };
+/** How close to an edge or a fade square grabs it, with a mouse and with a finger. */
 const HANDLE = 9;
+const HANDLE_TOUCH = 18;
 
 type Grab = 'start' | 'end' | 'fadeIn' | 'fadeOut';
 
@@ -73,12 +76,19 @@ export function AudioEditor() {
   const dirty = useRef(true);
   const preview = useRef<{ start: number; length: number; audio: AudioClip } | null>(null);
   const [, bump] = useState(0);
+  const gesture = useRef<Gesture | null>(null);
+  const pinch = useRef(new Pinch());
+  const lastOverlay = useRef({ x: -1, w: 0, h: 0, rec: false, dpr: 0 });
+  const lastDpr = useRef(screenDpr());
 
+  // everything the picture reads: a change to any of it redraws
+  // biome-ignore lint/correctness/useExhaustiveDependencies: the list is what drawing reads, not what the effect touches
   useEffect(() => {
     dirty.current = true;
-  });
+  }, [project, track, region, size, rulerSize]);
   useEffect(() => audioView.subscribe(() => (dirty.current = true)), []);
   useEffect(() => audioFiles.subscribe(() => (dirty.current = true)), []);
+  useEffect(() => () => gesture.current?.abort(), []);
 
   // a region opens: the whole recording in view
   // biome-ignore lint/correctness/useExhaustiveDependencies: refits when the region changes, not on every edit
@@ -88,7 +98,7 @@ export function AudioEditor() {
     const from = Math.min(a, region.start);
     const to = Math.max(Number.isFinite(b) ? b : region.start + region.length, region.start + region.length);
     const span = Math.max(240, to - from);
-    audioView.zoom = Math.max(4, Math.min(4000, ((size.w * 0.9) / span) * 960));
+    audioView.zoom = Math.max(ZOOM.audio[0], Math.min(ZOOM.audio[1], ((size.w * 0.9) / span) * 960));
     audioView.x = Math.max(0, from - (size.w * 0.05) / audioView.pxPerTick);
     audioView.emit();
   }, [region?.id, size.w > 0]);
@@ -96,6 +106,20 @@ export function AudioEditor() {
   useFrame(() => {
     const p = store.get().project;
     if (!p) return;
+    // a drag resting at an edge scrolls the view under it
+    const g = gesture.current;
+    if (g?.edgeScroll && box.current) {
+      const { dx } = edgeScroll(g.last, box.current.getBoundingClientRect(), 'x');
+      if (dx) {
+        audioView.scrollBy(dx, 0);
+        g.replay();
+      }
+    }
+    const dpr = screenDpr();
+    if (dpr !== lastDpr.current) {
+      lastDpr.current = dpr;
+      dirty.current = true;
+    }
     if (dirty.current) {
       dirty.current = false;
       const ctx = prepare(canvas.current, size.w, size.h);
@@ -103,16 +127,30 @@ export function AudioEditor() {
       const rctx = prepare(rulerCanvas.current, rulerSize.w, rulerSize.h);
       if (rctx) drawRuler(rctx, p, rulerSize.w, rulerSize.h);
     }
-    const octx = prepare(overlay.current, size.w, size.h);
-    if (octx) {
-      octx.clearRect(0, 0, size.w, size.h);
-      const x = Math.round(audioView.tickToX(Math.max(0, engine.positionTick()))) + 0.5;
-      if (x >= 0 && x <= size.w) {
-        octx.fillStyle = store.get().recording ? '#ff4f5e' : '#ffffff';
-        octx.fillRect(x - 0.5, 0, 1.5, size.h);
+    // the playhead, on its own layer, redrawn only when it has moved a pixel
+    const x = Math.round(audioView.tickToX(Math.max(0, engine.positionTick()))) + 0.5;
+    const rec = store.get().recording;
+    const last = lastOverlay.current;
+    if (x !== last.x || size.w !== last.w || size.h !== last.h || rec !== last.rec || dpr !== last.dpr) {
+      lastOverlay.current = { x, w: size.w, h: size.h, rec, dpr };
+      const octx = prepare(overlay.current, size.w, size.h);
+      if (octx) {
+        octx.clearRect(0, 0, size.w, size.h);
+        if (x >= 0 && x <= size.w) {
+          octx.fillStyle = rec ? '#ff4f5e' : '#ffffff';
+          octx.fillRect(x - 0.5, 0, 1.5, size.h);
+        }
       }
     }
   });
+
+  const onWheel = (e: WheelEvent, dx: number, dy: number) => {
+    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    if (e.ctrlKey || e.metaKey) audioView.zoomAt(Math.exp(-dy * WHEEL_ZOOM), e.clientX - rect.left, ...ZOOM.audio);
+    else audioView.scrollBy(dx || dy, 0);
+  };
+  useWheel(box, onWheel);
+  useWheel(rulerBox, onWheel);
 
   if (!project || !track) return <div className="audio-ed empty">Select a track.</div>;
   if (!region?.audio) {
@@ -137,19 +175,20 @@ export function AudioEditor() {
     return Math.round(tick / step) * step;
   };
 
-  const grabAt = (x: number, y: number): Grab | null => {
+  const grabAt = (x: number, y: number, touch = false): Grab | null => {
     const shown = preview.current ?? { start: region.start, length: region.length, audio: clip };
     const x0 = audioView.tickToX(shown.start);
     const x1 = audioView.tickToX(shown.start + shown.length);
     const s0 = tickToSeconds(project.tempo, shown.start);
     const total = secondsBetween(project, shown.start, shown.start + shown.length);
     const fx = (sec: number) => audioView.tickToX(secondsToTick(project.tempo, s0 + sec));
-    if (y < 22) {
-      if (Math.abs(x - fx(shown.audio.fadeIn)) < HANDLE + 2 && x < (x0 + x1) / 2) return 'fadeIn';
-      if (Math.abs(x - fx(total - shown.audio.fadeOut)) < HANDLE + 2 && x > (x0 + x1) / 2) return 'fadeOut';
+    const handle = touch ? HANDLE_TOUCH : HANDLE;
+    if (y < (touch ? 36 : 22)) {
+      if (Math.abs(x - fx(shown.audio.fadeIn)) < handle + 2 && x < (x0 + x1) / 2) return 'fadeIn';
+      if (Math.abs(x - fx(total - shown.audio.fadeOut)) < handle + 2 && x > (x0 + x1) / 2) return 'fadeOut';
     }
-    if (Math.abs(x - x0) < HANDLE) return 'start';
-    if (Math.abs(x - x1) < HANDLE) return 'end';
+    if (Math.abs(x - x0) < handle) return 'start';
+    if (Math.abs(x - x1) < handle) return 'end';
     return null;
   };
 
@@ -173,55 +212,61 @@ export function AudioEditor() {
     const x = e.clientX - rect.left;
     const y = e.clientY - rect.top;
     store.set({ selectedRegions: [region.id] });
-    const grab = grabAt(x, y);
-    const el = e.currentTarget;
-    el.setPointerCapture(e.pointerId);
-    const startX = e.clientX;
+    const grab = grabAt(x, y, e.pointerType === 'touch');
     let lx = e.clientX;
     let label = '';
-    const move = (ev: PointerEvent) => {
-      const tick = audioView.xToTick(ev.clientX - rect.left);
-      const free = ev.ctrlKey || ev.metaKey;
-      if (grab === 'start') {
-        preview.current = trimStart(project, region, clip, snapTo(tick, free));
-        label = 'Trim Region';
-      } else if (grab === 'end') {
-        const stretch = ev.altKey;
-        const r = trimEnd(project, region, clip, snapTo(tick, free) - region.start, stretch);
-        preview.current = { start: region.start, ...r };
-        label = stretch ? 'Time Stretch' : 'Trim Region';
-      } else if (grab) {
-        preview.current = {
-          start: region.start,
-          length: region.length,
-          audio: fadeTo(project, region, clip, grab, tick),
-        };
-        label = 'Fade';
-      } else {
-        // empty space: drag to scroll
-        audioView.scrollBy(lx - ev.clientX, 0);
-        lx = ev.clientX;
-      }
-      dirty.current = true;
-    };
-    const up = (ev: PointerEvent) => {
-      el.removeEventListener('pointermove', move);
-      el.removeEventListener('pointerup', up);
-      el.removeEventListener('pointercancel', up);
-      const next = preview.current;
-      preview.current = null;
-      dirty.current = true;
-      if (next) commit(next, label);
-      else if (!grab && Math.abs(ev.clientX - startX) < 4)
-        locate(snapTo(audioView.xToTick(ev.clientX - rect.left), true));
-      bump((n) => n + 1);
-    };
-    el.addEventListener('pointermove', move);
-    el.addEventListener('pointerup', up);
-    el.addEventListener('pointercancel', up);
+    gesture.current?.abort();
+    gesture.current = capture(e, {
+      edgeScroll: grab ? 'x' : undefined,
+      onMove: (ev) => {
+        const tick = audioView.xToTick(ev.clientX - rect.left);
+        const free = ev.ctrlKey || ev.metaKey;
+        if (grab === 'start') {
+          preview.current = trimStart(project, region, clip, snapTo(tick, free));
+          label = 'Trim Region';
+        } else if (grab === 'end') {
+          const stretch = ev.altKey;
+          const r = trimEnd(project, region, clip, snapTo(tick, free) - region.start, stretch);
+          preview.current = { start: region.start, ...r };
+          label = stretch ? 'Time Stretch' : 'Trim Region';
+        } else if (grab) {
+          preview.current = {
+            start: region.start,
+            length: region.length,
+            audio: fadeTo(project, region, clip, grab, tick),
+          };
+          label = 'Fade';
+        } else {
+          // empty space: drag to scroll
+          audioView.scrollBy(lx - ev.clientX, 0);
+          lx = ev.clientX;
+        }
+        dirty.current = true;
+      },
+      onUp: (ev, g) => {
+        gesture.current = null;
+        const next = preview.current;
+        preview.current = null;
+        dirty.current = true;
+        if (next) commit(next, label);
+        else if (!grab && !g.moved) locate(snapTo(audioView.xToTick(ev.clientX - rect.left), true));
+        bump((n) => n + 1);
+      },
+      onAbort: () => {
+        gesture.current = null;
+        preview.current = null;
+        dirty.current = true;
+      },
+    });
   };
 
   const onMove = (e: ReactPointerEvent<HTMLDivElement>) => {
+    const z = pinch.current.move(e);
+    if (z) {
+      const rect = e.currentTarget.getBoundingClientRect();
+      audioView.zoomAt(z.factor, z.x - rect.left, ...ZOOM.audio);
+      return;
+    }
     if (e.pointerType !== 'mouse' || e.buttons) return;
     const rect = e.currentTarget.getBoundingClientRect();
     const grab = grabAt(e.clientX - rect.left, e.clientY - rect.top);
@@ -235,12 +280,6 @@ export function AudioEditor() {
           : 'grab';
   };
 
-  const onWheel = (e: React.WheelEvent) => {
-    const rect = e.currentTarget.getBoundingClientRect();
-    if (e.ctrlKey || e.metaKey) audioView.zoomAt(Math.exp(-e.deltaY * 0.0025), e.clientX - rect.left, 4, 4000);
-    else audioView.scrollBy(e.deltaX || e.deltaY, 0);
-  };
-
   return (
     <div className="audio-ed">
       <div
@@ -250,11 +289,25 @@ export function AudioEditor() {
           const rect = e.currentTarget.getBoundingClientRect();
           locate(snapTo(audioView.xToTick(e.clientX - rect.left), false));
         }}
-        onWheel={onWheel}
       >
         <canvas ref={rulerCanvas} />
       </div>
-      <div className="cell" ref={box} onPointerDown={onDown} onPointerMove={onMove} onWheel={onWheel}>
+      <div
+        className="cell"
+        ref={box}
+        onPointerDown={(e) => {
+          // a second finger turns whatever the first was doing into a pinch
+          if (pinch.current.down(e)) {
+            gesture.current?.abort();
+            return;
+          }
+          if (pinch.current.active) return;
+          onDown(e);
+        }}
+        onPointerMove={onMove}
+        onPointerUp={(e) => pinch.current.up(e)}
+        onPointerCancel={(e) => pinch.current.up(e)}
+      >
         <canvas ref={canvas} />
         <canvas ref={overlay} style={{ pointerEvents: 'none' }} />
       </div>
@@ -524,7 +577,7 @@ export function AudioEditorBar() {
         type="button"
         className="btn ghost icon"
         title="Zoom out"
-        onClick={() => audioView.zoomAt(0.7, 0, 4, 4000)}
+        onClick={() => audioView.zoomAt(0.7, 0, ...ZOOM.audio)}
       >
         <ZoomOut />
       </button>
@@ -532,7 +585,7 @@ export function AudioEditorBar() {
         type="button"
         className="btn ghost icon"
         title="Zoom in"
-        onClick={() => audioView.zoomAt(1.4, 0, 4, 4000)}
+        onClick={() => audioView.zoomAt(1.4, 0, ...ZOOM.audio)}
       >
         <ZoomIn />
       </button>

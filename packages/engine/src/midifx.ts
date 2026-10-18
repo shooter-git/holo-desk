@@ -109,16 +109,22 @@ function passOther(input: EventList, output: EventList, i: number): boolean {
 }
 
 class Harmonizer implements MidiEffect {
-  private p: Record<string, number> = {};
+  private key = 0;
+  private steps: readonly number[] = [0, 2, 4, 5, 7, 9, 11];
+  private voices = [2, 0, 0];
+  private velScale = 0.8;
+  private original = true;
   private held = new Map<number, number[]>();
   setParams(p: Record<string, number>): void {
-    this.p = p;
+    const { key, steps } = scaleOf(p, 'harmonizer');
+    this.key = key;
+    this.steps = steps;
+    this.voices = ['voice1', 'voice2', 'voice3'].map((v) => Math.round(paramValue('harmonizer', p, v)));
+    this.velScale = paramValue('harmonizer', p, 'velocity') / 100;
+    this.original = paramValue('harmonizer', p, 'original') >= 0.5;
   }
   process(input: EventList, output: EventList): void {
-    const { key, steps } = scaleOf(this.p, 'harmonizer');
-    const voices = ['voice1', 'voice2', 'voice3'].map((v) => Math.round(paramValue('harmonizer', this.p, v)));
-    const velScale = paramValue('harmonizer', this.p, 'velocity') / 100;
-    const original = paramValue('harmonizer', this.p, 'original') >= 0.5;
+    const { key, steps, voices, velScale, original } = this;
     for (let i = 0; i < input.count; i++) {
       if (passOther(input, output, i)) continue;
       const off = input.offset[i] as number;
@@ -151,15 +157,20 @@ class Harmonizer implements MidiEffect {
 }
 
 class ScaleQuantizer implements MidiEffect {
-  private p: Record<string, number> = {};
+  private key = 0;
+  private steps: readonly number[] = [0, 2, 4, 5, 7, 9, 11];
+  private transpose = 0;
+  private snap = true;
   private held = new Map<number, number>();
   setParams(p: Record<string, number>): void {
-    this.p = p;
+    const { key, steps } = scaleOf(p, 'scale');
+    this.key = key;
+    this.steps = steps;
+    this.transpose = Math.round(paramValue('scale', p, 'transpose'));
+    this.snap = paramValue('scale', p, 'quantize') >= 0.5;
   }
   process(input: EventList, output: EventList): void {
-    const { key, steps } = scaleOf(this.p, 'scale');
-    const transpose = Math.round(paramValue('scale', this.p, 'transpose'));
-    const snap = paramValue('scale', this.p, 'quantize') >= 0.5;
+    const { key, steps, transpose, snap } = this;
     for (let i = 0; i < input.count; i++) {
       if (passOther(input, output, i)) continue;
       const pitch = input.a[i] as number;
@@ -181,18 +192,22 @@ class ScaleQuantizer implements MidiEffect {
 }
 
 class VelocityProcessor implements MidiEffect {
-  private p: Record<string, number> = {};
+  private scale = 1;
+  private offset = 0;
+  private random = 0;
+  private lo = 1;
+  private hi = 127;
   private seed = 12345;
   setParams(p: Record<string, number>): void {
-    this.p = p;
+    const v = (id: string) => paramValue('velocity', p, id);
+    this.scale = v('scale') / 100;
+    this.offset = v('offset');
+    this.random = v('random');
+    this.lo = v('min');
+    this.hi = Math.max(this.lo, v('max'));
   }
   process(input: EventList, output: EventList): void {
-    const v = (id: string) => paramValue('velocity', this.p, id);
-    const scale = v('scale') / 100;
-    const offset = v('offset');
-    const random = v('random');
-    const lo = v('min');
-    const hi = Math.max(lo, v('max'));
+    const { scale, offset, random, lo, hi } = this;
     for (let i = 0; i < input.count; i++) {
       let b = input.b[i] as number;
       if (input.kind[i] === EV_ON) {
@@ -209,10 +224,18 @@ class VelocityProcessor implements MidiEffect {
 const ARP_BEATS = [1, 0.5, 1 / 3, 0.25, 1 / 6, 0.125];
 
 class Arpeggiator implements MidiEffect {
-  private p: Record<string, number> = {};
+  private latch = false;
+  private mode = 0;
+  private octaves = 1;
+  private rate = 0.25;
+  private gate = 0.8;
+  private swing = 0;
   /** Keys held, in the order they were played. */
   private held: { key: number; vel: number }[] = [];
   private latched: { key: number; vel: number }[] = [];
+  /** The notes the arpeggio runs over, worked out again when the keys or the settings change. */
+  private notes: { key: number; vel: number }[] = [];
+  private stale = true;
   private physical = 0;
   private step = 0;
   private dir = 1;
@@ -226,23 +249,29 @@ class Arpeggiator implements MidiEffect {
     this.host = host;
   }
   setParams(p: Record<string, number>): void {
-    this.p = p;
+    const v = (id: string) => paramValue('arpeggiator', p, id);
+    this.latch = v('latch') >= 0.5;
+    this.mode = Math.round(v('mode'));
+    this.octaves = Math.round(v('octaves'));
+    this.rate = ARP_BEATS[Math.round(v('rate'))] ?? 0.25;
+    this.gate = v('gate') / 100;
+    this.swing = v('swing') / 100;
+    this.stale = true;
   }
   private pattern(): { key: number; vel: number }[] {
-    const v = (id: string) => paramValue('arpeggiator', this.p, id);
-    const latch = v('latch') >= 0.5;
-    const base = latch ? this.latched : this.held;
-    if (!base.length) return [];
-    const mode = Math.round(v('mode'));
-    const octaves = Math.round(v('octaves'));
-    const sorted = mode === 3 ? base.slice() : base.slice().sort((a, b) => a.key - b.key);
+    if (!this.stale) return this.notes;
+    this.stale = false;
+    const base = this.latch ? this.latched : this.held;
     const out: { key: number; vel: number }[] = [];
+    this.notes = out;
+    if (!base.length) return out;
+    const { mode, octaves } = this;
+    const sorted = mode === 3 ? base.slice() : base.slice().sort((a, b) => a.key - b.key);
     for (let o = 0; o < octaves; o++) for (const n of sorted) out.push({ key: n.key + o * 12, vel: n.vel });
     return out;
   }
   process(input: EventList, output: EventList, n: number): void {
-    const v = (id: string) => paramValue('arpeggiator', this.p, id);
-    const latch = v('latch') >= 0.5;
+    const { latch, mode, rate, gate, swing } = this;
     for (let i = 0; i < input.count; i++) {
       const kind = input.kind[i] as number;
       if (kind !== EV_ON && kind !== EV_OFF) {
@@ -250,6 +279,7 @@ class Arpeggiator implements MidiEffect {
         continue;
       }
       const key = input.a[i] as number;
+      this.stale = true;
       if (kind === EV_ON) {
         if (latch && this.physical === 0) this.latched = [];
         this.physical++;
@@ -261,15 +291,16 @@ class Arpeggiator implements MidiEffect {
         }
       } else {
         this.physical = Math.max(0, this.physical - 1);
-        this.held = this.held.filter((x) => x.key !== key);
+        // the key let go, out of the held (in place: nothing new to collect)
+        const held = this.held;
+        let kept = 0;
+        for (const x of held) if (x.key !== key) held[kept++] = x;
+        held.length = kept;
       }
     }
     const notes = this.pattern();
     const sr = this.host.sr;
     const beatSec = this.host.beatSeconds();
-    const rate = ARP_BEATS[Math.round(v('rate'))] ?? 0.25;
-    const gate = v('gate') / 100;
-    const swing = v('swing') / 100;
     const playing = this.host.playing();
     const beat0 = playing ? this.host.beatAt() : this.freeBeat;
     const beatsPerFrame = 1 / (beatSec * sr);
@@ -294,7 +325,6 @@ class Arpeggiator implements MidiEffect {
       const off = Math.max(0, Math.min(n - 1, Math.round((at - beat0) / beatsPerFrame)));
       for (const k of this.sounding) output.push(off, EV_OFF, k, 0);
       this.sounding = [];
-      const mode = Math.round(v('mode'));
       const chosen: { key: number; vel: number }[] = [];
       if (mode === 5) chosen.push(...notes);
       else if (mode === 4) {
@@ -327,10 +357,10 @@ class Arpeggiator implements MidiEffect {
     this.sounding = [];
     this.physical = 0;
     this.nextBeat = -1;
+    this.stale = true;
   }
   busy(): boolean {
-    const latch = paramValue('arpeggiator', this.p, 'latch') >= 0.5;
-    return (latch ? this.latched : this.held).length > 0 || this.sounding.length > 0;
+    return (this.latch ? this.latched : this.held).length > 0 || this.sounding.length > 0;
   }
 }
 

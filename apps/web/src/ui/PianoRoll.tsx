@@ -21,31 +21,52 @@ import {
 } from '@holo/session';
 import { Eraser, MousePointer2, Pencil, ZoomIn, ZoomOut } from 'lucide-react';
 import { type PointerEvent as ReactPointerEvent, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { apply, deleteNotes, ensureAudio, quantizeSelection, replaceNotes } from '../app/actions.ts';
+import {
+  apply,
+  deleteNotes,
+  ensureAudio,
+  quantizeSelection,
+  replaceNotes,
+  transposeSelection,
+} from '../app/actions.ts';
 import { isPhone, useLayout } from '../app/layout.ts';
 import { store, useApp } from '../app/store.ts';
 import { engine } from '../audio/engine.ts';
 import { midi } from '../audio/midi.ts';
 import { alpha, prepare, roundRect, useFrame, useSize, velocityColor } from './frame.ts';
-import { gridStep, Viewport } from './view.ts';
+import { capture, edgeScroll, type Gesture, type GestureOptions, Pinch, screenDpr, useWheel } from './gesture.ts';
+import { openMenu } from './menu.tsx';
+import { DOUBLE_TAP_MS, gridStep, Viewport, WHEEL_ZOOM, ZOOM } from './view.ts';
 
 export const rollView = new Viewport(store.get().pianoZoom);
 
-const LANES: [string, string][] = [
-  ['velocity', 'Velocity'],
-  ['1', 'Mod Wheel (CC 1)'],
-  ['11', 'Expression (CC 11)'],
-  ['64', 'Sustain (CC 64)'],
-  ['7', 'Volume (CC 7)'],
-  ['10', 'Pan (CC 10)'],
-  ['pb', 'Pitch Bend'],
-  ['at', 'Aftertouch'],
-  ['2', 'Breath (CC 2)'],
-  ['74', 'Brightness (CC 74)'],
+/** The lanes: id, the short name the narrow picker shows, the full name (for undo). */
+const LANES: [string, string, string][] = [
+  ['velocity', 'Vel', 'Velocity'],
+  ['1', 'Mod', 'Mod Wheel (CC 1)'],
+  ['11', 'Expr', 'Expression (CC 11)'],
+  ['64', 'Sust', 'Sustain (CC 64)'],
+  ['7', 'Vol', 'Volume (CC 7)'],
+  ['10', 'Pan', 'Pan (CC 10)'],
+  ['pb', 'Bend', 'Pitch Bend'],
+  ['at', 'AT', 'Aftertouch'],
+  ['2', 'Breath', 'Breath (CC 2)'],
+  ['74', 'Bright', 'Brightness (CC 74)'],
 ];
 
 const BLACK = new Set([1, 3, 6, 8, 10]);
 const isBlack = (p: number) => BLACK.has(((p % 12) + 12) % 12);
+
+// the velocity colours are mixed once per velocity, not per note per frame
+const velColors = new Map<number, string>();
+function velColor(v: number): string {
+  let c = velColors.get(v);
+  if (!c) {
+    c = velocityColor(v);
+    velColors.set(v, c);
+  }
+  return c;
+}
 
 interface NoteRef {
   note: Note;
@@ -71,6 +92,12 @@ function lanePoints(regions: Region[], lane: string): { region: Region; at: numb
 
 const laneRange = (lane: string) => (lane === 'pb' ? { min: -8192, max: 8191 } : { min: 0, max: 127 });
 
+const startOf = (r: NoteRef) => r.region.start + r.note.t;
+
+/** Edge of a note a mouse grabs, and the wider one a finger does. */
+const EDGE = 8;
+const EDGE_TOUCH = 14;
+
 export function PianoRoll() {
   const layout = useLayout();
   const phone = isPhone(layout);
@@ -87,6 +114,7 @@ export function PianoRoll() {
 
   const track = project?.tracks.find((t) => t.id === trackId) ?? null;
   const notesBox = useRef<HTMLDivElement>(null);
+  const keysBox = useRef<HTMLDivElement>(null);
   const laneBox = useRef<HTMLDivElement>(null);
   const keysCanvas = useRef<HTMLCanvasElement>(null);
   const notesCanvas = useRef<HTMLCanvasElement>(null);
@@ -98,29 +126,65 @@ export function PianoRoll() {
   const laneSize = useSize(laneBox);
   const rulerSize = useSize(rulerBox);
   const preview = useRef<Preview | null>(null);
+  /** Everything redraws; the keys and the lane also on their own, for what touches only them. */
   const dirty = useRef(true);
+  const keysDirty = useRef(false);
+  const laneDirty = useRef(false);
   const held = useRef(new Set<number>());
   const lastLength = useRef(PPQ / 2);
   const lastVelocity = useRef(100);
-  const [laneHeight, setLaneHeight] = useState(phone ? 70 : 96);
+  /** The lane's height: the layout's, until the splitter is dragged. */
+  const [laneOverride, setLaneOverride] = useState<number | null>(null);
+  const laneHeight = laneOverride ?? (layout === 'phone-landscape' ? 40 : phone ? 70 : 96);
+  const keysWidth = phone ? 44 : 66;
   const selected = useMemo(() => new Set(selectedNotes), [selectedNotes]);
   const lastTap = useRef(0);
+  const gesture = useRef<Gesture | null>(null);
+  const menuAt = useRef<((ev: PointerEvent) => void) | null>(null);
+  const pinch = useRef(new Pinch());
+  const zoomTimer = useRef(0);
+  const lastOverlay = useRef({ x: -1, w: 0, h: 0, rec: false, dpr: 0 });
+  const lastDpr = useRef(screenDpr());
+  const lastTick = useRef(Number.NaN);
 
   const gridTicks = DIVISIONS[grid] ?? PPQ / 4;
   const total = 128 * keyHeight;
 
-  // the notes on screen: every region of the selected track
+  // the notes on screen: every region of the selected track, in order of where they start
   const refs = useMemo<NoteRef[]>(() => {
     if (!track) return [];
-    return track.regions.flatMap((region) => region.notes.map((note) => ({ note, region, track })));
+    const out = track.regions.flatMap((region) => region.notes.map((note) => ({ note, region, track })));
+    return out.sort((a, b) => startOf(a) - startOf(b));
   }, [track]);
+  // the longest note: how far left of the view a note may start and still reach into it
+  const longest = useMemo(() => refs.reduce((m, r) => Math.max(m, r.note.d), 0), [refs]);
+  const regions = track?.regions;
+  const lanePts = useMemo(() => (regions && lane !== 'velocity' ? lanePoints(regions, lane) : []), [regions, lane]);
 
-  // anything that renders this component may change the picture
+  // everything the surfaces read: a change to any of it redraws them all
+  // biome-ignore lint/correctness/useExhaustiveDependencies: the list is what drawing reads, not what the effect touches
   useEffect(() => {
     dirty.current = true;
-  });
+  }, [
+    project,
+    track,
+    selectedRegionIds,
+    selected,
+    keyHeight,
+    gridTicks,
+    lane,
+    middleC,
+    size,
+    laneSize,
+    rulerSize,
+    keysWidth,
+  ]);
 
   useEffect(() => rollView.subscribe(() => (dirty.current = true)), []);
+  useEffect(() => () => gesture.current?.abort(), []);
+  // a rotation resets the lane to the layout's height
+  // biome-ignore lint/correctness/useExhaustiveDependencies: runs on a layout change, which it doesn't read
+  useEffect(() => setLaneOverride(null), [layout]);
 
   // when a track opens (and only then): show it from the playhead, or its selected or first region,
   // centred on the notes in view
@@ -147,17 +211,77 @@ export function PianoRoll() {
         const kind = e.status & 0xf0;
         if (kind === 0x90 && e.d2 > 0) held.current.add(e.d1);
         else if (kind === 0x80 || kind === 0x90) held.current.delete(e.d1);
-        dirty.current = true;
+        keysDirty.current = true;
       }),
     [],
   );
 
   const yOf = (p: number) => (127 - p) * keyHeight - rollView.y;
   const pitchAt = (y: number) => Math.max(0, Math.min(127, 127 - Math.floor((y + rollView.y) / keyHeight)));
+  const maxY = Math.max(0, total - size.h);
 
   // ---- drawing ----
 
-  const draw = (p: Project) => {
+  const drawKeys = () => {
+    const h = size.h;
+    const kw = keysWidth;
+    const kctx = prepare(keysCanvas.current, kw, h);
+    if (!kctx) return;
+    const color = track?.color ?? '#5cb8ff';
+    kctx.fillStyle = '#0b0d10';
+    kctx.fillRect(0, 0, kw, h);
+    // the white keys' sheen runs sideways, so one gradient serves every key
+    const white = kctx.createLinearGradient(0, 0, kw, 0);
+    white.addColorStop(0, '#d9dde3');
+    white.addColorStop(1, '#f1f3f6');
+    const whiteLit = kctx.createLinearGradient(0, 0, kw, 0);
+    whiteLit.addColorStop(0, color);
+    whiteLit.addColorStop(1, alpha(color, 0.7));
+    const blackW = Math.round(kw * 0.6);
+    const font = `600 ${Math.min(11, keyHeight - 2)}px Inter Variable, system-ui, sans-serif`;
+    kctx.font = font;
+    kctx.textBaseline = 'middle';
+    for (let pitch = 0; pitch < 128; pitch++) {
+      const y = yOf(pitch);
+      if (y > h || y + keyHeight < 0) continue;
+      const lit = held.current.has(pitch);
+      if (isBlack(pitch)) {
+        kctx.fillStyle = lit ? color : '#1d2026';
+        kctx.fillRect(0, y, blackW, keyHeight);
+        kctx.fillStyle = lit ? alpha(color, 0.6) : '#e9ecf1';
+        kctx.fillRect(blackW, y, kw - blackW, keyHeight);
+      } else {
+        kctx.fillStyle = lit ? whiteLit : white;
+        kctx.fillRect(0, y, kw, keyHeight);
+      }
+      if (pitch % 12 === 0 || pitch % 12 === 5) {
+        kctx.fillStyle = '#9aa1ab';
+        kctx.fillRect(0, y + keyHeight - 0.5, kw, 1);
+      }
+      if (pitch % 12 === 0 && keyHeight >= 9) {
+        kctx.fillStyle = '#3a414c';
+        kctx.fillText(noteName(pitch, middleC), kw - 22, y + keyHeight / 2);
+      }
+    }
+    kctx.fillStyle = '#0b0d10';
+    kctx.fillRect(kw - 1, 0, 1, h);
+  };
+
+  /** The refs that can reach into the view, from the first that may to the first that can't. */
+  const visibleRefs = (from: number, to: number): [number, number] => {
+    let lo = 0;
+    let hi = refs.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (startOf(refs[mid] as NoteRef) < from - longest) lo = mid + 1;
+      else hi = mid;
+    }
+    let end = lo;
+    while (end < refs.length && startOf(refs[end] as NoteRef) <= to) end++;
+    return [lo, end];
+  };
+
+  const drawNotes = (p: Project) => {
     const w = size.w;
     const h = size.h;
     const v = rollView;
@@ -166,44 +290,6 @@ export function PianoRoll() {
     const bar = ticksPerBar(m);
     const pv = preview.current;
 
-    // keys
-    const kctx = prepare(keysCanvas.current, 66, h);
-    if (kctx) {
-      kctx.fillStyle = '#0b0d10';
-      kctx.fillRect(0, 0, 66, h);
-      for (let pitch = 0; pitch < 128; pitch++) {
-        const y = yOf(pitch);
-        if (y > h || y + keyHeight < 0) continue;
-        const black = isBlack(pitch);
-        const lit = held.current.has(pitch);
-        if (black) {
-          kctx.fillStyle = lit ? (track?.color ?? '#5cb8ff') : '#1d2026';
-          kctx.fillRect(0, y, 40, keyHeight);
-          kctx.fillStyle = lit ? alpha(track?.color ?? '#5cb8ff', 0.6) : '#e9ecf1';
-          kctx.fillRect(40, y, 26, keyHeight);
-        } else {
-          const g = kctx.createLinearGradient(0, 0, 66, 0);
-          g.addColorStop(0, lit ? (track?.color ?? '#5cb8ff') : '#d9dde3');
-          g.addColorStop(1, lit ? alpha(track?.color ?? '#5cb8ff', 0.7) : '#f1f3f6');
-          kctx.fillStyle = g;
-          kctx.fillRect(0, y, 66, keyHeight);
-        }
-        if (pitch % 12 === 0 || pitch % 12 === 5) {
-          kctx.fillStyle = '#9aa1ab';
-          kctx.fillRect(0, y + keyHeight - 0.5, 66, 1);
-        }
-        if (pitch % 12 === 0 && keyHeight >= 9) {
-          kctx.fillStyle = '#3a414c';
-          kctx.font = `600 ${Math.min(11, keyHeight - 2)}px Inter Variable, system-ui, sans-serif`;
-          kctx.textBaseline = 'middle';
-          kctx.fillText(noteName(pitch, middleC), 44, y + keyHeight / 2);
-        }
-      }
-      kctx.fillStyle = '#0b0d10';
-      kctx.fillRect(65, 0, 1, h);
-    }
-
-    // grid
     const ctx = prepare(notesCanvas.current, w, h);
     if (ctx) {
       for (let pitch = 0; pitch < 128; pitch++) {
@@ -246,24 +332,27 @@ export function PianoRoll() {
       }
 
       // notes
-      const font = `600 ${Math.min(10.5, keyHeight - 3)}px Inter Variable, system-ui, sans-serif`;
+      ctx.font = `600 ${Math.min(10.5, keyHeight - 3)}px Inter Variable, system-ui, sans-serif`;
+      ctx.textBaseline = 'middle';
       const drawNote = (n: Note, region: Region, isSel: boolean, ghost = false) => {
         const x = v.tickToX(region.start + n.t);
         const nw = Math.max(3, n.d * v.pxPerTick - 1);
         const y = yOf(n.p) + 1;
         const nh = keyHeight - 2;
         if (x > w || x + nw < 0 || y > h || y + nh < 0) return;
-        const c = velocityColor(n.v);
+        const c = velColor(n.v);
         ctx.globalAlpha = ghost ? 0.35 : 1;
         roundRect(ctx, x, y, nw, nh, Math.min(3, nh / 3));
-        const g = ctx.createLinearGradient(0, y, 0, y + nh);
-        g.addColorStop(0, isSel ? '#ffffff' : c);
-        g.addColorStop(1, isSel ? alpha(c, 0.95) : alpha(c, 0.78));
-        ctx.fillStyle = g;
+        ctx.fillStyle = isSel ? '#ffffff' : c;
         ctx.fill();
         ctx.strokeStyle = isSel ? '#ffffff' : 'rgba(0,0,0,0.55)';
         ctx.lineWidth = isSel ? 1.25 : 1;
         ctx.stroke();
+        // a lighter top edge gives the note its shape without a gradient per note
+        if (!isSel && nh > 4) {
+          ctx.fillStyle = 'rgba(255,255,255,0.22)';
+          ctx.fillRect(x + 1, y + 1, Math.max(1, nw - 2), 1);
+        }
         // the velocity, as a line inside the note (as Logic draws it)
         if (nw > 10 && nh > 6) {
           ctx.fillStyle = 'rgba(0,0,0,0.35)';
@@ -272,13 +361,14 @@ export function PianoRoll() {
         if (nw > 34 && nh >= 10) {
           // dark text on bright notes, light text on dark (soft) ones
           ctx.fillStyle = isSel || n.v >= 64 ? 'rgba(8,10,12,0.85)' : 'rgba(235,241,255,0.92)';
-          ctx.font = font;
-          ctx.textBaseline = 'middle';
           ctx.fillText(noteName(n.p, middleC), x + 4, y + nh / 2 + 0.5);
         }
         ctx.globalAlpha = 1;
       };
-      for (const r of refs) {
+      // dragged notes may be anywhere, so a drag draws them all; otherwise only those in reach
+      const [from, to] = pv?.changed.size ? [0, refs.length] : visibleRefs(v.x, v.xToTick(w));
+      for (let i = from; i < to; i++) {
+        const r = refs[i] as NoteRef;
         const changed = pv?.changed.get(r.note);
         if (changed) drawNote(r.note, r.region, false, true);
         drawNote(changed ?? r.note, r.region, selected.has(r.note) || !!changed);
@@ -324,75 +414,87 @@ export function PianoRoll() {
       rctx.fillStyle = '#0b0d10';
       rctx.fillRect(0, rulerSize.h - 1, rulerSize.w, 1);
     }
+  };
 
-    // controller lane
+  const drawLane = (p: Project) => {
+    const v = rollView;
+    const bar = ticksPerBar(p.meter[0] ?? { tick: 0, num: 4, den: 4 });
+    const pv = preview.current;
     const lctx = prepare(laneCanvas.current, laneSize.w, laneSize.h);
-    if (lctx && track) {
-      const lw = laneSize.w;
-      const lh = laneSize.h;
-      lctx.fillStyle = '#101215';
-      lctx.fillRect(0, 0, lw, lh);
-      lctx.fillStyle = 'rgba(255,255,255,0.04)';
-      for (const f of [0.25, 0.5, 0.75]) lctx.fillRect(0, Math.round(lh * f) + 0.5, lw, 1);
-      if (lane === 'velocity') {
-        for (const r of refs) {
-          const n = pv?.changed.get(r.note) ?? r.note;
-          const x = v.tickToX(r.region.start + n.t);
+    if (!lctx || !track) return;
+    const lw = laneSize.w;
+    const lh = laneSize.h;
+    lctx.fillStyle = '#101215';
+    lctx.fillRect(0, 0, lw, lh);
+    lctx.fillStyle = 'rgba(255,255,255,0.04)';
+    for (const f of [0.25, 0.5, 0.75]) lctx.fillRect(0, Math.round(lh * f) + 0.5, lw, 1);
+    if (lane === 'velocity') {
+      const [from, to] = pv?.changed.size ? [0, refs.length] : visibleRefs(v.x, v.xToTick(lw));
+      for (let i = from; i < to; i++) {
+        const r = refs[i] as NoteRef;
+        const n = pv?.changed.get(r.note) ?? r.note;
+        const x = v.tickToX(r.region.start + n.t);
+        if (x < -4 || x > lw + 4) continue;
+        const bh = (n.v / 127) * (lh - 6);
+        const isSel = selected.has(r.note);
+        lctx.fillStyle = isSel ? '#ffffff' : velColor(n.v);
+        lctx.fillRect(x, lh - bh, 2, bh);
+        lctx.beginPath();
+        lctx.arc(x + 1, lh - bh, isSel ? 3.5 : 2.5, 0, Math.PI * 2);
+        lctx.fill();
+      }
+    } else {
+      const { min, max } = laneRange(lane);
+      const pts = pv?.points ? pv.points.map(([at, value]) => ({ at, value })) : lanePts;
+      const yv = (val: number) => lh - 3 - ((val - min) / (max - min)) * (lh - 6);
+      lctx.strokeStyle = track.color;
+      lctx.fillStyle = alpha(track.color, 0.22);
+      lctx.lineWidth = 1.5;
+      if (pts.length) {
+        lctx.beginPath();
+        const base = lane === 'pb' ? yv(0) : lh;
+        lctx.moveTo(0, base);
+        let lastY = base;
+        for (const pt of pts) {
+          const x = v.tickToX(pt.at);
+          lctx.lineTo(x, lastY);
+          lastY = yv(pt.value);
+          lctx.lineTo(x, lastY);
+        }
+        lctx.lineTo(lw, lastY);
+        lctx.lineTo(lw, base);
+        lctx.closePath();
+        lctx.fill();
+        lctx.stroke();
+        lctx.fillStyle = '#ffffff';
+        for (const pt of pts) {
+          const x = v.tickToX(pt.at);
           if (x < -4 || x > lw + 4) continue;
-          const bh = (n.v / 127) * (lh - 6);
-          const c = velocityColor(n.v);
-          const isSel = selected.has(r.note);
-          lctx.fillStyle = isSel ? '#ffffff' : c;
-          lctx.fillRect(x, lh - bh, 2, bh);
           lctx.beginPath();
-          lctx.arc(x + 1, lh - bh, isSel ? 3.5 : 2.5, 0, Math.PI * 2);
+          lctx.arc(x, yv(pt.value), 2.5, 0, Math.PI * 2);
           lctx.fill();
         }
       } else {
-        const { min, max } = laneRange(lane);
-        const pts = pv?.points
-          ? pv.points.map(([at, value]) => ({ at, value }))
-          : lanePoints(track.regions, lane).map(({ at, value }) => ({ at, value }));
-        const yv = (val: number) => lh - 3 - ((val - min) / (max - min)) * (lh - 6);
-        lctx.strokeStyle = track.color;
-        lctx.fillStyle = alpha(track.color, 0.22);
-        lctx.lineWidth = 1.5;
-        if (pts.length) {
-          lctx.beginPath();
-          const base = lane === 'pb' ? yv(0) : lh;
-          lctx.moveTo(0, base);
-          let lastY = base;
-          for (const pt of pts) {
-            const x = v.tickToX(pt.at);
-            lctx.lineTo(x, lastY);
-            lastY = yv(pt.value);
-            lctx.lineTo(x, lastY);
-          }
-          lctx.lineTo(lw, lastY);
-          lctx.lineTo(lw, base);
-          lctx.closePath();
-          lctx.fill();
-          lctx.stroke();
-          lctx.fillStyle = '#ffffff';
-          for (const pt of pts) {
-            const x = v.tickToX(pt.at);
-            if (x < -4 || x > lw + 4) continue;
-            lctx.beginPath();
-            lctx.arc(x, yv(pt.value), 2.5, 0, Math.PI * 2);
-            lctx.fill();
-          }
-        } else {
-          lctx.fillStyle = '#4b525d';
-          lctx.font = '500 11px Inter Variable, system-ui, sans-serif';
-          lctx.fillText('Draw with the pencil to add controller points', 10, lh / 2);
-        }
-      }
-      // grid in the lane
-      for (let t = Math.floor(v.x / bar) * bar; t < v.xToTick(lw); t += bar) {
-        lctx.fillStyle = 'rgba(255,255,255,0.07)';
-        lctx.fillRect(Math.round(v.tickToX(t)) + 0.5, 0, 1, lh);
+        lctx.fillStyle = '#4b525d';
+        lctx.font = '500 11px Inter Variable, system-ui, sans-serif';
+        lctx.fillText('Draw with the pencil to add controller points', 10, lh / 2);
       }
     }
+    // grid in the lane
+    lctx.fillStyle = 'rgba(255,255,255,0.07)';
+    for (let t = Math.floor(v.x / bar) * bar; t < v.xToTick(lw); t += bar) {
+      lctx.fillRect(Math.round(v.tickToX(t)) + 0.5, 0, 1, lh);
+    }
+  };
+
+  // the zoom is kept for the next launch, once the wheel or the fingers settle
+  const persistZoom = (soon = false) => {
+    window.clearTimeout(zoomTimer.current);
+    if (!soon) {
+      store.set({ pianoZoom: rollView.zoom });
+      return;
+    }
+    zoomTimer.current = window.setTimeout(() => store.set({ pianoZoom: rollView.zoom }), 200);
   };
 
   useFrame(() => {
@@ -400,21 +502,74 @@ export function PianoRoll() {
     const p = s.project;
     if (!p) return;
     const tick = engine.positionTick();
-    if (s.playing && follow && !preview.current) rollView.follow(tick, size.w);
+    const busy = !!gesture.current || pinch.current.active;
+    if (follow && !busy) {
+      // a jump (a locate, a cycle wrap) is shown wherever it lands; playback pages at the right edge
+      if (!Number.isNaN(lastTick.current) && Math.abs(tick - lastTick.current) > PPQ / 2) rollView.reveal(tick, size.w);
+      else if (s.playing) rollView.follow(tick, size.w);
+    }
+    lastTick.current = tick;
+    // a drag resting at an edge scrolls the view under it
+    const g = gesture.current;
+    if (g?.edgeScroll && notesBox.current) {
+      const { dx, dy } = edgeScroll(g.last, notesBox.current.getBoundingClientRect(), g.edgeScroll);
+      if (dx || dy) {
+        rollView.scrollBy(dx, dy, maxY);
+        g.replay();
+      }
+    }
+    const dpr = screenDpr();
+    if (dpr !== lastDpr.current) {
+      lastDpr.current = dpr;
+      dirty.current = true;
+    }
     if (dirty.current) {
       dirty.current = false;
-      draw(p);
+      keysDirty.current = false;
+      laneDirty.current = false;
+      drawKeys();
+      drawNotes(p);
+      drawLane(p);
+    } else {
+      if (keysDirty.current) {
+        keysDirty.current = false;
+        drawKeys();
+      }
+      if (laneDirty.current) {
+        laneDirty.current = false;
+        drawLane(p);
+      }
     }
-    const octx = prepare(overlay.current, size.w, size.h);
-    if (octx) {
-      octx.clearRect(0, 0, size.w, size.h);
-      const x = Math.round(rollView.tickToX(Math.max(0, tick))) + 0.5;
-      if (x >= 0 && x <= size.w) {
-        octx.fillStyle = s.recording ? '#ff4f5e' : '#ffffff';
-        octx.fillRect(x - 0.5, 0, 1.5, size.h);
+    // the playhead, on its own layer, redrawn only when it has moved a pixel
+    const x = Math.round(rollView.tickToX(Math.max(0, tick))) + 0.5;
+    const rec = s.recording;
+    const last = lastOverlay.current;
+    if (x !== last.x || size.w !== last.w || size.h !== last.h || rec !== last.rec || dpr !== last.dpr) {
+      lastOverlay.current = { x, w: size.w, h: size.h, rec, dpr };
+      const octx = prepare(overlay.current, size.w, size.h);
+      if (octx) {
+        octx.clearRect(0, 0, size.w, size.h);
+        if (x >= 0 && x <= size.w) {
+          octx.fillStyle = rec ? '#ff4f5e' : '#ffffff';
+          octx.fillRect(x - 0.5, 0, 1.5, size.h);
+        }
       }
     }
   });
+
+  const onWheel = (e: WheelEvent, dx: number, dy: number) => {
+    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    if (e.ctrlKey || e.metaKey) {
+      rollView.zoomAt(Math.exp(-dy * WHEEL_ZOOM), e.clientX - rect.left, ...ZOOM.roll);
+      persistZoom(true);
+    } else if (e.altKey) {
+      store.set({ keyHeight: Math.max(7, Math.min(32, keyHeight - Math.sign(dy))) });
+    } else if (e.shiftKey) rollView.scrollBy(dy || dx, 0, maxY);
+    else rollView.scrollBy(dx, dy, maxY);
+  };
+  useWheel(notesBox, onWheel);
+  useWheel(keysBox, onWheel);
+  useWheel(laneBox, onWheel);
 
   if (!project) return null;
   if (!track) {
@@ -427,34 +582,45 @@ export function PianoRoll() {
 
   // ---- editing ----
 
-  const hitNote = (x: number, y: number): { ref: NoteRef; edge: 'start' | 'end' | null } | null => {
+  const hitNote = (x: number, y: number, touch = false): { ref: NoteRef; edge: 'start' | 'end' | null } | null => {
     const tick = rollView.xToTick(x);
     const pitch = pitchAt(y);
+    const edgeMax = touch ? EDGE_TOUCH : EDGE;
     for (let i = refs.length - 1; i >= 0; i--) {
       const r = refs[i] as NoteRef;
       const start = r.region.start + r.note.t;
       if (Math.round(r.note.p) !== pitch || tick < start || tick > start + r.note.d) continue;
       const x0 = rollView.tickToX(start);
       const x1 = rollView.tickToX(start + r.note.d);
-      const edgePx = Math.min(8, (x1 - x0) / 3);
+      const edgePx = Math.min(edgeMax, (x1 - x0) / 3);
       return { ref: r, edge: x1 - x < edgePx ? 'end' : x - x0 < edgePx && x1 - x0 > 16 ? 'start' : null };
     }
     return null;
   };
 
-  const capture = (e: ReactPointerEvent, onMove: (ev: PointerEvent) => void, onUp: (ev: PointerEvent) => void) => {
-    const el = e.currentTarget as HTMLElement;
-    el.setPointerCapture(e.pointerId);
-    const move = (ev: PointerEvent) => onMove(ev);
-    const up = (ev: PointerEvent) => {
-      el.removeEventListener('pointermove', move);
-      el.removeEventListener('pointerup', up);
-      el.removeEventListener('pointercancel', up);
-      onUp(ev);
-    };
-    el.addEventListener('pointermove', move);
-    el.addEventListener('pointerup', up);
-    el.addEventListener('pointercancel', up);
+  /**
+   * Start a gesture on the roll: the one under way at a time, aborted by a second finger or a long
+   * press (which opens the menu for the spot), its preview cleared whichever way it ends.
+   */
+  const start = (e: ReactPointerEvent, o: GestureOptions) => {
+    gesture.current?.abort();
+    const menu = menuAt.current;
+    const g = capture(e, {
+      ...o,
+      onUp: (ev, gg) => {
+        gesture.current = null;
+        o.onUp?.(ev, gg);
+      },
+      onAbort: () => {
+        gesture.current = null;
+        preview.current = null;
+        dirty.current = true;
+        o.onAbort?.();
+      },
+      onLongPress: menu ? (ev) => menu(ev) : undefined,
+    });
+    gesture.current = g;
+    return g;
   };
 
   const audition = (pitch: number, velocity = lastVelocity.current) => {
@@ -471,16 +637,41 @@ export function PianoRoll() {
     return { region: newRegion(start, bar, ''), created: true };
   };
 
-  const maxY = Math.max(0, total - size.h);
+  /** The menu for a note (and the selection it belongs to): what the keyboard does, by name. */
+  const noteMenu = (x: number, y: number, note: Note) => {
+    const group = selected.has(note) ? selectedNotes : [note];
+    if (!selected.has(note)) store.set({ selectedNotes: [note] });
+    const velocity = (v: number) => replaceNotes(new Map(group.map((n) => [n, { ...n, v }])), 'Velocity');
+    openMenu(x, y, [
+      { label: 'Quantize', hint: 'Q', onSelect: quantizeSelection },
+      { label: 'Up an octave', hint: 'Shift ↑', onSelect: () => transposeSelection(12) },
+      { label: 'Down an octave', hint: 'Shift ↓', onSelect: () => transposeSelection(-12) },
+      { label: 'Up a semitone', hint: '↑', onSelect: () => transposeSelection(1) },
+      { label: 'Down a semitone', hint: '↓', onSelect: () => transposeSelection(-1) },
+      'sep',
+      { heading: 'Velocity' },
+      { label: 'Soft', hint: '50', onSelect: () => velocity(50) },
+      { label: 'Medium', hint: '90', onSelect: () => velocity(90) },
+      { label: 'Hard', hint: '120', onSelect: () => velocity(120) },
+      'sep',
+      { label: group.length > 1 ? 'Delete notes' : 'Delete', hint: 'Delete', onSelect: () => deleteNotes(group) },
+    ]);
+  };
+
   const onNotesDown = (e: ReactPointerEvent<HTMLDivElement>) => {
     const rect = e.currentTarget.getBoundingClientRect();
     const x = e.clientX - rect.left;
     const y = e.clientY - rect.top;
     const touch = e.pointerType === 'touch';
     const now = performance.now();
-    const doubleTap = now - lastTap.current < 320;
+    const doubleTap = now - lastTap.current < DOUBLE_TAP_MS;
     lastTap.current = now;
-    const h = hitNote(x, y);
+    menuAt.current = null;
+    const h = hitNote(x, y, touch);
+    if (e.button === 2) {
+      if (h) noteMenu(e.clientX, e.clientY, h.ref.note);
+      return;
+    }
     if (h) {
       const { ref } = h;
       if (tool === 'eraser' || (doubleTap && touch)) {
@@ -494,12 +685,13 @@ export function PianoRoll() {
       audition(ref.note.p, ref.note.v);
       lastVelocity.current = ref.note.v;
       lastLength.current = ref.note.d;
+      menuAt.current = (ev) => noteMenu(ev.clientX, ev.clientY, ref.note);
       dragNotes(e, sel, h.edge, e.altKey);
       return;
     }
     const tick = rollView.xToTick(x);
     const pitch = pitchAt(y);
-    if (tool === 'pencil' || (doubleTap && !touch) || (doubleTap && touch)) {
+    if (tool === 'pencil' || doubleTap) {
       drawNoteAt(e, tick, pitch);
       return;
     }
@@ -507,27 +699,26 @@ export function PianoRoll() {
     if (touch) {
       let lx = e.clientX;
       let ly = e.clientY;
-      capture(
-        e,
-        (ev) => {
+      start(e, {
+        threshold: 0,
+        onMove: (ev) => {
           rollView.scrollBy(lx - ev.clientX, ly - ev.clientY, maxY);
           lx = ev.clientX;
           ly = ev.clientY;
         },
-        () => undefined,
-      );
+      });
       return;
     }
-    capture(
-      e,
-      (ev) => {
+    start(e, {
+      edgeScroll: 'xy',
+      onMove: (ev) => {
         preview.current = {
           changed: new Map(),
           marquee: { x0: x, y0: y, x1: ev.clientX - rect.left, y1: ev.clientY - rect.top },
         };
         dirty.current = true;
       },
-      () => {
+      onUp: () => {
         const mq = preview.current?.marquee;
         preview.current = null;
         dirty.current = true;
@@ -545,30 +736,30 @@ export function PianoRoll() {
             .map((r) => r.note),
         });
       },
-    );
+    });
   };
 
   const drawNoteAt = (e: ReactPointerEvent, tick: number, pitch: number) => {
-    const start = Math.max(0, Math.floor(tick / gridTicks) * gridTicks);
+    const start0 = Math.max(0, Math.floor(tick / gridTicks) * gridTicks);
     let length = lastLength.current;
     audition(pitch);
-    preview.current = { changed: new Map(), drawing: { start, length, pitch } };
+    preview.current = { changed: new Map(), drawing: { start: start0, length, pitch } };
     dirty.current = true;
     const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-    capture(
-      e,
-      (ev) => {
+    start(e, {
+      edgeScroll: 'x',
+      onMove: (ev) => {
         const t = rollView.xToTick(ev.clientX - rect.left);
-        length = Math.max(gridTicks, quantize(t - start, gridTicks));
-        preview.current = { changed: new Map(), drawing: { start, length, pitch } };
+        length = Math.max(gridTicks, quantize(t - start0, gridTicks));
+        preview.current = { changed: new Map(), drawing: { start: start0, length, pitch } };
         dirty.current = true;
       },
-      () => {
+      onUp: () => {
         preview.current = null;
         dirty.current = true;
         lastLength.current = length;
-        const { region, created } = regionFor(start);
-        const note: Note = { t: start - region.start, d: length, p: pitch, v: lastVelocity.current };
+        const { region, created } = regionFor(start0);
+        const note: Note = { t: start0 - region.start, d: length, p: pitch, v: lastVelocity.current };
         if (created) {
           const bar = region.length;
           region.length = Math.max(bar, Math.ceil((note.t + length) / bar) * bar);
@@ -591,22 +782,21 @@ export function PianoRoll() {
         }
         store.set({ selectedNotes: [note] });
       },
-    );
+    });
   };
 
   const dragNotes = (e: ReactPointerEvent, notes: Note[], edge: 'start' | 'end' | null, copy: boolean) => {
     const startX = e.clientX;
     const startY = e.clientY;
-    let moved = false;
     let lastPitchShift = 0;
     const byNote = new Map(refs.map((r) => [r.note, r]));
-    capture(
-      e,
-      (ev) => {
+    start(e, {
+      edgeScroll: 'xy',
+      onMove: (ev, g) => {
+        // a finger wobbles more than a mouse: the gesture's threshold tells a tap from a drag
+        if (!g.moved) return;
         const dx = ev.clientX - startX;
         const dy = ev.clientY - startY;
-        if (!moved && Math.hypot(dx, dy) < 3) return;
-        moved = true;
         const fine = ev.shiftKey;
         const dTick = fine ? Math.round(dx / rollView.pxPerTick) : quantize(dx / rollView.pxPerTick, gridTicks);
         const dPitch = edge ? 0 : -Math.round(dy / keyHeight);
@@ -633,11 +823,14 @@ export function PianoRoll() {
         preview.current = { changed };
         dirty.current = true;
       },
-      () => {
+      onUp: (_ev, g) => {
         const changed = preview.current?.changed;
         preview.current = null;
         dirty.current = true;
-        if (!moved || !changed?.size) return;
+        if (!g.moved || !changed?.size) return;
+        // a wobble that settled back where it started is not an edit
+        const same = [...changed].every(([o, n]) => o.t === n.t && o.d === n.d && o.p === n.p && o.v === n.v);
+        if (same) return;
         // a note moved past its region's start goes before it: grow the region to keep it
         const ops = [];
         const growth = new Map<string, { region: Region; start: number; end: number }>();
@@ -686,20 +879,25 @@ export function PianoRoll() {
         apply(ops, 'Move Notes');
         store.set({ selectedNotes: [] });
       },
-    );
+    });
   };
 
   // the keyboard: press to hear, slide for a glissando
   const onKeysDown = (e: ReactPointerEvent<HTMLDivElement>) => {
     const rect = e.currentTarget.getBoundingClientRect();
     let pitch = pitchAt(e.clientY - rect.top);
-    const vel = Math.round(40 + 87 * Math.min(1, (e.clientX - rect.left) / 60));
+    const vel = Math.round(40 + 87 * Math.min(1, (e.clientX - rect.left) / (keysWidth - 6)));
     void ensureAudio().then(() => engine.live(0x90, pitch, vel, track.id));
     held.current.add(pitch);
-    dirty.current = true;
-    capture(
-      e,
-      (ev) => {
+    keysDirty.current = true;
+    const release = () => {
+      engine.live(0x80, pitch, 0, track.id);
+      held.current.delete(pitch);
+      keysDirty.current = true;
+    };
+    capture(e, {
+      threshold: 0,
+      onMove: (ev) => {
         const p = pitchAt(ev.clientY - rect.top);
         if (p !== pitch) {
           engine.live(0x80, pitch, 0, track.id);
@@ -707,25 +905,23 @@ export function PianoRoll() {
           pitch = p;
           engine.live(0x90, pitch, vel, track.id);
           held.current.add(pitch);
-          dirty.current = true;
+          keysDirty.current = true;
         }
       },
-      () => {
-        engine.live(0x80, pitch, 0, track.id);
-        held.current.delete(pitch);
-        dirty.current = true;
-      },
-    );
+      onUp: release,
+      onAbort: release,
+    });
   };
 
   // the controller lane
   const onLaneDown = (e: ReactPointerEvent<HTMLDivElement>) => {
     const rect = e.currentTarget.getBoundingClientRect();
     const lh = rect.height;
+    menuAt.current = null;
     if (lane === 'velocity') {
       const pick = (x: number) => {
         let best: NoteRef | null = null;
-        let dist = 8;
+        let dist = e.pointerType === 'touch' ? 14 : 8;
         for (const r of refs) {
           const d = Math.abs(rollView.tickToX(r.region.start + r.note.t) - x);
           if (d < dist) {
@@ -740,9 +936,9 @@ export function PianoRoll() {
       const startY = e.clientY;
       const base = new Map(group.map((n) => [n, n.v]));
       const drawn = new Map<Note, Note>();
-      capture(
-        e,
-        (ev) => {
+      start(e, {
+        threshold: 0,
+        onMove: (ev) => {
           const changed = new Map<Note, Note>();
           if (tool === 'pencil' || !first) {
             // drawing across bars sets each one it crosses
@@ -760,7 +956,7 @@ export function PianoRoll() {
           preview.current = { changed };
           dirty.current = true;
         },
-        () => {
+        onUp: () => {
           const changed = preview.current?.changed;
           preview.current = null;
           dirty.current = true;
@@ -770,13 +966,13 @@ export function PianoRoll() {
             if (v) lastVelocity.current = v;
           }
         },
-      );
+      });
       return;
     }
     // controller points: draw with any tool (the eraser clears what it crosses)
     const { min, max } = laneRange(lane);
     const valueAt = (y: number) => Math.round(min + Math.max(0, Math.min(1, (lh - 3 - y) / (lh - 6))) * (max - min));
-    const existing = lanePoints(track.regions, lane).map(({ at, value }): CCPoint => [at, value]);
+    const existing = lanePts.map(({ at, value }): CCPoint => [at, value]);
     const step = Math.max(gridTicks / 2, PPQ / 16);
     const touched = new Map<number, number>();
     const visit = (ev: { clientX: number; clientY: number }) => {
@@ -786,52 +982,48 @@ export function PianoRoll() {
       for (const [t, v] of touched) if (!Number.isNaN(v)) merged.push([t, v]);
       merged.sort((a, b) => a[0] - b[0]);
       preview.current = { changed: new Map(), points: merged };
-      dirty.current = true;
+      laneDirty.current = true;
     };
     visit(e);
-    capture(e, visit, () => {
-      const pts = preview.current?.points ?? existing;
-      preview.current = null;
-      dirty.current = true;
-      // points go to the regions they fall in (a region is made for any that fall outside all)
-      const ops = [];
-      const byRegion = new Map<string, CCPoint[]>();
-      const loose: CCPoint[] = [];
-      for (const r of track.regions) byRegion.set(r.id, []);
-      for (const [at, v] of pts) {
-        const r = track.regions.find((x) => at >= x.start && at <= x.start + x.length);
-        if (r) byRegion.get(r.id)?.push([at - r.start, v]);
-        else loose.push([at, v]);
-      }
-      for (const r of track.regions) {
-        const next = byRegion.get(r.id) ?? [];
-        if (JSON.stringify(next) !== JSON.stringify(r.cc[lane] ?? []))
-          ops.push({ op: 'setCC' as const, track: track.id, region: r.id, lane, points: next });
-      }
-      if (loose.length) {
-        const first = loose[0] as CCPoint;
-        const { region } = regionFor(first[0]);
-        const last = loose[loose.length - 1] as CCPoint;
-        region.length = Math.max(
-          region.length,
-          Math.ceil((last[0] - region.start + 1) / region.length) * region.length,
-        );
-        region.cc = { [lane]: loose.map(([at, v]): CCPoint => [at - region.start, v]) };
-        ops.push({ op: 'addRegion' as const, track: track.id, region });
-      }
-      if (ops.length) apply(ops, LANES.find(([id]) => id === lane)?.[1] ?? 'Controller');
+    start(e, {
+      threshold: 0,
+      onMove: visit,
+      onAbort: () => {
+        laneDirty.current = true;
+      },
+      onUp: () => {
+        const pts = preview.current?.points ?? existing;
+        preview.current = null;
+        laneDirty.current = true;
+        // points go to the regions they fall in (a region is made for any that fall outside all)
+        const ops = [];
+        const byRegion = new Map<string, CCPoint[]>();
+        const loose: CCPoint[] = [];
+        for (const r of track.regions) byRegion.set(r.id, []);
+        for (const [at, v] of pts) {
+          const r = track.regions.find((x) => at >= x.start && at <= x.start + x.length);
+          if (r) byRegion.get(r.id)?.push([at - r.start, v]);
+          else loose.push([at, v]);
+        }
+        for (const r of track.regions) {
+          const next = byRegion.get(r.id) ?? [];
+          if (JSON.stringify(next) !== JSON.stringify(r.cc[lane] ?? []))
+            ops.push({ op: 'setCC' as const, track: track.id, region: r.id, lane, points: next });
+        }
+        if (loose.length) {
+          const first = loose[0] as CCPoint;
+          const { region } = regionFor(first[0]);
+          const last = loose[loose.length - 1] as CCPoint;
+          region.length = Math.max(
+            region.length,
+            Math.ceil((last[0] - region.start + 1) / region.length) * region.length,
+          );
+          region.cc = { [lane]: loose.map(([at, v]): CCPoint => [at - region.start, v]) };
+          ops.push({ op: 'addRegion' as const, track: track.id, region });
+        }
+        if (ops.length) apply(ops, LANES.find(([id]) => id === lane)?.[2] ?? 'Controller');
+      },
     });
-  };
-
-  const onWheel = (e: React.WheelEvent) => {
-    const rect = e.currentTarget.getBoundingClientRect();
-    if (e.ctrlKey || e.metaKey) {
-      rollView.zoomAt(Math.exp(-e.deltaY * 0.0025), e.clientX - rect.left, 10, 2400);
-      store.set({ pianoZoom: rollView.zoom });
-    } else if (e.altKey) {
-      store.set({ keyHeight: Math.max(7, Math.min(32, keyHeight - Math.sign(e.deltaY))) });
-    } else if (e.shiftKey) rollView.scrollBy(e.deltaY || e.deltaX, 0, maxY);
-    else rollView.scrollBy(e.deltaX, e.deltaY, maxY);
   };
 
   const cursorFor = (e: React.PointerEvent<HTMLDivElement>) => {
@@ -842,15 +1034,15 @@ export function PianoRoll() {
   };
 
   return (
-    <div className="roll" style={{ ['--lane' as string]: `${laneHeight}px` }}>
+    <div className="roll" style={{ ['--lane' as string]: `${laneHeight}px`, ['--keys' as string]: `${keysWidth}px` }}>
       <div className="corner" />
       <div className="cell" ref={rulerBox} style={{ borderBottom: '1px solid var(--line)' }}>
         <canvas ref={rulerCanvas} />
       </div>
       <div
         className="cell"
+        ref={keysBox}
         onPointerDown={onKeysDown}
-        onWheel={onWheel}
         style={{ borderRight: '1px solid var(--line)', cursor: 'pointer' }}
       >
         <canvas ref={keysCanvas} />
@@ -858,9 +1050,31 @@ export function PianoRoll() {
       <div
         className="cell"
         ref={notesBox}
-        onPointerDown={onNotesDown}
-        onPointerMove={cursorFor}
-        onWheel={onWheel}
+        onPointerDown={(e) => {
+          // a second finger turns whatever the first was doing into a pinch
+          if (pinch.current.down(e)) {
+            gesture.current?.abort();
+            return;
+          }
+          if (pinch.current.active) return;
+          onNotesDown(e);
+        }}
+        onPointerMove={(e) => {
+          const z = pinch.current.move(e);
+          if (z) {
+            const rect = e.currentTarget.getBoundingClientRect();
+            rollView.zoomAt(z.factor, z.x - rect.left, ...ZOOM.roll);
+          } else cursorFor(e);
+        }}
+        onPointerUp={(e) => {
+          if (pinch.current.up(e)) {
+            lastTap.current = 0;
+            persistZoom();
+          }
+        }}
+        onPointerCancel={(e) => {
+          if (pinch.current.up(e)) lastTap.current = 0;
+        }}
         onContextMenu={(e) => e.preventDefault()}
       >
         <canvas ref={notesCanvas} />
@@ -871,20 +1085,15 @@ export function PianoRoll() {
         style={{ gridColumn: '1 / -1' }}
         onPointerDown={(e) => {
           let h = laneHeight;
-          const el = e.currentTarget;
-          el.setPointerCapture(e.pointerId);
           let ly = e.clientY;
-          const move = (ev: PointerEvent) => {
-            h = Math.max(40, Math.min(260, h - (ev.clientY - ly)));
-            ly = ev.clientY;
-            setLaneHeight(h);
-          };
-          const up = () => {
-            el.removeEventListener('pointermove', move);
-            el.removeEventListener('pointerup', up);
-          };
-          el.addEventListener('pointermove', move);
-          el.addEventListener('pointerup', up);
+          capture(e, {
+            threshold: 0,
+            onMove: (ev) => {
+              h = Math.max(40, Math.min(260, h - (ev.clientY - ly)));
+              ly = ev.clientY;
+              setLaneOverride(h);
+            },
+          });
         }}
       />
       <div className="lane-label">
@@ -892,12 +1101,12 @@ export function PianoRoll() {
           className="select"
           value={lane}
           aria-label="Controller lane"
+          title={LANES.find(([id]) => id === lane)?.[2]}
           onChange={(e) => store.set({ lane: e.target.value })}
-          style={{ height: 24, fontSize: 10.5, padding: '0 16px 0 4px' }}
         >
-          {LANES.map(([id, name]) => (
-            <option key={id} value={id}>
-              {name}
+          {LANES.map(([id, short, name]) => (
+            <option key={id} value={id} title={name}>
+              {short}
             </option>
           ))}
         </select>
@@ -906,7 +1115,6 @@ export function PianoRoll() {
         className="cell"
         ref={laneBox}
         onPointerDown={onLaneDown}
-        onWheel={onWheel}
         style={{ borderTop: '1px solid var(--line)', cursor: 'crosshair' }}
       >
         <canvas ref={laneCanvas} />
@@ -926,6 +1134,10 @@ export function PianoRollBar() {
   const vel = selectedNotes.length
     ? Math.round(selectedNotes.reduce((a, n) => a + n.v, 0) / selectedNotes.length)
     : null;
+  const zoomBy = (factor: number) => {
+    rollView.zoomAt(factor, 0, ...ZOOM.roll);
+    store.set({ pianoZoom: rollView.zoom });
+  };
   return (
     <>
       {!phone && <span className="title">Piano Roll</span>}
@@ -976,7 +1188,7 @@ export function PianoRollBar() {
             max={127}
             value={vel ?? 100}
             aria-label="Velocity of the selected notes"
-            style={{ width: phone ? 80 : 110, accentColor: '#5cb8ff' }}
+            style={{ width: phone ? 64 : 110, flex: 'none', accentColor: '#5cb8ff' }}
             onChange={(e) => {
               const v = Number(e.target.value);
               replaceNotes(new Map(selectedNotes.map((n) => [n, { ...n, v }])), 'Velocity');
@@ -988,26 +1200,10 @@ export function PianoRollBar() {
         </>
       )}
       <span className="grow" />
-      <button
-        type="button"
-        className="btn ghost icon"
-        title="Zoom out"
-        onClick={() => {
-          rollView.zoomAt(0.7, 0, 10, 2400);
-          store.set({ pianoZoom: rollView.zoom });
-        }}
-      >
+      <button type="button" className="btn ghost icon" title="Zoom out" onClick={() => zoomBy(0.7)}>
         <ZoomOut />
       </button>
-      <button
-        type="button"
-        className="btn ghost icon"
-        title="Zoom in"
-        onClick={() => {
-          rollView.zoomAt(1.4, 0, 10, 2400);
-          store.set({ pianoZoom: rollView.zoom });
-        }}
-      >
+      <button type="button" className="btn ghost icon" title="Zoom in" onClick={() => zoomBy(1.4)}>
         <ZoomIn />
       </button>
     </>

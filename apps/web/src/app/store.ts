@@ -142,7 +142,9 @@ const initial: AppState = {
   selectedRegions: [],
   selectedNotes: [],
   editor: 'piano',
-  editorHeight: 300,
+  // the editor takes a good share of the window to start with; a remembered height stands over this
+  editorHeight:
+    typeof window === 'undefined' ? 300 : Math.max(260, Math.min(520, Math.round(window.innerHeight * 0.42))),
   inspector: true,
   library: false,
   dialog: null,

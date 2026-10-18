@@ -53,6 +53,8 @@ function zeroPhaseKernel(freq: number, sr: number): Float64Array {
 
 /** The low pass's two sections, transposed direct form II, with their state in hand. */
 class Cascade {
+  /** The last sample run() made (left here: a call that returns a double allocates when it isn't inlined). */
+  y = 0;
   private readonly c: Float64Array;
   private readonly z = new Float64Array(4);
   constructor(freq: number, sr: number) {
@@ -63,7 +65,7 @@ class Cascade {
       this.c.set([f.b0, f.b1, f.b2, f.a1, f.a2], s * 5);
     });
   }
-  tick(x: number): number {
+  run(x: number): void {
     const { c, z } = this;
     for (let s = 0; s < 2; s++) {
       const o = s * 5;
@@ -72,7 +74,7 @@ class Cascade {
       z[2 * s + 1] = (c[o + 2] as number) * x - (c[o + 4] as number) * y;
       x = y;
     }
-    return x;
+    this.y = x;
   }
   /** As if it had heard `v` for ever (scipy's sosfilt_zi, scaled by v): each section passes v whole. */
   settle(v: number): void {
@@ -105,7 +107,12 @@ class OctaveUp {
   private readonly hop: number;
   private readonly win: Float64Array;
   private readonly kernel: Float64Array;
+  /**
+   * The input's history, written twice (at t and a length on), so the low pass reads its reach
+   * around any frame as one run of memory, with no wrap to mask.
+   */
   private readonly raw: Float64Array;
+  private readonly rawLen: number;
   private readonly buf: Float64Array;
   /** Where each filtered frame falls in the loop (−1 when there's none), for the grains to count from. */
   private readonly pos: Float64Array;
@@ -147,7 +154,8 @@ class OctaveUp {
     this.mask = len - 1;
     let rawLen = 1;
     while (rawLen < 2 * kernel.length + 2) rawLen <<= 1;
-    this.raw = new Float64Array(rawLen);
+    this.raw = new Float64Array(rawLen * 2);
+    this.rawLen = rawLen;
     this.rawMask = rawLen - 1;
     this.fwd = new Cascade(freq, sr);
     this.side = new Cascade(freq, sr);
@@ -175,13 +183,17 @@ class OctaveUp {
     const x = (m: number) => raw[(base + m) & rawMask] as number;
     const x0 = x(0);
     side.settle(2 * x0 - x(PAD));
-    for (let k = PAD; k >= 1; k--) side.tick(2 * x0 - x(k));
-    for (let m = 0; m <= K; m++) delta[m] = side.tick(x(m)) - (fwdOut[(base + m) & rawMask] as number);
+    for (let k = PAD; k >= 1; k--) side.run(2 * x0 - x(k));
+    for (let m = 0; m <= K; m++) {
+      side.run(x(m));
+      delta[m] = side.y - (fwdOut[(base + m) & rawMask] as number);
+    }
     back.clear();
     for (let m = K; m >= 0; m--) {
       const u = (base + m) & rawMask;
       this.fixKind[u] = 1;
-      this.fixVal[u] = back.tick(delta[m] as number);
+      back.run(delta[m] as number);
+      this.fixVal[u] = back.y;
     }
   }
 
@@ -194,13 +206,17 @@ class OctaveUp {
     const { raw, rawMask, fwd, side, back, delta, fwdOut } = this;
     const xl = raw[t & rawMask] as number;
     side.copy(fwd);
-    for (let k = 1; k <= PAD; k++) delta[k] = side.tick(2 * xl - (raw[(t - k) & rawMask] as number));
+    for (let k = 1; k <= PAD; k++) {
+      side.run(2 * xl - (raw[(t - k) & rawMask] as number));
+      delta[k] = side.y;
+    }
     back.settle(delta[PAD] as number);
-    for (let k = PAD; k >= 1; k--) back.tick(delta[k] as number);
+    for (let k = PAD; k >= 1; k--) back.run(delta[k] as number);
     for (let m = 0; m <= K; m++) {
       const u = (t - m) & rawMask;
       this.fixKind[u] = 2;
-      this.fixVal[u] = back.tick(fwdOut[u] as number);
+      back.run(fwdOut[u] as number);
+      this.fixVal[u] = back.y;
     }
   }
   /**
@@ -209,26 +225,30 @@ class OctaveUp {
    * go on into its next turn.
    */
   process(x: Float32Array, y: Float32Array, n: number, rho: Float64Array | null = null, turn = 0): void {
-    const { size, hop, win, buf, mask, raw, rawMask, kernel, pos } = this;
+    const { size, hop, win, buf, mask, raw, rawLen, rawMask, kernel, pos } = this;
     const K = kernel.length - 1;
     const last = turn > 0 ? Math.floor(turn / hop) : 0;
     const edges = turn > 4 * (K + PAD);
     for (let i = 0; i < n; i++) {
       const t = this.t;
       raw[t & rawMask] = x[i] as number;
+      raw[(t & rawMask) + rawLen] = x[i] as number;
       // where this input frame falls in the loop; it reaches the grains K frames later, with the filter
       const r0 = rho ? (rho[i] as number) : -1;
       pos[(t + K) & mask] = r0;
       if (edges) {
         this.rhoIn[t & rawMask] = r0;
-        this.fwdOut[t & rawMask] = this.fwd.tick(x[i] as number);
+        this.fwd.run(x[i] as number);
+        this.fwdOut[t & rawMask] = this.fwd.y;
         if (r0 === K && this.inOrder(t, K, K)) this.turnStart(t, K);
         else if (r0 === turn - 1 && this.inOrder(t, K + PAD, turn - 1)) this.turnEnd(t, K);
       }
-      // the low pass, centred K frames back: the filtered sound at u = t − K
-      let v = (kernel[0] as number) * (raw[(t - K) & rawMask] as number);
+      // the low pass, centred K frames back: the filtered sound at u = t − K (the history's upper
+      // copy reaches back a length from frame t, so its 2K + 1 frames around u lie in order)
+      const c = (t & rawMask) + rawLen - K;
+      let v = (kernel[0] as number) * (raw[c] as number);
       for (let k = 1; k <= K; k++) {
-        v += (kernel[k] as number) * ((raw[(t - K - k) & rawMask] as number) + (raw[(t - K + k) & rawMask] as number));
+        v += (kernel[k] as number) * ((raw[c - k] as number) + (raw[c + k] as number));
       }
       const u = t - K;
       const fix = this.fixKind[u & rawMask];
@@ -369,6 +389,34 @@ export class Shimmer implements Effect {
     if (this.useLow) this.lowcut.set('highpass', v('lowcut'), Math.SQRT1_2, 0, this.host.sr);
   }
 
+  /** One setting moved: what it alone sets, as setParams would (the spaces themselves: the whole). */
+  setParam(id: string, p: Record<string, number>, settings?: Record<string, string>): void {
+    const v = (x: string) => paramValue('shimmer', p, x);
+    switch (id) {
+      case 'feedback':
+        this.feedback = v('feedback') / 100;
+        break;
+      case 'cross':
+        this.cross = v('cross') / 100;
+        break;
+      case 'wet':
+        this.wet = dbToGain(v('wet'));
+        break;
+      case 'dry':
+        this.dry = v('dry') <= -60 ? 0 : dbToGain(v('dry'));
+        break;
+      case 'lookahead':
+        this.lookahead = v('lookahead') >= 0.5;
+        break;
+      case 'lowcut':
+        this.useLow = v('lowcut') > 20.5;
+        if (this.useLow) this.lowcut.set('highpass', v('lowcut'), Math.SQRT1_2, 0, this.host.sr);
+        break;
+      default:
+        this.setParams(p, settings);
+    }
+  }
+
   /** Responses that have arrived since: pick them up. */
   refresh(): void {
     this.keys.forEach((key, i) => {
@@ -390,7 +438,12 @@ export class Shimmer implements Effect {
   }
 
   process(l: Float32Array, r: Float32Array, n: number): void {
-    if (this.convs.some((c) => !c)) this.refresh();
+    for (const c of this.convs) {
+      if (!c) {
+        this.refresh();
+        break;
+      }
+    }
     const aligned = this.latency > 0;
     if (aligned !== this.aligned) {
       this.aligned = aligned;

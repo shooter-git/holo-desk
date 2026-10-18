@@ -3,7 +3,7 @@
  * instruments (every sample's key and velocity range, true pitch, level and loop) and the sample
  * files under its root.
  */
-import { createReadStream, existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, normalize, resolve, sep } from 'node:path';
 
 export interface Zone {
@@ -144,9 +144,5 @@ export class Packs {
     const path = normalize(join(loaded.root, rel));
     if (!path.startsWith(loaded.root + sep)) return null;
     return existsSync(path) && statSync(path).isFile() ? path : null;
-  }
-
-  stream(path: string) {
-    return createReadStream(path);
   }
 }

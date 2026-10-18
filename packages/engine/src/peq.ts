@@ -80,6 +80,29 @@ export class ParametricEq implements Effect {
     this.count = bands.length;
     this.out = dbToGain(paramValue('peq', p, 'output'));
   }
+  /**
+   * One setting moved: its band's filter alone, from the same values setParams would give it (a
+   * band's type changes which filters play which band: then the whole).
+   */
+  setParam(id: string, p: Record<string, number>): void {
+    if (id === 'output') {
+      this.out = dbToGain(paramValue('peq', p, 'output'));
+      return;
+    }
+    const letter = id[0];
+    const b = Number(id.slice(1));
+    if ((letter !== 'f' && letter !== 'q' && letter !== 'g') || !(b >= 1 && b <= PEQ_BANDS)) {
+      this.setParams(p);
+      return;
+    }
+    // the band's filter: the bands on before it come first
+    let i = 0;
+    for (let k = 1; k < b; k++) if (KINDS[Math.round(paramValue('peq', p, `t${k}`))]) i++;
+    const kind = KINDS[Math.round(paramValue('peq', p, `t${b}`))];
+    if (!kind) return;
+    const v = (x: string) => paramValue('peq', p, `${x}${b}`);
+    this.filters[i]?.set(kind, v('f'), v('q'), v('g'), this.host.sr);
+  }
   process(l: Float32Array, r: Float32Array, n: number): void {
     for (let i = 0; i < this.count; i++) this.filters[i]?.process(l, r, n);
     if (this.out !== 1) {

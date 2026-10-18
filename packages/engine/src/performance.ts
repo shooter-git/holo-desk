@@ -28,10 +28,6 @@ export function roundHalfEven(x: number): number {
 const ns = (seconds: number, sr: number) => roundHalfEven(seconds * sr);
 const undb = (d: number) => 10 ** (d / 20);
 const clip01 = (x: number) => (x < 0 ? 0 : x > 1 ? 1 : x);
-const smoothstep = (x: number) => {
-  const c = clip01(x);
-  return c * c * (3 - 2 * c);
-};
 
 /** One recorded sample, as the game measured it. */
 export interface PerfRow {
@@ -591,39 +587,86 @@ function pitchGlide(
   return out;
 }
 
-/** A glide's semitones at each sample (the vibrato's phase runs on from the start). */
+const HALF_PI = Math.PI / 2;
+
+/**
+ * A glide's semitones at each sample (the vibrato's phase runs on from the start). step() leaves the
+ * sample's semitones in `s`: a call that returns a double boxes it unless inlined, and a voice
+ * takes one every sample.
+ */
 export class GlidePlayer {
   private readonly g: GlideSpec;
   private readonly sr: number;
+  /** The bend's points as a curve, laid out once. */
+  private readonly bendT: Float64Array | null;
+  private readonly bendV: Float64Array | null;
+  private readonly rise: number;
+  private readonly ph0: number;
+  s = 0;
   private i = 0;
   private acc = 0;
   constructor(g: GlideSpec, sr: number) {
     this.g = g;
     this.sr = sr;
+    this.bendT = g.bend ? Float64Array.from(g.bend, (b) => b[0]) : null;
+    this.bendV = g.bend ? Float64Array.from(g.bend, (b) => b[1]) : null;
+    this.rise = g.vib ? Math.max(g.vib.rise, 1e-3) : 1;
+    this.ph0 = g.vib?.ph0 ?? 0;
   }
-  next(): number {
+  step(): void {
     const { g, sr } = this;
     const i = this.i++;
     const t = i / sr;
     let s = 0;
-    if (g.slide && i < g.slide.k) s += g.slide.delta * (1 - smoothstep(i / g.slide.k));
-    if (g.bend) {
-      const ts = g.bend.map((b) => b[0]);
-      const vs = g.bend.map((b) => b[1]);
+    if (g.slide && i < g.slide.k) {
+      let c = i / g.slide.k;
+      c = c < 0 ? 0 : c > 1 ? 1 : c;
+      s += g.slide.delta * (1 - c * c * (3 - 2 * c));
+    }
+    const ts = this.bendT;
+    const vs = this.bendV;
+    if (ts && vs) {
       if (ts.length === 1) s += vs[0] as number;
-      else s += curveAt({ t: ts, v: vs }, t);
+      else {
+        // curveAt, in line
+        const last = ts.length - 1;
+        if (t < (ts[0] as number)) s += vs[0] as number;
+        else if (t > (ts[last] as number)) s += vs[last] as number;
+        else {
+          let lo = 0;
+          let hi = ts.length;
+          while (lo < hi) {
+            const mid = (lo + hi) >> 1;
+            if ((ts[mid] as number) <= t) lo = mid + 1;
+            else hi = mid;
+          }
+          const idx = Math.max(0, Math.min(last - 1, lo - 1));
+          const t0 = ts[idx] as number;
+          const t1 = ts[idx + 1] as number;
+          let u = (t - t0) / Math.max(t1 - t0, 1e-9);
+          u = u < 0 ? 0 : u > 1 ? 1 : u;
+          u = 0.5 - 0.5 * Math.cos(Math.PI * u);
+          s += (vs[idx] as number) + ((vs[idx + 1] as number) - (vs[idx] as number)) * u;
+        }
+      }
     }
     if (g.vib) {
-      const { depth, rate, delay, rise, up } = g.vib;
+      const { depth, rate, delay, up } = g.vib;
       const drift = 1 + 0.04 * Math.sin(2 * Math.PI * 0.7 * t + 1.3);
       // the phase: 2π · (the running sum of rate · drift, this sample's included) / sr, from ph0
       this.acc += rate * drift;
-      const ph = (2 * Math.PI * this.acc) / sr + (g.vib.ph0 ?? 0);
-      const ramp = smoothstep((t - delay) / Math.max(rise, 1e-3));
+      const ph = (2 * Math.PI * this.acc) / sr + this.ph0;
+      let c = (t - delay) / this.rise;
+      c = c < 0 ? 0 : c > 1 ? 1 : c;
+      const ramp = c * c * (3 - 2 * c);
       const osc = up * 0.5 * (1 - Math.cos(ph)) + (1 - up) * 0.5 * Math.sin(ph);
       s += depth * ramp * osc;
     }
-    return s;
+    this.s = s;
+  }
+  next(): number {
+    this.step();
+    return this.s;
   }
 }
 
@@ -753,7 +796,9 @@ export type SampleData = [Float32Array, Float32Array];
 
 /**
  * A planned note, sounding: reads its source through the interpolator and lays its samples, set in
- * the stereo field, into the output from `plan.at` on.
+ * the stereo field, into the output from `plan.at` on. What the note holds constant in its gain is
+ * worked out once here (the same expressions as the game's, on the same inputs); gain() leaves
+ * each sample's in `g`, since a call that returns a double boxes it unless inlined.
  */
 export class PlanVoice {
   readonly plan: NotePlan;
@@ -763,18 +808,37 @@ export class PlanVoice {
   private readonly kernel: Float64Array | null;
   private readonly sr: number;
   private i = 0;
-  private pos: number;
+  // (a number a sample writes is declared with a value: made by a later assignment, V8 keeps it boxed)
+  private pos = 0;
   /** A glide's read so far (the running sum of its steps). */
   private run = 0;
   private readonly glide: GlidePlayer | null;
   private readonly gl: number;
   private readonly gr: number;
+  /** The sample's gain gain() made. */
+  private g = 0;
+  // ---- short notes: the fade in, the damping and the end ramp
+  private readonly fadeDen: number;
+  private readonly rampAt: number;
+  private readonly rampDen: number;
+  // ---- sustains: the dynamics, shape and envelope
+  private readonly dynGainConst: number;
+  private readonly dynLast: number;
+  private readonly swellOn: boolean;
+  private readonly durMax: number;
+  private readonly taperOn: boolean;
+  private readonly taperA: number;
+  private readonly taperB: number;
+  private readonly attackOn: boolean;
+  private readonly legatoDen: number;
+  private readonly startDen: number;
+  private readonly relTau: number;
 
   constructor(plan: NotePlan, data: SampleData, sr: number) {
     this.plan = plan;
     this.sr = sr;
     if (plan.extend) {
-      const [l, r] = lengthen(data, plan.row, plan.extend, sr);
+      const [l, r] = lengthened(data, plan.row, plan.extend, sr);
       this.srcL = l;
       this.srcR = r;
     } else {
@@ -795,10 +859,26 @@ export class PlanVoice {
       this.gl = 1;
       this.gr = 1;
     }
+    this.fadeDen = Math.max(1, plan.fadeIn - 1);
+    this.rampAt = plan.length - plan.endRamp;
+    this.rampDen = Math.max(1, plan.endRamp - 1);
+    const s = plan.sus;
+    this.dynGainConst =
+      s?.dynConst !== null && s?.dynConst !== undefined ? undb(-20 * (1 - clip01(s.dynConst)) ** 1.25) : 0;
+    this.dynLast = s ? Math.max(0, s.dynN - 1) : 0;
+    this.swellOn = !!(s?.shape?.swell && s.n > ns(0.4, sr));
+    this.durMax = s ? Math.max(s.dur, 1e-3) : 1;
+    this.taperOn = !!(s?.shape?.taper && s.n > ns(0.5, sr));
+    this.taperA = s ? 0.7 * s.dur : 0;
+    this.taperB = s ? 0.3 * s.dur : 1;
+    this.attackOn = !!(s?.shape?.attack && s.legatoK === 0);
+    this.legatoDen = s ? Math.max(1, s.legatoK - 1) : 1;
+    this.startDen = s ? Math.max(1, s.startK - 1) : 1;
+    this.relTau = s ? Math.max(s.rel / 3, 1e-3) : 1;
   }
 
   /** One interpolated frame of the source at the current read position. */
-  private read(out: [number, number]): void {
+  private read(out: Float64Array): void {
     const L = this.srcL;
     const R = this.srcR;
     const n = L.length;
@@ -835,60 +915,103 @@ export class PlanVoice {
     out[1] = Math.fround(ar);
   }
 
-  private readonly frame: [number, number] = [0, 0];
+  private readonly frame = new Float64Array(2);
 
-  /** The note's own gain at sample i (its velocity, dynamics, envelope, release). */
-  private gainAt(i: number): number {
+  /** The note's own gain at sample `i` (its velocity, dynamics, envelope, release), into `g`. */
+  private gain(): void {
     const p = this.plan;
     const sr = this.sr;
+    const i = this.i;
     if (!p.sus) {
       let g = p.gain;
-      if (p.fadeIn && i < p.fadeIn) g *= Math.fround(0.5 - 0.5 * Math.cos((Math.PI * i) / Math.max(1, p.fadeIn - 1)));
+      if (p.fadeIn && i < p.fadeIn) g *= Math.fround(0.5 - 0.5 * Math.cos((Math.PI * i) / this.fadeDen));
       if (p.damp && i >= p.damp.n) g *= Math.fround(Math.exp(-(i - p.damp.n) / sr / p.damp.tau));
-      if (p.endRamp && i >= p.length - p.endRamp) {
-        const j = i - (p.length - p.endRamp);
-        g *= Math.fround(1 - j / Math.max(1, p.endRamp - 1));
+      if (p.endRamp && i >= this.rampAt) {
+        const j = i - this.rampAt;
+        g *= Math.fround(1 - j / this.rampDen);
       }
-      return g;
+      this.g = g;
+      return;
     }
     const s = p.sus;
-    const d =
-      s.dynConst ??
-      clip01(curveAt(s.dyn as PerfCurve, s.dynT0 + Math.min(i, Math.max(0, s.dynN - 1)) / sr) + s.dynOffset);
-    const dynGain = undb(-20 * (1 - clip01(d)) ** 1.25);
+    let dynGain: number;
+    if (s.dynConst !== null) dynGain = this.dynGainConst;
+    else {
+      // the part's curve at this sample (curveAt, in line), held past the note's length
+      const c = s.dyn as PerfCurve;
+      const ts = c.t;
+      const vs = c.v;
+      const t = s.dynT0 + Math.min(i, this.dynLast) / sr;
+      const last = ts.length - 1;
+      let v: number;
+      if (t < (ts[0] as number)) v = vs[0] as number;
+      else if (t > (ts[last] as number)) v = vs[last] as number;
+      else {
+        let lo = 0;
+        let hi = ts.length;
+        while (lo < hi) {
+          const mid = (lo + hi) >> 1;
+          if ((ts[mid] as number) <= t) lo = mid + 1;
+          else hi = mid;
+        }
+        const idx = Math.max(0, Math.min(last - 1, lo - 1));
+        const t0 = ts[idx] as number;
+        const t1 = ts[idx + 1] as number;
+        let u = (t - t0) / Math.max(t1 - t0, 1e-9);
+        u = u < 0 ? 0 : u > 1 ? 1 : u;
+        u = 0.5 - 0.5 * Math.cos(Math.PI * u);
+        v = (vs[idx] as number) + ((vs[idx + 1] as number) - (vs[idx] as number)) * u;
+      }
+      let d = v + s.dynOffset;
+      d = d < 0 ? 0 : d > 1 ? 1 : d;
+      dynGain = 10 ** ((-20 * (1 - d) ** 1.25) / 20);
+    }
     let env = 1;
     if (s.shape) {
       const tt = i / sr;
-      if (s.shape.swell && s.n > ns(0.4, sr)) {
-        const u = clip01(tt / Math.max(s.dur, 1e-3));
+      if (this.swellOn) {
+        let u = tt / this.durMax;
+        u = u < 0 ? 0 : u > 1 ? 1 : u;
         env *= 1 + s.shape.swell * (Math.sin(Math.PI * u) ** 1.4 - 0.35);
       }
-      if (s.shape.taper && s.n > ns(0.5, sr)) {
-        const u = clip01((tt - 0.7 * s.dur) / (0.3 * s.dur));
+      if (this.taperOn) {
+        let u = (tt - this.taperA) / this.taperB;
+        u = u < 0 ? 0 : u > 1 ? 1 : u;
         env *= 10 ** ((-s.shape.taper * u) / 20);
       }
-      if (s.shape.attack && s.legatoK === 0) env *= smoothstep(tt / s.shape.attack) ** 0.8;
+      if (this.attackOn) {
+        let c = tt / s.shape.attack;
+        c = c < 0 ? 0 : c > 1 ? 1 : c;
+        env *= (c * c * (3 - 2 * c)) ** 0.8;
+      }
     }
-    if (s.legatoK && i < s.legatoK) env = Math.sin(((Math.PI / 2) * i) / Math.max(1, s.legatoK - 1)) ** 2;
-    else if (s.startK && i < s.startK) env = i / Math.max(1, s.startK - 1);
+    if (s.legatoK && i < s.legatoK) env = Math.sin((HALF_PI * i) / this.legatoDen) ** 2;
+    else if (s.startK && i < s.startK) env = i / this.startDen;
     if (i >= s.n) {
       const t = (i - s.n) / sr;
-      env *= Math.exp(-t / Math.max(s.rel / 3, 1e-3)) * Math.cos(clip01(t / s.tail) * (Math.PI / 2));
+      let c = t / s.tail;
+      c = c < 0 ? 0 : c > 1 ? 1 : c;
+      env *= Math.exp(-t / this.relTau) * Math.cos(c * HALF_PI);
     }
-    return p.gain * Math.fround(dynGain * env);
+    this.g = p.gain * Math.fround(dynGain * env);
   }
 
   /** On by `count` samples without sounding them (the read position and a glide move on as they would). */
   skip(count: number): void {
     const p = this.plan;
     const k = Math.min(count, p.length - this.i);
-    for (let j = 0; j < k; j++) {
-      this.i++;
-      if (this.glide) {
-        this.run += p.ratio * 2 ** (this.glide.next() / 12);
+    if (this.glide) {
+      // a glide's read is a running sum: step by step
+      for (let j = 0; j < k; j++) {
+        this.i++;
+        this.glide.step();
+        this.run += p.ratio * 2 ** (this.glide.s / 12);
         this.pos = Math.min(p.start + this.run, this.srcL.length - 1);
-      } else if (p.copy) this.pos += 1;
-      else this.pos = p.start + this.i * p.ratio;
+      }
+    } else if (k > 0) {
+      // a plain read's position is a function of the sample: straight there
+      this.i += k;
+      this.pos = p.copy ? this.pos + k : p.start + this.i * p.ratio;
     }
     if (this.i >= p.length) this.done = true;
   }
@@ -904,9 +1027,10 @@ export class PlanVoice {
         return false;
       }
       this.read(f);
-      const g = this.gainAt(this.i);
-      let a = Math.fround(f[0] * g);
-      let b = Math.fround(f[1] * g);
+      this.gain();
+      const g = this.g;
+      let a = Math.fround((f[0] as number) * g);
+      let b = Math.fround((f[1] as number) * g);
       if (w !== 1) {
         const mid = Math.fround(0.5 * Math.fround(a + b));
         const side = Math.fround(Math.fround(0.5 * Math.fround(a - b)) * w);
@@ -918,7 +1042,8 @@ export class PlanVoice {
       // on through the source
       this.i++;
       if (this.glide) {
-        this.run += p.ratio * 2 ** (this.glide.next() / 12);
+        this.glide.step();
+        this.run += p.ratio * 2 ** (this.glide.s / 12);
         this.pos = Math.min(p.start + this.run, this.srcL.length - 1);
       } else if (p.copy) this.pos += 1;
       else this.pos = p.start + this.i * p.ratio;
@@ -934,6 +1059,41 @@ export class PlanVoice {
     const begin = Math.max(from, p.at + this.i);
     if (begin < to && !this.done) this.play(l, r, offset + begin - from, to - begin);
     return !this.done;
+  }
+}
+
+/**
+ * Lengthened sources, each made once: a sustain's loop is seconds of audio, copied and measured,
+ * and every note on the same sample with the same extension would make the same one again at the
+ * frame it starts. Keyed by the sample's data (gone with it) and the extension's shape.
+ */
+const lengthenedCache = new WeakMap<Float32Array, Map<string, SampleData>>();
+
+export function lengthened(data: SampleData, e: PerfRow, x: Extension, sr: number): SampleData {
+  let byShape = lengthenedCache.get(data[0]);
+  if (!byShape) {
+    byShape = new Map();
+    lengthenedCache.set(data[0], byShape);
+  }
+  const key = `${e.start}|${x.total}|${x.ls}|${x.le}|${x.fade}|${x.linear ? 1 : 0}|${x.passes}|${sr}`;
+  let made = byShape.get(key);
+  if (!made) {
+    made = lengthen(data, e, x, sr);
+    byShape.set(key, made);
+  }
+  return made;
+}
+
+/** Make every lengthened source a part's plans will need, ahead of their notes (their data at hand). */
+export function prepareLengthened(
+  plans: NotePlan[],
+  dataFor: (sample: number) => SampleData | undefined,
+  sr: number,
+): void {
+  for (const p of plans) {
+    if (!p.extend) continue;
+    const data = dataFor(p.row.sample);
+    if (data) lengthened(data, p.row, p.extend, sr);
   }
 }
 

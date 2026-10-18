@@ -4,14 +4,14 @@
  *
  * The response is cut into segments. The first 128 taps are convolved directly; then uniform blocks
  * of 128 (to 2176 taps), 1024 (to 32896) and 16384 samples (to the end) in the frequency domain. A
- * big block's work (its transforms and its multiply-adds) is spread over the audio blocks of its
- * period, so a long hall never makes one block slow. The convolver's output starts at once: there is
- * no added latency.
+ * big block's work (its transforms, stage by stage, and its multiply-adds) is spread over the audio
+ * blocks of its period, so a long hall never makes one block slow. The convolver's output starts at
+ * once: there is no added latency.
  *
  * Preparing a response (its segments' spectra) is the heavy part and happens once, away from the
  * audio thread; a Convolver made from the prepared data is cheap.
  */
-import { fft, ifft } from './fft.ts';
+import { type FftPlan, fft, fftPlan, fftStage, ifftScale } from './fft.ts';
 
 export const BLOCK = 128;
 
@@ -128,6 +128,7 @@ class Segment {
   private readonly m: number;
   private readonly bins: number;
   private readonly perPeriod: number;
+  private readonly plan: FftPlan;
   /** The last 2·size input samples, as the period's transform needs them. */
   private readonly histL: Float64Array;
   private readonly histR: Float64Array;
@@ -147,10 +148,20 @@ class Segment {
   private readonly outL: Float64Array;
   private readonly outR: Float64Array;
   private readonly mask: number;
-  /** The period whose sum is under way, and how far it's got (in bins). */
+  /** The period whose work is under way, how many blocks in, and how far its sum has got (in bins). */
   private job = -1;
   private jobBlock = 0;
   private jobBin = 0;
+  /**
+   * A period's work as units of about equal size, in order: the forward transform's stages, its
+   * spectrum taken, the sum (`sumUnits` of them), the inverse's stages, then its scaling and the
+   * output. Each block of the period after the one that completes it does the units from
+   * `unitFrom[block]` to `unitTo[block]`.
+   */
+  private readonly sumUnits: number;
+  private readonly units: number;
+  private readonly unitFrom: Int32Array;
+  private readonly unitTo: Int32Array;
 
   constructor(d: PreparedSegment) {
     this.d = d;
@@ -159,6 +170,7 @@ class Segment {
     this.m = d.size * 2;
     this.bins = d.size + 1;
     this.perPeriod = d.size / BLOCK;
+    this.plan = fftPlan(this.m);
     this.histL = new Float64Array(this.m);
     this.histR = new Float64Array(this.m);
     this.xL = new Float64Array(this.bins * d.parts * 2);
@@ -172,6 +184,20 @@ class Segment {
     this.outL = new Float64Array(ring);
     this.outR = new Float64Array(ring);
     this.mask = ring - 1;
+    // the period's output is first due a whole period after it completes (its segment starts at
+    // least two sizes in), so its work has the period's remaining blocks: the fixed units one to a
+    // block where there's room, the sum over whatever blocks are left (and in pieces over half the
+    // blocks at least, where the fixed units already come more than one to a block)
+    const fixed = this.plan.stages * 2 + 2;
+    const blocks = this.perPeriod - 1;
+    this.sumUnits = Math.max(1, blocks - fixed, Math.ceil(blocks / 2));
+    this.units = fixed + this.sumUnits;
+    this.unitFrom = new Int32Array(this.perPeriod);
+    this.unitTo = new Int32Array(this.perPeriod);
+    for (let b = 1; b < this.perPeriod; b++) {
+      this.unitFrom[b] = Math.floor(((b - 1) * this.units) / blocks);
+      this.unitTo[b] = Math.floor((b * this.units) / blocks);
+    }
   }
 
   /** Take one block of input (block number `b`); do this block's share of the work. */
@@ -185,28 +211,14 @@ class Segment {
     }
     this.fill += BLOCK;
     if (this.fill === half) {
-      // a period is complete: its spectrum (both channels in one transform), then shift the history
+      // a period is complete: its transform's input (both channels in one transform), then shift the history
       const { fre: re, fim: im, m } = this;
       const parts = this.d.parts;
       for (let i = 0; i < m; i++) {
         re[i] = this.histL[i] as number;
         im[i] = this.histR[i] as number;
       }
-      fft(re, im);
       this.newest = (this.newest + parts - 1) % parts;
-      const { xL, xR } = this;
-      for (let k = 0; k <= half; k++) {
-        const j = (m - k) % m;
-        const a = re[k] as number;
-        const bb = im[k] as number;
-        const c = re[j] as number;
-        const d = im[j] as number;
-        const at2 = (k * parts + this.newest) * 2;
-        xL[at2] = (a + c) / 2;
-        xL[at2 + 1] = (bb - d) / 2;
-        xR[at2] = (bb + d) / 2;
-        xR[at2 + 1] = (c - a) / 2;
-      }
       this.histL.copyWithin(0, half, m);
       this.histR.copyWithin(0, half, m);
       this.fill = 0;
@@ -214,22 +226,51 @@ class Segment {
       this.jobBlock = 0;
       this.jobBin = 0;
       this.cross = cross;
-      if (this.perPeriod === 1) {
-        this.sum(this.bins);
-        this.finish();
-      }
+      if (this.perPeriod === 1) this.work(0, this.units);
       return;
     }
     if (this.job < 0) return;
-    // a big block: its sum over the period's blocks, a share of the bins each; its inverse transform on the last
     this.jobBlock++;
-    const spread = this.perPeriod - 2;
-    if (this.jobBlock <= spread) {
-      this.sum(Math.ceil((this.bins * this.jobBlock) / spread) - this.jobBin);
-    } else if (this.jobBlock === this.perPeriod - 1) {
-      this.finish();
-    }
+    this.work(this.unitFrom[this.jobBlock] as number, this.unitTo[this.jobBlock] as number);
     void b;
+  }
+
+  /** Units `from` to `to` of the period's work. */
+  private work(from: number, to: number): void {
+    const stages = this.plan.stages;
+    const sumUnits = this.sumUnits;
+    for (let u = from; u < to; u++) {
+      if (u < stages) fftStage(this.plan, u, this.fre, this.fim);
+      else if (u === stages) this.spectrum();
+      else if (u <= stages + sumUnits) {
+        // the sum's share: as far through the bins as this unit's place in it
+        this.sum(Math.ceil((this.bins * (u - stages)) / sumUnits) - this.jobBin);
+      } else {
+        const s = u - stages - sumUnits - 1;
+        // (the inverse transform: the forward one with real and imaginary swapped)
+        if (s < stages) fftStage(this.plan, s, this.im, this.re);
+        else this.finish();
+      }
+    }
+  }
+
+  /** The period's spectrum, into its slot: the two channels' halves of the one transform. */
+  private spectrum(): void {
+    const { fre: re, fim: im, m, xL, xR } = this;
+    const half = this.size;
+    const parts = this.d.parts;
+    for (let k = 0; k <= half; k++) {
+      const j = (m - k) % m;
+      const a = re[k] as number;
+      const bb = im[k] as number;
+      const c = re[j] as number;
+      const d = im[j] as number;
+      const at2 = (k * parts + this.newest) * 2;
+      xL[at2] = (a + c) / 2;
+      xL[at2 + 1] = (bb - d) / 2;
+      xR[at2] = (bb + d) / 2;
+      xR[at2 + 1] = (c - a) / 2;
+    }
   }
 
   /**
@@ -329,12 +370,11 @@ class Segment {
     this.jobBin = end;
   }
 
-  /** The period's sum back to time (both channels in one transform), into the output ring. */
+  /** The period's sum, back in time (its stages done), scaled and into the output ring. */
   private finish(): void {
-    if (this.jobBin < this.bins) this.sum(this.bins - this.jobBin);
     const { re, im } = this;
     const half = this.size;
-    ifft(re, im);
+    ifftScale(re, im);
     // outputs for the period that ended `job`: from its start, `start` samples later
     const t0 = this.job * this.size + this.start;
     for (let i = 0; i < half; i++) {

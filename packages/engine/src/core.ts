@@ -15,7 +15,7 @@ import { GlassLineVoice, GlassVoice } from './glass.ts';
 import type { Instrument } from './instrument.ts';
 import { createMidiEffect, EventList, type MidiEffect, type MidiHost } from './midifx.ts';
 import type { PartPlans } from './parts.ts';
-import { PlanVoice, type SampleData } from './performance.ts';
+import { PlanVoice, prepareLengthened, type SampleData } from './performance.ts';
 import {
   type ChannelSpec,
   type ClipSpec,
@@ -99,8 +99,12 @@ interface Insert {
   bypass: boolean;
   effect: Effect;
   json: string;
-  /** The parameters as set (automation changes one at a time on top of them). */
+  /**
+   * The parameters as set (automation changes one at a time on top of them: its own copy once it
+   * has, `owned`, so the graph's stays as sent).
+   */
   params: Record<string, number>;
+  owned: boolean;
   settings: Record<string, string> | undefined;
 }
 
@@ -111,23 +115,32 @@ interface Lane {
   smooth: boolean;
   /** The last value applied, so a plugin is only re-tuned when its value moves. */
   last: number;
+  /** A mute lane; or a plugin's parameter: the insert and the parameter's id (found once, when the strip is set up). */
+  mute: boolean;
+  insert: Insert | null;
+  id: string;
 }
 
 /** A lane's value at a frame: a straight line (or a cosine ease) between points, held outside them. */
 function laneAt(points: number[], frame: number, stepped: boolean, smooth = false): number {
   if (frame <= (points[0] as number)) return points[1] as number;
-  for (let i = 2; i < points.length; i += 2) {
-    const f1 = points[i] as number;
-    if (frame < f1) {
-      const f0 = points[i - 2] as number;
-      const v0 = points[i - 1] as number;
-      if (stepped || f1 === f0) return v0;
-      let u = (frame - f0) / (f1 - f0);
-      if (smooth) u = 0.5 - 0.5 * Math.cos(Math.PI * u);
-      return v0 + ((points[i + 1] as number) - v0) * u;
-    }
+  // the last point at or before the frame
+  let lo = 0;
+  let hi = points.length / 2 - 1;
+  while (lo < hi) {
+    const mid = (lo + hi + 1) >> 1;
+    if ((points[mid * 2] as number) <= frame) lo = mid;
+    else hi = mid - 1;
   }
-  return points[points.length - 1] as number;
+  const i = lo * 2 + 2;
+  if (i >= points.length) return points[points.length - 1] as number;
+  const f0 = points[i - 2] as number;
+  const v0 = points[i - 1] as number;
+  const f1 = points[i] as number;
+  if (stepped || f1 === f0) return v0;
+  let u = (frame - f0) / (f1 - f0);
+  if (smooth) u = 0.5 - 0.5 * Math.cos(Math.PI * u);
+  return v0 + ((points[i + 1] as number) - v0) * u;
 }
 
 /**
@@ -326,7 +339,19 @@ class Strip {
     this.mute = spec.mute;
     this.output = spec.output || 'master';
     this.inserts = reconcile(this.inserts, spec.inserts, host);
-    const lanes = spec.automation.map((a) => ({ ...a, smooth: a.smooth ?? false, last: Number.NaN }));
+    const lanes: Lane[] = spec.automation.map((a) => {
+      const fx = a.param.startsWith('fx:') ? a.param.split(':') : null;
+      return {
+        param: a.param,
+        points: a.points,
+        stepped: a.stepped,
+        smooth: a.smooth ?? false,
+        last: Number.NaN,
+        mute: a.param === 'mute',
+        insert: fx ? (this.inserts.find((x) => x.id === fx[1]) ?? null) : null,
+        id: fx?.[2] ?? '',
+      };
+    });
     const take = (param: string) => lanes.find((l) => l.param === param) ?? null;
     this.volLane = take('volume');
     this.panLane = take('pan');
@@ -383,14 +408,18 @@ class Strip {
     this.autoMute = false;
     for (const lane of this.lanes) {
       const v = laneAt(lane.points, frame, lane.stepped, lane.smooth);
-      const p = lane.param;
-      if (p === 'mute') this.autoMute = v >= 0.5;
-      else if (p.startsWith('fx:') && v !== lane.last) {
-        const [, id, param] = p.split(':');
-        const ins = this.inserts.find((x) => x.id === id);
-        if (ins && param) {
-          ins.params = { ...ins.params, [param]: v };
-          ins.effect.setParams(ins.params, ins.settings);
+      if (lane.mute) this.autoMute = v >= 0.5;
+      else if (v !== lane.last) {
+        const ins = lane.insert;
+        if (ins && lane.id) {
+          if (!ins.owned) {
+            ins.params = { ...ins.params };
+            ins.owned = true;
+          }
+          ins.params[lane.id] = v;
+          // only what the one setting changes, where the plugin knows; else the whole
+          if (ins.effect.setParam) ins.effect.setParam(lane.id, ins.params, ins.settings);
+          else ins.effect.setParams(ins.params, ins.settings);
         }
       }
       lane.last = v;
@@ -405,15 +434,25 @@ class Strip {
     for (const s of this.sends) if (s.lane) fillLane(s.lane, spans, count, n, at, s.frames);
   }
 
-  /** A send's gain at frame i of the block. */
-  sendGain(s: Strip['sends'][number], i: number): number {
-    if (!s.lane) return s.gain.next();
-    const d = s.frames[i] as number;
-    if (d !== s.lastDb) {
-      s.lastDb = d;
-      s.lastGain = dbToGain(d);
+  /** A send's gain at each frame of the block, into `out` (its lane's, worked out again only when it moves; else its smoothed level). */
+  sendGains(s: Strip['sends'][number], n: number, out: Float64Array): void {
+    if (!s.lane) {
+      const gain = s.gain;
+      for (let i = 0; i < n; i++) {
+        gain.step();
+        out[i] = gain.value;
+      }
+      return;
     }
-    return s.lastGain;
+    const frames = s.frames;
+    for (let i = 0; i < n; i++) {
+      const d = frames[i] as number;
+      if (d !== s.lastDb) {
+        s.lastDb = d;
+        s.lastGain = dbToGain(d);
+      }
+      out[i] = s.lastGain;
+    }
   }
 
   /** Frames the strip's plugins delay its sound by. */
@@ -434,10 +473,13 @@ class Strip {
       if (ins.id === this.watch) this.watchGr = ins.effect.gr;
     }
     this.gr = gr;
-    this.preL.set(this.l.subarray(0, n));
-    this.preR.set(this.r.subarray(0, n));
+    const { preL, preR } = this;
+    for (let i = 0; i < n; i++) {
+      preL[i] = this.l[i] as number;
+      preR[i] = this.r[i] as number;
+    }
     const on = this.audible && !this.mute && !this.autoMute ? 1 : 0;
-    const { volLane, panLane, volFrames, panFrames } = this;
+    const { volLane, panLane, volFrames, panFrames, vol, panL, panR } = this;
     // a lane's gain, worked out again only when its value moves
     let lastDb = Number.NaN;
     let lastGain = 0;
@@ -450,7 +492,10 @@ class Strip {
           lastGain = dbToGain(d);
         }
         g = lastGain;
-      } else g = this.vol.next();
+      } else {
+        vol.step();
+        g = vol.value;
+      }
       const v = g * on;
       let pl: number;
       let pr: number;
@@ -459,8 +504,10 @@ class Strip {
         pl = Math.min(1, 1 - pan);
         pr = Math.min(1, 1 + pan);
       } else {
-        pl = this.panL.next();
-        pr = this.panR.next();
+        panL.step();
+        panR.step();
+        pl = panL.value;
+        pr = panR.value;
       }
       this.l[i] = (this.l[i] as number) * v * pl;
       this.r[i] = (this.r[i] as number) * v * pr;
@@ -474,11 +521,18 @@ class Strip {
    * the sound before that, each at its seats' levels.
    */
   private seat(near: SeatNode, far: SeatNode, n: number): void {
-    const { l, r, cn, cf, nearL, nearR, farL, farR } = this;
-    this.postL.set(l.subarray(0, n));
-    this.postR.set(r.subarray(0, n));
+    const { l, r, cn, cf, nearL, nearR, farL, farR, postL, postR, distance, distLane, distFrames } = this;
     for (let i = 0; i < n; i++) {
-      const d = this.distLane ? Math.max(0, Math.min(1, this.distFrames[i] as number)) : this.distance.next();
+      postL[i] = l[i] as number;
+      postR[i] = r[i] as number;
+    }
+    for (let i = 0; i < n; i++) {
+      let d: number;
+      if (distLane) d = Math.max(0, Math.min(1, distFrames[i] as number));
+      else {
+        distance.step();
+        d = distance.value;
+      }
       const a = Math.cos((d * Math.PI) / 2);
       const b = Math.sin((d * Math.PI) / 2);
       cn[i] = a;
@@ -522,11 +576,21 @@ function reconcile(old: Insert[], specs: PluginSpec[], host: Host): Insert[] {
       const effect = createEffect(s.type, host);
       if (!effect) continue;
       effect.setParams(s.params, s.settings);
-      ins = { id: s.id, type: s.type, bypass: s.bypass, effect, json, params: s.params, settings: s.settings };
+      ins = {
+        id: s.id,
+        type: s.type,
+        bypass: s.bypass,
+        effect,
+        json,
+        params: s.params,
+        owned: false,
+        settings: s.settings,
+      };
     } else if (ins.json !== json) {
       ins.effect.setParams(s.params, s.settings);
       ins.json = json;
       ins.params = s.params;
+      ins.owned = false;
       ins.settings = s.settings;
     }
     ins.bypass = s.bypass;
@@ -574,6 +638,9 @@ interface PartRuntime {
 
 class TrackNode extends Strip {
   clips: ClipSpec[] = [];
+  /** The first clip not yet past (the clips are in order and don't overlap), and the song frame it was found for. */
+  clipCursor = 0;
+  clipFrom = Number.NEGATIVE_INFINITY;
   part: PartRuntime | null = null;
   input: InputSpec | null = null;
   capture: Capture | null = null;
@@ -695,13 +762,17 @@ export class EngineCore implements Host {
 
   // ---- hosts for plugins ----
 
+  /** The tempo segment a frame falls in: the last that starts at or before it (the first, before any). */
   private segmentAt(frame: number): TempoSegment {
-    let seg = this.tempo[0] as TempoSegment;
-    for (const s of this.tempo) {
-      if (s.frame > frame) break;
-      seg = s;
+    const tempo = this.tempo;
+    let lo = 0;
+    let hi = tempo.length - 1;
+    while (lo < hi) {
+      const mid = (lo + hi + 1) >> 1;
+      if ((tempo[mid] as TempoSegment).frame <= frame) lo = mid;
+      else hi = mid - 1;
     }
-    return seg;
+    return tempo[lo] as TempoSegment;
   }
   private tickAt(frame: number): number {
     const s = this.segmentAt(frame);
@@ -733,11 +804,15 @@ export class EngineCore implements Host {
   }
   private frameAtSigned(tick: number): number {
     if (tick < 0) return tick * (this.tempo[0] as TempoSegment).framesPerTick;
-    let seg = this.tempo[0] as TempoSegment;
-    for (const s of this.tempo) {
-      if (s.tick > tick) break;
-      seg = s;
+    const tempo = this.tempo;
+    let lo = 0;
+    let hi = tempo.length - 1;
+    while (lo < hi) {
+      const mid = (lo + hi + 1) >> 1;
+      if ((tempo[mid] as TempoSegment).tick <= tick) lo = mid;
+      else hi = mid - 1;
     }
+    const seg = tempo[lo] as TempoSegment;
     return seg.frame + (tick - seg.tick) * seg.framesPerTick;
   }
 
@@ -794,8 +869,7 @@ export class EngineCore implements Host {
       case 'impulse': {
         this.impulses.set(msg.key, msg.data);
         // the plugins waiting for it pick it up (those this engine plays)
-        for (const s of [...this.trackOrder, ...this.buses, this.master])
-          if (s.role !== ROLE_NONE) for (const ins of s.inserts) ins.effect.refresh?.();
+        for (const s of this.allStrips) if (s.role !== ROLE_NONE) for (const ins of s.inserts) ins.effect.refresh?.();
         break;
       }
       case 'forgetAudio':
@@ -803,14 +877,21 @@ export class EngineCore implements Host {
         break;
       case 'clips': {
         const t = this.tracks.get(msg.num);
-        if (t) t.clips = msg.clips;
+        if (t) {
+          t.clips = msg.clips;
+          t.clipCursor = 0;
+          t.clipFrom = Number.NEGATIVE_INFINITY;
+        }
         break;
       }
       case 'plans': {
         const t = this.tracks.get(msg.num);
         if (t) {
           t.part = msg.plans ? this.partRuntime(msg.plans) : null;
-          if (t.part && this.playsSong(t)) this.seekPart(t.part, Math.max(0, this.pos), this.playing);
+          if (t.part && this.playsSong(t)) {
+            this.prepareLengthened(t.part.plans);
+            this.seekPart(t.part, Math.max(0, this.pos), this.playing);
+          }
         }
         break;
       }
@@ -821,6 +902,9 @@ export class EngineCore implements Host {
           this.perfData.set(msg.key, files);
         }
         for (const x of msg.samples) files.set(x.index, [x.left, x.right]);
+        for (const t of this.trackOrder)
+          if (t.part && t.part.plans.kind === 'performance' && t.part.plans.key === msg.key && this.playsSong(t))
+            this.prepareLengthened(t.part.plans);
         break;
       }
       case 'inputs':
@@ -844,6 +928,12 @@ export class EngineCore implements Host {
         this.samplers.set(msg.spec.key, msg.spec);
         for (const t of this.trackOrder)
           if (t.spec && usesSampler(t.spec, msg.spec.key)) this.buildInstruments(t, t.spec, true);
+        break;
+      case 'forgetSampler':
+        // (a track still on it, if any, keeps a silent instrument until the samples come again)
+        this.samplers.delete(msg.key);
+        for (const t of this.trackOrder)
+          if (t.spec && usesSampler(t.spec, msg.key)) this.buildInstruments(t, t.spec, true);
         break;
       case 'play':
         this.lastCmd = msg.cmd ?? this.lastCmd;
@@ -1008,6 +1098,16 @@ export class EngineCore implements Host {
     return { plans, entries, next: 0, voices: [], until: 0 };
   }
 
+  /**
+   * A Performance part's sustains lengthened ahead of their notes (seconds of audio copied and
+   * measured each: not for the block a note starts in), once its samples are here.
+   */
+  private prepareLengthened(plans: PartPlans): void {
+    if (plans.kind !== 'performance') return;
+    const files = this.perfData.get(plans.key);
+    if (files) prepareLengthened(plans.notes, (sample) => files.get(sample), this.sr);
+  }
+
   /** From a frame: what's due next, and (playing) what should already be sounding, joined late. */
   private seekPart(part: PartRuntime, frame: number, late: boolean): void {
     part.voices = [];
@@ -1058,7 +1158,11 @@ export class EngineCore implements Host {
         } else v.play(t.l, t.r, out + (e.at - song), count - (e.at - song));
         part.voices.push(v);
       }
-      part.voices = part.voices.filter((v) => !v.done);
+      // the voices that have finished, out (in place: nothing new to collect)
+      const voices = part.voices;
+      let kept = 0;
+      for (const v of voices) if (!v.done) voices[kept++] = v;
+      voices.length = kept;
     }
   }
 
@@ -1104,27 +1208,29 @@ export class EngineCore implements Host {
     }
   }
 
+  /** A live MIDI message (its bytes packed in a word), to its track's events for this block. */
+  private pushLive(word: number, num: number): void {
+    const t = this.tracks.get(num);
+    if (!t) return;
+    const status = word & 0xff;
+    const d1 = (word >> 8) & 0x7f;
+    const d2 = (word >> 16) & 0x7f;
+    const kind = status & 0xf0;
+    if (kind === 0x90 && d2 > 0) t.events.push(0, EV_ON, d1, d2);
+    else if (kind === 0x80 || kind === 0x90) t.events.push(0, EV_OFF, d1, 0);
+    else if (kind === 0xb0) t.events.push(0, EV_CC, d1, d2);
+    else if (kind === 0xe0) t.events.push(0, EV_BEND, ((d2 << 7) | d1) - 8192, 0);
+    else if (kind === 0xd0) t.events.push(0, EV_PRESSURE, d1, 0);
+  }
+
   private readLive(): void {
-    const push = (word: number, num: number) => {
-      const t = this.tracks.get(num);
-      if (!t) return;
-      const status = word & 0xff;
-      const d1 = (word >> 8) & 0x7f;
-      const d2 = (word >> 16) & 0x7f;
-      const kind = status & 0xf0;
-      if (kind === 0x90 && d2 > 0) t.events.push(0, EV_ON, d1, d2);
-      else if (kind === 0x80 || kind === 0x90) t.events.push(0, EV_OFF, d1, 0);
-      else if (kind === 0xb0) t.events.push(0, EV_CC, d1, d2);
-      else if (kind === 0xe0) t.events.push(0, EV_BEND, ((d2 << 7) | d1) - 8192, 0);
-      else if (kind === 0xd0) t.events.push(0, EV_PRESSURE, d1, 0);
-    };
     const ring = this.ring;
     if (ring) {
       let read = Atomics.load(ring, 1);
       const write = Atomics.load(ring, 0);
       while (read !== write) {
         const i = RING_HEADER + read * EVENT_INTS;
-        push(ring[i] as number, ring[i + 1] as number);
+        this.pushLive(ring[i] as number, ring[i + 1] as number);
         read = (read + 1) % RING_EVENTS;
       }
       Atomics.store(ring, 1, read);
@@ -1133,7 +1239,7 @@ export class EngineCore implements Host {
     // a worker plays no live notes: the audio thread does, at once
     if (this.split && this.split.self >= 0) q.length = 0;
     for (let i = 0; i + 3 < q.length; i += 4) {
-      push(
+      this.pushLive(
         ((q[i] as number) & 0xff) | (((q[i + 1] as number) & 0x7f) << 8) | (((q[i + 2] as number) & 0x7f) << 16),
         q[i + 3] as number,
       );
@@ -1196,16 +1302,19 @@ export class EngineCore implements Host {
     t.capture = null;
   }
 
-  /** The input this track listens to, for this block (null when nothing is plugged in). */
-  private inputOf(t: TrackNode, input: Float32Array[] | undefined): [Float32Array, Float32Array] | null {
+  /** The input this track listens to, for this block, in inA and inB (false when nothing is plugged in). */
+  private inputOf(t: TrackNode, input: Float32Array[] | undefined): boolean {
     const spec = t.input;
-    if (!spec || !input?.length) return null;
+    if (!spec || !input?.length) return false;
     const a = input[spec.input] ?? (input[0] as Float32Array);
-    const b = spec.channels === 2 ? (input[spec.input + 1] ?? a) : a;
-    return [a, b];
+    this.inA = a;
+    this.inB = spec.channels === 2 ? (input[spec.input + 1] ?? a) : a;
+    return true;
   }
+  private inA: Float32Array = new Float32Array(0);
+  private inB: Float32Array = new Float32Array(0);
 
-  private record(t: TrackNode, src: [Float32Array, Float32Array], n: number): void {
+  private record(t: TrackNode, srcL: Float32Array, srcR: Float32Array, n: number): void {
     const c = t.capture;
     if (!c || c.done || !this.playing || this.spanCount === 0) return;
     // the first span only: a cycle jump ends the take (it plays back from where it began)
@@ -1214,8 +1323,8 @@ export class EngineCore implements Host {
     const count = Math.min(this.spans[2] as number, n - from);
     if (c.frame < 0) c.frame = song;
     for (let i = 0; i < count; i++) {
-      c.left[c.fill] = src[0][from + i] as number;
-      if (c.right) c.right[c.fill] = src[1][from + i] as number;
+      c.left[c.fill] = srcL[from + i] as number;
+      if (c.right) c.right[c.fill] = srcR[from + i] as number;
       if (++c.fill === c.left.length) this.flushCapture(t, false);
     }
     if (this.spanCount > 1) {
@@ -1226,12 +1335,19 @@ export class EngineCore implements Host {
 
   /** The track's audio regions over this block. */
   private playClips(t: TrackNode): void {
+    const clips = t.clips;
     for (let s = 0; s < this.spanCount; s++) {
       const out = this.spans[s * 3] as number;
       const song = this.spans[s * 3 + 1] as number;
       const count = this.spans[s * 3 + 2] as number;
       const songEnd = song + count;
-      for (const clip of t.clips) {
+      // from the first clip not yet past (from the first of all, when the song has gone back)
+      let c = song < t.clipFrom ? 0 : t.clipCursor;
+      t.clipFrom = song;
+      while (c < clips.length && (clips[c] as ClipSpec).end <= song) c++;
+      t.clipCursor = c;
+      for (let i = c; i < clips.length; i++) {
+        const clip = clips[i] as ClipSpec;
         if (clip.start >= songEnd) break;
         if (clip.end <= song) continue;
         const data = this.audio.get(clip.key);
@@ -1297,15 +1413,13 @@ export class EngineCore implements Host {
     t.work.clear();
     if (t.clips.length && this.playing && song) this.playClips(t);
     if (t.part && this.playing && song) this.playPart(t, t.part);
-    if (t.input) {
-      const src = this.inputOf(t, input);
-      if (src) {
-        if (t.capture) this.record(t, src, n);
-        if (t.input.monitor) {
-          for (let i = 0; i < n; i++) {
-            t.l[i] = (t.l[i] as number) + (src[0][i] as number);
-            t.r[i] = (t.r[i] as number) + (src[1][i] as number);
-          }
+    if (t.input && this.inputOf(t, input)) {
+      const { inA, inB } = this;
+      if (t.capture) this.record(t, inA, inB, n);
+      if (t.input.monitor) {
+        for (let i = 0; i < n; i++) {
+          t.l[i] = (t.l[i] as number) + (inA[i] as number);
+          t.r[i] = (t.r[i] as number) + (inB[i] as number);
         }
       }
     }
@@ -1397,10 +1511,11 @@ export class EngineCore implements Host {
         srcL = send.comp.l;
         srcR = send.comp.r;
       }
+      const g = this.gains;
+      s.sendGains(send, n, g);
       for (let i = 0; i < n; i++) {
-        const g = s.sendGain(send, i);
-        bus.l[i] = (bus.l[i] as number) + (srcL[i] as number) * g;
-        bus.r[i] = (bus.r[i] as number) + (srcR[i] as number) * g;
+        bus.l[i] = (bus.l[i] as number) + (srcL[i] as number) * (g[i] as number);
+        bus.r[i] = (bus.r[i] as number) + (srcR[i] as number) * (g[i] as number);
       }
     }
     for (const seat of s.seatSends) {
@@ -1614,6 +1729,7 @@ export class EngineCore implements Host {
       if (s.ran) for (const ins of s.inserts) ins.effect.reset();
       if (t) {
         t.events.clear();
+        if (t.part) this.prepareLengthened(t.part.plans);
         this.seek(t, Math.max(0, this.pos));
       }
     }
@@ -1784,7 +1900,7 @@ export class EngineCore implements Host {
         srcR = send.comp.r;
       }
       const g = this.gains;
-      for (let i = 0; i < n; i++) g[i] = s.sendGain(send, i);
+      s.sendGains(send, n, g);
       this.pL = srcL;
       this.pR = srcR;
       return g;
@@ -2002,8 +2118,7 @@ export class EngineCore implements Host {
     for (const t of this.trackOrder) if (t.lanes.length) t.automate(at);
     for (const b of this.buses) if (b.lanes.length) b.automate(at);
     if (this.master.lanes.length) this.master.automate(at);
-    for (const s of [...this.trackOrder, ...this.buses, this.master])
-      s.automateFrames(this.spans, this.spanCount, n, at);
+    for (const s of this.allStrips) s.automateFrames(this.spans, this.spanCount, n, at);
     for (const t of this.trackOrder) {
       this.renderTrack(t, n, input);
       this.meter(t, n);

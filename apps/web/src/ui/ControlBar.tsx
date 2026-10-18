@@ -6,6 +6,7 @@ import {
   FastForward,
   Keyboard,
   Library,
+  ListMusic,
   Maximize2,
   Metronome,
   Minimize2,
@@ -45,10 +46,26 @@ import { isPhone, useLayout } from '../app/layout.ts';
 import { store, useApp, useShow } from '../app/store.ts';
 import { engine } from '../audio/engine.ts';
 import { midi } from '../audio/midi.ts';
-import { startDrag, Wordmark } from './controls.tsx';
+import { startDrag, TAP, Wordmark } from './controls.tsx';
 import { useFrame } from './frame.ts';
 import { openMenuAt } from './menu.tsx';
 import { ViewMenu } from './ViewMenu.tsx';
+
+/** Whether a media query holds, kept current as the window changes. */
+function useMedia(query: string): boolean {
+  const [match, setMatch] = useState(() => window.matchMedia(query).matches);
+  useEffect(() => {
+    const mq = window.matchMedia(query);
+    const on = () => setMatch(mq.matches);
+    on();
+    mq.addEventListener('change', on);
+    return () => mq.removeEventListener('change', on);
+  }, [query]);
+  return match;
+}
+
+/** Where the bar is too narrow for the full display: the position shortens and the time goes (the CSS hides the rest). */
+const NARROW_BAR = '(max-width: 900px), (max-width: 1100px) and (pointer: coarse)';
 
 /** "9 1 1 7" as "  9 1 1   7": every digit keeps its place while the song plays. */
 function padPosition(text: string): string {
@@ -84,6 +101,8 @@ export function Lcd({ compact = false }: { compact?: boolean }) {
   const pos = useRef<HTMLSpanElement>(null);
   const time = useRef<HTMLSpanElement>(null);
   const [editingTempo, setEditingTempo] = useState(false);
+  // Escape leaves the tempo as it was: the field's blur, as it goes, must not commit what was typed
+  const cancelled = useRef(false);
   useFrame(() => {
     const p = store.get().project;
     if (!p) return;
@@ -123,20 +142,38 @@ export function Lcd({ compact = false }: { compact?: boolean }) {
       )}
       <div
         className="editable"
-        title="Tempo: drag up or down, double-click to type"
+        title="Tempo: drag up or down, double-click (or tap) to type"
         onPointerDown={(e) => {
           if (e.button !== 0 || (e.target as HTMLElement).tagName === 'INPUT') return;
+          const touch = e.pointerType === 'touch';
           let v = store.get().project?.tempo[0]?.bpm ?? 120;
+          let tx = 0;
+          let ty = 0;
+          let moved = false;
           beginGesture('Tempo');
           startDrag(e, {
             onMove: (dx, dy, ev) => {
+              tx += dx;
+              ty += dy;
+              if (!moved && Math.hypot(tx, ty) < TAP) return;
+              moved = true;
               v += (dx - dy) * (ev.shiftKey ? 0.05 : 0.5);
               gestureChange(setBpm(v));
             },
-            onEnd: endGesture,
+            onEnd: (wasCancelled) => {
+              endGesture();
+              // a finger can't double-click: a tap opens the field instead
+              if (touch && !moved && !wasCancelled) {
+                cancelled.current = false;
+                setEditingTempo(true);
+              }
+            },
           });
         }}
-        onDoubleClick={() => setEditingTempo(true)}
+        onDoubleClick={() => {
+          cancelled.current = false;
+          setEditingTempo(true);
+        }}
       >
         {editingTempo ? (
           <input
@@ -147,11 +184,16 @@ export function Lcd({ compact = false }: { compact?: boolean }) {
             aria-label="Tempo"
             onKeyDown={(e) => {
               if (e.key === 'Enter') e.currentTarget.blur();
-              if (e.key === 'Escape') setEditingTempo(false);
+              if (e.key === 'Escape') {
+                cancelled.current = true;
+                setEditingTempo(false);
+              }
             }}
             onBlur={(e) => {
-              const v = Number(e.currentTarget.value);
-              if (v > 0 && v !== bpm) apply(setBpm(v), 'Tempo');
+              if (!cancelled.current) {
+                const v = Number(e.currentTarget.value);
+                if (v > 0 && v !== bpm) apply(setBpm(v), 'Tempo');
+              }
               setEditingTempo(false);
             }}
           />
@@ -161,10 +203,11 @@ export function Lcd({ compact = false }: { compact?: boolean }) {
         <span className="caption">tempo</span>
       </div>
       {showSig && (
-        <div
-          className="editable"
-          style={{ cursor: 'pointer' }}
+        <button
+          type="button"
+          className="btn bare cell"
           title="Time signature"
+          aria-haspopup="menu"
           onClick={(e) =>
             openMenuAt(e.currentTarget, [
               { heading: 'Time signature' },
@@ -191,13 +234,14 @@ export function Lcd({ compact = false }: { compact?: boolean }) {
             {m.num}/{m.den}
           </span>
           <span className="caption">{m.groups ? m.groups.join('+') : 'sig'}</span>
-        </div>
+        </button>
       )}
       {!compact && showKey && (
-        <div
-          className="lcd-key"
-          style={{ cursor: 'pointer' }}
+        <button
+          type="button"
+          className="btn bare cell lcd-key"
           title="Key"
+          aria-haspopup="menu"
           onClick={(e) =>
             openMenuAt(e.currentTarget, [
               {
@@ -222,7 +266,7 @@ export function Lcd({ compact = false }: { compact?: boolean }) {
         >
           <span className="value small key">{project.key ?? '—'}</span>
           <span className="caption">key</span>
-        </div>
+        </button>
       )}
     </section>
   );
@@ -236,24 +280,50 @@ export function TransportButtons({ minimal = false }: { minimal?: boolean }) {
     <div className="transport">
       {!minimal && (
         <>
-          <button type="button" className="btn tp-nav" title="Go to the beginning (Return)" onClick={() => locate(0)}>
+          <button
+            type="button"
+            className="btn tp-nav"
+            title="Go to the beginning (Return)"
+            aria-label="Go to the beginning (Return)"
+            onClick={() => locate(0)}
+          >
             <SkipBack />
           </button>
-          <button type="button" className="btn tp-nav" title="Back a bar (,)" onClick={() => moveBars(-1)}>
+          <button
+            type="button"
+            className="btn tp-nav"
+            title="Back a bar (,)"
+            aria-label="Back a bar (,)"
+            onClick={() => moveBars(-1)}
+          >
             <Rewind />
           </button>
-          <button type="button" className="btn tp-nav" title="Forward a bar (.)" onClick={() => moveBars(1)}>
+          <button
+            type="button"
+            className="btn tp-nav"
+            title="Forward a bar (.)"
+            aria-label="Forward a bar (.)"
+            onClick={() => moveBars(1)}
+          >
             <FastForward />
           </button>
         </>
       )}
-      <button type="button" className="btn" title="Stop (Space). Again: back to the beginning" onClick={() => stop()}>
+      <button
+        type="button"
+        className="btn"
+        title="Stop (Space). Again: back to the beginning"
+        aria-label="Stop (Space). Again: back to the beginning"
+        onClick={() => stop()}
+      >
         <Square fill="currentColor" />
       </button>
       <button
         type="button"
         className={`btn play${playing ? ' on' : ''}`}
         title="Play (Space)"
+        aria-label="Play (Space)"
+        aria-pressed={playing}
         onClick={() => void togglePlay()}
       >
         <Play fill="currentColor" />
@@ -262,18 +332,27 @@ export function TransportButtons({ minimal = false }: { minimal?: boolean }) {
         type="button"
         className={`btn rec${recording ? ' on' : ''}`}
         title="Record (R)"
+        aria-label="Record (R)"
+        aria-pressed={recording}
         onClick={() => void toggleRecord()}
       >
         <Circle fill="currentColor" />
       </button>
-      <button type="button" className={`btn cycle${cycle ? ' on' : ''}`} title="Cycle (C)" onClick={toggleCycle}>
+      <button
+        type="button"
+        className={`btn cycle${cycle ? ' on' : ''}`}
+        title="Cycle (C)"
+        aria-label="Cycle (C)"
+        aria-pressed={cycle}
+        onClick={toggleCycle}
+      >
         <Repeat />
       </button>
     </div>
   );
 }
 
-function SaveDot() {
+export function SaveDot() {
   const state = useApp((s) => s.saveState);
   const cls = state === 'saved' ? 'ok' : state === 'saving' || state === 'dirty' ? 'busy' : 'bad';
   const text = {
@@ -293,7 +372,8 @@ function MidiLight() {
     let last = 0;
     for (const t of midi.lastActivity.values()) last = Math.max(last, t);
     const on = now - last < 90;
-    if (dot.current) dot.current.className = `status-dot ${on ? 'flash' : store.get().midiStatus === 'on' ? 'ok' : ''}`;
+    const cls = `status-dot ${on ? 'flash' : store.get().midiStatus === 'on' ? 'ok' : ''}`;
+    if (dot.current && dot.current.className !== cls) dot.current.className = cls;
   });
   return <span ref={dot} className="status-dot" />;
 }
@@ -326,6 +406,12 @@ function DspMeter() {
   const text = useRef<HTMLSpanElement>(null);
   const box = useRef<HTMLButtonElement>(null);
   const seen = useRef({ overloads: 0, at: 0 });
+  // what the meter last showed: only a change is written, so a steady load costs the page no layout
+  const last = useRef({ width: -1, color: '', pct: -1 });
+  const hover = useRef(false);
+  const describe = () => {
+    if (box.current) box.current.title = `DSP load: ${dspSummary(engine.dsp())}. Audio & MIDI settings`;
+  };
   useFrame((now) => {
     const d = engine.dsp();
     // rendering ahead: the song keeps up while the busiest worker does (and the audio thread)
@@ -337,15 +423,35 @@ function DspMeter() {
     else if (overloads < seen.current.overloads) seen.current = { overloads, at: 0 };
     const hot = now - seen.current.at < 3000 && seen.current.at > 0;
     const shown = Math.max(load, d.peak);
-    if (bar.current) {
-      bar.current.style.width = `${Math.min(100, Math.round(shown * 100))}%`;
-      bar.current.style.background = loadColor(shown, hot);
+    const width = Math.min(100, Math.round(shown * 100));
+    const color = loadColor(shown, hot);
+    const pct = Math.round(load * 100);
+    const l = last.current;
+    if (bar.current && width !== l.width) bar.current.style.width = `${width}%`;
+    if (bar.current && color !== l.color) bar.current.style.background = color;
+    if (text.current && pct !== l.pct) {
+      text.current.textContent = `${pct}%`;
+      // the words behind the number are only put together while someone is reading them
+      if (hover.current) describe();
     }
-    if (text.current) text.current.textContent = `${Math.round(load * 100)}%`;
-    if (box.current) box.current.title = `DSP load: ${dspSummary(d)}. Audio & MIDI settings`;
+    last.current = { width, color, pct };
   });
   return (
-    <button ref={box} type="button" className="btn dsp-meter" onClick={() => store.set({ dialog: 'settings' })}>
+    <button
+      ref={box}
+      type="button"
+      className="btn dsp-meter"
+      title="DSP load. Audio & MIDI settings"
+      onClick={() => store.set({ dialog: 'settings' })}
+      onMouseEnter={() => {
+        hover.current = true;
+        describe();
+      }}
+      onMouseLeave={() => {
+        hover.current = false;
+      }}
+      onFocus={describe}
+    >
       <span className="dsp-label">DSP</span>
       <span className="dsp-track">
         <span ref={bar} className="dsp-bar" />
@@ -372,6 +478,7 @@ export function ControlBar() {
   const canRedo = useApp((s) => s.redo.length > 0);
   const remotes = useApp((s) => s.peers.filter((p) => p.role === 'remote').length);
   const show = useApp((s) => s.show);
+  const narrow = useMedia(NARROW_BAR);
   const [full, setFull] = useState(() => document.fullscreenElement !== null);
   useEffect(() => {
     const on = () => setFull(document.fullscreenElement !== null);
@@ -384,26 +491,52 @@ export function ControlBar() {
       <div className="control-bar">
         <div className="left">
           <div className="brand">
-            <span className="mark" title="About HO[LO] Desk" onClick={() => store.set({ dialog: 'about' })}>
+            <button
+              type="button"
+              className="btn bare mark"
+              title="About HO[LO] Desk"
+              onClick={() => store.set({ dialog: 'about' })}
+            >
               <Wordmark />
-            </span>
-            <span className="title" onClick={() => store.set({ dialog: 'projects' })}>
+            </button>
+            <button
+              type="button"
+              className="btn bare title"
+              title="Songs (open, new, import)"
+              onClick={() => store.set({ dialog: 'projects' })}
+            >
               {title}
-            </span>
+            </button>
             <SaveDot />
           </div>
         </div>
         <div className="right">
-          <button type="button" className="btn ghost icon" title="Undo" disabled={!canUndo} onClick={undo}>
+          <button
+            type="button"
+            className="btn ghost icon"
+            title="Undo"
+            aria-label="Undo"
+            disabled={!canUndo}
+            onClick={undo}
+          >
             <Undo2 />
           </button>
-          <button type="button" className="btn ghost icon" title="Redo" disabled={!canRedo} onClick={redo}>
+          <button
+            type="button"
+            className="btn ghost icon"
+            title="Redo"
+            aria-label="Redo"
+            disabled={!canRedo}
+            onClick={redo}
+          >
             <Redo2 />
           </button>
           <button
             type="button"
             className={`btn ghost icon${metronome ? ' on' : ''}`}
             title="Metronome"
+            aria-label="Metronome"
+            aria-pressed={metronome}
             onClick={toggleMetronome}
           >
             <Metronome />
@@ -413,6 +546,7 @@ export function ControlBar() {
             type="button"
             className="btn ghost icon"
             title="Settings"
+            aria-label="Settings"
             onClick={() => store.set({ dialog: 'settings' })}
           >
             <Settings />
@@ -427,19 +561,41 @@ export function ControlBar() {
     <div className="control-bar">
       <div className="left">
         <div className="brand">
-          <span className="mark" title="About HO[LO] Desk" onClick={() => store.set({ dialog: 'about' })}>
+          <button
+            type="button"
+            className="btn bare mark"
+            title="About HO[LO] Desk"
+            onClick={() => store.set({ dialog: 'about' })}
+          >
             <Wordmark desk />
-          </span>
-          <span className="title" title="Songs (open, new, import)" onClick={() => store.set({ dialog: 'projects' })}>
+          </button>
+          <button
+            type="button"
+            className="btn bare title"
+            title="Songs (open, new, import)"
+            onClick={() => store.set({ dialog: 'projects' })}
+          >
             {title}
-          </span>
+          </button>
           <SaveDot />
         </div>
+        {/* where the bar is too narrow for the song's name, this is the way to the songs */}
+        <button
+          type="button"
+          className="btn icon cb-songs"
+          title="Songs (open, new, import)"
+          aria-label="Songs (open, new, import)"
+          onClick={() => store.set({ dialog: 'projects' })}
+        >
+          <ListMusic />
+        </button>
         <div className="seg">
           <button
             type="button"
             className={`btn icon${library ? ' on' : ''}`}
             title="Library (Y)"
+            aria-label="Library (Y)"
+            aria-pressed={library}
             onClick={() => store.set({ library: !library })}
           >
             <Library />
@@ -448,30 +604,48 @@ export function ControlBar() {
             type="button"
             className={`btn icon${inspector ? ' on' : ''}`}
             title="Inspector (I)"
+            aria-label="Inspector (I)"
+            aria-pressed={inspector}
             onClick={() => store.set({ inspector: !inspector })}
           >
             <PanelLeft />
           </button>
         </div>
         {touch && (
-          <div className="seg">
-            <button type="button" className="btn icon" title="Undo" disabled={!canUndo} onClick={undo}>
+          <div className="seg cb-undo">
+            <button
+              type="button"
+              className="btn icon"
+              title="Undo"
+              aria-label="Undo"
+              disabled={!canUndo}
+              onClick={undo}
+            >
               <Undo2 />
             </button>
-            <button type="button" className="btn icon" title="Redo" disabled={!canRedo} onClick={redo}>
+            <button
+              type="button"
+              className="btn icon"
+              title="Redo"
+              aria-label="Redo"
+              disabled={!canRedo}
+              onClick={redo}
+            >
               <Redo2 />
             </button>
           </div>
         )}
       </div>
-      <div className="hstack" style={{ gap: 10 }}>
+      <div className="hstack cb-centre">
         <TransportButtons minimal={!show.barNav} />
-        <Lcd />
+        <Lcd compact={narrow} />
         {show.barMetronome && (
           <button
             type="button"
-            className={`btn icon${metronome ? ' on' : ''}`}
+            className={`btn icon cb-metro${metronome ? ' on' : ''}`}
             title="Metronome (K)"
+            aria-label="Metronome (K)"
+            aria-pressed={metronome}
             onClick={toggleMetronome}
           >
             <Metronome />
@@ -484,6 +658,8 @@ export function ControlBar() {
             type="button"
             className={`btn icon${editor === 'piano' ? ' on' : ''}`}
             title="Piano Roll (P)"
+            aria-label="Piano Roll (P)"
+            aria-pressed={editor === 'piano'}
             onClick={() => store.set({ editor: editor === 'piano' ? null : 'piano' })}
           >
             <Piano />
@@ -492,6 +668,8 @@ export function ControlBar() {
             type="button"
             className={`btn icon${editor === 'mixer' ? ' on' : ''}`}
             title="Mixer (X)"
+            aria-label="Mixer (X)"
+            aria-pressed={editor === 'mixer'}
             onClick={() => store.set({ editor: editor === 'mixer' ? null : 'mixer' })}
           >
             <SlidersVertical />
@@ -502,6 +680,8 @@ export function ControlBar() {
             type="button"
             className={`btn icon cb-optional${typing ? ' on' : ''}`}
             title="Musical Typing (Ctrl K)"
+            aria-label="Musical Typing (Ctrl K)"
+            aria-pressed={typing}
             onClick={() => {
               store.set({ typing: !typing });
               midi.addVirtualPort(TYPING_PORT, 'typing');
@@ -513,25 +693,27 @@ export function ControlBar() {
         {show.barMidi && (
           <button
             type="button"
-            className="btn"
+            className="btn cb-midi"
             title={`MIDI: ${ports} device${ports === 1 ? '' : 's'}`}
+            aria-label={`MIDI: ${ports} device${ports === 1 ? '' : 's'}`}
             onClick={() => store.set({ dialog: 'settings' })}
           >
             <Usb />
             <MidiLight />
           </button>
         )}
-        {show.barDsp && !phone && <DspMeter />}
+        {show.barDsp && <DspMeter />}
         {agent && (
-          <span className="btn ghost icon" title="The AI is connected" style={{ color: 'var(--ai)' }}>
+          <span className="btn ghost icon ai" title="The AI is connected" role="img" aria-label="The AI is connected">
             <Bot />
           </span>
         )}
         {show.barRemote && (
           <button
             type="button"
-            className={`btn icon ghost${remotes ? ' on' : ''}`}
+            className={`btn icon ghost cb-remote${remotes ? ' on' : ''}`}
             title={remotes ? `Remote: ${remotes} connected` : 'Control from your phone (HO[LO] Remote)'}
+            aria-label={remotes ? `Remote: ${remotes} connected` : 'Control from your phone (HO[LO] Remote)'}
             onClick={() => store.set({ dialog: 'remote' })}
           >
             <Smartphone />
@@ -542,6 +724,8 @@ export function ControlBar() {
             type="button"
             className="btn icon ghost cb-optional"
             title="Full screen (Ctrl Shift F)"
+            aria-label="Full screen (Ctrl Shift F)"
+            aria-pressed={full}
             onClick={toggleFullscreen}
           >
             {full ? <Minimize2 /> : <Maximize2 />}
@@ -550,8 +734,9 @@ export function ControlBar() {
         <ViewMenu />
         <button
           type="button"
-          className="btn icon ghost cb-optional"
+          className="btn icon ghost cb-settings"
           title="Audio & MIDI settings"
+          aria-label="Audio & MIDI settings"
           onClick={() => store.set({ dialog: 'settings' })}
         >
           <Settings />

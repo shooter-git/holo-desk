@@ -2,12 +2,11 @@
 import {
   type AudioClip,
   automationTargets,
-  barToTick,
   DIVISIONS,
   findLane,
   type Instrument,
-  meterAt,
   type Op,
+  PPQ,
   type Project,
   quantize,
   type Region,
@@ -33,7 +32,15 @@ import {
   ZoomIn,
   ZoomOut,
 } from 'lucide-react';
-import { type PointerEvent as ReactPointerEvent, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import {
+  memo,
+  type PointerEvent as ReactPointerEvent,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import {
   addAudioTrack,
   addTrack,
@@ -50,14 +57,13 @@ import {
   repeatRegions,
   selectTrack,
   setCycle,
-  songLength,
   splitAtPlayhead,
   takeLinkedTick,
   updateChannel,
   updateTrack,
 } from '../app/actions.ts';
 import { isPhone, isTouch, useLayout } from '../app/layout.ts';
-import { store, useApp } from '../app/store.ts';
+import { type AppState, store, useApp } from '../app/store.ts';
 import { engine } from '../audio/engine.ts';
 import { audioFiles } from '../audio/files.ts';
 import { library } from '../audio/samples.ts';
@@ -72,8 +78,9 @@ import {
   targetOf,
 } from './automation.ts';
 import { alpha, prepare, roundRect, useFrame, useSize } from './frame.ts';
+import { capture, edgeScroll, type Gesture, type GestureOptions, Pinch, screenDpr, useWheel } from './gesture.ts';
 import { type MenuEntry, openMenu, openMenuAt } from './menu.tsx';
-import { gridStep, Viewport } from './view.ts';
+import { DOUBLE_TAP_MS, gridStep, Viewport, WHEEL_ZOOM, ZOOM } from './view.ts';
 import { drawClipWave, drawFades, fadeTo, trimEnd, trimStart } from './wave.ts';
 
 export const tracksView = new Viewport(store.get().zoom);
@@ -105,6 +112,8 @@ export function instrumentMenu(onPick: (i: Instrument) => void): MenuEntry[] {
   for (const preset of SYNTH_PRESETS)
     entries.push({ label: preset, onSelect: () => onPick({ type: 'synth', preset }) });
   for (const pack of library.packs) {
+    // a pack with rooms but no instruments has nothing to put under a heading
+    if (pack.instruments.length === 0) continue;
     entries.push({ heading: pack.name });
     for (const inst of pack.instruments) {
       entries.push({
@@ -214,7 +223,18 @@ function LaneSelect({ track }: { track: Track }) {
   );
 }
 
-function TrackRow({ track, top, height, selected }: { track: Track; top: number; height: number; selected: boolean }) {
+interface TrackRowProps {
+  track: Track;
+  top: number;
+  height: number;
+  selected: boolean;
+  /** Phones leave no room for the icon beside the name and its buttons. */
+  phone: boolean;
+  /** How far the list can scroll (a finger dragging a header scrolls it). */
+  maxScrollY: number;
+}
+
+const TrackRow = memo(function TrackRow({ track, top, height, selected, phone, maxScrollY }: TrackRowProps) {
   const [renaming, setRenaming] = useState(false);
   const automationView = useApp((s) => s.automationView);
   const show = useApp((s) => s.show);
@@ -243,21 +263,50 @@ function TrackRow({ track, top, height, selected }: { track: Track; top: number;
       'sep',
       { label: 'Delete track', onSelect: () => deleteTrack(track.id) },
     ]);
+  // a finger on a header scrolls the list, selects on a tap, and opens the menu when held
+  const fingerDown = useRef(false);
+  const onDown = (e: ReactPointerEvent<HTMLDivElement>) => {
+    if (e.pointerType !== 'touch') {
+      selectTrack(track.id);
+      return;
+    }
+    fingerDown.current = true;
+    let ly = e.clientY;
+    capture(e, {
+      onMove: (ev, g) => {
+        if (!g.moved) return;
+        tracksView.scrollBy(0, ly - ev.clientY, maxScrollY);
+        ly = ev.clientY;
+      },
+      onUp: (_ev, g) => {
+        fingerDown.current = false;
+        if (!g.moved) selectTrack(track.id);
+      },
+      onAbort: () => {
+        fingerDown.current = false;
+      },
+      onLongPress: (ev) => {
+        selectTrack(track.id);
+        menu(ev.clientX, ev.clientY);
+      },
+    });
+  };
   return (
     <div
-      className={`track-row${selected ? ' selected' : ''}${show.trackIcons ? '' : ' no-icon'}`}
+      className={`track-row${selected ? ' selected' : ''}${show.trackIcons && !phone ? '' : ' no-icon'}`}
       style={{ top, height }}
-      onPointerDown={() => selectTrack(track.id)}
+      onPointerDown={onDown}
       onContextMenu={(e) => {
         e.preventDefault();
-        menu(e.clientX, e.clientY);
+        // a finger's long press has its own menu (some browsers raise this event for it too)
+        if (!fingerDown.current) menu(e.clientX, e.clientY);
       }}
     >
       <div
         className="swatch"
         style={{ background: track.color, boxShadow: selected ? `0 0 10px ${track.color}` : undefined }}
       />
-      {show.trackIcons && (
+      {show.trackIcons && !phone && (
         <div className="ico" style={{ color: track.color }}>
           {track.kind === 'audio' ? <Mic /> : instrumentIcon(track.instrument)}
         </div>
@@ -356,12 +405,15 @@ function TrackRow({ track, top, height, selected }: { track: Track; top: number;
       )}
     </div>
   );
-}
+});
 
 // ---- drawing ----
 
 interface Draw {
   project: Project;
+  /** The cycle as shown: the one being dragged on the ruler, else the song's. */
+  cycle: Project['cycle'];
+  show: AppState['show'];
   selectedTrack: string | null;
   selectedRegions: Set<string>;
   trackHeight: number;
@@ -385,8 +437,59 @@ interface DragPreview {
   marquee?: { x0: number; y0: number; x1: number; y1: number };
 }
 
+const REGION_FONT = '600 10.5px Inter Variable, system-ui, sans-serif';
+
+// colours with an alpha are parsed once, not four times per region per frame
+const tints = new Map<string, string>();
+function tint(hex: string, a: number): string {
+  const key = `${hex}|${a}`;
+  let v = tints.get(key);
+  if (!v) {
+    v = alpha(hex, a);
+    tints.set(key, v);
+  }
+  return v;
+}
+
+// a region's fill, made once per colour, selection and height; drawn translated to the region's top
+const gradients = new WeakMap<CanvasRenderingContext2D, Map<string, CanvasGradient>>();
+function regionGradient(ctx: CanvasRenderingContext2D, base: string, selected: boolean, h: number): CanvasGradient {
+  let cache = gradients.get(ctx);
+  if (!cache) {
+    cache = new Map();
+    gradients.set(ctx, cache);
+  }
+  const key = `${base}|${selected ? 1 : 0}|${h}`;
+  let g = cache.get(key);
+  if (!g) {
+    if (cache.size > 200) cache.clear();
+    g = ctx.createLinearGradient(0, 0, 0, h);
+    g.addColorStop(0, tint(base, selected ? 0.62 : 0.42));
+    g.addColorStop(1, tint(base, selected ? 0.48 : 0.3));
+    cache.set(key, g);
+  }
+  return g;
+}
+
+// a MIDI region's pitch range is scanned once per region, not per frame
+const pitchRanges = new WeakMap<Region, { lo: number; hi: number }>();
+function pitchRange(r: Region): { lo: number; hi: number } {
+  let range = pitchRanges.get(r);
+  if (!range) {
+    let lo = 127;
+    let hi = 0;
+    for (const n of r.notes) {
+      if (n.p < lo) lo = n.p;
+      if (n.p > hi) hi = n.p;
+    }
+    range = { lo, hi };
+    pitchRanges.set(r, range);
+  }
+  return range;
+}
+
 function drawTimeline(ctx: CanvasRenderingContext2D, d: Draw): void {
-  const { project, w, h, trackHeight } = d;
+  const { project, w, h, trackHeight, show } = d;
   const v = tracksView;
   const m = project.meter[0] ?? { tick: 0, num: 4, den: 4 };
   const beat = ticksPerBeat(m);
@@ -405,24 +508,28 @@ function drawTimeline(ctx: CanvasRenderingContext2D, d: Draw): void {
   });
 
   // cycle band
-  if (project.cycle.on) {
-    const x0 = v.tickToX(project.cycle.start);
-    const x1 = v.tickToX(project.cycle.end);
+  if (d.cycle.on) {
+    const x0 = v.tickToX(d.cycle.start);
+    const x1 = v.tickToX(d.cycle.end);
     ctx.fillStyle = 'rgba(246, 196, 83, 0.05)';
     ctx.fillRect(x0, 0, x1 - x0, h);
   }
 
   // grid
-  const step = gridStep(v.pxPerTick, 14, beat, bar);
-  const first = Math.floor(v.x / step) * step;
-  for (let t = first; store.get().show.gridLines && t < v.xToTick(w); t += step) {
-    const x = Math.round(v.tickToX(t)) + 0.5;
-    ctx.fillStyle = t % bar === 0 ? 'rgba(255,255,255,0.075)' : 'rgba(255,255,255,0.03)';
-    ctx.fillRect(x, 0, 1, h);
+  if (show.gridLines) {
+    const step = gridStep(v.pxPerTick, 14, beat, bar);
+    const first = Math.floor(v.x / step) * step;
+    for (let t = first; t < v.xToTick(w); t += step) {
+      const x = Math.round(v.tickToX(t)) + 0.5;
+      ctx.fillStyle = t % bar === 0 ? 'rgba(255,255,255,0.075)' : 'rgba(255,255,255,0.03)';
+      ctx.fillRect(x, 0, 1, h);
+    }
   }
 
   // regions
   const pxPerTick = v.pxPerTick;
+  ctx.font = REGION_FONT;
+  ctx.textBaseline = 'middle';
   project.tracks.forEach((t, i) => {
     for (const r of t.regions) {
       const moved = d.drag?.regions.get(r.id);
@@ -437,30 +544,11 @@ function drawTimeline(ctx: CanvasRenderingContext2D, d: Draw): void {
       if (y > h || y + rh < 0) continue;
       const audio = moved?.audio ?? r.audio;
       const shown = moved ? { ...r, start, length, ...(audio ? { audio } : {}) } : r;
-      drawRegion(ctx, shown, t.color, x, y, rw, rh, d.selectedRegions.has(r.id), !!moved, project, w);
+      drawRegion(ctx, shown, t.color, x, y, rw, rh, d.selectedRegions.has(r.id), !!moved, project, w, show);
     }
   });
 
-  // live recording
-  for (const take of liveTakes().values()) {
-    const i = project.tracks.findIndex((t) => t.id === take.track);
-    if (i < 0) continue;
-    const y = i * trackHeight - v.y + 2;
-    const now = engine.positionTick();
-    const start = Math.min(...take.notes.map((n) => n.t), now);
-    const x = v.tickToX(start);
-    ctx.fillStyle = 'rgba(255, 79, 94, 0.28)';
-    roundRect(ctx, x, y, Math.max(4, v.tickToX(now) - x), trackHeight - 5, 4);
-    ctx.fill();
-    ctx.fillStyle = '#ffd9dc';
-    for (const n of take.notes) {
-      const end = n.d > 1 ? n.t + n.d : now;
-      const ny = y + trackHeight - 8 - ((n.p % 48) / 48) * (trackHeight - 12);
-      ctx.fillRect(v.tickToX(n.t), ny, Math.max(2, (end - n.t) * pxPerTick), 2);
-    }
-  }
-
-  if (d.automation) drawLanes(ctx, project, v, trackHeight, w, d.automation.params, d.automation.preview);
+  if (d.automation) drawLanes(ctx, project, v, trackHeight, w, h, d.automation.params, d.automation.preview);
 
   if (d.drag?.marquee) {
     const mq = d.drag.marquee;
@@ -477,6 +565,30 @@ function drawTimeline(ctx: CanvasRenderingContext2D, d: Draw): void {
   }
 }
 
+/** What's being recorded right now, drawn on the overlay so the timeline needn't redraw per frame. */
+function drawLiveTakes(ctx: CanvasRenderingContext2D, project: Project, trackHeight: number): void {
+  const v = tracksView;
+  const pxPerTick = v.pxPerTick;
+  const now = engine.positionTick();
+  for (const take of liveTakes().values()) {
+    const i = project.tracks.findIndex((t) => t.id === take.track);
+    if (i < 0) continue;
+    const y = i * trackHeight - v.y + 2;
+    let start = now;
+    for (const n of take.notes) if (n.t < start) start = n.t;
+    const x = v.tickToX(start);
+    ctx.fillStyle = 'rgba(255, 79, 94, 0.28)';
+    roundRect(ctx, x, y, Math.max(4, v.tickToX(now) - x), trackHeight - 5, 4);
+    ctx.fill();
+    ctx.fillStyle = '#ffd9dc';
+    for (const n of take.notes) {
+      const end = n.d > 1 ? n.t + n.d : now;
+      const ny = y + trackHeight - 8 - ((n.p % 48) / 48) * (trackHeight - 12);
+      ctx.fillRect(v.tickToX(n.t), ny, Math.max(2, (end - n.t) * pxPerTick), 2);
+    }
+  }
+}
+
 function drawRegion(
   ctx: CanvasRenderingContext2D,
   r: Region,
@@ -489,24 +601,21 @@ function drawRegion(
   dragging: boolean,
   project: Project,
   canvasWidth: number,
+  show: AppState['show'],
 ): void {
   const base = r.muted ? '#5d6470' : color;
-  const show = store.get().show;
   const header = show.regionNames ? Math.min(15, h * 0.32) : 0;
   ctx.save();
   roundRect(ctx, x + 0.5, y + 0.5, Math.max(3, w - 1), h, 4);
   ctx.clip();
-  const g = ctx.createLinearGradient(0, y, 0, y + h);
-  g.addColorStop(0, alpha(base, selected ? 0.62 : 0.42));
-  g.addColorStop(1, alpha(base, selected ? 0.48 : 0.3));
-  ctx.fillStyle = g;
-  ctx.fillRect(x, y, w, h + 1);
-  ctx.fillStyle = alpha(base, selected ? 0.95 : 0.78);
+  ctx.translate(0, y);
+  ctx.fillStyle = regionGradient(ctx, base, selected, h);
+  ctx.fillRect(x, 0, w, h + 1);
+  ctx.translate(0, -y);
+  ctx.fillStyle = tint(base, selected ? 0.95 : 0.78);
   ctx.fillRect(x, y, w, header);
   if (w > 26 && header >= 10) {
     ctx.fillStyle = '#0b0d10';
-    ctx.font = '600 10.5px Inter Variable, system-ui, sans-serif';
-    ctx.textBaseline = 'middle';
     ctx.fillText(
       r.name || (r.audio ? 'Audio' : r.notes.length ? `${r.notes.length} notes` : 'MIDI'),
       x + 5,
@@ -516,12 +625,7 @@ function drawRegion(
   if (r.audio && show.regionContents) drawWave(ctx, project, r, r.audio, x, y + header, w, h - header, canvasWidth);
   // the notes, scaled to the region's own range
   if (r.notes.length && show.regionContents) {
-    let lo = 127;
-    let hi = 0;
-    for (const n of r.notes) {
-      if (n.p < lo) lo = n.p;
-      if (n.p > hi) hi = n.p;
-    }
+    const { lo, hi } = pitchRange(r);
     const span = Math.max(12, hi - lo + 1);
     const top = y + header + 3;
     const avail = h - header - 6;
@@ -537,7 +641,7 @@ function drawRegion(
   }
   ctx.restore();
   ctx.lineWidth = selected ? 1.5 : 1;
-  ctx.strokeStyle = selected ? '#ffffff' : alpha(base, 0.95);
+  ctx.strokeStyle = selected ? '#ffffff' : tint(base, 0.95);
   if (dragging) ctx.setLineDash([4, 3]);
   roundRect(ctx, x + 0.5, y + 0.5, Math.max(3, w - 1), h, 4);
   ctx.stroke();
@@ -565,10 +669,19 @@ function drawWave(
     ctx.font = '600 9.5px Inter Variable, system-ui, sans-serif';
     ctx.textBaseline = 'bottom';
     ctx.fillText(`${Math.round(clip.stretch * 100)}%`, x + 5, y + h - 2);
+    ctx.font = REGION_FONT;
+    ctx.textBaseline = 'middle';
   }
 }
 
-function drawRuler(ctx: CanvasRenderingContext2D, project: Project, w: number, h: number): void {
+function drawRuler(
+  ctx: CanvasRenderingContext2D,
+  project: Project,
+  cycle: Project['cycle'],
+  showMarkers: boolean,
+  w: number,
+  h: number,
+): void {
   const v = tracksView;
   const m = project.meter[0] ?? { tick: 0, num: 4, den: 4 };
   const beat = ticksPerBeat(m);
@@ -579,16 +692,15 @@ function drawRuler(ctx: CanvasRenderingContext2D, project: Project, w: number, h
   ctx.fillStyle = g;
   ctx.fillRect(0, 0, w, h);
   // cycle strip (top half)
-  const c = project.cycle;
-  const x0 = v.tickToX(c.start);
-  const x1 = v.tickToX(c.end);
-  ctx.fillStyle = c.on ? 'rgba(246,196,83,0.9)' : 'rgba(246,196,83,0.22)';
+  const x0 = v.tickToX(cycle.start);
+  const x1 = v.tickToX(cycle.end);
+  ctx.fillStyle = cycle.on ? 'rgba(246,196,83,0.9)' : 'rgba(246,196,83,0.22)';
   roundRect(ctx, x0, 2, Math.max(2, x1 - x0), h / 2 - 4, 3);
   ctx.fill();
   // bar numbers and ticks
   const step = gridStep(v.pxPerTick, 7, beat, bar);
   const labelEvery = gridStep(v.pxPerTick, 34, bar, bar);
-  ctx.font = '600 10.5px Inter Variable, system-ui, sans-serif';
+  ctx.font = REGION_FONT;
   ctx.textBaseline = 'alphabetic';
   for (let t = Math.floor(v.x / step) * step; t < v.xToTick(w); t += step) {
     const x = Math.round(v.tickToX(t)) + 0.5;
@@ -601,7 +713,7 @@ function drawRuler(ctx: CanvasRenderingContext2D, project: Project, w: number, h
     }
   }
   // markers
-  for (const mk of store.get().show.markers ? project.markers : []) {
+  for (const mk of showMarkers ? project.markers : []) {
     const x = v.tickToX(mk.tick);
     if (x < -100 || x > w) continue;
     ctx.fillStyle = '#c792ff';
@@ -614,7 +726,9 @@ function drawRuler(ctx: CanvasRenderingContext2D, project: Project, w: number, h
 
 // ---- the component ----
 
+/** How close to a region's edge grabs it, with a mouse and with a finger. */
 const EDGE = 7;
+const EDGE_TOUCH = 16;
 type Edge = 'left' | 'right' | 'fadeIn' | 'fadeOut';
 
 export function TracksArea() {
@@ -626,23 +740,35 @@ export function TracksArea() {
   const trackHeight = useApp((s) => (isTouch() ? Math.max(66, s.trackHeight) : s.trackHeight));
   const tool = useApp((s) => s.tool);
   const automationView = useApp((s) => s.automationView);
+  const autoParam = useApp((s) => s.autoParam);
+  const show = useApp((s) => s.show);
+  const follow = useApp((s) => s.follow);
   const lanePreview = useRef<LanePreview | null>(null);
   const laneTip = useRef<HTMLDivElement>(null);
-  const playing = useApp((s) => s.playing);
-  const follow = useApp((s) => s.follow);
-  // what the View menu shows: a change redraws the timeline
-  useApp((s) => s.show);
 
   const timelineBox = useRef<HTMLDivElement>(null);
   const rulerBox = useRef<HTMLDivElement>(null);
+  const listBox = useRef<HTMLDivElement>(null);
+  const listInner = useRef<HTMLDivElement>(null);
   const canvas = useRef<HTMLCanvasElement>(null);
   const overlay = useRef<HTMLCanvasElement>(null);
   const rulerCanvas = useRef<HTMLCanvasElement>(null);
   const size = useSize(timelineBox);
   const rulerSize = useSize(rulerBox);
   const drag = useRef<DragPreview | null>(null);
-  const [, redrawList] = useState(0);
+  /** The cycle while it's dragged on the ruler: drawn in place of the song's, committed once on release. */
+  const cyclePreview = useRef<Project['cycle'] | null>(null);
   const dirty = useRef(true);
+  /** The one gesture under way on the timeline (a drag, a pan, a lane edit). */
+  const gesture = useRef<Gesture | null>(null);
+  /** The menu a long press opens for what's under the finger, set as each gesture starts. */
+  const menuAt = useRef<((ev: PointerEvent) => void) | null>(null);
+  const pinch = useRef(new Pinch());
+  const lastTap = useRef(0);
+  const zoomTimer = useRef(0);
+  const lastOverlay = useRef({ x: -1, w: 0, h: 0, rec: false, dpr: 0 });
+  const lastDpr = useRef(screenDpr());
+  const lastTick = useRef(Number.NaN);
 
   const selectedRegions = useMemo(() => new Set(selectedRegionsList), [selectedRegionsList]);
 
@@ -650,10 +776,11 @@ export function TracksArea() {
     dirty.current = true;
   };
 
-  // anything that renders this component may change the picture
+  // everything the timeline and ruler read: a change to any of it redraws them
+  // biome-ignore lint/correctness/useExhaustiveDependencies: the list is what drawing reads, not what the effect touches
   useEffect(() => {
     dirty.current = true;
-  });
+  }, [project, selectedTrack, selectedRegions, trackHeight, show, automationView, autoParam, size, rulerSize]);
 
   // waveforms arrive after the regions
   useEffect(
@@ -664,19 +791,26 @@ export function TracksArea() {
     [],
   );
 
+  // scrolling moves the headers along with the canvases, without a render
   useEffect(
     () =>
       tracksView.subscribe(() => {
         dirty.current = true;
-        redrawList((n) => n + 1);
+        if (listInner.current) listInner.current.style.transform = `translateY(${-tracksView.y}px)`;
       }),
     [],
   );
+  useLayoutEffect(() => {
+    if (listInner.current) listInner.current.style.transform = `translateY(${-tracksView.y}px)`;
+  });
 
   useLayoutEffect(() => {
     const z = store.get().zoom;
     if (tracksView.zoom !== z) tracksView.zoom = z;
   }, []);
+
+  // the gesture under way ends with the component
+  useEffect(() => () => gesture.current?.abort(), []);
 
   // a link to a bar: start the view a bar before it
   useEffect(() => {
@@ -688,69 +822,124 @@ export function TracksArea() {
     }
   }, [project]);
 
+  const maxScrollY = (p: Project) => Math.max(0, p.tracks.length * trackHeight - size.h + 60);
+
+  // the zoom is kept for the next launch, once the wheel or the fingers settle
+  const persistZoom = (soon = false) => {
+    window.clearTimeout(zoomTimer.current);
+    if (!soon) {
+      store.set({ zoom: tracksView.zoom });
+      return;
+    }
+    zoomTimer.current = window.setTimeout(() => store.set({ zoom: tracksView.zoom }), 200);
+  };
+
   useFrame(() => {
-    const p = store.get().project;
+    const s = store.get();
+    const p = s.project;
     if (!p) return;
     const tick = engine.positionTick();
-    if (store.get().playing && follow && !drag.current) tracksView.follow(tick, size.w);
-    if (liveTakes().size) dirty.current = true;
+    const busy = !!gesture.current || pinch.current.active;
+    if (follow && !busy) {
+      // a jump (a locate, a cycle wrap) is shown wherever it lands; playback pages at the right edge
+      if (!Number.isNaN(lastTick.current) && Math.abs(tick - lastTick.current) > PPQ / 2)
+        tracksView.reveal(tick, size.w);
+      else if (s.playing) tracksView.follow(tick, size.w);
+    }
+    lastTick.current = tick;
+    // a drag resting at an edge scrolls the view under it
+    const g = gesture.current;
+    if (g?.edgeScroll && timelineBox.current) {
+      const { dx, dy } = edgeScroll(g.last, timelineBox.current.getBoundingClientRect(), g.edgeScroll);
+      if (dx || dy) {
+        tracksView.scrollBy(dx, dy, maxScrollY(p));
+        g.replay();
+      }
+    }
+    // the screen's density changed (another screen, the browser zoomed): every canvas resizes
+    const dpr = screenDpr();
+    if (dpr !== lastDpr.current) {
+      lastDpr.current = dpr;
+      dirty.current = true;
+    }
     if (dirty.current) {
       dirty.current = false;
+      const cycle = cyclePreview.current ?? p.cycle;
       const ctx = prepare(canvas.current, size.w, size.h);
       if (ctx)
         drawTimeline(ctx, {
           project: p,
+          cycle,
+          show: s.show,
           selectedTrack,
           selectedRegions,
           trackHeight,
           w: size.w,
           h: size.h,
           drag: drag.current,
-          automation: store.get().automationView
-            ? { params: store.get().autoParam, preview: lanePreview.current }
-            : null,
+          automation: s.automationView ? { params: s.autoParam, preview: lanePreview.current } : null,
         });
       const rctx = prepare(rulerCanvas.current, rulerSize.w, rulerSize.h);
-      if (rctx) drawRuler(rctx, p, rulerSize.w, rulerSize.h);
+      if (rctx) drawRuler(rctx, p, cycle, s.show.markers, rulerSize.w, rulerSize.h);
     }
-    // the playhead, on its own layer
-    const octx = prepare(overlay.current, size.w, size.h);
-    if (octx) {
-      octx.clearRect(0, 0, size.w, size.h);
-      const x = Math.round(tracksView.tickToX(Math.max(0, tick))) + 0.5;
-      if (x >= 0 && x <= size.w) {
-        const rec = store.get().recording;
-        octx.fillStyle = rec ? '#ff4f5e' : '#ffffff';
-        octx.shadowColor = rec ? 'rgba(255,79,94,0.8)' : 'rgba(255,255,255,0.6)';
-        octx.shadowBlur = 6;
-        octx.fillRect(x - 0.5, 0, 1.5, size.h);
-        octx.shadowBlur = 0;
+    // the playhead, on its own layer, redrawn only when it has moved a pixel
+    const x = Math.round(tracksView.tickToX(Math.max(0, tick))) + 0.5;
+    const rec = s.recording;
+    const last = lastOverlay.current;
+    const recording = liveTakes().size > 0;
+    if (recording || x !== last.x || size.w !== last.w || size.h !== last.h || rec !== last.rec || dpr !== last.dpr) {
+      lastOverlay.current = { x, w: size.w, h: size.h, rec, dpr };
+      const octx = prepare(overlay.current, size.w, size.h);
+      if (octx) {
+        octx.clearRect(0, 0, size.w, size.h);
+        if (recording) drawLiveTakes(octx, p, trackHeight);
+        if (x >= 0 && x <= size.w) {
+          // a soft band under the line stands in for a glow, without a blur pass per frame
+          octx.fillStyle = rec ? 'rgba(255,79,94,0.25)' : 'rgba(255,255,255,0.25)';
+          octx.fillRect(x - 2, 0, 3, size.h);
+          octx.fillStyle = rec ? '#ff4f5e' : '#ffffff';
+          octx.fillRect(x - 0.5, 0, 1.5, size.h);
+        }
       }
     }
   });
 
-  // two-finger pinch zoom on touch screens
-  const pinch = useRef(new Map<number, { x: number; y: number }>());
-  const lastTap = useRef(0);
+  const onWheel = (e: WheelEvent, dx: number, dy: number) => {
+    const p = store.get().project;
+    if (!p) return;
+    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    if (e.ctrlKey || e.metaKey) {
+      tracksView.zoomAt(Math.exp(-dy * WHEEL_ZOOM), e.clientX - rect.left, ...ZOOM.tracks);
+      persistZoom(true);
+    } else if (e.shiftKey) tracksView.scrollBy(dy || dx, 0, maxScrollY(p));
+    else tracksView.scrollBy(dx, dy, maxScrollY(p));
+  };
+  useWheel(timelineBox, onWheel);
+  useWheel(rulerBox, onWheel);
+  useWheel(listBox, (_e, _dx, dy) => {
+    const p = store.get().project;
+    if (p) tracksView.scrollBy(0, dy, maxScrollY(p));
+  });
 
   if (!project) return <div className="tracks" />;
   const m = project.meter[0] ?? { tick: 0, num: 4, den: 4 };
   const bar = ticksPerBar(m);
   const snapTicks = () => (tracksView.pxPerTick * bar > 160 ? ticksPerBeat(m) : bar);
-  const maxScrollY = Math.max(0, project.tracks.length * trackHeight - size.h + 60);
 
   /**
    * What's under the pointer. Region edges resize; an audio region's left edge trims its start, and
-   * its top corners (the name bar) drag its fades.
+   * its top corners (the name bar) drag its fades. A finger gets a wider edge than a mouse.
    */
   const hit = (
     x: number,
     y: number,
+    touch = false,
   ): { track: Track; index: number; region: Region | null; edge: Edge | null } | null => {
     const index = Math.floor((y + tracksView.y) / trackHeight);
     const track = project.tracks[index];
     if (!track) return null;
     const tick = tracksView.xToTick(x);
+    const edgePx = touch ? EDGE_TOUCH : EDGE;
     for (let i = track.regions.length - 1; i >= 0; i--) {
       const r = track.regions[i] as Region;
       if (tick >= r.start && tick <= r.start + r.length) {
@@ -759,9 +948,9 @@ export function TracksArea() {
         const top = index * trackHeight - tracksView.y + 2;
         const inHeader = y - top < Math.min(15, (trackHeight - 5) * 0.32) + 2;
         let edge: Edge | null = null;
-        if (r.length * tracksView.pxPerTick > EDGE * 3) {
-          if (right - x < EDGE) edge = r.audio && inHeader ? 'fadeOut' : 'right';
-          else if (r.audio && x - left < EDGE) edge = inHeader ? 'fadeIn' : 'left';
+        if (r.length * tracksView.pxPerTick > edgePx * 3) {
+          if (right - x < edgePx) edge = r.audio && inHeader ? 'fadeOut' : 'right';
+          else if (r.audio && x - left < edgePx) edge = inHeader ? 'fadeIn' : 'left';
         }
         return { track, index, region: r, edge };
       }
@@ -806,15 +995,47 @@ export function TracksArea() {
     store.set({ selectedTrack: trackId, selectedRegions: [regionId], editor: 'piano', mobileTab: 'editor' });
   };
 
+  /**
+   * Start a gesture on the timeline: the one under way at a time, aborted by a second finger or a
+   * long press (which opens the menu for the spot), its preview cleared whichever way it ends.
+   */
+  const start = (e: ReactPointerEvent, o: GestureOptions) => {
+    gesture.current?.abort();
+    const menu = menuAt.current;
+    const clear = () => {
+      drag.current = null;
+      lanePreview.current = null;
+      cyclePreview.current = null;
+      if (laneTip.current) laneTip.current.style.display = 'none';
+      redraw();
+    };
+    const g = capture(e, {
+      ...o,
+      onUp: (ev, gg) => {
+        gesture.current = null;
+        o.onUp?.(ev, gg);
+      },
+      onAbort: () => {
+        gesture.current = null;
+        clear();
+        o.onAbort?.();
+      },
+      onLongPress: menu ? (ev) => menu(ev) : undefined,
+    });
+    gesture.current = g;
+    return g;
+  };
+
   const onPointerDown = (e: ReactPointerEvent<HTMLDivElement>) => {
     const rect = e.currentTarget.getBoundingClientRect();
     const x = e.clientX - rect.left;
     const y = e.clientY - rect.top;
-    const h = hit(x, y);
     const touch = e.pointerType === 'touch';
+    const h = hit(x, y, touch);
     const now = performance.now();
-    const doubleTap = now - lastTap.current < 320;
+    const doubleTap = now - lastTap.current < DOUBLE_TAP_MS;
     lastTap.current = now;
+    menuAt.current = null;
     if (automationView && h) {
       onLane(e, x, y, h.track, h.index, doubleTap);
       return;
@@ -833,7 +1054,7 @@ export function TracksArea() {
     }
     selectTrack(h.track.id);
     if (!h.region) {
-      if (tool === 'pencil' || (doubleTap && !touch) || (touch && doubleTap)) {
+      if (tool === 'pencil' || doubleTap) {
         createRegionAt(h.track.id, tracksView.xToTick(x));
         return;
       }
@@ -858,10 +1079,12 @@ export function TracksArea() {
         : [...selection, region.id];
     } else if (!selectedRegions.has(region.id)) selection = [region.id];
     store.set({ selectedRegions: selection });
+    // a finger held on the region opens its menu
+    menuAt.current = (ev) => regionMenu(ev.clientX, ev.clientY, region, h.track);
     if (h.edge === 'right') resizeDrag(e, region, h.track, e.altKey && !!region.audio);
     else if (h.edge === 'left') trimStartDrag(e, region, h.track);
     else if (h.edge === 'fadeIn' || h.edge === 'fadeOut') fadeDrag(e, region, h.track, h.edge);
-    else moveDrag(e, selection, h.index, e.altKey);
+    else moveDrag(e, selection, e.altKey);
   };
 
   /** Automation: add a point (click), move one (drag), delete one (double-click or its menu). */
@@ -877,8 +1100,8 @@ export function TracksArea() {
     const hit = pointAt(points, x, y, tracksView, toY, e.pointerType === 'touch' ? 16 : 10);
     const commit = (pts: [number, number][], label: string) =>
       apply([{ op: 'setAutomation', target: track.id, param: target.param, points: pts }], label);
-    if (e.button === 2) {
-      openMenu(e.clientX, e.clientY, [
+    const menu = (cx: number, cy: number) =>
+      openMenu(cx, cy, [
         ...(hit >= 0
           ? [
               {
@@ -897,6 +1120,8 @@ export function TracksArea() {
           onSelect: () => commit([], 'Clear Automation'),
         },
       ]);
+    if (e.button === 2) {
+      menu(e.clientX, e.clientY);
       return;
     }
     if (hit >= 0 && doubleTap) {
@@ -926,9 +1151,9 @@ export function TracksArea() {
     lanePreview.current = { track: track.id, param: target.param, points: working };
     show(x, y, (working[at] as [number, number])[1]);
     redraw();
-    capture(
-      e,
-      (ev) => {
+    menuAt.current = (ev) => menu(ev.clientX, ev.clientY);
+    start(e, {
+      onMove: (ev) => {
         const px = ev.clientX - rect.left;
         const py = ev.clientY - rect.top;
         const lo = at > 0 ? (working[at - 1] as [number, number])[0] : 0;
@@ -941,56 +1166,40 @@ export function TracksArea() {
         show(px, py, v);
         redraw();
       },
-      () => {
+      onUp: () => {
         if (laneTip.current) laneTip.current.style.display = 'none';
         lanePreview.current = null;
         redraw();
         commit(working, hit >= 0 ? 'Move Automation Point' : 'Add Automation Point');
       },
-    );
-  };
-
-  const capture = (e: ReactPointerEvent, onMove: (ev: PointerEvent) => void, onUp: (ev: PointerEvent) => void) => {
-    const el = e.currentTarget as HTMLElement;
-    el.setPointerCapture(e.pointerId);
-    const move = (ev: PointerEvent) => onMove(ev);
-    const up = (ev: PointerEvent) => {
-      el.removeEventListener('pointermove', move);
-      el.removeEventListener('pointerup', up);
-      el.removeEventListener('pointercancel', up);
-      onUp(ev);
-    };
-    el.addEventListener('pointermove', move);
-    el.addEventListener('pointerup', up);
-    el.addEventListener('pointercancel', up);
+    });
   };
 
   const panDrag = (e: ReactPointerEvent) => {
     let lx = e.clientX;
     let ly = e.clientY;
-    capture(
-      e,
-      (ev) => {
-        tracksView.scrollBy(lx - ev.clientX, ly - ev.clientY, maxScrollY);
+    start(e, {
+      threshold: 0,
+      onMove: (ev) => {
+        tracksView.scrollBy(lx - ev.clientX, ly - ev.clientY, maxScrollY(project));
         lx = ev.clientX;
         ly = ev.clientY;
       },
-      () => undefined,
-    );
+    });
   };
 
   const marqueeDrag = (e: ReactPointerEvent, x0: number, y0: number) => {
     const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-    capture(
-      e,
-      (ev) => {
+    start(e, {
+      edgeScroll: 'xy',
+      onMove: (ev) => {
         drag.current = {
           regions: new Map(),
           marquee: { x0, y0, x1: ev.clientX - rect.left, y1: ev.clientY - rect.top },
         };
         redraw();
       },
-      () => {
+      onUp: () => {
         const mq = drag.current?.marquee;
         drag.current = null;
         redraw();
@@ -1006,37 +1215,47 @@ export function TracksArea() {
         });
         store.set({ selectedRegions: ids });
       },
-    );
+    });
   };
 
-  const moveDrag = (e: ReactPointerEvent, ids: string[], fromRow: number, copy: boolean) => {
+  /** The row a region lands on: the nearest one of its own kind (audio stays on audio tracks). */
+  const rowFor = (from: number, dRow: number, kind: Track['kind']): number => {
+    const want = Math.max(0, Math.min(project.tracks.length - 1, from + dRow));
+    for (let d = 0; d < project.tracks.length; d++) {
+      for (const i of [want - d, want + d]) {
+        const t = project.tracks[i];
+        if (t && t.kind === kind && (d === 0 || (dRow < 0 ? i <= from : i >= from))) return i;
+      }
+    }
+    return from;
+  };
+
+  const moveDrag = (e: ReactPointerEvent, ids: string[], copy: boolean) => {
     const startX = e.clientX;
     const startY = e.clientY;
     const snap = snapTicks();
-    let moved = false;
     const originals = ids.map((id) => findRegion(project, id)).filter((x): x is NonNullable<typeof x> => !!x);
-    capture(
-      e,
-      (ev) => {
+    start(e, {
+      edgeScroll: 'xy',
+      onMove: (ev, g) => {
+        if (!g.moved) return;
         const dx = ev.clientX - startX;
         const dy = ev.clientY - startY;
-        if (!moved && Math.hypot(dx, dy) < 4) return;
-        moved = true;
         const dTick = quantize(dx / tracksView.pxPerTick, snap);
         const dRow = Math.round(dy / trackHeight);
         const preview = new Map<string, { start: number; length: number; trackIndex: number }>();
         for (const { track, region } of originals) {
-          const row = Math.max(0, Math.min(project.tracks.length - 1, project.tracks.indexOf(track) + dRow));
+          const row = rowFor(project.tracks.indexOf(track), dRow, track.kind);
           preview.set(region.id, { start: Math.max(0, region.start + dTick), length: region.length, trackIndex: row });
         }
         drag.current = { regions: preview };
         redraw();
       },
-      () => {
+      onUp: (_ev, g) => {
         const preview = drag.current?.regions;
         drag.current = null;
         redraw();
-        if (!moved || !preview) return;
+        if (!g.moved || !preview) return;
         const ops: Op[] = originals.flatMap(({ track, region }): Op[] => {
           const p = preview.get(region.id);
           if (!p) return [];
@@ -1057,9 +1276,8 @@ export function TracksArea() {
           return [{ op: 'moveRegion' as const, from: track.id, to: to.id, region: region.id, start: p.start }];
         });
         if (ops.length) apply(ops, copy ? 'Copy Regions' : 'Move Regions');
-        void fromRow;
       },
-    );
+    });
   };
 
   /** The right edge: longer or shorter; on an audio region with Alt, time-stretched (Logic's Option-drag). */
@@ -1068,9 +1286,9 @@ export function TracksArea() {
     const snap = snapTicks();
     const clip = region.audio;
     const trackIndex = project.tracks.indexOf(track);
-    capture(
-      e,
-      (ev) => {
+    start(e, {
+      edgeScroll: 'x',
+      onMove: (ev) => {
         const length = Math.max(snap, quantize(region.length + (ev.clientX - startX) / tracksView.pxPerTick, snap));
         const next: RegionPreview = clip
           ? { start: region.start, trackIndex, ...trimEnd(project, region, clip, length, stretch) }
@@ -1078,7 +1296,7 @@ export function TracksArea() {
         drag.current = { regions: new Map([[region.id, next]]) };
         redraw();
       },
-      () => {
+      onUp: () => {
         const p = drag.current?.regions.get(region.id);
         drag.current = null;
         redraw();
@@ -1097,7 +1315,7 @@ export function TracksArea() {
           stretched ? 'Time Stretch' : 'Resize Region',
         );
       },
-    );
+    });
   };
 
   /** An audio region's left edge: starts later (or earlier, as far as the recording goes). */
@@ -1107,14 +1325,14 @@ export function TracksArea() {
     const startX = e.clientX;
     const snap = snapTicks();
     const trackIndex = project.tracks.indexOf(track);
-    capture(
-      e,
-      (ev) => {
+    start(e, {
+      edgeScroll: 'x',
+      onMove: (ev) => {
         const start = quantize(region.start + (ev.clientX - startX) / tracksView.pxPerTick, snap);
         drag.current = { regions: new Map([[region.id, { trackIndex, ...trimStart(project, region, clip, start) }]]) };
         redraw();
       },
-      () => {
+      onUp: () => {
         const p = drag.current?.regions.get(region.id);
         drag.current = null;
         redraw();
@@ -1131,7 +1349,7 @@ export function TracksArea() {
           'Trim Region',
         );
       },
-    );
+    });
   };
 
   /** Dragging a fade's corner. */
@@ -1140,23 +1358,23 @@ export function TracksArea() {
     if (!clip) return;
     const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
     const trackIndex = project.tracks.indexOf(track);
-    capture(
-      e,
-      (ev) => {
+    start(e, {
+      edgeScroll: 'x',
+      onMove: (ev) => {
         const audio = fadeTo(project, region, clip, which, tracksView.xToTick(ev.clientX - rect.left));
         drag.current = {
           regions: new Map([[region.id, { start: region.start, length: region.length, trackIndex, audio }]]),
         };
         redraw();
       },
-      () => {
+      onUp: () => {
         const p = drag.current?.regions.get(region.id);
         drag.current = null;
         redraw();
         if (!p?.audio) return;
         apply([{ op: 'updateRegion', track: track.id, region: region.id, patch: { audio: p.audio } }], 'Fade');
       },
-    );
+    });
   };
 
   // ruler: top half sets or moves the cycle, bottom half moves the playhead
@@ -1166,13 +1384,13 @@ export function TracksArea() {
     const y = e.clientY - rect.top;
     const tick = tracksView.xToTick(x);
     const snap = snapTicks();
+    menuAt.current = null;
     if (y > rect.height / 2) {
       locate(quantize(tick, ticksPerBeat(m)));
-      capture(
-        e,
-        (ev) => locate(quantize(tracksView.xToTick(ev.clientX - rect.left), ticksPerBeat(m))),
-        () => undefined,
-      );
+      start(e, {
+        threshold: 0,
+        onMove: (ev) => locate(quantize(tracksView.xToTick(ev.clientX - rect.left), ticksPerBeat(m))),
+      });
       return;
     }
     const c = project.cycle;
@@ -1181,9 +1399,9 @@ export function TracksArea() {
     const mode = Math.abs(x - x0) < 8 ? 'start' : Math.abs(x - x1) < 8 ? 'end' : x > x0 && x < x1 ? 'move' : 'new';
     const anchor = quantize(tick, snap);
     let next = { start: c.start, end: c.end };
-    capture(
-      e,
-      (ev) => {
+    start(e, {
+      threshold: 0,
+      onMove: (ev) => {
         const t = quantize(tracksView.xToTick(ev.clientX - rect.left), snap);
         if (mode === 'start') next = { start: Math.min(t, c.end - snap), end: c.end };
         else if (mode === 'end') next = { start: c.start, end: Math.max(t, c.start + snap) };
@@ -1191,37 +1409,29 @@ export function TracksArea() {
           const d = t - anchor;
           next = { start: Math.max(0, c.start + d), end: Math.max(snap, c.end + d) };
         } else next = { start: Math.min(anchor, t), end: Math.max(anchor + snap, t) };
-        // live preview without an undo step per pixel
-        store.set({ project: { ...project, cycle: { on: true, ...next } } });
+        // drawn in place of the song's cycle until release: one undo step, no store writes per pixel
+        cyclePreview.current = { on: true, ...next };
         redraw();
       },
-      () => {
-        store.set({ project });
+      onUp: () => {
+        cyclePreview.current = null;
+        redraw();
         if (mode === 'new' && next.start === c.start && next.end === c.end) {
           apply([{ op: 'setProject', patch: { cycle: { ...c, on: !c.on } } }], 'Cycle');
           return;
         }
         setCycle(next.start, next.end);
       },
-    );
+    });
   };
 
-  const onWheel = (e: React.WheelEvent) => {
-    const rect = e.currentTarget.getBoundingClientRect();
-    if (e.ctrlKey || e.metaKey) {
-      tracksView.zoomAt(Math.exp(-e.deltaY * 0.0025), e.clientX - rect.left, 3, 600);
-      store.set({ zoom: tracksView.zoom });
-    } else if (e.shiftKey) tracksView.scrollBy(e.deltaY || e.deltaX, 0, maxScrollY);
-    else tracksView.scrollBy(e.deltaX, e.deltaY, maxScrollY);
+  const zoomBy = (factor: number) => {
+    tracksView.zoomAt(factor, 0, ...ZOOM.tracks);
+    persistZoom();
   };
 
-  const onTouchPointer = (e: ReactPointerEvent) => {
-    if (e.pointerType !== 'touch') return;
-    pinch.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
-  };
-
-  const headerWidth = phone ? 150 : layout === 'tablet' ? 210 : 230;
-  const end = songLength(project);
+  const headerWidth = phone ? 176 : layout === 'tablet' ? 210 : 230;
+  const listMax = maxScrollY(project);
 
   return (
     <div className="tracks" style={{ ['--headers' as string]: `${headerWidth}px` }}>
@@ -1267,80 +1477,61 @@ export function TracksArea() {
           <Activity />
         </button>
         <span className="grow" />
-        <button
-          type="button"
-          className="btn ghost icon"
-          title="Zoom out (Ctrl wheel)"
-          onClick={() => {
-            tracksView.zoomAt(0.7, 0, 3, 600);
-            store.set({ zoom: tracksView.zoom });
-          }}
-        >
+        <button type="button" className="btn ghost icon" title="Zoom out (Ctrl wheel)" onClick={() => zoomBy(0.7)}>
           <ZoomOut />
         </button>
-        {!phone && (
-          <button
-            type="button"
-            className="btn ghost icon"
-            title="Zoom in"
-            onClick={() => {
-              tracksView.zoomAt(1.4, 0, 3, 600);
-              store.set({ zoom: tracksView.zoom });
-            }}
-          >
-            <ZoomIn />
-          </button>
-        )}
+        <button type="button" className="btn ghost icon" title="Zoom in" onClick={() => zoomBy(1.4)}>
+          <ZoomIn />
+        </button>
       </div>
       <div
         className="ruler"
         ref={rulerBox}
         onPointerDown={onRulerDown}
-        onWheel={onWheel}
         title="Top: drag to set the cycle. Bottom: click to move the playhead"
       >
         <canvas ref={rulerCanvas} />
       </div>
-      <div className="track-list" onWheel={(e) => tracksView.scrollBy(0, e.deltaY, maxScrollY)}>
-        {project.tracks.map((t, i) => (
-          <TrackRow
-            key={t.id}
-            track={t}
-            top={i * trackHeight - tracksView.y}
-            height={trackHeight}
-            selected={t.id === selectedTrack}
-          />
-        ))}
-        <button
-          type="button"
-          className="btn ghost"
-          style={{ position: 'absolute', left: 8, top: project.tracks.length * trackHeight - tracksView.y + 8 }}
-          onClick={(e) => openMenuAt(e.currentTarget, newTrackMenu())}
-        >
-          <Plus /> New track
-        </button>
+      <div className="track-list" ref={listBox}>
+        <div className="track-list-inner" ref={listInner}>
+          {project.tracks.map((t, i) => (
+            <TrackRow
+              key={t.id}
+              track={t}
+              top={i * trackHeight}
+              height={trackHeight}
+              selected={t.id === selectedTrack}
+              phone={phone}
+              maxScrollY={listMax}
+            />
+          ))}
+          <button
+            type="button"
+            className="btn ghost"
+            style={{ position: 'absolute', left: 8, top: project.tracks.length * trackHeight + 8 }}
+            onClick={(e) => openMenuAt(e.currentTarget, newTrackMenu())}
+          >
+            <Plus /> New track
+          </button>
+        </div>
       </div>
       <div
         className="timeline"
         ref={timelineBox}
         onPointerDown={(e) => {
-          onTouchPointer(e);
-          if (pinch.current.size >= 2) return;
+          // a second finger turns whatever the first was doing into a pinch
+          if (pinch.current.down(e)) {
+            gesture.current?.abort();
+            return;
+          }
+          if (pinch.current.active) return;
           onPointerDown(e);
         }}
         onPointerMove={(e) => {
-          const pts = pinch.current;
-          if (e.pointerType === 'touch' && pts.size === 2 && pts.has(e.pointerId)) {
-            const [a, b] = [...pts.values()] as [{ x: number; y: number }, { x: number; y: number }];
-            const before = Math.abs(a.x - b.x);
-            pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
-            const [c, d] = [...pts.values()] as [{ x: number; y: number }, { x: number; y: number }];
-            const after = Math.abs(c.x - d.x);
-            if (before > 20 && after > 20) {
-              const rect = e.currentTarget.getBoundingClientRect();
-              tracksView.zoomAt(after / before, (c.x + d.x) / 2 - rect.left, 3, 600);
-              store.set({ zoom: tracksView.zoom });
-            }
+          const z = pinch.current.move(e);
+          if (z) {
+            const rect = e.currentTarget.getBoundingClientRect();
+            tracksView.zoomAt(z.factor, z.x - rect.left, ...ZOOM.tracks);
           } else if (e.pointerType !== 'touch') {
             const rect = e.currentTarget.getBoundingClientRect();
             const h = hit(e.clientX - rect.left, e.clientY - rect.top);
@@ -1356,9 +1547,16 @@ export function TracksArea() {
                     : 'default';
           }
         }}
-        onPointerUp={(e) => pinch.current.delete(e.pointerId)}
-        onPointerCancel={(e) => pinch.current.delete(e.pointerId)}
-        onWheel={onWheel}
+        onPointerUp={(e) => {
+          if (pinch.current.up(e)) {
+            // the fingers lifting are not a tap, and the zoom they settled on is kept
+            lastTap.current = 0;
+            persistZoom();
+          }
+        }}
+        onPointerCancel={(e) => {
+          if (pinch.current.up(e)) lastTap.current = 0;
+        }}
         onContextMenu={(e) => e.preventDefault()}
         onDragOver={(e) => {
           if (!e.dataTransfer.types.includes('Files')) return;
@@ -1390,13 +1588,6 @@ export function TracksArea() {
           </div>
         )}
       </div>
-      <span hidden>
-        {end}
-        {playing ? 1 : 0}
-        {barToTick(project.meter, 1)}
-        {meterAt(project.meter, 0).num}
-        {DIVISIONS['1/4']}
-      </span>
     </div>
   );
 }

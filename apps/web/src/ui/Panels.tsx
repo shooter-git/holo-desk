@@ -1,7 +1,7 @@
 /** The Inspector (the selected region and track, and its channel strip) and the Library (instruments). */
 import { type Instrument, SYNTH_PRESETS, tickToBarBeat } from '@holo/session';
 import { Check, Drum, Music, Piano, Search, Upload, Waves } from 'lucide-react';
-import { useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import { memo, useCallback, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import {
   addTrack,
   apply,
@@ -36,11 +36,7 @@ function AudioRegionRows({ trackId }: { trackId: string }) {
     <>
       <div className="row">
         <span>Recording</span>
-        <span
-          className="muted"
-          style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
-          title={file?.name}
-        >
+        <span className="muted ellipsis" title={file?.name}>
           {file?.name ?? clip.file}
         </span>
       </div>
@@ -176,11 +172,7 @@ export function Inspector({ overlay = false }: { overlay?: boolean }) {
   const track = project?.tracks.find((t) => t.id === trackId);
   const region = project && regionIds.length === 1 ? findRegion(project, regionIds[0] as string) : null;
   return (
-    <aside
-      className={`inspector${overlay ? ' overlay-panel' : ''}`}
-      style={overlay ? { left: 0 } : undefined}
-      aria-label="Inspector"
-    >
+    <aside className={`inspector${overlay ? ' overlay-panel' : ''}`} aria-label="Inspector">
       {region && project && (
         <details className="disclosure" open>
           <summary>Region: {region.region.name || (region.region.audio ? 'Audio' : 'MIDI')}</summary>
@@ -206,6 +198,7 @@ export function Inspector({ overlay = false }: { overlay?: boolean }) {
               <span>Mute</span>
               <input
                 type="checkbox"
+                aria-label="Mute the region"
                 checked={region.region.muted}
                 onChange={(e) =>
                   apply(
@@ -231,8 +224,8 @@ export function Inspector({ overlay = false }: { overlay?: boolean }) {
                       <button
                         key={st}
                         type="button"
-                        className="btn"
-                        style={{ padding: '0 6px' }}
+                        className="btn tight"
+                        title={`Transpose ${st > 0 ? 'up' : 'down'} ${Math.abs(st) === 12 ? 'an octave' : 'a semitone'}`}
                         onClick={() =>
                           apply(
                             [
@@ -278,8 +271,8 @@ export function Inspector({ overlay = false }: { overlay?: boolean }) {
                   <span>Instrument</span>
                   <button
                     type="button"
-                    className="btn"
-                    style={{ justifyContent: 'flex-start', overflow: 'hidden' }}
+                    className="btn left"
+                    title="Choose an instrument in the Library"
                     onClick={() => store.set({ library: true, mobileTab: 'library' })}
                   >
                     {instrumentLabel(track.instrument)}
@@ -289,6 +282,7 @@ export function Inspector({ overlay = false }: { overlay?: boolean }) {
                   <span>MIDI in</span>
                   <select
                     className="select"
+                    aria-label="MIDI input"
                     value={track.input.port}
                     onChange={(e) =>
                       updateTrack(track.id, { input: { ...track.input, port: e.target.value } }, 'Input')
@@ -309,6 +303,7 @@ export function Inspector({ overlay = false }: { overlay?: boolean }) {
                   <span>Channel</span>
                   <select
                     className="select"
+                    aria-label="MIDI channel"
                     value={track.input.channel}
                     onChange={(e) =>
                       updateTrack(
@@ -343,9 +338,10 @@ export function Inspector({ overlay = false }: { overlay?: boolean }) {
               <span>Colour</span>
               <input
                 type="color"
+                className="swatch-input"
+                aria-label="Track colour"
                 value={track.color}
                 onChange={(e) => updateTrack(track.id, { color: e.target.value }, 'Colour')}
-                style={{ width: 40, height: 24, border: 0, background: 'none' }}
               />
             </div>
             {track.origin && (
@@ -363,7 +359,7 @@ export function Inspector({ overlay = false }: { overlay?: boolean }) {
       )}
       {track && (
         // the track's strip and the one it plays into, side by side (as Logic's inspector shows them)
-        <div style={{ display: 'flex', justifyContent: 'center', gap: 2, padding: 8, height: 580, flex: 'none' }}>
+        <div className="inspector-strips">
           <Strip
             id={track.id}
             kind="track"
@@ -394,12 +390,49 @@ const PRESET_ICON: Record<string, typeof Piano> = {
   Pluck: Waves,
 };
 
+/** What names an instrument: the same preset, or the same pack and name, is the same instrument. */
+function instrumentKey(i: Instrument | undefined): string {
+  if (!i) return '';
+  if (i.type === 'synth') return `synth:${i.preset}`;
+  if (i.type === 'sampler' || i.type === 'performance') return `${i.type}:${i.pack}/${i.name}`;
+  return i.type;
+}
+
+const LibraryItem = memo(function LibraryItem({
+  instrument,
+  icon: Icon,
+  title,
+  meta,
+  current,
+  onPick,
+}: {
+  instrument: Instrument;
+  icon: typeof Piano;
+  title: string;
+  meta?: string;
+  current: boolean;
+  onPick: (i: Instrument) => void;
+}) {
+  return (
+    <button
+      type="button"
+      className={`list-item${current ? ' active' : ''}`}
+      aria-pressed={current}
+      onClick={() => onPick(instrument)}
+    >
+      <Icon size={meta ? 14 : 15} className="muted" />
+      <span>{title}</span>
+      {meta && <span className="meta">{meta}</span>}
+      {current && !meta && <Check size={14} className="meta" />}
+    </button>
+  );
+});
+
 export function LibraryPanel({ overlay = false, full = false }: { overlay?: boolean; full?: boolean }) {
   const packs = useLibrary();
   const states = useLoadStates();
-  const project = useApp((s) => s.project);
-  const trackId = useApp((s) => s.selectedTrack);
-  const track = project?.tracks.find((t) => t.id === trackId);
+  // the selected track only: the whole song changing (a note played in) needn't redraw the list
+  const track = useApp((s) => s.project?.tracks.find((t) => t.id === s.selectedTrack));
   const [query, setQuery] = useState('');
   const [importing, setImporting] = useState(false);
   const file = useRef<HTMLInputElement>(null);
@@ -424,12 +457,19 @@ export function LibraryPanel({ overlay = false, full = false }: { overlay?: bool
     }
   };
 
-  const pick = (i: Instrument) => {
-    if (track)
-      setInstrument(track.id, i, track.regions.length === 0 && track.name === instrumentLabel(track.instrument));
-    else addTrack(i);
-  };
-  const isCurrent = (i: Instrument) => JSON.stringify(track?.instrument) === JSON.stringify(i);
+  const pick = useCallback(
+    (i: Instrument) => {
+      if (track)
+        setInstrument(track.id, i, track.regions.length === 0 && track.name === instrumentLabel(track.instrument));
+      else addTrack(i);
+      // on a tablet the Library slides over the tracks: the choice made, it slides away
+      if (overlay) store.set({ library: false });
+    },
+    [track, overlay],
+  );
+  const currentKey = instrumentKey(track?.instrument);
+  // a stable object per instrument, so a memoised row sees the same props
+  const synths = useMemo(() => SYNTH_PRESETS.map((preset): Instrument => ({ type: 'synth', preset })), []);
 
   const groups = useMemo(
     () =>
@@ -437,35 +477,30 @@ export function LibraryPanel({ overlay = false, full = false }: { overlay?: bool
         pack: p,
         categories: [...new Set(p.instruments.map((i) => i.category))].map((c) => ({
           name: c,
-          items: p.instruments.filter(
-            (i) => i.category === c && (!q || `${i.title} ${i.category} ${p.name}`.toLowerCase().includes(q)),
-          ),
+          items: p.instruments
+            .filter((i) => i.category === c && (!q || `${i.title} ${i.category} ${p.name}`.toLowerCase().includes(q)))
+            .map((i) => ({ ...i, instrument: { type: 'sampler', pack: p.id, name: i.name } as Instrument })),
         })),
       })),
     [packs, q],
   );
 
   return (
-    <aside
-      className={`library${overlay ? ' overlay-panel' : ''}`}
-      style={{ ...(overlay ? { right: 0 } : {}), ...(full ? { width: '100%', borderLeft: 0 } : {}) }}
-      aria-label="Library"
-    >
+    <aside className={`library${overlay ? ' overlay-panel' : ''}${full ? ' full' : ''}`} aria-label="Library">
       <div className="hstack search">
         <Search size={15} className="muted" />
         <input
           className="input"
-          style={{ flex: 1 }}
           placeholder="Search instruments"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           aria-label="Search instruments"
         />
       </div>
-      <div className="muted" style={{ padding: '0 10px 8px' }}>
+      <div className="muted library-hint">
         {track ? (
           <>
-            For <b style={{ color: 'var(--text)' }}>{track.name}</b>: click to load.
+            For <b>{track.name}</b>: click to load.
           </>
         ) : (
           'Click an instrument to make a new track with it.'
@@ -474,65 +509,62 @@ export function LibraryPanel({ overlay = false, full = false }: { overlay?: bool
       <details className="disclosure" open>
         <summary>Built-in</summary>
         <div className="list">
-          {SYNTH_PRESETS.filter((pr) => !q || pr.toLowerCase().includes(q)).map((preset) => {
-            const inst: Instrument = { type: 'synth', preset };
-            const Icon = PRESET_ICON[preset] ?? Piano;
-            return (
-              <div key={preset} className={`list-item${isCurrent(inst) ? ' active' : ''}`} onClick={() => pick(inst)}>
-                <Icon size={15} className="muted" />
-                <span>{preset}</span>
-                {isCurrent(inst) && <Check size={14} className="meta" />}
-              </div>
-            );
-          })}
+          {synths
+            .filter((i) => i.type === 'synth' && (!q || i.preset.toLowerCase().includes(q)))
+            .map((inst) => {
+              const preset = inst.type === 'synth' ? inst.preset : '';
+              return (
+                <LibraryItem
+                  key={preset}
+                  instrument={inst}
+                  icon={PRESET_ICON[preset] ?? Piano}
+                  title={preset}
+                  current={instrumentKey(inst) === currentKey}
+                  onPick={pick}
+                />
+              );
+            })}
         </div>
       </details>
       {groups.map(({ pack, categories }) => (
         <details key={pack.id} className="disclosure" open={!!q}>
           <summary>
             {pack.name}{' '}
-            <span className="meta muted" style={{ marginLeft: 'auto', fontWeight: 500 }}>
-              {pack.license.length > 14 ? 'Free use' : pack.license}
-            </span>
+            <span className="meta muted pack-license">{pack.license.length > 14 ? 'Free use' : pack.license}</span>
           </summary>
           {categories
             .filter((c) => c.items.length)
             .map((c) => (
               <div key={c.name}>
-                <div className="label" style={{ padding: '8px 10px 4px' }}>
-                  {c.name}
-                </div>
+                <div className="label category">{c.name}</div>
                 <div className="list">
                   {c.items.map((i) => {
-                    const inst: Instrument = { type: 'sampler', pack: pack.id, name: i.name };
                     const st = states.get(`${pack.id}/${i.name}`);
                     return (
-                      <div
+                      <LibraryItem
                         key={i.name}
-                        className={`list-item${isCurrent(inst) ? ' active' : ''}`}
-                        onClick={() => pick(inst)}
-                      >
-                        <Music size={14} className="muted" />
-                        <span>{i.title}</span>
-                        <span className="meta">
-                          {st?.state === 'loading'
+                        instrument={i.instrument}
+                        icon={Music}
+                        title={i.title}
+                        meta={
+                          st?.state === 'loading'
                             ? `${Math.round((st.done / Math.max(1, st.total)) * 100)}%`
                             : st?.state === 'error'
                               ? 'error'
-                              : `${i.size} MB`}
-                        </span>
-                      </div>
+                              : `${i.size} MB`
+                        }
+                        current={instrumentKey(i.instrument) === currentKey}
+                        onPick={pick}
+                      />
                     );
                   })}
                 </div>
               </div>
             ))}
-          <div className="muted" style={{ padding: '8px 10px 12px', fontSize: 11 }}>
-            {pack.credit}
-          </div>
+          <div className="muted pack-credit">{pack.credit}</div>
         </details>
       ))}
-      <div style={{ padding: 10 }}>
+      <div className="library-import">
         <input
           ref={file}
           type="file"
@@ -540,22 +572,16 @@ export function LibraryPanel({ overlay = false, full = false }: { overlay?: bool
           hidden
           onChange={(e) => e.target.files?.[0] && void importPack(e.target.files[0])}
         />
-        <button
-          type="button"
-          className="btn"
-          style={{ width: '100%' }}
-          disabled={importing}
-          onClick={() => file.current?.click()}
-        >
+        <button type="button" className="btn" disabled={importing} onClick={() => file.current?.click()}>
           <Upload /> {importing ? 'Importing…' : 'Import a sample pack (.zip)'}
         </button>
-        <div className="muted" style={{ marginTop: 6, fontSize: 11, lineHeight: 1.5 }}>
+        <div className="muted note">
           SFZ instruments, or folders of WAV/FLAC files named by note (C4, F#3…); a folder of unnamed hits becomes a
           drum kit.
         </div>
       </div>
       {packs.length === 0 && (
-        <div className="muted" style={{ padding: 12, lineHeight: 1.6 }}>
+        <div className="muted library-empty">
           No sample packs installed yet. The built-in instruments above always work. To install the orchestral packs,
           run <kbd>pnpm packs install</kbd> on the machine that runs HO[LO].
         </div>

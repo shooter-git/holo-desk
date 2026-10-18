@@ -1,7 +1,7 @@
 // HO[LO] Desk offline. The build writes this as sw.js and fills in BUILD with its files.
 //
-// - The app (the page, its scripts, styles, fonts and icons) is cached when a version installs, so
-//   an installed HO[LO] opens with no network.
+// - The app (the page, its scripts, styles and icons) is cached when a version installs, so an
+//   installed HO[LO] opens with no network. The fonts the page uses stay in the browser's own cache.
 // - The page itself comes from the network whenever it answers, so a new version shows next time;
 //   offline it comes from the cache. Hashed files are always served from the cache.
 // - Projects (/api) are never cached here: the studio keeps its own copy while it works offline.
@@ -14,7 +14,22 @@ const shell = new Set(BUILD.shell.map(at));
 
 self.addEventListener('install', (event) => {
   event.waitUntil(
-    caches.open(SHELL).then((cache) => cache.addAll([...shell].map((url) => new Request(url, { cache: 'reload' })))),
+    (async () => {
+      const cache = await caches.open(SHELL);
+      await Promise.all(
+        [...shell].map(async (url) => {
+          // a hashed file is the same file for as long as it has that name: the last version's copy
+          // does, or the browser's own (the page has just loaded most of them). The page, the
+          // manifests and the icons keep their names, so those are fetched afresh
+          const hashed = url.includes('/assets/');
+          const kept = hashed ? await caches.match(url) : undefined;
+          if (kept) return cache.put(url, kept);
+          const response = await fetch(new Request(url, { cache: hashed ? 'default' : 'reload' }));
+          if (!response.ok) throw new Error(`${url}: ${response.status}`);
+          await cache.put(url, response);
+        }),
+      );
+    })(),
   );
 });
 

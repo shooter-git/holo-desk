@@ -1,4 +1,5 @@
 /** Pop-up menus: opened from code at a point (a button, a right-click, a long press). */
+import { Check } from 'lucide-react';
 import { type ReactNode, useEffect, useLayoutEffect, useRef, useSyncExternalStore } from 'react';
 
 export type MenuEntry =
@@ -13,12 +14,15 @@ interface Open {
 }
 
 let open: Open | null = null;
+/** What had the keyboard when the menu opened: it gets it back when the menu closes. */
+let opener: Element | null = null;
 const listeners = new Set<() => void>();
 const emit = () => {
   for (const l of listeners) l();
 };
 
 export function openMenu(x: number, y: number, items: MenuEntry[]): void {
+  if (!open) opener = document.activeElement;
   open = { x, y, items };
   emit();
 }
@@ -30,9 +34,15 @@ export function openMenuAt(el: Element, items: MenuEntry[]): void {
 }
 
 export function closeMenu(): void {
+  if (!open) return;
   open = null;
   emit();
+  const back = opener;
+  opener = null;
+  if (back instanceof HTMLElement && back.isConnected) back.focus({ preventScroll: true });
 }
+
+const ITEMS = '.item:not(:disabled)';
 
 export function MenuHost() {
   const state = useSyncExternalStore(
@@ -53,22 +63,34 @@ export function MenuHost() {
     const y = state.y + r.height > window.innerHeight - 6 ? Math.max(6, window.innerHeight - r.height - 6) : state.y;
     el.style.left = `${x}px`;
     el.style.top = `${y}px`;
-    (el.querySelector('.item') as HTMLElement | null)?.focus({ preventScroll: true });
+    (el.querySelector(ITEMS) as HTMLElement | null)?.focus({ preventScroll: true });
   }, [state]);
 
   useEffect(() => {
     if (!state) return;
     const down = (e: PointerEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) closeMenu();
+      if (!ref.current || ref.current.contains(e.target as Node)) return;
+      // a press outside closes the menu and goes no further: the control under it isn't pressed as well
+      e.preventDefault();
+      e.stopPropagation();
+      closeMenu();
     };
     const key = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') closeMenu();
-      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
-        const items = [...(ref.current?.querySelectorAll<HTMLElement>('.item') ?? [])];
-        const i = items.indexOf(document.activeElement as HTMLElement);
-        items[(i + (e.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length]?.focus();
+      const items = [...(ref.current?.querySelectorAll<HTMLElement>(ITEMS) ?? [])];
+      const i = items.indexOf(document.activeElement as HTMLElement);
+      let to: HTMLElement | undefined;
+      if (e.key === 'Escape' || e.key === 'Tab') {
+        closeMenu();
         e.preventDefault();
+        return;
       }
+      if (e.key === 'ArrowDown') to = items[(i + 1) % items.length];
+      else if (e.key === 'ArrowUp') to = items[(i - 1 + items.length) % items.length];
+      else if (e.key === 'Home') to = items[0];
+      else if (e.key === 'End') to = items[items.length - 1];
+      else return;
+      to?.focus();
+      e.preventDefault();
     };
     window.addEventListener('pointerdown', down, true);
     window.addEventListener('keydown', key, true);
@@ -80,34 +102,50 @@ export function MenuHost() {
 
   if (!state) return null;
   return (
-    <div className="menu" ref={ref} role="menu" style={{ left: state.x, top: state.y }}>
-      {state.items.map((item, i) => {
-        if (item === 'sep') return <div key={`s${i}`} className="sep" />;
-        if ('heading' in item) {
+    <>
+      {/* catches the press that closes the menu, so nothing under it is hit */}
+      <div className="menu-backdrop" onPointerDown={closeMenu} />
+      <div
+        className="menu"
+        ref={ref}
+        role="menu"
+        style={{ left: state.x, top: state.y }}
+        onKeyDown={(e) => {
+          // Enter and Space press the focused item; the studio's shortcuts (Return, Space) must not see them
+          if (e.key === 'Enter' || e.key === ' ') e.stopPropagation();
+        }}
+      >
+        {state.items.map((item, i) => {
+          if (item === 'sep') return <hr key={`s${i}`} className="sep" />;
+          if ('heading' in item) {
+            return (
+              <div key={`h${i}`} className="heading" role="presentation">
+                {item.heading}
+              </div>
+            );
+          }
+          const radio = item.checked !== undefined;
           return (
-            <div key={`h${i}`} className="heading">
-              {item.heading}
-            </div>
+            // biome-ignore lint/a11y/useAriaPropsSupportedByRole: aria-checked goes with menuitemradio, the role set when checked is given
+            <button
+              key={`${item.label}${i}`}
+              type="button"
+              className="item"
+              role={radio ? 'menuitemradio' : 'menuitem'}
+              aria-checked={radio ? item.checked : undefined}
+              disabled={item.disabled}
+              onClick={() => {
+                closeMenu();
+                item.onSelect();
+              }}
+            >
+              <span className="mark">{item.checked ? <Check size={13} aria-hidden="true" /> : item.icon}</span>
+              <span>{item.label}</span>
+              {item.hint && <span className="hint">{item.hint}</span>}
+            </button>
           );
-        }
-        return (
-          <button
-            key={`${item.label}${i}`}
-            type="button"
-            className="item"
-            role="menuitem"
-            disabled={item.disabled}
-            onClick={() => {
-              closeMenu();
-              item.onSelect();
-            }}
-          >
-            <span style={{ width: 14, display: 'inline-flex' }}>{item.checked ? '✓' : item.icon}</span>
-            <span>{item.label}</span>
-            {item.hint && <span className="hint">{item.hint}</span>}
-          </button>
-        );
-      })}
-    </div>
+        })}
+      </div>
+    </>
   );
 }

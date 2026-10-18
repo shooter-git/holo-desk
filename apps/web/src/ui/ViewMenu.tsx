@@ -4,7 +4,8 @@
  * Bar do. Each device remembers its own choice.
  */
 import { Eye } from 'lucide-react';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
+import { isPhone, useLayout } from '../app/layout.ts';
 import { SHOW_DEFAULTS, type ShowKey, store, useApp } from '../app/store.ts';
 
 type Pane = 'library' | 'inspector' | 'editor' | 'mixer' | 'automation';
@@ -83,23 +84,41 @@ export function ViewMenu() {
   const show = useApp((s) => s.show);
   const panes = useApp((s) => PANES.map(([p]) => paneOn(s, p)).join(','));
   const hidden = Object.values(show).filter((v) => !v).length;
+  const labelId = useId();
+  // on a phone the panel is a sheet from the bottom; elsewhere it hangs under the button, kept on screen
+  const sheet = isPhone(useLayout());
 
   useEffect(() => {
     if (!open) return;
+    // the keyboard goes to the first checkbox, and comes back to the button when the menu closes
+    panel.current?.querySelector<HTMLElement>('input')?.focus({ preventScroll: true });
     const away = (e: PointerEvent) => {
       const t = e.target as Node;
       if (!panel.current?.contains(t) && !button.current?.contains(t)) setOpen(false);
     };
-    const key = (e: KeyboardEvent) => e.key === 'Escape' && setOpen(false);
+    const key = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      setOpen(false);
+      button.current?.focus({ preventScroll: true });
+    };
+    // the panel is placed under the button at open time: a resize (or a turn of the phone) moves the button
+    const close = () => setOpen(false);
     document.addEventListener('pointerdown', away);
     document.addEventListener('keydown', key);
+    window.addEventListener('resize', close);
     return () => {
       document.removeEventListener('pointerdown', away);
       document.removeEventListener('keydown', key);
+      window.removeEventListener('resize', close);
     };
   }, [open]);
 
   const rect = button.current?.getBoundingClientRect();
+  const place = (r: DOMRect) => {
+    const width = Math.min(620, window.innerWidth - 16);
+    const right = Math.max(8, Math.min(window.innerWidth - r.right - 4, window.innerWidth - 8 - width));
+    return { top: r.bottom + 6, right };
+  };
   const set = (key: ShowKey, on: boolean) => store.set({ show: { ...store.get().show, [key]: on } });
   const paneStates = panes.split(',');
   return (
@@ -112,18 +131,21 @@ export function ViewMenu() {
           hidden ? `View: ${hidden} part${hidden === 1 ? '' : 's'} hidden` : 'View: show or hide parts of the studio'
         }
         aria-expanded={open}
+        aria-haspopup="true"
+        id={labelId}
         onClick={() => setOpen(!open)}
       >
         <Eye />
         {hidden > 0 && <span className="view-badge">{hidden}</span>}
       </button>
       {open && rect && (
+        // biome-ignore lint/a11y/useSemanticElements: a fieldset brings its own box and sizing; this is a styled popover
         <div
           ref={panel}
-          className="view-menu"
-          role="dialog"
-          aria-label="View"
-          style={{ top: rect.bottom + 6, right: Math.max(8, window.innerWidth - rect.right - 4) }}
+          className={`view-menu${sheet ? ' sheet' : ''}`}
+          role="group"
+          aria-labelledby={labelId}
+          style={sheet ? undefined : place(rect)}
         >
           <div className="view-group">
             <div className="label">Panes</div>

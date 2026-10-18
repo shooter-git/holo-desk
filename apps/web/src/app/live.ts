@@ -3,9 +3,10 @@
  * playhead, the selection and the song), applies the AI's changes as undo steps, follows transport
  * commands, plays the AI's notes and passes on notes from other devices.
  */
-import { type ChannelPatch, formatBarBeat, newId, type Op, tickToSeconds } from '@holo/session';
+import { type ChannelPatch, formatBarBeat, newId, type Op, type Project, tickToSeconds } from '@holo/session';
 import { engine } from '../audio/engine.ts';
 import { midi } from '../audio/midi.ts';
+import { library, type PackSummary } from '../audio/samples.ts';
 import { inputLabel, instrumentLabel } from '../ui/Tracks.tsx';
 import {
   apply,
@@ -20,6 +21,7 @@ import {
   play,
   redo,
   saveNow,
+  saveSoon,
   selectTrack,
   setCycle,
   stop,
@@ -59,11 +61,40 @@ export function device(): string {
   return `${browser} on a ${kind}`;
 }
 
+/**
+ * The song's shape as reported: its markers and tracks, worked out again only when the song (or
+ * the pack list the labels come from) has changed, since the report goes out a few times a second.
+ */
+let shape: { project: Project | null; packs: PackSummary[]; markers: unknown[]; tracks: unknown[] } | null = null;
+function songShape(p: Project | null): { markers: unknown[]; tracks: unknown[] } {
+  if (shape && shape.project === p && shape.packs === library.packs) return shape;
+  shape = {
+    project: p,
+    packs: library.packs,
+    markers: (p?.markers ?? []).map((m) => ({ tick: m.tick, name: m.name, at: formatBarBeat(p?.meter ?? [], m.tick) })),
+    tracks: (p?.tracks ?? []).map((t) => ({
+      id: t.id,
+      name: t.name,
+      color: t.color,
+      kind: t.kind,
+      sub: t.kind === 'audio' ? inputLabel(t) : instrumentLabel(t.instrument),
+      armed: t.armed,
+      mute: t.channel.mute,
+      solo: t.channel.solo,
+      volume: t.channel.volume,
+      pan: t.channel.pan,
+    })),
+  };
+  return shape;
+}
+
 function report(): void {
+  if (socket?.readyState !== WebSocket.OPEN) return;
   const s = store.get();
   const p = s.project;
   const tick = engine.positionTick();
   const lat = engine.latency();
+  const { markers, tracks } = songShape(p);
   const state = {
     project: p?.id ?? null,
     title: p?.title ?? null,
@@ -89,26 +120,16 @@ function report(): void {
     canUndo: s.undo.length > 0,
     canRedo: s.redo.length > 0,
     saveState: s.saveState,
-    markers: (p?.markers ?? []).map((m) => ({ tick: m.tick, name: m.name, at: formatBarBeat(p?.meter ?? [], m.tick) })),
-    tracks: (p?.tracks ?? []).map((t) => ({
-      id: t.id,
-      name: t.name,
-      color: t.color,
-      kind: t.kind,
-      sub: t.kind === 'audio' ? inputLabel(t) : instrumentLabel(t.instrument),
-      armed: t.armed,
-      mute: t.channel.mute,
-      solo: t.channel.solo,
-      volume: t.channel.volume,
-      pan: t.channel.pan,
-    })),
+    markers,
+    tracks,
     master: p ? { volume: p.master.volume } : null,
     tempo: p?.tempo ?? [],
     meter: p?.meter ?? [],
   };
-  const json = JSON.stringify(state);
+  // (the one text is both the comparison and what's sent)
+  const json = JSON.stringify({ type: 'state', state });
   if (json !== lastSent) {
-    send({ type: 'state', state });
+    socket.send(json);
     lastSent = json;
   }
 }
@@ -131,7 +152,8 @@ async function onMessage(msg: Record<string, unknown>): Promise<void> {
         return;
       }
       toast(`${author}: ${label}`, 'ai');
-      const revision = await saveNow();
+      // (a burst of changes is saved as one, and each is answered with that save's revision)
+      const revision = await saveSoon();
       ack(true, revision === null ? {} : { revision });
       return;
     }
@@ -211,10 +233,19 @@ async function onMessage(msg: Record<string, unknown>): Promise<void> {
       }
       return;
     }
-    case 'peers':
-      store.set({ peers: (msg.peers as { role: string; name: string }[]) ?? [] });
+    case 'peers': {
+      // a session the host hasn't yet seen go (a reload's) would show a device twice
+      const seen = new Set<string>();
+      const peers = ((msg.peers as { role: string; name: string }[]) ?? []).filter((x) => {
+        const key = `${x.role}\n${x.name}`;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+      store.set({ peers });
       metersWhileRemotes();
       return;
+    }
     case 'command':
       await command(msg);
       return;

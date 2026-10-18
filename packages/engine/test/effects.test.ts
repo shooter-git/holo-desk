@@ -1,6 +1,8 @@
-import { PLUGINS } from '@holo/session';
+import { type ParamDef, PLUGINS } from '@holo/session';
 import { describe, expect, it } from 'vitest';
+import { prepareImpulse } from '../src/convolver.ts';
 import { createEffect, type Host } from '../src/fx.ts';
+import { generateSpace } from '../src/spaces.ts';
 
 const SR = 48000;
 const host = (lowLatency: boolean): Host => ({
@@ -80,4 +82,47 @@ describe('audio effects', () => {
       expect(gr.limiter).toBeGreaterThan(-24);
     }
   });
+});
+
+describe('a setting moved on its own', () => {
+  // (a small room for the spaces, whatever they ask for)
+  const room = prepareImpulse(generateSpace('room', 1, 0.3, SR));
+  const withRoom: Host = { ...host(false), impulse: () => room, loopRange: () => null };
+  const moving = PLUGINS.filter((p) => p.kind === 'audio' && createEffect(p.type, withRoom)?.setParam);
+  for (const def of moving) {
+    it(`tunes ${def.type} as the whole set does, to the byte`, () => {
+      const whole = createEffect(def.type, withRoom);
+      const one = createEffect(def.type, withRoom);
+      if (!whole || !one?.setParam) throw new Error(def.type);
+      const params: Record<string, number> = Object.fromEntries(def.params.map((p) => [p.id, p.default]));
+      if (def.type === 'peq') Object.assign(params, { t1: 1, f1: 80, t2: 3, f2: 900, g2: -5, t3: 6, f3: 8000, g3: 3 });
+      whole.setParams(params);
+      one.setParams(params);
+      const [l, r] = music(3);
+      const l2 = l.slice();
+      const r2 = r.slice();
+      // every setting in turn, from the first to the last, as lanes move them
+      let seed = 5;
+      const next = () => {
+        seed = (seed * 1664525 + 1013904223) >>> 0;
+        return seed / 4294967296;
+      };
+      const movable = def.params.filter((p) => !['space', 'seed', 'decay', 'generations'].includes(p.id));
+      for (let at = 0, k = 0; at < l.length; at += 128, k++) {
+        if (k % 7 === 3) {
+          const p = movable[k % movable.length] as ParamDef;
+          let v = p.min + next() * (p.max - p.min);
+          if (p.step) v = Math.round(v / p.step) * p.step;
+          params[p.id] = v;
+          whole.setParams(params);
+          one.setParam(p.id, params);
+        }
+        whole.process(l.subarray(at, at + 128), r.subarray(at, at + 128), 128);
+        one.process(l2.subarray(at, at + 128), r2.subarray(at, at + 128), 128);
+        expect(whole.gr).toBe(one.gr);
+      }
+      expect(Buffer.from(l.buffer).equals(Buffer.from(l2.buffer))).toBe(true);
+      expect(Buffer.from(r.buffer).equals(Buffer.from(r2.buffer))).toBe(true);
+    });
+  }
 });

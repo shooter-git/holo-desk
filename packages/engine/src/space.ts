@@ -125,6 +125,36 @@ export class SpaceDesigner {
     if (this.useHigh) this.highcut.set('lowpass', v('highcut'), Math.SQRT1_2, 0, sr);
   }
 
+  /** One setting moved: what it alone sets, as setParams would (the space itself: the whole). */
+  setParam(id: string, p: Record<string, number>, settings?: Record<string, string>): void {
+    const v = (x: string) => paramValue('space', p, x);
+    const sr = this.host.sr;
+    switch (id) {
+      case 'wet':
+        this.wet = dbToGain(v('wet'));
+        break;
+      case 'dry':
+        this.dry = v('dry') <= -60 ? 0 : dbToGain(v('dry'));
+        break;
+      case 'cross':
+        this.cross = v('cross') / 100;
+        break;
+      case 'predelay':
+        this.delay = Math.round((v('predelay') / 1000) * sr);
+        break;
+      case 'lowcut':
+        this.useLow = v('lowcut') > 20.5;
+        if (this.useLow) this.lowcut.set('highpass', v('lowcut'), Math.SQRT1_2, 0, sr);
+        break;
+      case 'highcut':
+        this.useHigh = v('highcut') < 19999;
+        if (this.useHigh) this.highcut.set('lowpass', v('highcut'), Math.SQRT1_2, 0, sr);
+        break;
+      default:
+        this.setParams(p, settings);
+    }
+  }
+
   /** The response may have arrived since: pick it up. */
   refresh(): void {
     if (this.conv || !this.key) return;

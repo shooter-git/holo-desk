@@ -197,6 +197,8 @@ export type ToWorklet =
   | { type: 'sequence'; num: number; events: Float64Array }
   | { type: 'tempo'; segments: TempoSegment[]; ppq: number; beatTicks: number; barTicks: number }
   | { type: 'sampler'; spec: SamplerSpec }
+  /** No track plays this instrument any more: its samples are let go. */
+  | { type: 'forgetSampler'; key: string }
   /** A Space Designer's response, prepared (transferred). */
   | { type: 'impulse'; key: string; data: PreparedImpulse }
   /** Audio for clips: one or two channels at the context's rate (transferred). */

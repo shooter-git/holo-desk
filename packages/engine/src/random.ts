@@ -187,8 +187,18 @@ export class Pcg64 {
     return [...toLimbs(this.state), ...toLimbs(this.inc), this.has32 ? 1 : 0, this.buf32];
   }
 
+  /** A blank generator of the constructor's own shape (one shape keeps the draws' code monomorphic). */
+  private static blank(): Pcg64 {
+    return new Pcg64([
+      [0, 0],
+      [0, 0],
+      [0, 0],
+      [0, 0],
+    ]);
+  }
+
   static load(s: number[]): Pcg64 {
-    const c = Object.create(Pcg64.prototype) as Pcg64;
+    const c = Pcg64.blank();
     c.state = toDigits(s.slice(0, 4), new Float64Array(8));
     c.inc = toDigits(s.slice(4, 8), new Float64Array(8));
     c.has32 = s[8] === 1;
@@ -200,7 +210,7 @@ export class Pcg64 {
 
   /** A generator in the same state, to draw the same numbers again. */
   clone(): Pcg64 {
-    const c = Object.create(Pcg64.prototype) as Pcg64;
+    const c = Pcg64.blank();
     c.state = this.state.slice();
     c.inc = this.inc.slice();
     c.has32 = this.has32;
@@ -289,14 +299,15 @@ export class NumpyRandom {
 
   /** A stream from a saved state: it draws what the saved one would have drawn next. */
   static resume(state: number[]): NumpyRandom {
-    const c = Object.create(NumpyRandom.prototype) as NumpyRandom;
+    // made as the constructor makes one, so every generator has the same shape
+    const c = new NumpyRandom([0]);
     c.bits = Pcg64.load(state);
     return c;
   }
 
   /** A generator that will draw what this one draws from here on. */
   clone(): NumpyRandom {
-    const c = Object.create(NumpyRandom.prototype) as NumpyRandom;
+    const c = new NumpyRandom([0]);
     c.bits = this.bits.clone();
     return c;
   }
@@ -309,7 +320,11 @@ export class NumpyRandom {
     return low + (high - low) * this.bits.nextDouble();
   }
 
-  standardNormal(): number {
+  /** The last draw drawNormal() made. */
+  drawn = 0;
+
+  /** A standard normal, left in `drawn`: a voice draws one every sample, and a returned double is boxed unless inlined. */
+  drawNormal(): void {
     const b = this.bits;
     for (;;) {
       b.next64();
@@ -321,21 +336,34 @@ export class NumpyRandom {
       const rabs = (hi & 0x1fffffff) * 8388608 + (lo >>> 9);
       let x = rabs * (WI[idx] as number);
       if (sign) x = -x;
-      if (rabs < (KI[idx] as number)) return x;
+      if (rabs < (KI[idx] as number)) {
+        this.drawn = x;
+        return;
+      }
       if (idx === 0) {
         const bit = (lo >>> 17) & 1;
         for (;;) {
           const xx = -ZIG_INV_R * Math.log1p(-b.nextDouble());
           const yy = -Math.log1p(-b.nextDouble());
-          if (yy + yy > xx * xx) return bit ? -(ZIG_R + xx) : ZIG_R + xx;
+          if (yy + yy > xx * xx) {
+            this.drawn = bit ? -(ZIG_R + xx) : ZIG_R + xx;
+            return;
+          }
         }
       }
       if (
         ((FI[idx - 1] as number) - (FI[idx] as number)) * b.nextDouble() + (FI[idx] as number) <
         Math.exp(-0.5 * x * x)
-      )
-        return x;
+      ) {
+        this.drawn = x;
+        return;
+      }
     }
+  }
+
+  standardNormal(): number {
+    this.drawNormal();
+    return this.drawn;
   }
 
   normal(loc = 0, scale = 1): number {

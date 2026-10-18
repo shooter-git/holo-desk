@@ -83,12 +83,13 @@ export function drawLanes(
   view: Viewport,
   trackHeight: number,
   w: number,
+  h: number,
   params: Record<string, string>,
   preview: LanePreview | null,
 ): void {
   project.tracks.forEach((track, i) => {
     const g = laneGeometry(i, trackHeight, view.y);
-    if (g.top + g.height < 0 || g.top > ctx.canvas.height) return;
+    if (g.top + g.height < 0 || g.top > h) return;
     // the regions recede so the line reads
     ctx.fillStyle = 'rgba(9, 11, 14, 0.55)';
     ctx.fillRect(0, g.top - 4, w, trackHeight - 3);
@@ -109,9 +110,6 @@ export function drawLanes(
       ctx.setLineDash([]);
       return;
     }
-    ctx.strokeStyle = off ? 'rgba(160,170,180,0.6)' : '#ffd166';
-    ctx.shadowColor = off ? 'transparent' : 'rgba(255, 209, 102, 0.5)';
-    ctx.shadowBlur = 6;
     ctx.beginPath();
     let lastY = y((points[0] as [number, number])[1]);
     let lastX = 0;
@@ -135,8 +133,15 @@ export function drawLanes(
       lastV = v;
     });
     ctx.lineTo(w, lastY);
+    // a soft wide stroke under the line stands in for a glow, without a blur pass per lane
+    if (!off) {
+      ctx.strokeStyle = 'rgba(255, 209, 102, 0.25)';
+      ctx.lineWidth = 4;
+      ctx.stroke();
+    }
+    ctx.strokeStyle = off ? 'rgba(160,170,180,0.6)' : '#ffd166';
+    ctx.lineWidth = 2;
     ctx.stroke();
-    ctx.shadowBlur = 0;
     for (const [tick, v] of points) {
       const x = view.tickToX(tick);
       if (x < -6 || x > w + 6) continue;

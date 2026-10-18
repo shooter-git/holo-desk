@@ -5,6 +5,10 @@ import { useSyncExternalStore } from 'react';
  *  - desktop: the full studio, panels side by side;
  *  - tablet: the same, side panels slide over the tracks;
  *  - phone: one view at a time with tabs at the bottom (portrait) or down the side (landscape).
+ *
+ * The rules go by size and pointer, not by the device: a window under 500 px tall and under 1000 px
+ * wide is laid out as a phone on its side even with a mouse (the full studio doesn't fit it either),
+ * and a touch screen of any width gets the tablet layout, with its overlays and bigger controls.
  */
 export type Layout = 'desktop' | 'tablet' | 'phone-portrait' | 'phone-landscape';
 

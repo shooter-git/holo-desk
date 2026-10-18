@@ -232,36 +232,6 @@ export const PRESETS: Record<string, Partial<SynthParams>> = {
 
 const TAU = Math.PI * 2;
 
-/** PolyBLEP residual for a discontinuity at phase 0 (t, dt in cycles). */
-function blep(t: number, dt: number): number {
-  if (t < dt) {
-    const x = t / dt;
-    return x + x - x * x - 1;
-  }
-  if (t > 1 - dt) {
-    const x = (t - 1) / dt;
-    return x * x + x + x + 1;
-  }
-  return 0;
-}
-
-function osc(wave: number, phase: number, dt: number): number {
-  switch (wave) {
-    case 0:
-      return 2 * phase - 1 - blep(phase, dt);
-    case 1: {
-      let v = phase < 0.5 ? 1 : -1;
-      v += blep(phase, dt);
-      v -= blep((phase + 0.5) % 1, dt);
-      return v;
-    }
-    case 2:
-      return 1 - 4 * Math.abs(phase - 0.5);
-    default:
-      return Math.sin(TAU * phase);
-  }
-}
-
 class SynthVoice implements Voice {
   key: number;
   sustained = false;
@@ -340,14 +310,23 @@ class SynthVoice implements Voice {
     // with the mod wheel at rest the pitch holds through the block: worked out once
     const still = ctl.mod === 0;
     const held = still ? 440 * 2 ** ((this.key - 69 + ctl.bend + 0) / 12) : 0;
+    const vibStep = p.vibRate / sr;
+    const mix1 = 1 - p.mix2 * 0.5;
+    const fenv = this.fenv;
+    const amp = this.amp;
+    const noise = this.noise;
+    const phases = this.phases;
+    const k1 = this.k1;
+    const k2 = this.k2;
     for (let i = start; i < end; i++) {
       // vibrato from the mod wheel
-      this.vib += p.vibRate / sr;
+      this.vib += vibStep;
       if (this.vib >= 1) this.vib -= 1;
       const freq = still
         ? held
         : 440 * 2 ** ((this.key - 69 + ctl.bend + Math.sin(TAU * this.vib) * p.vibDepth * ctl.mod) / 12);
-      const fe = this.fenv.next();
+      fenv.step();
+      const fe = fenv.level;
       if ((this.counter++ & 15) === 0) {
         const cutoff =
           p.cutoff *
@@ -367,27 +346,85 @@ class SynthVoice implements Voice {
         this.modPhase += dm;
         if (this.modPhase >= 1) this.modPhase -= 1;
         const mod = Math.sin(TAU * this.modPhase) * p.fmIndex * this.fmEnv * (0.4 + 0.6 * this.vel);
-        const ph = (this.phases[0] as number) + freq / sr;
-        this.phases[0] = ph - Math.floor(ph);
-        x = Math.sin(TAU * (this.phases[0] as number) + mod);
+        const ph = (phases[0] as number) + freq / sr;
+        phases[0] = ph - Math.floor(ph);
+        x = Math.sin(TAU * (phases[0] as number) + mod);
       } else {
         for (let s = 0; s < stacks; s++) {
-          const d1 = (freq * (this.k1[s] as number)) / sr;
-          const d2 = (freq * (this.k2[s] as number)) / sr;
-          let ph1 = (this.phases[s * 2] as number) + d1;
+          const d1 = (freq * (k1[s] as number)) / sr;
+          const d2 = (freq * (k2[s] as number)) / sr;
+          let ph1 = (phases[s * 2] as number) + d1;
           ph1 -= Math.floor(ph1);
-          let ph2 = (this.phases[s * 2 + 1] as number) + d2;
+          let ph2 = (phases[s * 2 + 1] as number) + d2;
           ph2 -= Math.floor(ph2);
-          this.phases[s * 2] = ph1;
-          this.phases[s * 2 + 1] = ph2;
-          x += (osc(p.wave1, ph1, d1) * (1 - p.mix2 * 0.5) + osc(p.wave2, ph2, d2) * p.mix2) * norm;
+          phases[s * 2] = ph1;
+          phases[s * 2 + 1] = ph2;
+          // the two oscillators, in line: a call V8 doesn't inline (this loop is big) boxes every
+          // double it passes or returns, a heap allocation each sample
+          let o1 = 0;
+          let o2 = 0;
+          for (let o = 0; o < 2; o++) {
+            const wave = o === 0 ? p.wave1 : p.wave2;
+            const ph = o === 0 ? ph1 : ph2;
+            const dt = o === 0 ? d1 : d2;
+            let v: number;
+            switch (wave) {
+              case 0: {
+                // saw, its drop at phase 0 smoothed by the polyBLEP residual
+                let b: number;
+                if (ph < dt) {
+                  const x = ph / dt;
+                  b = x + x - x * x - 1;
+                } else if (ph > 1 - dt) {
+                  const x = (ph - 1) / dt;
+                  b = x * x + x + x + 1;
+                } else b = 0;
+                v = 2 * ph - 1 - b;
+                break;
+              }
+              case 1: {
+                // square: a residual at each edge
+                v = ph < 0.5 ? 1 : -1;
+                let b: number;
+                if (ph < dt) {
+                  const x = ph / dt;
+                  b = x + x - x * x - 1;
+                } else if (ph > 1 - dt) {
+                  const x = (ph - 1) / dt;
+                  b = x * x + x + x + 1;
+                } else b = 0;
+                v += b;
+                const t = (ph + 0.5) % 1;
+                if (t < dt) {
+                  const x = t / dt;
+                  b = x + x - x * x - 1;
+                } else if (t > 1 - dt) {
+                  const x = (t - 1) / dt;
+                  b = x * x + x + x + 1;
+                } else b = 0;
+                v -= b;
+                break;
+              }
+              case 2:
+                v = 1 - 4 * Math.abs(ph - 0.5);
+                break;
+              default:
+                v = Math.sin(TAU * ph);
+            }
+            if (o === 0) o1 = v;
+            else o2 = v;
+          }
+          x += (o1 * mix1 + o2 * p.mix2) * norm;
         }
         if (p.sub > 0) {
           this.sub += freq / 2 / sr;
           if (this.sub >= 1) this.sub -= 1;
           x += Math.sin(TAU * this.sub) * p.sub;
         }
-        if (p.noise > 0) x += this.noise.next() * p.noise;
+        if (p.noise > 0) {
+          noise.step();
+          x += noise.value * p.noise;
+        }
       }
       // state-variable low-pass
       const v3 = x - this.ic2;
@@ -395,7 +432,8 @@ class SynthVoice implements Voice {
       const v2 = this.ic2 + this.a2 * this.ic1 + this.a3 * v3;
       this.ic1 = 2 * v1 - this.ic1;
       this.ic2 = 2 * v2 - this.ic2;
-      let a = this.amp.next();
+      amp.step();
+      let a = amp.level;
       if (this.killing > 0) {
         this.killing *= 0.995;
         a *= this.killing;
@@ -404,7 +442,7 @@ class SynthVoice implements Voice {
           return;
         }
       }
-      if (this.amp.off) {
+      if (amp.off) {
         this.done = true;
         return;
       }

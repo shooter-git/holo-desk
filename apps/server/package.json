@@ -10,6 +10,7 @@
     "typecheck": "tsc -p ."
   },
   "dependencies": {
+    "@fastify/compress": "9.2.2",
     "@fastify/static": "10.1.6",
     "@fastify/websocket": "11.3.4",
     "@holo/engine": "workspace:*",

@@ -1,6 +1,15 @@
 /** Knobs, faders and meters: the hands-on parts of the mixer and the plugins. */
 import { formatParam, fromUnit, type ParamDef, toUnit } from '@holo/session';
-import { type PointerEvent as ReactPointerEvent, useRef } from 'react';
+import {
+  type KeyboardEvent as ReactKeyboardEvent,
+  type PointerEvent as ReactPointerEvent,
+  type RefObject,
+  useCallback,
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+} from 'react';
 import { engine } from '../audio/engine.ts';
 import { prepare, useFrame } from './frame.ts';
 
@@ -13,7 +22,8 @@ export const formatDb = (db: number): string => (db <= -144 ? '-∞' : `${db > 0
 interface DragOptions {
   onStart?: () => void;
   onMove: (dx: number, dy: number, e: PointerEvent) => void;
-  onEnd?: () => void;
+  /** Always called, so a gesture ends even when the browser took the pointer for a scroll (`cancelled`). */
+  onEnd?: (cancelled: boolean) => void;
 }
 
 /** Pointer drag with capture: works with a mouse, a pen and a finger. */
@@ -35,12 +45,75 @@ export function startDrag(e: ReactPointerEvent, opts: DragOptions): void {
     el.removeEventListener('pointermove', move);
     el.removeEventListener('pointerup', up);
     el.removeEventListener('pointercancel', up);
-    opts.onEnd?.();
+    opts.onEnd?.(ev.type === 'pointercancel');
   };
   el.addEventListener('pointermove', move);
   el.addEventListener('pointerup', up);
   el.addEventListener('pointercancel', up);
 }
+
+/** How far a drag has come from where it began: under this it was a tap. */
+export const TAP = 4;
+
+// ---- keys and the wheel: one gesture per burst ----
+
+/**
+ * Keys and wheel ticks arrive one at a time; a run of them is one gesture (one undo step, one
+ * save): it begins with the first and ends when they stop for a moment.
+ */
+function useBurst(onBegin?: () => void, onEnd?: () => void, idle = 300) {
+  const latest = useRef({ onBegin, onEnd });
+  latest.current = { onBegin, onEnd };
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const flush = useCallback(() => {
+    if (timer.current === null) return;
+    clearTimeout(timer.current);
+    timer.current = null;
+    latest.current.onEnd?.();
+  }, []);
+  useEffect(() => flush, [flush]);
+  return useMemo(
+    () => ({
+      flush,
+      tick(change: () => void) {
+        if (timer.current === null) latest.current.onBegin?.();
+        else clearTimeout(timer.current);
+        change();
+        timer.current = setTimeout(flush, idle);
+      },
+    }),
+    [flush, idle],
+  );
+}
+
+/** React's onWheel is passive, so the page would scroll under the control: listen ourselves. */
+function useWheel(ref: RefObject<HTMLElement | null>, onWheel: (e: WheelEvent) => void): void {
+  const latest = useRef(onWheel);
+  latest.current = onWheel;
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const on = (e: WheelEvent) => {
+      e.preventDefault();
+      latest.current(e);
+    };
+    el.addEventListener('wheel', on, { passive: false });
+    return () => el.removeEventListener('wheel', on);
+  }, [ref]);
+}
+
+/** The keys a slider answers: the arrows step (Shift ten steps, Alt a tenth where it's continuous), Home and End go to the ends. */
+function keyStep(e: ReactKeyboardEvent, fine: boolean): number | 'home' | 'end' | null {
+  let dir = 0;
+  if (e.key === 'ArrowUp' || e.key === 'ArrowRight') dir = 1;
+  else if (e.key === 'ArrowDown' || e.key === 'ArrowLeft') dir = -1;
+  else if (e.key === 'Home') return 'home';
+  else if (e.key === 'End') return 'end';
+  else return null;
+  return dir * (e.shiftKey ? 10 : e.altKey && fine ? 0.1 : 1);
+}
+
+const clamp01 = (x: number) => Math.min(1, Math.max(0, x));
 
 // ---- knob ----
 
@@ -54,6 +127,8 @@ interface KnobProps {
   color?: string;
   label?: string;
   compact?: boolean;
+  /** Snap a drag to the default while it is within this much of it (a pan's centre). */
+  detent?: number;
 }
 
 export function Knob({
@@ -63,11 +138,17 @@ export function Knob({
   onBegin,
   onEnd,
   size = 42,
-  color = '#5cb8ff',
+  color = 'var(--accent)',
   label,
   compact,
+  detent,
 }: KnobProps) {
+  const root = useRef<HTMLDivElement>(null);
   const unit = useRef(toUnit(def, value));
+  // every knob draws its own cap, so each gradient needs an id of its own
+  const reactId = useId();
+  const capId = `knob-cap-${reactId.replace(/[^a-zA-Z0-9]/g, '')}`;
+  const burst = useBurst(onBegin, onEnd);
   const u = toUnit(def, value);
   const a0 = -135;
   const a = a0 + u * 270;
@@ -80,56 +161,78 @@ export function Knob({
   };
   const bipolar = def.min < 0 && def.max > 0 && !def.options;
   const zero = bipolar ? a0 + toUnit(def, 0) * 270 : a0;
+  const name = label ?? def.name;
+  const text = formatParam(def, value);
+  // one step: the parameter's own, or a hundredth of the travel
+  const continuous = !def.step || def.scale === 'log';
+  const stepUnit = continuous ? 0.01 : (def.step as number) / (def.max - def.min);
+  const nudge = (steps: number) => onChange(fromUnit(def, clamp01(u + steps * stepUnit)));
+  useWheel(root, (e) => {
+    const fine = e.shiftKey && continuous ? 0.25 : 1;
+    burst.tick(() => nudge(-Math.sign(e.deltaY) * (continuous ? 2 : 1) * fine));
+  });
+  const lit = Math.abs(a - zero) > 0.5 ? (a > zero ? arc(zero, a) : arc(a, zero)) : null;
   return (
     <div
+      ref={root}
       className="knob"
-      title={`${label ?? def.name}: ${formatParam(def, value)} (double-click resets, Shift for fine)`}
+      role="slider"
+      tabIndex={0}
+      aria-label={name}
+      aria-valuemin={def.min}
+      aria-valuemax={def.max}
+      aria-valuenow={value}
+      aria-valuetext={text}
+      title={`${name}: ${text} (double-click resets, Shift for fine)`}
       onPointerDown={(e) => {
         if (e.button !== 0) return;
+        burst.flush();
         unit.current = toUnit(def, value);
         startDrag(e, {
           onStart: onBegin,
           onMove: (dx, dy, ev) => {
             const speed = ev.shiftKey ? 0.0015 : 0.006;
-            unit.current = Math.min(1, Math.max(0, unit.current + (dx - dy) * speed));
-            onChange(fromUnit(def, unit.current));
+            unit.current = clamp01(unit.current + (dx - dy) * speed);
+            let v = fromUnit(def, unit.current);
+            if (detent !== undefined && Math.abs(v - def.default) <= detent) v = def.default;
+            onChange(v);
           },
           onEnd,
         });
       }}
       onDoubleClick={() => {
+        burst.flush();
         onBegin?.();
         onChange(def.default);
         onEnd?.();
       }}
-      onWheel={(e) => {
-        onChange(
-          fromUnit(
-            def,
-            Math.min(1, Math.max(0, u - Math.sign(e.deltaY) * (def.step ? 1 / (def.max - def.min) : 0.02))),
-          ),
-        );
+      onKeyDown={(e) => {
+        const k = keyStep(e, continuous);
+        if (k === null) return;
+        e.preventDefault();
+        burst.tick(() => {
+          if (k === 'home') onChange(def.min);
+          else if (k === 'end') onChange(def.max);
+          else nudge(k);
+        });
       }}
     >
-      <svg width={size} height={size} role="img" aria-label={label ?? def.name}>
+      <svg width={size} height={size} aria-hidden="true">
         <defs>
-          <radialGradient id="knob-cap" cx="40%" cy="30%" r="80%">
+          <radialGradient id={capId} cx="40%" cy="30%" r="80%">
             <stop offset="0%" stopColor="#4a515c" />
             <stop offset="100%" stopColor="#1c1f24" />
           </radialGradient>
         </defs>
         <path d={arc(a0, a0 + 270)} stroke="#0b0d10" strokeWidth="3.5" fill="none" strokeLinecap="round" />
-        {Math.abs(a - zero) > 0.5 && (
-          <path
-            d={a > zero ? arc(zero, a) : arc(a, zero)}
-            stroke={color}
-            strokeWidth="3.5"
-            fill="none"
-            strokeLinecap="round"
-            style={{ filter: `drop-shadow(0 0 3px ${color})` }}
-          />
+        {lit && (
+          <>
+            {/* a wider, fainter stroke under the arc is its glow: a filter would be repainted on every move */}
+            <path d={lit} strokeWidth="7" fill="none" strokeLinecap="round" style={{ stroke: color, opacity: 0.3 }} />
+            <path d={lit} strokeWidth="3.5" fill="none" strokeLinecap="round" style={{ stroke: color }} />
+          </>
         )}
-        <circle cx={c} cy={c} r={r - 5} fill="url(#knob-cap)" stroke="#000" strokeWidth="1" />
+        <circle cx={c} cy={c} r={r - 5} fill={`url(#${capId})`} stroke="#000" strokeWidth="1" />
         <line
           x1={c + (r - 12) * Math.cos(rad(a)) * 0.3}
           y1={c + (r - 12) * Math.sin(rad(a)) * 0.3}
@@ -140,13 +243,14 @@ export function Knob({
           strokeLinecap="round"
         />
       </svg>
-      {!compact && <span className="knob-value">{formatParam(def, value)}</span>}
-      {!compact && <span className="knob-label">{label ?? def.name}</span>}
+      {!compact && <span className="knob-value">{text}</span>}
+      {!compact && <span className="knob-label">{name}</span>}
     </div>
   );
 }
 
-const PAN: ParamDef = { id: 'pan', name: 'Pan', min: -64, max: 63, default: 0, step: 1 };
+/** Pan, as the mixer counts it: 64 steps each side of the centre, with a detent there (as HO[LO] Remote has). */
+const PAN: ParamDef = { id: 'pan', name: 'Pan', min: -64, max: 64, default: 0, step: 1, unit: 'LR' };
 
 export function PanKnob({
   value,
@@ -159,22 +263,22 @@ export function PanKnob({
   onBegin?: () => void;
   onEnd?: () => void;
 }) {
+  const steps = Math.round(value * 64);
   return (
-    <div className="vstack" style={{ alignItems: 'center', gap: 2 }}>
+    <div className="pan-knob">
       <Knob
         def={PAN}
-        value={Math.round(value * 64)}
+        value={steps}
         onChange={(v) => onChange(Math.max(-1, Math.min(1, v / 64)))}
         onBegin={onBegin}
         onEnd={onEnd}
         size={34}
         compact
+        detent={2}
         label="Pan"
       />
-      <span className="knob-value mono" style={{ fontSize: 10 }}>
-        {Math.round(value * 64) === 0
-          ? 'C'
-          : `${Math.round(value * 64) < 0 ? 'L' : 'R'}${Math.abs(Math.round(value * 64))}`}
+      <span className="knob-value mono pan-readout">
+        {steps === 0 ? 'C' : `${steps < 0 ? 'L' : 'R'}${Math.abs(steps)}`}
       </span>
     </div>
   );
@@ -192,6 +296,9 @@ const meterPos = (g: number) => {
 export function Meter({ id, width = 14, height }: { id: string; width?: number; height: number }) {
   const canvas = useRef<HTMLCanvasElement>(null);
   const hold = useRef({ l: 0, r: 0, t: 0 });
+  // what the last frame drew, to the half pixel: a quiet meter is not repainted
+  const drawn = useRef({ w: 0, h: 0, l: -1, r: -1, hl: -1, hr: -1, over: -1 });
+  const grad = useRef<{ h: number; fill: CanvasGradient } | null>(null);
   useFrame((now) => {
     const ctx = prepare(canvas.current, width, height);
     if (!ctx) return;
@@ -202,24 +309,37 @@ export function Meter({ id, width = 14, height }: { id: string; width?: number; 
       h.r = Math.max(r, now - h.t > 1500 ? 0 : h.r);
       h.t = now;
     }
+    const px = (g: number) => Math.round(meterPos(g) * height * 2) / 2;
+    const pl = px(l);
+    const pr = px(r);
+    const phl = px(h.l);
+    const phr = px(h.r);
+    const over = (h.l > 1 ? 1 : 0) + (h.r > 1 ? 2 : 0);
+    const d = drawn.current;
+    if (d.w === width && d.h === height && d.l === pl && d.r === pr && d.hl === phl && d.hr === phr && d.over === over)
+      return;
+    drawn.current = { w: width, h: height, l: pl, r: pr, hl: phl, hr: phr, over };
     ctx.clearRect(0, 0, width, height);
     ctx.fillStyle = '#07090b';
     ctx.fillRect(0, 0, width, height);
     const bw = (width - 3) / 2;
-    const grad = ctx.createLinearGradient(0, height, 0, 0);
-    grad.addColorStop(0, '#1f9d5b');
-    grad.addColorStop(0.62, '#3ddc84');
-    grad.addColorStop(0.8, '#e2d54a');
-    grad.addColorStop(0.9, '#f59a3d');
-    grad.addColorStop(0.95, '#ff4f5e');
-    [l, r].forEach((g, i) => {
+    if (grad.current?.h !== height) {
+      const fill = ctx.createLinearGradient(0, height, 0, 0);
+      fill.addColorStop(0, '#1f9d5b');
+      fill.addColorStop(0.62, '#3ddc84');
+      fill.addColorStop(0.8, '#e2d54a');
+      fill.addColorStop(0.9, '#f59a3d');
+      fill.addColorStop(0.95, '#ff4f5e');
+      grad.current = { h: height, fill };
+    }
+    const fill = grad.current.fill;
+    [pl, pr].forEach((ph, i) => {
       const x = 1 + i * (bw + 1);
-      const ph = meterPos(g) * height;
       ctx.fillStyle = '#13171b';
       ctx.fillRect(x, 0, bw, height);
-      ctx.fillStyle = grad;
+      ctx.fillStyle = fill;
       ctx.fillRect(x, height - ph, bw, ph);
-      const hp = meterPos(i ? h.r : h.l) * height;
+      const hp = i ? phr : phl;
       if (hp > 1) {
         ctx.fillStyle = (i ? h.r : h.l) > 1 ? '#ff4f5e' : '#e8edf3';
         ctx.fillRect(x, height - hp, bw, 1.5);
@@ -232,7 +352,7 @@ export function Meter({ id, width = 14, height }: { id: string; width?: number; 
       ctx.fillRect(0, y, width, 1);
     }
   });
-  return <canvas ref={canvas} style={{ width, height, borderRadius: 3, display: 'block' }} />;
+  return <canvas ref={canvas} className="meter-canvas" style={{ width, height }} />;
 }
 
 // ---- fader ----
@@ -243,20 +363,36 @@ interface FaderProps {
   onBegin?: () => void;
   onEnd?: () => void;
   height: number;
+  label?: string;
 }
 
 const SCALE = [6, 0, -6, -12, -24, -48];
 
-export function Fader({ db, onChange, onBegin, onEnd, height }: FaderProps) {
+export function Fader({ db, onChange, onBegin, onEnd, height, label = 'Volume' }: FaderProps) {
+  const root = useRef<HTMLDivElement>(null);
   const pos = dbToFader(db);
   const travel = height - 26;
   const p = useRef(pos);
+  const burst = useBurst(onBegin, onEnd);
+  const step = (by: number) => onChange(Math.max(-144, Math.min(6, Math.round((db + by) * 10) / 10)));
+  useWheel(root, (e) => burst.tick(() => step(-Math.sign(e.deltaY) * (e.shiftKey ? 0.1 : 1))));
   return (
     <div
-      style={{ position: 'relative', width: 30, height, touchAction: 'none', cursor: 'ns-resize' }}
+      ref={root}
+      className="fader"
+      role="slider"
+      tabIndex={0}
+      aria-label={label}
+      aria-orientation="vertical"
+      aria-valuemin={-144}
+      aria-valuemax={6}
+      aria-valuenow={Math.round(db * 10) / 10}
+      aria-valuetext={`${formatDb(db)} dB`}
+      style={{ height }}
       title={`${formatDb(db)} dB (double-click: 0 dB)`}
       onPointerDown={(e) => {
         if (e.button !== 0) return;
+        burst.flush();
         p.current = dbToFader(db);
         startDrag(e, {
           onStart: onBegin,
@@ -269,52 +405,32 @@ export function Fader({ db, onChange, onBegin, onEnd, height }: FaderProps) {
         });
       }}
       onDoubleClick={() => {
+        burst.flush();
         onBegin?.();
         onChange(0);
         onEnd?.();
       }}
+      onKeyDown={(e) => {
+        const k = keyStep(e, true);
+        if (k === null) return;
+        e.preventDefault();
+        burst.tick(() => {
+          if (k === 'home') onChange(-144);
+          else if (k === 'end') onChange(6);
+          else step(k);
+        });
+      }}
     >
-      {/* the slot */}
-      <div
-        style={{
-          position: 'absolute',
-          left: 13,
-          top: 13,
-          bottom: 13,
-          width: 4,
-          borderRadius: 2,
-          background: '#07090b',
-          boxShadow: 'inset 0 1px 2px #000, 0 1px 0 rgba(255,255,255,0.05)',
-        }}
-      />
+      <div className="fader-slot" />
       {SCALE.map((d) => (
         <div
           key={d}
-          style={{
-            position: 'absolute',
-            left: 0,
-            top: 13 + (1 - dbToFader(d)) * travel - 0.5,
-            width: d === 0 ? 30 : 8,
-            height: 1,
-            background: d === 0 ? 'rgba(92,184,255,0.35)' : '#3a414c',
-          }}
+          className={`fader-tick${d === 0 ? ' zero' : ''}`}
+          style={{ top: 13 + (1 - dbToFader(d)) * travel - 0.5 }}
         />
       ))}
-      {/* the cap */}
-      <div
-        style={{
-          position: 'absolute',
-          left: 3,
-          top: (1 - pos) * travel + 3,
-          width: 24,
-          height: 20,
-          borderRadius: 4,
-          background: 'linear-gradient(180deg, #5b636f 0%, #3a414b 45%, #2b3037 55%, #474e59 100%)',
-          border: '1px solid #000',
-          boxShadow: '0 3px 6px rgba(0,0,0,0.6), inset 0 1px 0 rgba(255,255,255,0.18)',
-        }}
-      >
-        <div style={{ position: 'absolute', left: 3, right: 3, top: 9, height: 1, background: '#e8edf3' }} />
+      <div className="fader-cap" style={{ top: (1 - pos) * travel + 3 }}>
+        <div className="fader-cap-line" />
       </div>
     </div>
   );

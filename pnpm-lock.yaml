@@ -45,6 +45,9 @@ importers:
 
   apps/server:
     dependencies:
+      '@fastify/compress':
+        specifier: 9.2.2
+        version: 9.2.2
       '@fastify/static':
         specifier: 10.1.6
         version: 10.1.6
@@ -201,6 +204,9 @@ packages:
 
   '@fastify/ajv-compiler@4.0.7':
     resolution: {integrity: sha512-VP0yIfwlc1ohj733keYDqyHm1VWeP9VQxYomunhr90jkC4aNNibbkrRiaNgPgqj1ORxUenILR4qzA/ppYBNAtQ==}
+
+  '@fastify/compress@9.2.2':
+    resolution: {integrity: sha512-FF1CSw1ED4f2lZmYDXmpHgDJLj752JBr7Tdv6Z5SYkZmbvwzlagWwKvF3OGWPzbL7pRFgoki6rNyh/yu8tb92w==}
 
   '@fastify/deepmerge@3.2.2':
     resolution: {integrity: sha512-155eqA/WMQdN6gUD4RrhS2K0Pcz2Ou9pQ86L0sipOpP9ONbTA6oYw/hW4VdBjR4egcDHqmWUK9x80oUX7S1mDQ==}
@@ -759,6 +765,10 @@ packages:
   magic-string@1.4.3:
     resolution: {integrity: sha512-z12OxmaPGE0F4xlpGdjuAUckipLpQlTAuAmyGhNoD7ODpYUzvDfvtxUbjM/jwznyP178oju/KDdyi220wNJ0RQ==}
 
+  mime-db@1.54.0:
+    resolution: {integrity: sha512-aU5EJuIN2WDemCcAp2vFBfp/m4EAhWJnUNSSw0ixs7/kXbd6Pg64EmwJkNdFhB8aWt1sH2CTXrLxo/iAGV3oPQ==}
+    engines: {node: '>= 0.6'}
+
   mime@3.0.0:
     resolution: {integrity: sha512-jSCU7/VB1loIWBZe14aEYHU/+1UMEHoaO7qxCOVJOw9GgH72VAWppxNcjU+x9a2k3GSIBXNKxXQFqRvvZ7vr3A==}
     engines: {node: '>=10.0.0'}
@@ -1098,6 +1108,12 @@ snapshots:
       ajv: 8.20.0
       ajv-formats: 3.0.1(ajv@8.20.0)
       fast-uri: 4.2.2
+
+  '@fastify/compress@9.2.2':
+    dependencies:
+      '@fastify/accept-negotiator': 2.1.1
+      fastify-plugin: 6.0.1
+      mime-db: 1.54.0
 
   '@fastify/deepmerge@3.2.2': {}
 
@@ -1526,6 +1542,8 @@ snapshots:
   magic-string@1.4.3:
     dependencies:
       '@jridgewell/sourcemap-codec': 1.6.0
+
+  mime-db@1.54.0: {}
 
   mime@3.0.0: {}
 

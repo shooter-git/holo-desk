@@ -3,7 +3,7 @@
  * (offset, stretch, gain, fades), and the arithmetic of trimming, stretching and fading them, shared
  * by the tracks area and the Audio Editor.
  */
-import { type AudioClip, type Project, type Region, secondsToTick, tickToSeconds } from '@holo/session';
+import { type AudioClip, PPQ, type Project, type Region, secondsToTick, tickToSeconds } from '@holo/session';
 import { engine } from '../audio/engine.ts';
 import { audioFiles } from '../audio/files.ts';
 
@@ -50,10 +50,16 @@ export function drawClipWave(
   const perPeak = peaks.rate / peaks.step;
   const from = Math.max(0, Math.floor(view.tickToX(style.from)));
   const to = Math.min(style.canvasWidth, Math.ceil(view.tickToX(style.to)));
+  // one tempo: seconds are a straight line of ticks, so skip the tempo-map walk per pixel
+  const single = tempo.length === 1 ? 60 / ((tempo[0]?.bpm ?? 120) * PPQ) : 0;
+  const at = (px: number) => {
+    const tick = Math.max(0, view.xToTick(px));
+    return (single ? tick * single : tickToSeconds(tempo, tick)) - s0;
+  };
   ctx.fillStyle = style.color;
-  let sa = tickToSeconds(tempo, Math.max(0, view.xToTick(from))) - s0;
+  let sa = at(from);
   for (let px = from; px < to; px++) {
-    const sb = tickToSeconds(tempo, Math.max(0, view.xToTick(px + 1))) - s0;
+    const sb = at(px + 1);
     const i0 = Math.floor((clip.offset + sa / clip.stretch) * perPeak);
     const i1 = Math.max(i0 + 1, Math.ceil((clip.offset + sb / clip.stretch) * perPeak));
     if (i0 >= peaks.min.length) break;

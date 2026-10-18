@@ -3,18 +3,12 @@
  * bridge to your creations. It has no accounts and no passwords: it listens on this machine only,
  * and your own devices reach it through Tailscale.
  */
-import {
-  copyFileSync,
-  createReadStream,
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  readdirSync,
-  rmSync,
-  statSync,
-} from 'node:fs';
+import { createHash } from 'node:crypto';
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { basename, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
+import { constants as zlib } from 'node:zlib';
+import fastifyCompress from '@fastify/compress';
 import fastifyStatic from '@fastify/static';
 import fastifyWebsocket from '@fastify/websocket';
 import { engineLabel, engineRelation, studioEngine } from '@holo/music';
@@ -35,7 +29,7 @@ import {
   SessionError,
   writeMidi,
 } from '@holo/session';
-import Fastify, { type FastifyInstance } from 'fastify';
+import Fastify, { type FastifyInstance, type FastifyReply } from 'fastify';
 import type { Config } from './config.ts';
 import { Creations, sessionText } from './creations.ts';
 import { Store } from './db.ts';
@@ -70,6 +64,16 @@ export async function buildApp(config: Config): Promise<{ app: FastifyInstance; 
   // every response may be part of a cross-origin isolated page
   app.addHook('onSend', async (_req, reply) => {
     for (const [k, v] of Object.entries(ISOLATION)) reply.header(k, v);
+  });
+
+  // JSON and text go out compressed (a song is a fifth of its size as brotli); other devices reach
+  // the server through a proxy that compresses nothing. Audio is left alone, and the studio's own
+  // files come compressed from the build, so a light setting is enough here
+  await app.register(fastifyCompress, {
+    global: true,
+    threshold: 1024,
+    encodings: ['br', 'gzip'],
+    brotliOptions: { params: { [zlib.BROTLI_PARAM_QUALITY]: 4 } },
   });
 
   app.setErrorHandler((err, _req, reply) => {
@@ -239,19 +243,38 @@ export async function buildApp(config: Config): Promise<{ app: FastifyInstance; 
     }
   });
 
+  /**
+   * A file sent from disk, with its length, a tag and a date for the browser to check it by, and
+   * ranges (what the static plugin does for the studio's own files: see below).
+   */
+  const sendFile = (reply: FastifyReply, path: string, type: string, cacheControl: string) =>
+    reply
+      .type(type)
+      .header('cache-control', cacheControl)
+      .sendFile(basename(path), dirname(path), { contentType: false });
+  // a sample is kept a week, then checked: a pack can be brought up to date in place
+  const SAMPLE_CACHE = 'public, max-age=604800';
+
   app.get<{ Params: { pack: string; name: string } }>('/api/packs/:pack/instruments/:name', async (req, reply) => {
-    return packs.instrument(req.params.pack, req.params.name) ?? reply.code(404).send({ error: 'No such instrument' });
+    const instrument = packs.instrument(req.params.pack, req.params.name);
+    if (!instrument) return reply.code(404).send({ error: 'No such instrument' });
+    // tagged by its content, so a studio that has it already gets a short answer and no body
+    const body = JSON.stringify(instrument);
+    const etag = `W/"${createHash('sha256').update(body).digest('base64url').slice(0, 16)}"`;
+    reply.header('etag', etag).header('cache-control', 'no-cache');
+    if (req.headers['if-none-match'] === etag) return reply.code(304).send();
+    return reply.type('application/json; charset=utf-8').send(body);
   });
   app.get<{ Params: { pack: string; name: string } }>('/api/packs/:pack/impulses/:name', async (req, reply) => {
     const path = packs.impulse(req.params.pack, req.params.name);
     if (!path) return reply.code(404).send({ error: 'No such impulse response' });
-    return reply.type('audio/wav').header('cache-control', 'public, max-age=604800').send(packs.stream(path));
+    return sendFile(reply, path, 'audio/wav', SAMPLE_CACHE);
   });
   app.get<{ Params: { pack: string; '*': string } }>('/packs/:pack/files/*', async (req, reply) => {
     const path = packs.file(req.params.pack, req.params['*']);
     if (!path) return reply.code(404).send({ error: 'No such file' });
     const type = path.endsWith('.flac') ? 'audio/flac' : path.endsWith('.ogg') ? 'audio/ogg' : 'audio/wav';
-    return reply.type(type).header('cache-control', 'public, max-age=604800').send(packs.stream(path));
+    return sendFile(reply, path, type, SAMPLE_CACHE);
   });
 
   // ---- creations ----
@@ -449,10 +472,12 @@ export async function buildApp(config: Config): Promise<{ app: FastifyInstance; 
     const found = readdirSync(dir).find((f) => f.startsWith(`${req.params.file}.`));
     if (!found) return reply.code(404).send({ error: 'No such file' });
     const ext = found.slice(found.lastIndexOf('.'));
-    return reply
-      .type(AUDIO_EXT[ext] ?? 'application/octet-stream')
-      .header('cache-control', 'private, max-age=31536000, immutable')
-      .send(createReadStream(join(dir, found)));
+    return sendFile(
+      reply,
+      join(dir, found),
+      AUDIO_EXT[ext] ?? 'application/octet-stream',
+      'private, max-age=31536000, immutable',
+    );
   });
 
   // ---- bounces: songs rendered to WAV by the studio, kept with the song ----
@@ -499,10 +524,8 @@ export async function buildApp(config: Config): Promise<{ app: FastifyInstance; 
     const file = req.params.file;
     const path = join(bounceDir(req.params.id), file);
     if (!SAFE_FILE.test(file) || !existsSync(path)) return reply.code(404).send({ error: 'No such bounce' });
-    return reply
-      .type('audio/wav')
-      .header('content-disposition', `attachment; filename="${file}"`)
-      .send(createReadStream(path));
+    reply.header('content-disposition', `attachment; filename="${file}"`);
+    return sendFile(reply, path, 'audio/wav', 'no-cache');
   });
 
   // ---- the live channel, from the command line ----
@@ -543,16 +566,22 @@ export async function buildApp(config: Config): Promise<{ app: FastifyInstance; 
     return { seconds, notes: await live.listen(seconds * 1000) };
   });
 
-  // ---- the studio itself ----
+  // ---- the studio itself (and, through its sendFile, the files sent from disk above) ----
 
-  if (existsSync(config.webDir)) {
-    await app.register(fastifyStatic, {
-      root: config.webDir,
-      wildcard: false,
-      setHeaders(reply, path) {
+  const webDir = existsSync(config.webDir) ? config.webDir : null;
+  await app.register(fastifyStatic, {
+    ...(webDir ? { root: webDir } : { serve: false }),
+    wildcard: false,
+    // the build writes .br and .gz beside its files: the browser gets whichever it takes
+    preCompressed: true,
+    cacheControl: false,
+    setHeaders(reply, path) {
+      // the studio's hashed files never change; the page and the manifests are checked each time
+      if (webDir && path.startsWith(webDir))
         reply.header('cache-control', path.includes('/assets/') ? 'public, max-age=31536000, immutable' : 'no-cache');
-      },
-    });
+    },
+  });
+  if (webDir) {
     app.setNotFoundHandler((req, reply) => {
       if (req.method === 'GET' && !req.url.startsWith('/api') && !req.url.startsWith('/packs')) {
         return reply.header('cache-control', 'no-cache').sendFile('index.html');

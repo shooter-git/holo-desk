@@ -36,11 +36,13 @@ import {
 } from '@holo/session';
 import { bounce, bounceRange } from '../audio/bounce.ts';
 import { companion } from '../audio/companion.ts';
-import { engine, type RecordedTake } from '../audio/engine.ts';
+import { engine, type RecordedTake, warmEngine } from '../audio/engine.ts';
 import { audioFiles } from '../audio/files.ts';
 import { midi } from '../audio/midi.ts';
 import { library } from '../audio/samples.ts';
 import { ApiError, api } from './api.ts';
+// (live.ts imports this module too: neither uses the other while loading, so the cycle is harmless)
+import { reconnectSoon } from './live.ts';
 import { store, toast } from './store.ts';
 
 const MAX_UNDO = 300;
@@ -116,6 +118,33 @@ export function scheduleSave(delay = 700): void {
   saveTimer = window.setTimeout(() => void saveNow(), delay);
 }
 
+/**
+ * Save soon, with whatever else arrives meanwhile in the one save (the AI's changes come in bursts).
+ * Resolves with the revision the song as it is now was saved under (or null if it couldn't be).
+ */
+export function saveSoon(delay = 150): Promise<number | null> {
+  const s = store.get();
+  if (!s.project) return Promise.resolve(null);
+  if (s.saveState === 'saved' || s.saveState === 'conflict') return Promise.resolve(s.serverRevision);
+  if (!awaited) {
+    let resolve: (revision: number | null) => void = () => undefined;
+    const promise = new Promise<number | null>((r) => {
+      resolve = r;
+    });
+    awaited = { promise, resolve };
+  }
+  scheduleSave(delay);
+  return awaited.promise;
+}
+/** Those waiting for the next save that takes in the song as it is now. */
+let awaited: { promise: Promise<number | null>; resolve: (revision: number | null) => void } | null = null;
+
+function settle(revision: number | null): void {
+  const done = awaited;
+  awaited = null;
+  done?.resolve(revision);
+}
+
 /** Save now. Resolves with the saved revision (or null if it couldn't). */
 export async function saveNow(): Promise<number | null> {
   const s = store.get();
@@ -125,7 +154,10 @@ export async function saveNow(): Promise<number | null> {
     saveAgain = true;
     return null;
   }
-  if (s.saveState === 'saved' || s.saveState === 'conflict') return s.serverRevision;
+  if (s.saveState === 'saved' || s.saveState === 'conflict') {
+    settle(s.serverRevision);
+    return s.serverRevision;
+  }
   saving = true;
   store.set({ saveState: 'saving' });
   try {
@@ -133,8 +165,10 @@ export async function saveNow(): Promise<number | null> {
     const now = store.get();
     store.set({ serverRevision: r.revision, saveState: now.project === project ? 'saved' : 'dirty' });
     // the host answered: the live channel needn't wait for its next retry
-    if (now.connection === 'offline') void import('./live.ts').then((m) => m.reconnectSoon());
+    if (now.connection === 'offline') reconnectSoon();
+    // (changed meanwhile: those waiting get the save that takes the change in)
     if (now.project !== project) scheduleSave(200);
+    else settle(r.revision);
     return r.revision;
   } catch (err) {
     if (err instanceof ApiError && err.status === 409) {
@@ -144,6 +178,7 @@ export async function saveNow(): Promise<number | null> {
       store.set({ saveState: 'offline' });
       scheduleSave(5000);
     }
+    settle(null);
     return null;
   } finally {
     saving = false;
@@ -230,6 +265,7 @@ export function exportMidi(): void {
 
 export async function startup(): Promise<void> {
   void library.refresh();
+  warmEngine();
   void api
     .settings()
     .then((s) => store.set({ middleC: s.middleC }))
@@ -240,18 +276,18 @@ export async function startup(): Promise<void> {
   } catch {
     id = null;
   }
-  try {
-    if (id) {
-      load(await api.project(id));
-      goToLinkedBar();
-      return;
-    }
-  } catch {
-    // gone: fall through to the newest one
+  // the last song and the list are asked for together: a song that's gone costs no second round trip
+  const last = id ? api.project(id).catch(() => null) : Promise.resolve(null);
+  const list = api.projects();
+  list.catch(() => undefined);
+  const project = await last;
+  if (project) {
+    load(project);
+    goToLinkedBar();
+    return;
   }
   try {
-    const list = await api.projects();
-    const first = list[0];
+    const first = (await list)[0];
     if (first) load(await api.project(first.id));
     else load(await api.create('My First Song'));
   } catch {
@@ -394,12 +430,15 @@ export function setShareDevice(on: boolean): void {
   companion.setExclusive(!on);
 }
 
+/** The song's instruments into the audio thread, the selected and armed tracks' first (they're the ones about to be played). */
 export function loadInstruments(project: Project): void {
   if (!engine.ctx) return;
+  const selected = store.get().selectedTrack;
   for (const t of project.tracks) {
+    const first = t.id === selected || t.armed;
     for (const i of [t.instrument, ...t.articulations.map((a) => a.instrument)]) {
       // a Performance instrument's live notes play on its pack's plain sampler
-      if (i.type === 'sampler' || i.type === 'performance') void library.ensure(i.pack, i.name);
+      if (i.type === 'sampler' || i.type === 'performance') void library.ensure(i.pack, i.name, first ? 0 : 1);
     }
   }
 }
@@ -819,7 +858,8 @@ export function gestureChange(ops: Op[]): void {
   try {
     const next = applyOps(s.project, ops);
     store.set({ project: next, saveState: 'dirty' });
-    engine.sync(next);
+    // (the pointer moves far more often than frames are drawn: the audio thread follows once a frame)
+    engine.syncSoon(next);
   } catch {
     // ignore a change that no longer applies mid-drag
   }
@@ -845,6 +885,22 @@ export function addPlugin(target: string, type: string, slot: 'inserts' | 'midiF
 export function addBus(name = 'Bus'): string | null {
   const bus = newBus(name);
   return apply([{ op: 'addBus', bus }], 'New Bus') ? bus.id : null;
+}
+
+/** A new bus with a send to it from a channel, as one undo step (undone, the bus goes with the send). */
+export function addBusWithSend(target: string, name = 'Bus', level = -12): string | null {
+  const p = store.get().project;
+  const channel =
+    target === 'master'
+      ? p?.master
+      : (p?.tracks.find((t) => t.id === target)?.channel ?? p?.buses.find((b) => b.id === target)?.channel);
+  if (!channel) return null;
+  const bus = newBus(name);
+  const ops: Op[] = [
+    { op: 'addBus', bus },
+    { op: 'updateChannel', target, patch: { sends: [...channel.sends, { bus: bus.id, level, pre: false }] } },
+  ];
+  return apply(ops, 'New Bus') ? bus.id : null;
 }
 
 // ---- regions ----

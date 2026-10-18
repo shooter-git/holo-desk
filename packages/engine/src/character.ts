@@ -124,9 +124,12 @@ export class StereoWidth implements Effect {
       this.lowL = new Float32Array(n);
       this.lowR = new Float32Array(n);
     }
-    this.lowL.set(l.subarray(0, n));
-    this.lowR.set(r.subarray(0, n));
-    this.low.process(this.lowL, this.lowR, n);
+    const { lowL, lowR } = this;
+    for (let i = 0; i < n; i++) {
+      lowL[i] = l[i] as number;
+      lowR[i] = r[i] as number;
+    }
+    this.low.process(lowL, lowR, n);
     for (let i = 0; i < n; i++) {
       // each side loses its own lows and gets both sides' lows, averaged
       const d = 0.5 * ((this.lowL[i] as number) - (this.lowR[i] as number));
@@ -228,7 +231,9 @@ export class TapeWarmth implements Effect {
 
 /** A slow random wobble (std about 0.5): normal points cosine-joined, about 2.2 points per cycle of `rate`. */
 class SmoothRandom {
-  private step = 2;
+  /** The last draw step() made (left here: a call that returns a double allocates when it isn't inlined). */
+  value = 0;
+  private size = 2;
   private pos = 0;
   private p0 = 0;
   private p1 = 0;
@@ -239,17 +244,16 @@ class SmoothRandom {
     this.p1 = r.normal();
   }
   setRate(rate: number, sr: number): void {
-    this.step = Math.max(2, Math.floor(sr / (rate * 2.2)));
+    this.size = Math.max(2, Math.floor(sr / (rate * 2.2)));
   }
-  next(): number {
-    const u = 0.5 - 0.5 * Math.cos((Math.PI * this.pos) / this.step);
-    const x = (this.p0 * (1 - u) + this.p1 * u) * (0.5 / 0.8);
-    if (++this.pos >= this.step) {
+  step(): void {
+    const u = 0.5 - 0.5 * Math.cos((Math.PI * this.pos) / this.size);
+    this.value = (this.p0 * (1 - u) + this.p1 * u) * (0.5 / 0.8);
+    if (++this.pos >= this.size) {
       this.pos = 0;
       this.p0 = this.p1;
       this.p1 = this.r.normal();
     }
-    return x;
   }
 }
 
@@ -339,13 +343,17 @@ export class WowFlutter implements Effect {
     }
     const sr = this.host.sr;
     const mask = WOW_SIZE - 1;
-    const { wow, flutter, leak, bound, bufL, bufR } = this;
+    const { wow, flutter, leak, bound, bufL, bufR, slowRand, quickRand } = this;
     const wInc = this.wr / sr;
     const fInc = this.fr / sr;
     for (let i = 0; i < n; i++) {
+      // (the slow draw before the quick, as the sum reads them)
+      slowRand.step();
+      const slow = slowRand.value;
+      quickRand.step();
       const dev =
-        wow * (2 * this.slowRand.next() + 0.6 * Math.sin(2 * Math.PI * this.wowPhase)) +
-        flutter * (Math.sin(2 * Math.PI * this.flutterPhase + this.phi) + 0.4 * this.quickRand.next());
+        wow * (2 * slow + 0.6 * Math.sin(2 * Math.PI * this.wowPhase)) +
+        flutter * (Math.sin(2 * Math.PI * this.flutterPhase + this.phi) + 0.4 * quickRand.value);
       this.wowPhase += wInc;
       if (this.wowPhase >= 1) this.wowPhase -= 1;
       this.flutterPhase += fInc;

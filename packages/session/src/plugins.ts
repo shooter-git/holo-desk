@@ -499,9 +499,12 @@ export function defaultParams(type: string): Record<string, number> {
   return Object.fromEntries(def.params.map((p) => [p.id, p.default]));
 }
 
+/** Each plugin type's parameters by id (the engine asks for them every time a setting moves). */
+const PARAMS_BY_ID = new Map(PLUGINS.map((p) => [p.type, new Map(p.params.map((x) => [x.id, x]))]));
+
 /** A parameter's value, from its stored value or its default, kept inside its range. */
 export function paramValue(type: string, params: Record<string, number>, id: string): number {
-  const p = BY_TYPE.get(type)?.params.find((x) => x.id === id);
+  const p = PARAMS_BY_ID.get(type)?.get(id);
   if (!p) return params[id] ?? 0;
   const v = params[id] ?? p.default;
   return Math.min(p.max, Math.max(p.min, v));

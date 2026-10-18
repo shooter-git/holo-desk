@@ -19,6 +19,7 @@ import {
   EVENT_SIZE,
   type FromWorklet,
   frameToTick,
+  type GraphSpec,
   type InputSpec,
   impulseBuffers,
   instrumentSpec,
@@ -49,7 +50,7 @@ import {
 } from '@holo/engine';
 import type { CompanionDevice } from '@holo/engine/companion';
 import { type Project, projectEnd, type Track } from '@holo/session';
-import { aheadThreads, startAhead } from './ahead.ts';
+import { aheadThreads, startAhead, warmAhead } from './ahead.ts';
 import { companion } from './companion.ts';
 import { audioFiles } from './files.ts';
 import ImpulseWorker from './impulse.worker.ts?worker';
@@ -57,6 +58,18 @@ import { instrumentManifest, sampleFile } from './pack-files.ts';
 import processorUrl from './worklet/processor.ts?worker&url';
 
 export type LatencyMode = 'lowest' | 'balanced' | 'safe';
+
+/** How long an instrument no track plays keeps its samples (an undo often brings it back). */
+const FORGET_AFTER = 30_000;
+
+/** The audio thread's and the workers' scripts into the browser's cache, so the Start click doesn't wait for them. */
+export function warmEngine(): void {
+  if (typeof fetch !== 'function') return;
+  void fetch(processorUrl).catch(() => undefined);
+  warmAhead();
+}
+
+let isolationWarned = false;
 
 const HINT: Record<LatencyMode, AudioContextLatencyCategory | number> = {
   lowest: 0,
@@ -102,15 +115,39 @@ export class AudioEngine {
   private nums = new Map<string, number>();
   private nextNum = 1;
   private sentTracks = new Map<string, Track['regions']>();
-  private sentTempo = '';
+  /** The tempo and meter lists the audio thread has (the session shares what an edit leaves alone, so the same lists are the same tempo). */
+  private sentTempo: { tempo: Project['tempo']; meter: Project['meter'] } | null = null;
+  /** Goes up with each tempo map sent: the cycle's frames and the graph's automation depend on it. */
+  private tempoGen = 0;
   private sentGraph = '';
+  /** What the graph was last compiled from: the same lists make the same graph. */
+  private graphFrom: {
+    tracks: Project['tracks'];
+    buses: Project['buses'];
+    master: Project['master'];
+    tempoGen: number;
+  } | null = null;
   private sentCycle = '';
+  /** The song last brought up to date (the same one again has nothing new). */
+  private synced: Project | null = null;
+  /** A gesture's sync left planned parts for its end. */
+  private partsDeferred = false;
+  private livePending: Project | null = null;
+  private liveFrame = 0;
   segments: TempoSegment[] = [{ frame: 0, tick: 0, framesPerTick: 25 }];
   private project: Project | null = null;
   private liveFallback: number[] = [];
   private liveScheduled = false;
   private samplers = new Set<string>();
+  /** Samplers whose samples are in shared memory: they outlive the threads, so a restart needn't load them again. */
+  private kept = new Map<string, SamplerSpec>();
+  /** Sampler keys the song's tracks play (as of the last graph). */
+  private usedSamplers = new Set<string>();
+  /** Samplers no track plays, and since when: let go after a grace. */
+  private unused = new Map<string, number>();
+  private unusedTimer: ReturnType<typeof setTimeout> | null = null;
   private restartListeners = new Set<(keys: string[]) => void>();
+  private forgetListeners = new Set<(keys: string[]) => void>();
   private errorListeners = new Set<(message: string) => void>();
   latencyMode: LatencyMode = 'balanced';
   private lowLatency = true;
@@ -123,6 +160,8 @@ export class AudioEngine {
   private impulsesSent = new Set<string>();
   private impulseWorker: Worker | null = null;
   private sentInputs = '';
+  /** The track list the inputs were last worked out from. */
+  private inputTracks: Project['tracks'] | null = null;
   private inputDevice = '';
   private inputStream: MediaStream | null = null;
   private inputSource: MediaStreamAudioSourceNode | null = null;
@@ -185,6 +224,12 @@ export class AudioEngine {
     node.connect(ctx.destination);
     node.port.onmessage = (e: MessageEvent<FromWorklet>) => this.onMessage(e.data);
     const shared = globalThis.crossOriginIsolated === true && typeof SharedArrayBuffer !== 'undefined';
+    if (!shared && window.isSecureContext && !isolationWarned) {
+      isolationWarned = true;
+      console.warn(
+        '[engine] This page is not cross-origin isolated (no Cross-Origin-Opener-Policy / Cross-Origin-Embedder-Policy headers): without shared memory, live MIDI and the meters go by message, and the song is not rendered ahead on worker threads.',
+      );
+    }
     let ring: SharedArrayBuffer | null = null;
     let meters: SharedArrayBuffer | null = null;
     let transport: SharedArrayBuffer | null = null;
@@ -225,14 +270,25 @@ export class AudioEngine {
     this.sentTracks.clear();
     this.sentParts.clear();
     this.perfSent.clear();
-    this.sentTempo = this.sentGraph = this.sentCycle = this.sentInputs = '';
+    this.sentTempo = null;
+    this.graphFrom = null;
+    this.synced = null;
+    this.inputTracks = null;
+    this.sentGraph = this.sentCycle = this.sentInputs = '';
     this.audioSent.clear();
     this.impulsesSent.clear();
     this.closeInput();
-    // a new audio thread needs its samples again: whoever loaded them sends them anew
+    // a new audio thread needs its samples again: those in shared memory are handed over as they
+    // are (the memory outlives the threads); whoever loaded the rest loads them anew
+    const again: string[] = [];
     const keys = [...this.samplers];
     this.samplers.clear();
-    for (const fn of this.restartListeners) fn(keys);
+    for (const key of keys) {
+      const spec = this.kept.get(key);
+      if (spec) this.addSampler(spec);
+      else again.push(key);
+    }
+    if (again.length) for (const fn of this.restartListeners) fn(again);
     if (this.project) this.sync(this.project);
     this.post({ type: 'lowLatency', on: this.lowLatency });
   }
@@ -333,50 +389,106 @@ export class AudioEngine {
 
   /** Bring the audio thread up to date with the session: only what changed is sent. */
   sync(project: Project): void {
+    // (a full pass covers whatever a gesture still had waiting)
+    this.livePending = null;
+    this.syncNow(project, false);
+  }
+
+  /**
+   * A gesture's change (a fader, a knob, the tempo being dragged): the audio thread follows once a
+   * frame, with the slow work (planning parts) left for the gesture's end.
+   */
+  syncSoon(project: Project): void {
+    this.project = project;
+    this.livePending = project;
+    if (this.liveFrame) return;
+    this.liveFrame = nextFrame(() => {
+      this.liveFrame = 0;
+      const p = this.livePending;
+      this.livePending = null;
+      if (p) this.syncNow(p, true);
+    });
+  }
+
+  /**
+   * What changed is found by what the session shares: an edit keeps every list it leaves alone, so
+   * the same tempo list, track list or regions are the same music, without reading through them.
+   */
+  private syncNow(project: Project, live: boolean): void {
     this.project = project;
     if (!this.port) return;
     const sr = this.sampleRate;
-    const tempoKey = JSON.stringify([project.tempo, project.meter]);
-    if (tempoKey !== this.sentTempo) {
-      this.segments = compileTempo(project, sr);
-      this.post({ type: 'tempo', segments: this.segments, ppq: 960, ...meterTicks(project) });
-      this.sentTempo = tempoKey;
-      this.sentTracks.clear();
-      this.sentCycle = '';
-    }
-    const graph = compileGraph(project, (id) => this.numOf(id), this.segments);
-    const graphKey = JSON.stringify(graph);
-    if (graphKey !== this.sentGraph) {
-      this.post({ type: 'graph', graph });
-      this.sentGraph = graphKey;
-      if (this.ahead) for (const m of this.ahead.layout(graph, this.playing)) this.post(m);
-    }
-    for (const t of project.tracks) {
-      const planned = isPlanned(t);
-      if (planned && this.sentParts.get(t.id) !== partKey(t, project)) void this.syncPart(t, project);
-      if (!planned && this.sentParts.has(t.id)) {
-        this.sentParts.delete(t.id);
-        this.post({ type: 'plans', num: this.numOf(t.id), plans: null });
+    if (project !== this.synced || (this.partsDeferred && !live)) {
+      this.synced = project;
+      if (!live) this.partsDeferred = false;
+      if (!this.sentTempo || this.sentTempo.tempo !== project.tempo || this.sentTempo.meter !== project.meter) {
+        const tick = this.sentTempo ? this.positionTick() : null;
+        this.segments = compileTempo(project, sr);
+        this.post({ type: 'tempo', segments: this.segments, ppq: 960, ...meterTicks(project) });
+        this.sentTempo = { tempo: project.tempo, meter: project.meter };
+        this.tempoGen++;
+        this.sentTracks.clear();
+        this.sentCycle = '';
+        // the playhead keeps its place in the music (its frame alone would have moved with the tempo)
+        if (tick !== null && tick >= 0 && Math.round(tickToFrame(this.segments, tick)) !== this.songFrame())
+          this.locate(tick);
       }
-      if (this.sentTracks.get(t.id) === t.regions && this.sentArts.get(t.id) === t.articulations) continue;
-      let events = compileTrack(t, this.segments);
-      if (this.ahead && !planned) {
-        const length = tickToFrame(this.segments, projectEnd(project));
-        this.ahead.setPart(this.numOf(t.id), aheadTrackGuess(events, instrumentSpec(t.instrument), length, sr));
+      const from = this.graphFrom;
+      if (
+        !from ||
+        from.tracks !== project.tracks ||
+        from.buses !== project.buses ||
+        from.master !== project.master ||
+        from.tempoGen !== this.tempoGen
+      ) {
+        this.graphFrom = {
+          tracks: project.tracks,
+          buses: project.buses,
+          master: project.master,
+          tempoGen: this.tempoGen,
+        };
+        const graph = compileGraph(project, (id) => this.numOf(id), this.segments);
+        // (the graph is built afresh each time: its text says whether anything in it changed)
+        const graphKey = JSON.stringify(graph);
+        if (graphKey !== this.sentGraph) {
+          this.post({ type: 'graph', graph });
+          this.sentGraph = graphKey;
+          if (this.ahead) for (const m of this.ahead.layout(graph, this.playing)) this.post(m);
+          this.pruneSamplers(graph);
+        }
+        this.syncAudio(project);
+        this.syncImpulses(project);
       }
-      // a planned part's notes play as its plans; its sequence keeps only its controllers
-      if (planned) events = withoutNotes(events);
-      this.post({ type: 'sequence', num: this.numOf(t.id), events }, [events.buffer]);
-      if (t.kind === 'audio')
-        this.post({ type: 'clips', num: this.numOf(t.id), clips: compileClips(t, this.segments, sr) });
-      this.sentTracks.set(t.id, t.regions);
-      this.sentArts.set(t.id, t.articulations);
+      for (const t of project.tracks) {
+        const planned = isPlanned(t);
+        if (planned && this.partChanged(t, project)) {
+          if (live) this.partsDeferred = true;
+          else void this.syncPart(t, project);
+        }
+        if (!planned && this.sentParts.has(t.id)) {
+          this.sentParts.delete(t.id);
+          this.post({ type: 'plans', num: this.numOf(t.id), plans: null });
+        }
+        if (this.sentTracks.get(t.id) === t.regions && this.sentArts.get(t.id) === t.articulations) continue;
+        let events = compileTrack(t, this.segments);
+        if (this.ahead && !planned) {
+          const length = tickToFrame(this.segments, projectEnd(project));
+          this.ahead.setPart(this.numOf(t.id), aheadTrackGuess(events, instrumentSpec(t.instrument), length, sr));
+        }
+        // a planned part's notes play as its plans; its sequence keeps only its controllers
+        if (planned) events = withoutNotes(events);
+        // rendering ahead, every engine reads the one copy in shared memory; else it's transferred
+        if (this.ahead) this.post({ type: 'sequence', num: this.numOf(t.id), events: sharedEvents(events) });
+        else this.post({ type: 'sequence', num: this.numOf(t.id), events }, [events.buffer]);
+        if (t.kind === 'audio')
+          this.post({ type: 'clips', num: this.numOf(t.id), clips: compileClips(t, this.segments, sr) });
+        this.sentTracks.set(t.id, t.regions);
+        this.sentArts.set(t.id, t.articulations);
+      }
     }
-    this.syncAudio(project);
-    this.syncImpulses(project);
     this.syncInputs(project);
     const c = project.cycle;
-    const cycleKey = `${c.on}:${c.start}:${c.end}:${this.sentTempo}`;
+    const cycleKey = `${c.on}:${c.start}:${c.end}:${this.tempoGen}`;
     if (cycleKey !== this.sentCycle) {
       this.post({
         type: 'cycle',
@@ -388,10 +500,22 @@ export class AudioEngine {
     }
   }
   private sentArts = new Map<string, Track['articulations']>();
-  /** Planned parts: what they were planned from, the newest planning, and the sample files sent. */
-  private sentParts = new Map<string, string>();
+  /** Planned parts: what they were planned from (the pieces, and their text), the newest planning, and the sample files sent. */
+  private sentParts = new Map<string, { from: readonly unknown[]; key: string }>();
   private partVersion = new Map<string, number>();
   private perfSent = new Map<string, Set<number>>();
+
+  /** Whether a part needs planning again: the pieces it's planned from have changed, by their text if not the same objects. */
+  private partChanged(t: Track, project: Project): boolean {
+    const sent = this.sentParts.get(t.id);
+    if (!sent) return true;
+    const from = partFrom(t, project);
+    if (from.every((x, i) => x === sent.from[i])) return false;
+    // other objects (a song opened again): their text says whether they're the same part
+    if (sent.key !== partKey(t, project)) return true;
+    sent.from = from;
+    return false;
+  }
 
   /**
    * Plan a part (a Performance instrument's or Glass's) and hand it over, with the sample files its
@@ -400,8 +524,7 @@ export class AudioEngine {
   private async syncPart(t: Track, project: Project): Promise<void> {
     const ctx = this.ctx;
     if (!ctx) return;
-    const key = partKey(t, project);
-    this.sentParts.set(t.id, key);
+    this.sentParts.set(t.id, { from: partFrom(t, project), key: partKey(t, project) });
     const version = (this.partVersion.get(t.id) ?? 0) + 1;
     this.partVersion.set(t.id, version);
     const current = () => this.partVersion.get(t.id) === version;
@@ -422,11 +545,8 @@ export class AudioEngine {
         const samples = await Promise.all(
           wanted.map(async (index) => {
             const [left, right] = await sampleFile(inst.pack, perf?.files[index] as string, ctx);
-            if (this.ahead) {
-              const l = toShared(left);
-              return { index, left: l, right: right === left ? l : toShared(right) };
-            }
-            return { index, left: left.slice(), right: right === left ? left.slice() : right.slice() };
+            const l = this.share(left);
+            return { index, left: l, right: right === left ? l : this.share(right) };
           }),
         );
         if (!current()) return;
@@ -434,7 +554,7 @@ export class AudioEngine {
         if (samples.length)
           this.post(
             { type: 'performance', key: plans.key, samples },
-            samples.flatMap((x) => [x.left.buffer, x.right.buffer]),
+            transferable(samples.flatMap((x) => [x.left, x.right])),
           );
       }
       if (!current()) return;
@@ -508,22 +628,27 @@ export class AudioEngine {
 
   /** Audio tracks that are armed or monitoring listen to this device's input. */
   private syncInputs(project: Project): void {
-    const specs: InputSpec[] = project.tracks
-      .filter((t) => t.kind === 'audio' && (t.armed || t.audioInput?.monitor))
-      .map((t) => ({
-        num: this.numOf(t.id),
-        input: t.audioInput?.input ?? 0,
-        channels: t.audioInput?.channels ?? 1,
-        monitor: t.audioInput?.monitor ?? false,
-        record: t.armed,
-      }));
-    const key = JSON.stringify(specs);
-    if (key !== this.sentInputs) {
-      this.post({ type: 'inputs', tracks: specs });
-      this.sentInputs = key;
+    if (project.tracks !== this.inputTracks) {
+      this.inputTracks = project.tracks;
+      const specs: InputSpec[] = project.tracks
+        .filter((t) => t.kind === 'audio' && (t.armed || t.audioInput?.monitor))
+        .map((t) => ({
+          num: this.numOf(t.id),
+          input: t.audioInput?.input ?? 0,
+          channels: t.audioInput?.channels ?? 1,
+          monitor: t.audioInput?.monitor ?? false,
+          record: t.armed,
+        }));
+      const key = specs
+        .map((s) => `${s.num}:${s.input}:${s.channels}:${s.monitor ? 1 : 0}:${s.record ? 1 : 0}`)
+        .join(' ');
+      if (key !== this.sentInputs) {
+        this.post({ type: 'inputs', tracks: specs });
+        this.sentInputs = key;
+      }
+      // (HO[LO] Engine records from the system's default input itself)
+      this.inputWanted = specs.length > 0 && !this.remote;
     }
-    // (HO[LO] Engine records from the system's default input itself)
-    this.inputWanted = specs.length > 0 && !this.remote;
     if (this.inputWanted && !this.inputSource && !this.inputOpening && this.started) {
       this.inputOpening = this.openInput().finally(() => {
         this.inputOpening = null;
@@ -591,31 +716,86 @@ export class AudioEngine {
     this.post({ type: 'record', on });
   }
 
-  /** Hand an instrument's samples to the audio thread (transferred: this side keeps no copy). */
+  /**
+   * Hand an instrument's samples to the audio thread. In shared memory (rendering ahead, or decoded
+   * there to begin with) the audio thread and every worker play the one copy, and this side keeps
+   * it for the next audio thread; otherwise they're transferred, and this side keeps no copy.
+   */
   addSampler(spec: SamplerSpec): void {
     this.samplers.add(spec.key);
-    if (this.ahead) {
-      // in shared memory: the audio thread and every worker play the same samples
-      const zones = spec.zones.map((z) => ({
-        ...z,
-        left: toShared(z.left),
-        right: z.right ? toShared(z.right) : null,
-      }));
-      this.post({ type: 'sampler', spec: { ...spec, zones } });
-      return;
+    if (this.usedSamplers.has(spec.key)) this.unused.delete(spec.key);
+    else this.markUnused(spec.key);
+    let sent = spec;
+    if (this.ahead)
+      sent = {
+        ...spec,
+        zones: spec.zones.map((z) => ({ ...z, left: toShared(z.left), right: z.right ? toShared(z.right) : null })),
+      };
+    const arrays = sent.zones.flatMap((z) => (z.right ? [z.left, z.right] : [z.left]));
+    if (arrays.every(isShared)) this.kept.set(spec.key, sent);
+    else this.kept.delete(spec.key);
+    this.post({ type: 'sampler', spec: sent }, transferable(arrays));
+  }
+
+  /** In shared memory as it is, or as a copy there when rendering ahead; otherwise a copy to transfer. */
+  private share(a: Float32Array): Float32Array {
+    if (isShared(a)) return a;
+    return this.ahead ? toShared(a) : a.slice();
+  }
+
+  /** Samplers the song's tracks no longer play are let go after a grace, in every thread. */
+  private pruneSamplers(graph: GraphSpec): void {
+    this.usedSamplers = new Set<string>();
+    for (const t of graph.tracks)
+      for (const i of [t.instrument, ...t.articulations]) if (i.kind === 'sampler') this.usedSamplers.add(i.key);
+    for (const key of this.samplers) {
+      if (this.usedSamplers.has(key)) this.unused.delete(key);
+      else this.markUnused(key);
     }
-    const transfer: Transferable[] = [];
-    for (const z of spec.zones) {
-      transfer.push(z.left.buffer as ArrayBuffer);
-      if (z.right) transfer.push(z.right.buffer as ArrayBuffer);
+  }
+
+  private markUnused(key: string): void {
+    if (!this.unused.has(key)) this.unused.set(key, Date.now());
+    this.scheduleForget();
+  }
+
+  private scheduleForget(): void {
+    if (this.unusedTimer || !this.unused.size) return;
+    const due = Math.min(...this.unused.values()) + FORGET_AFTER - Date.now();
+    this.unusedTimer = setTimeout(
+      () => {
+        this.unusedTimer = null;
+        this.forgetUnused();
+      },
+      Math.max(0, due),
+    );
+  }
+
+  private forgetUnused(): void {
+    const now = Date.now();
+    const gone: string[] = [];
+    for (const [key, since] of this.unused) {
+      if (now - since < FORGET_AFTER) continue;
+      this.unused.delete(key);
+      if (!this.samplers.delete(key)) continue;
+      this.kept.delete(key);
+      this.post({ type: 'forgetSampler', key });
+      gone.push(key);
     }
-    this.post({ type: 'sampler', spec }, transfer);
+    if (gone.length) for (const fn of this.forgetListeners) fn(gone);
+    this.scheduleForget();
   }
 
   /** Called with the sampler keys a restarted audio thread needs again. */
   onRestart(fn: (keys: string[]) => void): () => void {
     this.restartListeners.add(fn);
     return () => this.restartListeners.delete(fn);
+  }
+
+  /** Called with the sampler keys let go because no track plays them any more. */
+  onForget(fn: (keys: string[]) => void): () => void {
+    this.forgetListeners.add(fn);
+    return () => this.forgetListeners.delete(fn);
   }
 
   hasSampler(key: string): boolean {
@@ -898,8 +1078,37 @@ export class AudioEngine {
 }
 
 /** What a planned part is planned from: its notes, its instrument, the song's tempo and shared settings. */
+function partFrom(t: Track, project: Project): readonly unknown[] {
+  return [t.instrument, t.regions, project.tempo, project.performance ?? null];
+}
+
 function partKey(t: Track, project: Project): string {
-  return JSON.stringify([t.instrument, t.regions, project.tempo, project.performance ?? null]);
+  return JSON.stringify(partFrom(t, project));
+}
+
+function isShared(a: ArrayBufferView): boolean {
+  return typeof SharedArrayBuffer !== 'undefined' && a.buffer instanceof SharedArrayBuffer;
+}
+
+/** The buffers to transfer with a message: shared memory goes by reference and can't be. */
+function transferable(arrays: ArrayBufferView[]): Transferable[] {
+  const out: Transferable[] = [];
+  for (const a of arrays) if (!isShared(a) && !out.includes(a.buffer as ArrayBuffer)) out.push(a.buffer as ArrayBuffer);
+  return out;
+}
+
+/** A sequence in shared memory (toShared, for events): every engine reads the one copy instead of taking its own. */
+function sharedEvents(events: Float64Array): Float64Array {
+  if (isShared(events)) return events;
+  const s = new Float64Array(new SharedArrayBuffer(events.byteLength));
+  s.set(events);
+  return s;
+}
+
+/** Before the next frame is drawn (a timer where there are no frames). */
+function nextFrame(fn: () => void): number {
+  if (typeof requestAnimationFrame === 'function') return requestAnimationFrame(fn);
+  return setTimeout(fn, 16) as unknown as number;
 }
 
 /** A sequence without its notes (its controllers stay). */

@@ -57,7 +57,13 @@ export abstract class Instrument {
     const v = this.startVoice(key, velocity, art);
     if (!v) return;
     v.age = this.clock++;
-    const free = this.voices.findIndex((x) => x.done);
+    let free = -1;
+    for (let i = 0; i < this.voices.length; i++) {
+      if ((this.voices[i] as Voice).done) {
+        free = i;
+        break;
+      }
+    }
     if (free < 0 && this.voices.length >= this.maxVoices) {
       // steal: the oldest released voice, else the oldest
       let oldest = -1;
@@ -180,7 +186,8 @@ export class Envelope {
   get off(): boolean {
     return this.stage === 3;
   }
-  next(): number {
+  /** On a sample: the new level is in `level` (a voice reads the field; a returned double would be boxed). */
+  step(): void {
     switch (this.stage) {
       case 0:
         this.level += this.attackStep;
@@ -197,6 +204,9 @@ export class Envelope {
         }
         break;
     }
+  }
+  next(): number {
+    this.step();
     return this.level;
   }
 }
@@ -223,7 +233,8 @@ export class Adsr {
   get off(): boolean {
     return this.stage === 4;
   }
-  next(): number {
+  /** On a sample: the new level is in `level` (a voice reads the field; a returned double would be boxed). */
+  step(): void {
     switch (this.stage) {
       case 0:
         this.level += this.attackStep;
@@ -244,6 +255,9 @@ export class Adsr {
         }
         break;
     }
+  }
+  next(): number {
+    this.step();
     return this.level;
   }
 }

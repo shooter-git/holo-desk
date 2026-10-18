@@ -12,10 +12,6 @@ import { roundHalfEven } from './performance.ts';
 import { NumpyRandom, namedRandom } from './random.ts';
 
 const clip01 = (x: number) => (x < 0 ? 0 : x > 1 ? 1 : x);
-const smoothstep = (x: number) => {
-  const c = clip01(x);
-  return c * c * (3 - 2 * c);
-};
 const hz = (midi: number) => 440 * 2 ** ((midi - 69) / 12);
 const vgain = (v: number, range: number) => 10 ** ((-range * (1 - clip01(v)) ** 1.3) / 20);
 
@@ -39,19 +35,23 @@ export interface GlassOptions {
   trem?: number;
 }
 
-/** The game's time-varying TPT state-variable filter (nb.svf), one sample at a time. */
+/**
+ * The game's time-varying TPT state-variable filter (nb.svf), one sample at a time, for planning a
+ * note's breath (its voice runs the same filter in line). The sample is left in `out`.
+ */
 class Svf {
   private ic1 = 0;
   private ic2 = 0;
   private readonly k: number;
   private readonly mode: number;
   private readonly sr: number;
+  out = 0;
   constructor(q: number, mode: number, sr: number) {
     this.k = 1 / q;
     this.mode = mode;
     this.sr = sr;
   }
-  run(x: number, fc: number): number {
+  run(x: number, fc: number): void {
     let f = fc;
     if (f < 10) f = 10;
     if (f > 0.45 * this.sr) f = 0.45 * this.sr;
@@ -65,10 +65,10 @@ class Svf {
     const v2 = this.ic2 + a2 * this.ic1 + a3 * v3;
     this.ic1 = 2 * v1 - this.ic1;
     this.ic2 = 2 * v2 - this.ic2;
-    if (this.mode === 0) return v2;
-    if (this.mode === 1) return v1;
-    if (this.mode === 2) return x - k * v1 - v2;
-    return x - k * v1;
+    if (this.mode === 0) this.out = v2;
+    else if (this.mode === 1) this.out = v1;
+    else if (this.mode === 2) this.out = x - k * v1 - v2;
+    else this.out = x - k * v1;
   }
 }
 
@@ -155,7 +155,9 @@ export function planGlass(notes: GlassNote[], o: GlassOptions, sr: number): Glas
       let s = 0;
       let s2 = 0;
       for (let j = 0; j < n; j++) {
-        const v = f.run(r.standardNormal(), f0);
+        r.drawNormal();
+        f.run(r.drawn, f0);
+        const v = f.out;
         s += v;
         s2 += v * v;
       }
@@ -190,54 +192,139 @@ export function planGlass(notes: GlassNote[], o: GlassOptions, sr: number): Glas
   });
 }
 
-/** A planned glass note, sounding. */
+const TAU = 2 * Math.PI;
+
+/**
+ * A planned glass note, sounding. Its sample is made in line and left in `y`: in a loop this busy a
+ * call V8 doesn't inline boxes every double it passes or returns, a heap allocation each sample,
+ * so the rods are arrays, the filter is its own fields, and what the note holds constant is worked
+ * out once (the same expressions as the game's, on the same inputs).
+ */
 export class GlassVoice {
   done = false;
   private readonly p: GlassPlan;
   private readonly sr: number;
   private readonly acc: Float64Array;
-  private readonly svf: Svf;
+  private readonly rodFreq: Float64Array;
+  private readonly rodAmp: Float64Array;
+  private readonly rodPhase0: Float64Array;
+  private readonly rodTau: Float64Array;
+  /** Which rods die away (the fundamental's don't). */
+  private readonly rodDecays: Uint8Array;
+  /** The breath's band pass (nb.svf at the note, mode 1), its coefficients fixed by the note's pitch. */
+  private readonly svfA1: number;
+  private readonly svfA2: number;
+  private readonly svfA3: number;
+  private ic1 = 0;
+  private ic2 = 0;
   private readonly noise: NumpyRandom | null;
+  private readonly vibW: number;
+  private readonly tremW: number;
+  private readonly tremAmt: number;
+  private readonly breathAmt: number;
+  private readonly attack: number;
+  private readonly releases: boolean;
+  private readonly relTau: number;
   private readonly gl: number;
   private readonly gr: number;
+  /** The last sample sample() made. */
+  private y = 0;
   private i = 0;
   constructor(plan: GlassPlan, sr: number) {
     this.p = plan;
     this.sr = sr;
-    this.acc = new Float64Array(plan.rods.length);
-    this.svf = new Svf(35, 1, sr);
+    const rods = plan.rods;
+    this.acc = new Float64Array(rods.length);
+    this.rodFreq = new Float64Array(rods.length);
+    this.rodAmp = new Float64Array(rods.length);
+    this.rodPhase0 = new Float64Array(rods.length);
+    this.rodTau = new Float64Array(rods.length);
+    this.rodDecays = new Uint8Array(rods.length);
+    rods.forEach((rod, k) => {
+      this.rodFreq[k] = rod.freq;
+      this.rodAmp[k] = rod.amp;
+      this.rodPhase0[k] = rod.phase0;
+      this.rodTau[k] = rod.tau;
+      this.rodDecays[k] = Number.isFinite(rod.tau) ? 1 : 0;
+    });
+    // the filter's coefficients (Svf.run with q 35 at f0, which never moves)
+    let f = plan.f0;
+    if (f < 10) f = 10;
+    if (f > 0.45 * sr) f = 0.45 * sr;
+    const g = Math.tan((Math.PI * f) / sr);
+    const k = 1 / 35;
+    this.svfA1 = 1 / (1 + g * (g + k));
+    this.svfA2 = g * this.svfA1;
+    this.svfA3 = g * this.svfA2;
     this.noise = plan.noise ? NumpyRandom.resume(plan.noise) : null;
+    this.vibW = 2 * Math.PI * plan.vibRate;
+    this.tremW = 2 * Math.PI * plan.tremRate;
+    this.tremAmt = plan.trem * 0.15;
+    this.breathAmt = plan.breath * 0.15;
+    this.attack = Math.max(plan.attack, 1e-3);
+    this.releases = plan.relStart < plan.n / sr;
+    this.relTau = Math.max(plan.release / 4, 1e-3);
     const a = ((plan.pan + 1) * Math.PI) / 4;
     // a mono voice: cos and sin, no make-up (the game's to_stereo for one channel)
     this.gl = plan.pan ? Math.cos(a) : Math.cos(Math.PI / 4);
     this.gr = plan.pan ? Math.sin(a) : Math.sin(Math.PI / 4);
   }
 
-  private sample(): number {
-    const p = this.p;
-    const sr = this.sr;
-    const i = this.i;
-    const t = i / sr;
-    const vib = 1 + 0.0015 * Math.sin(2 * Math.PI * p.vibRate * t + p.vibPhase) * smoothstep((t - 0.4) / 0.8);
-    let y = 0;
-    p.rods.forEach((rod, k) => {
-      this.acc[k] = (this.acc[k] as number) + rod.freq * vib;
-      const ph = (2 * Math.PI * (this.acc[k] as number)) / sr + rod.phase0;
-      const decay = Number.isFinite(rod.tau) ? Math.exp(-t / rod.tau) : 1;
-      y += rod.amp * Math.sin(ph) * decay;
-    });
-    if (this.noise) y += p.breath * 0.15 * this.svf.run(this.noise.standardNormal(), p.f0) * p.noiseScale;
-    let env = smoothstep(t / Math.max(p.attack, 1e-3));
-    if (p.relStart < p.n / sr && t >= p.relStart) env *= Math.exp(-(t - p.relStart) / Math.max(p.release / 4, 1e-3));
-    env *= 1 + p.trem * 0.15 * Math.sin(2 * Math.PI * p.tremRate * t + p.tremPhase);
-    return y * env * p.level;
+  /** The rods on by one sample at the vibrato's factor on their frequencies (the time from `i`: no double passed). */
+  private advance(): void {
+    const t = this.i / this.sr;
+    let c = (t - 0.4) / 0.8;
+    c = c < 0 ? 0 : c > 1 ? 1 : c;
+    const vib = 1 + 0.0015 * Math.sin(this.vibW * t + this.p.vibPhase) * (c * c * (3 - 2 * c));
+    const acc = this.acc;
+    const freq = this.rodFreq;
+    for (let k = 0; k < acc.length; k++) acc[k] = (acc[k] as number) + (freq[k] as number) * vib;
   }
 
-  /** On by `count` samples unheard (its oscillators and breath run on, as they would have). */
+  /** The breath's filtered noise for one sample, into `b` (the band pass's state moves on). */
+  private b = 0;
+  private breath(): void {
+    const noise = this.noise as NumpyRandom;
+    noise.drawNormal();
+    const x = noise.drawn;
+    const v3 = x - this.ic2;
+    const v1 = this.svfA1 * this.ic1 + this.svfA2 * v3;
+    const v2 = this.ic2 + this.svfA2 * this.ic1 + this.svfA3 * v3;
+    this.ic1 = 2 * v1 - this.ic1;
+    this.ic2 = 2 * v2 - this.ic2;
+    this.b = v1;
+  }
+
+  private sample(): void {
+    const p = this.p;
+    const sr = this.sr;
+    const t = this.i / sr;
+    this.advance();
+    let y = 0;
+    const acc = this.acc;
+    for (let k = 0; k < acc.length; k++) {
+      const ph = (TAU * (acc[k] as number)) / sr + (this.rodPhase0[k] as number);
+      const decay = this.rodDecays[k] ? Math.exp(-t / (this.rodTau[k] as number)) : 1;
+      y += (this.rodAmp[k] as number) * Math.sin(ph) * decay;
+    }
+    if (this.noise) {
+      this.breath();
+      y += this.breathAmt * this.b * p.noiseScale;
+    }
+    let c = t / this.attack;
+    c = c < 0 ? 0 : c > 1 ? 1 : c;
+    let env = c * c * (3 - 2 * c);
+    if (this.releases && t >= p.relStart) env *= Math.exp(-(t - p.relStart) / this.relTau);
+    env *= 1 + this.tremAmt * Math.sin(this.tremW * t + p.tremPhase);
+    this.y = y * env * p.level;
+  }
+
+  /** On by `count` samples unheard: only what carries state moves (the rods' phases, the breath's stream and filter). */
   skip(count: number): void {
     const k = Math.min(count, this.p.n - this.i);
     for (let j = 0; j < k; j++) {
-      this.sample();
+      this.advance();
+      if (this.noise) this.breath();
       this.i++;
     }
     if (this.i >= this.p.n) this.done = true;
@@ -251,7 +338,8 @@ export class GlassVoice {
         this.done = true;
         return false;
       }
-      const y = this.sample() * p.gain;
+      this.sample();
+      const y = this.y * p.gain;
       l[o] = (l[o] as number) + Math.fround(y * this.gl);
       r[o] = (r[o] as number) + Math.fround(y * this.gr);
       this.i++;
@@ -373,7 +461,10 @@ export function planGlassLine(notes: GlassNote[], o: GlassLineOptions, sr: numbe
       let s = 0;
       let s2 = 0;
       for (let j = 0; j < n; j++) {
-        const v = f.run(r.standardNormal(), Math.min(8000, Math.max(60, line.freq(j))));
+        line.at(j);
+        r.drawNormal();
+        f.run(r.drawn, Math.min(8000, Math.max(60, line.f)));
+        const v = f.out;
         s += v;
         s2 += v * v;
       }
@@ -384,87 +475,156 @@ export function planGlassLine(notes: GlassNote[], o: GlassLineOptions, sr: numbe
   });
 }
 
-/** A phrase's pitch and level at each sample: each note glides in over `glide` seconds, centred on its time. */
+/**
+ * A phrase's pitch and level at each sample: each note glides in over `glide` seconds, centred on
+ * its time. at(i) leaves the semitone, level and frequency in fields (a call that returns a double
+ * boxes it unless inlined; a tuple would be an allocation).
+ */
 class LineState {
   private readonly p: GlassLinePlan;
   private readonly sr: number;
+  private readonly noteT: Float64Array;
+  private readonly noteP: Float64Array;
+  private readonly noteLvl: Float64Array;
+  private readonly vibW: number;
+  semi = 0;
+  lvl = 0;
+  f = 0;
   constructor(p: GlassLinePlan, sr: number) {
     this.p = p;
     this.sr = sr;
+    this.noteT = Float64Array.from(p.notes, (n) => n.t);
+    this.noteP = Float64Array.from(p.notes, (n) => n.p);
+    this.noteLvl = Float64Array.from(p.notes, (n) => n.lvl);
+    this.vibW = 2 * Math.PI * p.vibRate;
   }
-  semiLvl(i: number): [number, number] {
+  /** Sample i's semitone and level (the game's semi_lvl), and its frequency with the vibrato on it. */
+  at(i: number): void {
     const p = this.p;
     const t = i / this.sr;
-    const first = p.notes[0] as { p: number; lvl: number };
-    let semi = first.p;
-    let lvl = first.lvl;
-    for (let k = 1; k < p.notes.length; k++) {
-      const cur = p.notes[k] as { t: number; p: number; lvl: number };
-      const prev = p.notes[k - 1] as { p: number; lvl: number };
-      const a = cur.t - p.glide * 0.5;
-      const u = smoothstep((t - a) / p.glide);
-      semi += (cur.p - prev.p) * u;
-      lvl += (cur.lvl - prev.lvl) * u;
+    const noteT = this.noteT;
+    const noteP = this.noteP;
+    const noteLvl = this.noteLvl;
+    let semi = noteP[0] as number;
+    let lvl = noteLvl[0] as number;
+    for (let k = 1; k < noteT.length; k++) {
+      const a = (noteT[k] as number) - p.glide * 0.5;
+      let c = (t - a) / p.glide;
+      c = c < 0 ? 0 : c > 1 ? 1 : c;
+      const u = c * c * (3 - 2 * c);
+      semi += ((noteP[k] as number) - (noteP[k - 1] as number)) * u;
+      lvl += ((noteLvl[k] as number) - (noteLvl[k - 1] as number)) * u;
     }
-    return [semi, lvl];
-  }
-  freq(i: number): number {
-    const p = this.p;
-    const t = i / this.sr;
-    const [semi] = this.semiLvl(i);
-    return hz(semi) * (1 + p.vibDepth * Math.sin(2 * Math.PI * p.vibRate * t) * smoothstep((t - 0.6) / 1.0));
+    this.semi = semi;
+    this.lvl = lvl;
+    let c = (t - 0.6) / 1.0;
+    c = c < 0 ? 0 : c > 1 ? 1 : c;
+    this.f = 440 * 2 ** ((semi - 69) / 12) * (1 + p.vibDepth * Math.sin(this.vibW * t) * (c * c * (3 - 2 * c)));
   }
 }
 
+/** A planned glass_line phrase, sounding (its sample made in line, as GlassVoice's). */
 export class GlassLineVoice {
   done = false;
   private readonly p: GlassLinePlan;
   private readonly sr: number;
   private readonly line: LineState;
   private readonly acc: Float64Array;
-  private readonly svf: Svf;
+  private readonly rodMult: Float64Array;
+  private readonly rodAmp: Float64Array;
+  private readonly rodPhase0: Float64Array;
+  /** The breath's band pass (nb.svf, q 30, mode 1), following the line. */
+  private ic1 = 0;
+  private ic2 = 0;
   private readonly noise: NumpyRandom | null;
+  private readonly breathAmt: number;
+  private readonly attack: number;
+  private readonly releases: boolean;
+  private readonly relTau: number;
   private readonly gl: number;
   private readonly gr: number;
+  /** The last sample sample() made, and the last breath breath() made. */
+  private y = 0;
+  private b = 0;
   private i = 0;
   constructor(plan: GlassLinePlan, sr: number) {
     this.p = plan;
     this.sr = sr;
     this.line = new LineState(plan, sr);
-    this.acc = new Float64Array(plan.rods.length);
-    this.svf = new Svf(30, 1, sr);
+    const rods = plan.rods;
+    this.acc = new Float64Array(rods.length);
+    this.rodMult = Float64Array.from(rods, (r) => r.mult);
+    this.rodAmp = Float64Array.from(rods, (r) => r.amp);
+    this.rodPhase0 = Float64Array.from(rods, (r) => r.phase0);
     this.noise = plan.noise ? NumpyRandom.resume(plan.noise) : null;
+    this.breathAmt = plan.breath * 0.15;
+    this.attack = Math.max(plan.attack, 1e-3);
+    this.releases = plan.relStart < plan.n / sr;
+    this.relTau = Math.max(plan.release / 4, 1e-3);
     const a = ((plan.pan + 1) * Math.PI) / 4;
     this.gl = Math.cos(a);
     this.gr = Math.sin(a);
   }
 
-  private sample(): number {
-    const p = this.p;
-    const sr = this.sr;
-    const i = this.i;
-    const t = i / sr;
-    const f = this.line.freq(i);
-    let y = 0;
-    p.rods.forEach((rod, k) => {
-      this.acc[k] = (this.acc[k] as number) + f * rod.mult;
-      y += rod.amp * Math.sin((2 * Math.PI * (this.acc[k] as number)) / sr + rod.phase0);
-    });
-    if (this.noise) {
-      const nz = this.svf.run(this.noise.standardNormal(), Math.min(8000, Math.max(60, f)));
-      y += p.breath * 0.15 * nz * p.noiseScale;
-    }
-    let env = smoothstep(t / Math.max(p.attack, 1e-3));
-    if (p.relStart < p.n / sr && t >= p.relStart) env *= Math.exp(-(t - p.relStart) / Math.max(p.release / 4, 1e-3));
-    const [, lvl] = this.line.semiLvl(i);
-    return y * env * lvl * 0.3;
+  /** The line at this sample, and the rods on by one sample at its frequency. */
+  private advance(): void {
+    const line = this.line;
+    line.at(this.i);
+    const f = line.f;
+    const acc = this.acc;
+    const mult = this.rodMult;
+    for (let k = 0; k < acc.length; k++) acc[k] = (acc[k] as number) + f * (mult[k] as number);
   }
 
-  /** On by `count` samples unheard (its line and breath run on, as they would have). */
+  /** The breath's filtered noise for one sample, into `b` (Svf.run at the line's frequency, within 60..8000). */
+  private breath(): void {
+    const noise = this.noise as NumpyRandom;
+    noise.drawNormal();
+    const x = noise.drawn;
+    const sr = this.sr;
+    let f = Math.min(8000, Math.max(60, this.line.f));
+    if (f < 10) f = 10;
+    if (f > 0.45 * sr) f = 0.45 * sr;
+    const g = Math.tan((Math.PI * f) / sr);
+    const k = 1 / 30;
+    const a1 = 1 / (1 + g * (g + k));
+    const a2 = g * a1;
+    const a3 = g * a2;
+    const v3 = x - this.ic2;
+    const v1 = a1 * this.ic1 + a2 * v3;
+    const v2 = this.ic2 + a2 * this.ic1 + a3 * v3;
+    this.ic1 = 2 * v1 - this.ic1;
+    this.ic2 = 2 * v2 - this.ic2;
+    this.b = v1;
+  }
+
+  private sample(): void {
+    const p = this.p;
+    const sr = this.sr;
+    const t = this.i / sr;
+    this.advance();
+    let y = 0;
+    const acc = this.acc;
+    for (let k = 0; k < acc.length; k++) {
+      y += (this.rodAmp[k] as number) * Math.sin((TAU * (acc[k] as number)) / sr + (this.rodPhase0[k] as number));
+    }
+    if (this.noise) {
+      this.breath();
+      y += this.breathAmt * this.b * p.noiseScale;
+    }
+    let c = t / this.attack;
+    c = c < 0 ? 0 : c > 1 ? 1 : c;
+    let env = c * c * (3 - 2 * c);
+    if (this.releases && t >= p.relStart) env *= Math.exp(-(t - p.relStart) / this.relTau);
+    this.y = y * env * this.line.lvl * 0.3;
+  }
+
+  /** On by `count` samples unheard: only what carries state moves (the rods' phases, the breath's stream and filter). */
   skip(count: number): void {
     const k = Math.min(count, this.p.n - this.i);
     for (let j = 0; j < k; j++) {
-      this.sample();
+      this.advance();
+      if (this.noise) this.breath();
       this.i++;
     }
     if (this.i >= this.p.n) this.done = true;
@@ -478,7 +638,8 @@ export class GlassLineVoice {
         this.done = true;
         return false;
       }
-      const y = this.sample() * p.gain;
+      this.sample();
+      const y = this.y * p.gain;
       l[o] = (l[o] as number) + Math.fround(y * this.gl);
       r[o] = (r[o] as number) + Math.fround(y * this.gr);
       this.i++;

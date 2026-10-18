@@ -4,8 +4,9 @@
  * next device restart of the audio thread) loads from disk instead of the network.
  */
 
-import type { InstrumentManifest, SamplerSpec, SampleZone, ZoneManifest } from '@holo/engine';
+import type { SamplerSpec, SampleZone, ZoneManifest } from '@holo/engine';
 import { engine } from './engine.ts';
+import { channelData, instrumentManifest, packFileData } from './pack-files.ts';
 
 export interface InstrumentSummary {
   name: string;
@@ -26,8 +27,6 @@ export interface PackSummary {
   impulses?: { name: string; title: string; seconds: number | null }[];
 }
 
-const CACHE = 'holo-samples-v1';
-
 export type LoadState =
   | { state: 'loading'; done: number; total: number }
   | { state: 'ready' }
@@ -47,6 +46,14 @@ export class SampleLibrary {
         void this.ensure(pack ?? '', rest.join('/'));
       }
     });
+    // let go by the engine (no track plays them): loaded again when one does
+    engine.onForget((keys) => {
+      for (const key of keys) {
+        this.states.delete(key);
+        this.loading.delete(key);
+      }
+      this.emit();
+    });
   }
 
   subscribe(fn: () => void): () => void {
@@ -60,6 +67,19 @@ export class SampleLibrary {
   private emit(): void {
     this.version++;
     for (const fn of this.listeners) fn();
+  }
+
+  /** Once a frame at most: a load's progress comes file by file, and the screen needn't follow each. */
+  private emitDue = false;
+  private emitSoon(): void {
+    if (this.emitDue) return;
+    this.emitDue = true;
+    const flush = () => {
+      this.emitDue = false;
+      this.emit();
+    };
+    if (typeof requestAnimationFrame === 'function') requestAnimationFrame(flush);
+    else setTimeout(flush, 16);
   }
 
   async refresh(): Promise<void> {
@@ -76,13 +96,17 @@ export class SampleLibrary {
     return this.states.get(`${pack}/${name}`);
   }
 
-  /** Load an instrument into the audio thread unless it's there already (or on its way). */
-  ensure(pack: string, name: string): Promise<void> {
+  /**
+   * Load an instrument into the audio thread unless it's there already (or on its way). Files are
+   * fetched a few at a time the library over, the lowest `priority` first (0: the track about to be
+   * played).
+   */
+  ensure(pack: string, name: string, priority = 1): Promise<void> {
     const key = `${pack}/${name}`;
     if (engine.hasSampler(key)) return Promise.resolve();
     let p = this.loading.get(key);
     if (!p) {
-      p = this.load(pack, name).catch((err: unknown) => {
+      p = this.load(pack, name, priority).catch((err: unknown) => {
         this.states.set(key, { state: 'error', message: err instanceof Error ? err.message : String(err) });
         this.loading.delete(key);
         this.emit();
@@ -92,14 +116,20 @@ export class SampleLibrary {
     return p;
   }
 
-  private async load(pack: string, name: string): Promise<void> {
+  private async load(pack: string, name: string, priority: number): Promise<void> {
     const key = `${pack}/${name}`;
     const ctx = engine.ctx;
     if (!ctx) throw new Error('Start the audio first');
-    const spec = await this.build(pack, name, ctx, (done, total) => {
-      this.states.set(key, { state: 'loading', done, total });
-      this.emit();
-    });
+    const spec = await this.build(
+      pack,
+      name,
+      ctx,
+      (done, total) => {
+        this.states.set(key, { state: 'loading', done, total });
+        this.emitSoon();
+      },
+      priority,
+    );
     engine.addSampler(spec);
     this.states.set(key, { state: 'ready' });
     this.loading.delete(key);
@@ -115,35 +145,27 @@ export class SampleLibrary {
     name: string,
     ctx: BaseAudioContext,
     progress?: (done: number, total: number) => void,
+    priority = 1,
   ): Promise<SamplerSpec> {
     const key = `${pack}/${name}`;
-    const res = await fetch(`/api/packs/${encodeURIComponent(pack)}/instruments/${encodeURIComponent(name)}`);
-    if (!res.ok) throw new Error(`No instrument ${key} (${res.status})`);
-    const manifest = (await res.json()) as InstrumentManifest;
+    const manifest = await instrumentManifest(pack, name);
     const total = manifest.zones.length;
     let done = 0;
     progress?.(done, total);
-    const cache = 'caches' in globalThis ? await caches.open(CACHE).catch(() => null) : null;
     const zones: SampleZone[] = new Array(total);
     let next = 0;
     const worker = async () => {
       while (next < total) {
         const index = next++;
         const z = manifest.zones[index] as ZoneManifest;
-        const url = `/packs/${encodeURIComponent(pack)}/files/${z.file.split('/').map(encodeURIComponent).join('/')}`;
-        let response = cache ? await cache.match(url) : undefined;
-        if (!response) {
-          response = await fetch(url);
-          if (!response.ok) throw new Error(`Missing sample ${z.file}`);
-          if (cache) await cache.put(url, response.clone()).catch(() => undefined);
-        }
-        const audio = await ctx.decodeAudioData(await response.arrayBuffer());
+        const audio = await ctx.decodeAudioData(await packFileData(pack, z.file, priority));
         // the decoder resampled to the context's rate: move the manifest's frames with it
         const k = audio.sampleRate / z.rate;
         const start = Math.max(0, Math.round(z.start * k));
         const end = Math.min(audio.length, z.end > 0 ? Math.round(z.end * k) : audio.length);
-        const left = audio.getChannelData(0).slice(start, end);
-        const right = audio.numberOfChannels > 1 ? audio.getChannelData(1).slice(start, end) : null;
+        // (in shared memory where the page has it: the audio thread and the workers play the one copy)
+        const left = channelData(audio, 0, start, end);
+        const right = audio.numberOfChannels > 1 ? channelData(audio, 1, start, end) : null;
         zones[index] = {
           left,
           right,

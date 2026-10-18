@@ -129,8 +129,25 @@ function typingKey(e: KeyboardEvent, down: boolean): boolean {
 
 function editing(target: EventTarget | null): boolean {
   const el = target as HTMLElement | null;
-  if (!el) return false;
+  if (!el?.tagName) return false;
   return el.isContentEditable || el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT';
+}
+
+/** Focus is in a menu or a dialog: its own buttons answer the keys, so the studio's shortcuts wait. */
+function inPopup(target: EventTarget | null): boolean {
+  const el = target as HTMLElement | null;
+  return !!el?.closest?.('[role="dialog"], [role="menu"], .view-menu');
+}
+
+/** A button reached with the keyboard (it shows its focus ring): Enter and Space are its, not the transport's. */
+function keyboardFocusedButton(target: EventTarget | null): boolean {
+  const el = target as HTMLElement | null;
+  if (!el || (el.tagName !== 'BUTTON' && el.tagName !== 'A')) return false;
+  try {
+    return el.matches(':focus-visible');
+  } catch {
+    return false;
+  }
 }
 
 function selectedTrackId(): string | null {
@@ -139,13 +156,18 @@ function selectedTrackId(): string | null {
 
 function onKeyDown(e: KeyboardEvent): void {
   if (editing(e.target)) return;
+  const s = store.get();
+  const ctrl = e.ctrlKey || e.metaKey;
+  const key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
+  // a menu or dialog is up: only Escape, ? (the key commands, so it toggles off) and undo/redo reach the
+  // studio behind it; Space would play, Delete would delete, Enter would cancel the button being pressed
+  if (inPopup(e.target) || s.dialog) {
+    if (key !== 'Escape' && key !== '?' && !(ctrl && (key === 'z' || key === 'y'))) return;
+  } else if ((key === 'Enter' || e.code === 'Space') && keyboardFocusedButton(e.target)) return;
   if (typingKey(e, true)) {
     e.preventDefault();
     return;
   }
-  const s = store.get();
-  const ctrl = e.ctrlKey || e.metaKey;
-  const key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
   let handled = true;
   if (ctrl && e.altKey && key === 'n') addTrack({ type: 'synth', preset: 'Soft Keys' });
   else if (ctrl && e.shiftKey && key === 'f') toggleFullscreen();
@@ -177,7 +199,8 @@ function onKeyDown(e: KeyboardEvent): void {
   else if (key === '?') store.set({ dialog: s.dialog === 'shortcuts' ? null : 'shortcuts' });
   else if (key === 'q') quantizeSelection();
   else if (key === 'Delete' || key === 'Backspace') deleteSelection();
-  else if (key === 'Escape') store.set({ selectedNotes: [], selectedRegions: [], dialog: null, plugin: null });
+  else if (key === 'Escape')
+    store.set({ selectedNotes: [], selectedRegions: [], dialog: null, plugin: null, stage: null });
   else if (key === 'm' || key === 's') {
     const id = selectedTrackId();
     const t = s.project?.tracks.find((x) => x.id === id);

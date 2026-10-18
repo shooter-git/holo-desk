@@ -28,14 +28,22 @@ import {
   SlidersVertical,
   Square,
   Undo2,
+  WifiOff,
 } from 'lucide-react';
-import { type PointerEvent as ReactPointerEvent, useEffect, useRef, useState } from 'react';
+import {
+  type KeyboardEvent as ReactKeyboardEvent,
+  type PointerEvent as ReactPointerEvent,
+  useEffect,
+  useRef,
+  useState,
+} from 'react';
 import {
   activeStudio,
   chooseStudio,
   command,
   levels,
   optimistic,
+  STALE_MS,
   type StudioState,
   type StudioTrack,
   sendMidi,
@@ -57,11 +65,16 @@ const TABS: [Tab, string, typeof Rows3][] = [
 const DEFAULT_TEMPO: TempoPoint[] = [{ tick: 0, bpm: 120 }];
 const DEFAULT_METER: MeterPoint[] = [{ tick: 0, num: 4, den: 4 }];
 
-/** Where the studio's playhead is now: its last report, carried on at the song's tempo while it plays. */
+/**
+ * Where the studio's playhead is now: its last report, carried on at the song's tempo while it plays.
+ * A playing studio reports a few times a second, so when nothing has come for longer than that the
+ * display stops where it is rather than running on from a studio it has lost touch with.
+ */
 function liveTick(s: StudioState, at: number): number {
   if (!s.playing) return s.tick;
   const tempo = s.tempo?.length ? s.tempo : [{ tick: 0, bpm: s.bpm }];
-  let t = secondsToTick(tempo, tickToSeconds(tempo, Math.max(0, s.tick)) + (Date.now() - at) / 1000);
+  const elapsed = Math.min(STALE_MS, Date.now() - at);
+  let t = secondsToTick(tempo, tickToSeconds(tempo, Math.max(0, s.tick)) + elapsed / 1000);
   const c = s.cycle;
   if (c.on && c.end > c.start && s.tick < c.end && t >= c.end) t = c.start + ((t - c.end) % (c.end - c.start));
   return t;
@@ -101,7 +114,10 @@ export function Remote() {
     }
   });
   const connection = useRemote((s) => s.connection);
+  const stale = useRemote((s) => s.stale);
   const studio = useRemote((s) => activeStudio(s));
+  // out of touch: the host is unreachable, or the studio has gone quiet while it should be talking
+  const lost = connection !== 'online' || stale !== null;
   useWakeLock();
   useEffect(() => {
     document.title = 'HO[LO] Remote';
@@ -130,8 +146,16 @@ export function Remote() {
       <RemoteBar />
       {studio ? (
         <>
-          <section className="remote-deck">
-            {!studio.state.audio && (
+          <section className={`remote-deck${lost ? ' stale' : ''}`}>
+            {lost && (
+              <div className="remote-banner stale" role="status">
+                <WifiOff size={15} />{' '}
+                {connection === 'online'
+                  ? `The studio hasn’t reported for ${stale} s`
+                  : `Can’t reach HO[LO] on ${location.host}. Trying again…`}
+              </div>
+            )}
+            {!lost && !studio.state.audio && (
               <div className="remote-banner">
                 <Headphones size={15} /> The studio on <b>{studio.name}</b> hasn’t started its audio. Press{' '}
                 <b>Start the studio</b> there once, then play from here.
@@ -346,23 +370,27 @@ function RemoteTransport() {
 
 /** A level bar for a track (or "master") from the studio's meters. */
 function LevelBar({ id, vertical = false }: { id: string; vertical?: boolean }) {
-  const fill = useRef<HTMLDivElement>(null);
+  const bar = useRef<HTMLDivElement>(null);
+  // the dark cover over the bar's scale: it is drawn back as far as the level reaches
+  const cover = useRef<HTMLDivElement>(null);
   const shown = useRef(0);
-  useFrame(() => {
+  const lastFrame = useRef(0);
+  useFrame((now) => {
     const [l = 0, r = 0] = levels.get(id) ?? [];
-    // decay here as well, between the studio's updates
-    const v = Math.max(l, r, shown.current * 0.9);
+    // decay here as well, between the studio's updates: by time, not by frame, so a screen that
+    // draws twice as often doesn't drop the bar twice as fast
+    const dt = lastFrame.current ? now - lastFrame.current : 16.7;
+    lastFrame.current = now;
+    const v = Math.max(l, r, shown.current * 0.9 ** (dt / 16.7));
     shown.current = v;
     const db = v > 1e-5 ? 20 * Math.log10(v) : -90;
     const f = Math.max(0, Math.min(1, (db + 60) / 66));
-    if (fill.current) {
-      fill.current.style[vertical ? 'height' : 'width'] = `${f * 100}%`;
-      fill.current.classList.toggle('hot', db > -1);
-    }
+    if (cover.current) cover.current.style[vertical ? 'bottom' : 'left'] = `${f * 100}%`;
+    bar.current?.classList.toggle('hot', db > -1);
   });
   return (
-    <div className={`level${vertical ? ' vertical' : ''}`}>
-      <div ref={fill} />
+    <div ref={bar} className={`level${vertical ? ' vertical' : ''}`}>
+      <div ref={cover} />
     </div>
   );
 }
@@ -389,8 +417,50 @@ function TrackChips({ track }: { track: StudioTrack }) {
 }
 
 /**
+ * A fader's value while a finger is on it: shown at once, sent to the studio at most every 35 ms and
+ * once more as the finger lifts, then kept a moment longer until the studio's report catches up (so
+ * the fader doesn't snap back to the old value for a frame). A new touch cancels that moment, and so
+ * does leaving the screen.
+ */
+function useHeldValue(send: (v: number) => void, end: () => void) {
+  const [local, setLocal] = useState<number | null>(null);
+  const latest = useRef({ send, end });
+  latest.current = { send, end };
+  const sentAt = useRef(0);
+  const held = useRef<number | null>(null);
+  const timer = useRef(0);
+  useEffect(() => () => window.clearTimeout(timer.current), []);
+  const begin = () => {
+    window.clearTimeout(timer.current);
+    held.current = null;
+    sentAt.current = 0;
+  };
+  const move = (v: number) => {
+    held.current = v;
+    setLocal(v);
+    const now = performance.now();
+    if (now - sentAt.current > 35) {
+      sentAt.current = now;
+      latest.current.send(v);
+    }
+  };
+  /** The finger lifts: the value it lifted at (else the last one held) is sent whether or not throttled out. */
+  const finish = (v: number | null = held.current) => {
+    if (v !== null) {
+      setLocal(v);
+      latest.current.send(v);
+    }
+    latest.current.end();
+    window.clearTimeout(timer.current);
+    timer.current = window.setTimeout(() => setLocal(null), 600);
+  };
+  return { local, begin, move, finish };
+}
+
+/**
  * A fader a thumb can work: drag anywhere along it (not jump to where you touch), one undo step in the
- * studio per touch.
+ * studio per touch. From a keyboard the arrows nudge it (Shift: ten times as far, Alt: a tenth), Home
+ * and End take it to the ends.
  */
 function SlideFader({
   value,
@@ -415,37 +485,44 @@ function SlideFader({
   center?: boolean;
   label: string;
 }) {
-  const [local, setLocal] = useState<number | null>(null);
-  const shown = local ?? value;
+  const hold = useHeldValue(onChange, onEnd);
+  const shown = hold.local ?? value;
   const u = toUnit(shown);
+  const clamp = (x: number) => Math.max(0, Math.min(1, x));
   const down = (e: ReactPointerEvent<HTMLDivElement>) => {
+    if (e.button !== 0) return;
     const el = e.currentTarget;
     el.setPointerCapture(e.pointerId);
     const width = el.getBoundingClientRect().width;
     const startX = e.clientX;
     const start = toUnit(value);
-    let last = 0;
+    hold.begin();
     onBegin();
-    const move = (ev: PointerEvent) => {
-      const next = fromUnit(Math.max(0, Math.min(1, start + (ev.clientX - startX) / width)));
-      setLocal(next);
-      const now = performance.now();
-      if (now - last > 35) {
-        last = now;
-        onChange(next);
-      }
-    };
+    const at = (ev: PointerEvent) => fromUnit(clamp(start + (ev.clientX - startX) / width));
+    const move = (ev: PointerEvent) => hold.move(at(ev));
     const up = (ev: PointerEvent) => {
       el.removeEventListener('pointermove', move);
       el.removeEventListener('pointerup', up);
       el.removeEventListener('pointercancel', up);
-      onChange(fromUnit(Math.max(0, Math.min(1, start + (ev.clientX - startX) / width))));
-      onEnd();
-      setTimeout(() => setLocal(null), 600);
+      hold.finish(at(ev));
     };
     el.addEventListener('pointermove', move);
     el.addEventListener('pointerup', up);
     el.addEventListener('pointercancel', up);
+  };
+  const key = (e: ReactKeyboardEvent<HTMLDivElement>) => {
+    const step = 0.02 * (e.shiftKey ? 10 : e.altKey ? 0.1 : 1);
+    let next: number;
+    if (e.key === 'ArrowUp' || e.key === 'ArrowRight') next = u + step;
+    else if (e.key === 'ArrowDown' || e.key === 'ArrowLeft') next = u - step;
+    else if (e.key === 'Home') next = 0;
+    else if (e.key === 'End') next = 1;
+    else return;
+    e.preventDefault();
+    // one undo step per press, as one touch is
+    hold.begin();
+    onBegin();
+    hold.finish(fromUnit(clamp(next)));
   };
   const from = center ? Math.min(0.5, u) : 0;
   const to = center ? Math.max(0.5, u) : u;
@@ -455,11 +532,13 @@ function SlideFader({
       role="slider"
       tabIndex={0}
       aria-label={label}
+      aria-orientation="horizontal"
       aria-valuemin={0}
       aria-valuemax={100}
       aria-valuenow={Math.round(u * 100)}
       aria-valuetext={format(shown)}
       onPointerDown={down}
+      onKeyDown={key}
       style={{ ['--c' as string]: color }}
     >
       <div className="fill" style={{ left: `${from * 100}%`, width: `${(to - from) * 100}%` }} />
@@ -469,8 +548,11 @@ function SlideFader({
   );
 }
 
-const panText = (p: number) =>
-  Math.abs(p) < 0.01 ? 'C' : p < 0 ? `L${Math.round(-p * 64)}` : `R${Math.round(p * 64)}`;
+/** Pan in the studio's own words (as its pan knob writes it: 64 steps a side, 0 is C). */
+const panText = (p: number) => {
+  const n = Math.round(p * 64);
+  return n === 0 ? 'C' : `${n < 0 ? 'L' : 'R'}${Math.abs(n)}`;
+};
 
 function TrackControls({ track }: { track: StudioTrack }) {
   const channel = (phase: string, patch: Record<string, number>) =>
@@ -595,9 +677,11 @@ function MixerTab() {
 }
 
 function MiniStrip({ track, height, selected }: { track: StudioTrack; height: number; selected: boolean }) {
-  const [local, setLocal] = useState<number | null>(null);
-  const last = useRef(0);
-  const db = local ?? track.volume;
+  const hold = useHeldValue(
+    (volume) => command('channel', { target: track.id, phase: 'move', volume }),
+    () => command('channel', { target: track.id, phase: 'end' }),
+  );
+  const db = hold.local ?? track.volume;
   return (
     <div className={`mini-strip${selected ? ' selected' : ''}`} style={{ ['--c' as string]: track.color }}>
       <span className="name" onClick={() => command('select', { track: track.id })}>
@@ -608,20 +692,12 @@ function MiniStrip({ track, height, selected }: { track: StudioTrack; height: nu
         <Fader
           db={db}
           height={height}
-          onBegin={() => command('channel', { target: track.id, phase: 'begin' })}
-          onChange={(volume) => {
-            setLocal(volume);
-            const now = performance.now();
-            if (now - last.current > 35) {
-              last.current = now;
-              command('channel', { target: track.id, phase: 'move', volume });
-            }
+          onBegin={() => {
+            hold.begin();
+            command('channel', { target: track.id, phase: 'begin' });
           }}
-          onEnd={() => {
-            if (local !== null) command('channel', { target: track.id, phase: 'move', volume: local });
-            command('channel', { target: track.id, phase: 'end' });
-            setTimeout(() => setLocal(null), 600);
-          }}
+          onChange={hold.move}
+          onEnd={() => hold.finish()}
         />
         <LevelBar id={track.id} vertical />
       </div>

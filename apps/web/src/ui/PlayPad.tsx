@@ -14,6 +14,15 @@ import { useSize } from './frame.ts';
 const PORT = 'On-screen';
 const PADS = [49, 51, 46, 42, 50, 47, 45, 43, 39, 37, 38, 36, 56, 54, 70, 75];
 const BLACK = [1, 3, 6, 8, 10];
+/** Semitones from C of the white keys in an octave. */
+const WHITES = [0, 2, 4, 5, 7, 9, 11];
+
+/** The highest octave whose keyboard of `whiteCount` keys stays within MIDI (G9 is note 127). */
+function topOctave(whiteCount: number): number {
+  const last = whiteCount - 1;
+  const span = 12 * Math.floor(last / 7) + (WHITES[last % 7] ?? 0);
+  return Math.min(7, Math.floor((127 - span) / 12) - 1);
+}
 
 /** Where the pads and keys play: this device's own studio, or the studio open on another device. */
 let remote = (() => {
@@ -56,11 +65,15 @@ export function PlayPad({ onMidi, color: colorProp, middleC: middleCProp }: Play
   const touches = useRef(new Map<number, number>());
 
   const whiteCount = size.w > 900 ? 21 : size.w > 560 ? 14 : 10;
+  // a wide keyboard reaches further, so the top octave moves down with the width: a key past 127
+  // would play as a note seven octaves below (the engine keeps the low seven bits)
+  const top = topOctave(whiteCount);
+  const shownOctave = Math.min(octave, top);
   const whites: number[] = [];
-  for (let n = (octave + 1) * 12; whites.length < whiteCount; n++) if (!BLACK.includes(n % 12)) whites.push(n);
+  for (let n = (shownOctave + 1) * 12; whites.length < whiteCount; n++) if (!BLACK.includes(n % 12)) whites.push(n);
   const keyW = size.w / whiteCount;
 
-  const noteAt = (x: number, y: number): { note: number; vel: number } | null => {
+  const noteAt = (x: number, y: number): number | null => {
     const h = size.h;
     const wi = Math.floor(x / keyW);
     const white = whites[wi];
@@ -70,10 +83,10 @@ export function PlayPad({ onMidi, color: colorProp, middleC: middleCProp }: Play
       const local = x - wi * keyW;
       const left = white - 1;
       const right = white + 1;
-      if (local < keyW * 0.3 && BLACK.includes(((left % 12) + 12) % 12)) return { note: left, vel: 0 };
-      if (local > keyW * 0.7 && BLACK.includes(right % 12)) return { note: right, vel: 0 };
+      if (local < keyW * 0.3 && BLACK.includes(((left % 12) + 12) % 12)) return left;
+      if (local > keyW * 0.7 && BLACK.includes(right % 12)) return right;
     }
-    return { note: white, vel: 0 };
+    return white;
   };
 
   const velocityFor = (y: number) => Math.round(40 + 87 * Math.min(1, Math.max(0, 1 - y / size.h)) ** 0.8);
@@ -114,24 +127,53 @@ export function PlayPad({ onMidi, color: colorProp, middleC: middleCProp }: Play
         <span className="grow" />
         {mode === 'keys' && (
           <>
-            <button type="button" className="btn" onClick={() => setOctave((o) => Math.max(0, o - 1))}>
+            <button
+              type="button"
+              className="btn"
+              aria-label="An octave down"
+              onClick={() => setOctave(Math.max(0, shownOctave - 1))}
+            >
               −
             </button>
-            <span className="mono">{noteName((octave + 1) * 12, middleC)}</span>
-            <button type="button" className="btn" onClick={() => setOctave((o) => Math.min(7, o + 1))}>
+            <span className="mono">{noteName((shownOctave + 1) * 12, middleC)}</span>
+            <button
+              type="button"
+              className="btn"
+              aria-label="An octave up"
+              onClick={() => setOctave(Math.min(top, shownOctave + 1))}
+            >
               +
             </button>
           </>
         )}
       </div>
       {mode === 'pads' ? (
-        <div className="pads" style={{ alignContent: 'center' }}>
+        <div className="pads">
           {PADS.map((n) => (
-            <div
+            <button
               key={n}
+              type="button"
+              aria-label={GM_DRUMS[n] ?? `Note ${n}`}
+              aria-pressed={lit.has(n)}
               className={`pad${lit.has(n) ? ' hit' : ''}`}
-              style={{ ['--pad-color' as string]: color, ['--pad-glow' as string]: `${color}88` }}
+              style={{ ['--pad-color' as string]: color }}
+              onKeyDown={(e) => {
+                // a pad from a keyboard: held down for as long as the key is
+                if ((e.key !== ' ' && e.key !== 'Enter') || e.repeat) return;
+                e.preventDefault();
+                wake();
+                touches.current.set(-1 - n, n);
+                update();
+                play(0x99, n, 100);
+              }}
+              onKeyUp={(e) => {
+                if (e.key !== ' ' && e.key !== 'Enter') return;
+                touches.current.delete(-1 - n);
+                update();
+                play(0x89, n, 0);
+              }}
               onPointerDown={(e) => {
+                if (e.button !== 0) return;
                 e.currentTarget.setPointerCapture(e.pointerId);
                 wake();
                 const r = e.currentTarget.getBoundingClientRect();
@@ -151,7 +193,7 @@ export function PlayPad({ onMidi, color: colorProp, middleC: middleCProp }: Play
               }}
             >
               {GM_DRUMS[n] ?? n}
-            </div>
+            </button>
           ))}
         </div>
       ) : (
@@ -159,25 +201,26 @@ export function PlayPad({ onMidi, color: colorProp, middleC: middleCProp }: Play
           ref={box}
           className="keyboard"
           onPointerDown={(e) => {
+            if (e.button !== 0) return;
             e.currentTarget.setPointerCapture(e.pointerId);
             wake();
             const r = e.currentTarget.getBoundingClientRect();
             const hit = noteAt(e.clientX - r.left, e.clientY - r.top);
-            if (!hit) return;
-            touches.current.set(e.pointerId, hit.note);
+            if (hit === null) return;
+            touches.current.set(e.pointerId, hit);
             update();
-            play(0x90, hit.note, velocityFor(e.clientY - r.top));
+            play(0x90, hit, velocityFor(e.clientY - r.top));
           }}
           onPointerMove={(e) => {
             const held = touches.current.get(e.pointerId);
             if (held === undefined) return;
             const r = e.currentTarget.getBoundingClientRect();
             const hit = noteAt(e.clientX - r.left, e.clientY - r.top);
-            if (!hit || hit.note === held) return;
+            if (hit === null || hit === held) return;
             play(0x80, held, 0);
-            touches.current.set(e.pointerId, hit.note);
+            touches.current.set(e.pointerId, hit);
             update();
-            play(0x90, hit.note, velocityFor(e.clientY - r.top));
+            play(0x90, hit, velocityFor(e.clientY - r.top));
           }}
           onPointerUp={(e) => {
             const held = touches.current.get(e.pointerId);
@@ -192,10 +235,15 @@ export function PlayPad({ onMidi, color: colorProp, middleC: middleCProp }: Play
             if (held !== undefined) play(0x80, held, 0);
           }}
         >
+          {/* the keys are drawn, and named for a screen reader; the surface above takes the touches */}
           {whites.map((n, i) => (
-            <div
+            <button
               key={n}
+              type="button"
+              tabIndex={-1}
+              aria-label={noteName(n, middleC)}
               style={{
+                all: 'unset',
                 position: 'absolute',
                 left: i * keyW,
                 top: 0,
@@ -217,13 +265,17 @@ export function PlayPad({ onMidi, color: colorProp, middleC: middleCProp }: Play
               }}
             >
               {n % 12 === 0 ? noteName(n, middleC) : ''}
-            </div>
+            </button>
           ))}
           {whites.map((n, i) =>
             BLACK.includes((n + 1) % 12) && i < whites.length - 1 ? (
-              <div
+              <button
                 key={`b${n}`}
+                type="button"
+                tabIndex={-1}
+                aria-label={noteName(n + 1, middleC)}
                 style={{
+                  all: 'unset',
                   position: 'absolute',
                   left: (i + 1) * keyW - keyW * 0.3,
                   top: 0,

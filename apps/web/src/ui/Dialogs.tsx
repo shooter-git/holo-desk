@@ -1,6 +1,5 @@
 /** Dialogs: songs (open, new, import, from a creation), Audio & MIDI settings, key commands. */
 import { AudioLines, Download, Plus, Send, Upload, X } from 'lucide-react';
-import qrcode from 'qrcode-generator';
 import { type ReactNode, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import {
   bounceSong,
@@ -36,14 +35,30 @@ function Dialog({
   footer?: ReactNode;
   wide?: boolean;
 }) {
+  const box = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    // the keyboard moves into the dialog while it's up, and back to where it was when it closes
+    const was = document.activeElement;
+    box.current?.focus({ preventScroll: true });
+    return () => {
+      if (was instanceof HTMLElement && was.isConnected) was.focus({ preventScroll: true });
+    };
+  }, []);
   return (
     <div className="scrim" onPointerDown={(e) => e.target === e.currentTarget && store.set({ dialog: null })}>
       <div
-        className="dialog"
+        ref={box}
+        className={`dialog${wide ? ' wide' : ''}`}
         role="dialog"
         aria-modal="true"
         aria-label={title}
-        style={wide ? { width: 'min(860px, 100%)' } : undefined}
+        tabIndex={-1}
+        onKeyDown={(e) => {
+          // Escape closes from inside too (a field in the dialog has the keyboard, so the studio's keys don't see it)
+          if (e.key !== 'Escape') return;
+          e.stopPropagation();
+          store.set({ dialog: null });
+        }}
       >
         <header>
           <h2>{title}</h2>
@@ -124,30 +139,28 @@ function ProjectsDialog() {
             </button>
           )}
           <span className="grow" />
-          <input
-            className="input"
-            placeholder="New song's name"
-            value={title}
-            onChange={(e) => setTitle(e.target.value)}
-            aria-label="New song name"
-            style={{ width: 200 }}
-          />
-          <button type="button" className="btn primary" onClick={() => void createProject(title.trim() || 'Untitled')}>
-            <Plus /> New song
-          </button>
+          <div className="hstack new-song">
+            <input
+              className="input"
+              placeholder="New song's name"
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && void createProject(title.trim() || 'Untitled')}
+              aria-label="New song name"
+            />
+            <button
+              type="button"
+              className="btn primary"
+              onClick={() => void createProject(title.trim() || 'Untitled')}
+            >
+              <Plus /> New song
+            </button>
+          </div>
         </>
       }
     >
       {current?.origin && (
-        <div
-          className="banner song-origin"
-          style={{
-            borderRadius: 8,
-            marginBottom: 12,
-            background: 'linear-gradient(90deg, #22314a, #1b2433)',
-            color: '#d6e9ff',
-          }}
-        >
+        <div className="banner song-origin">
           <Send size={16} />
           {creations.find((c) => c.name === current.origin?.creation)?.engine ? (
             <span className="grow">
@@ -180,24 +193,37 @@ function ProjectsDialog() {
   );
 }
 
-/** Where this device's time from key to ear goes, live. */
+/** The readouts are words: refreshed about four times a second, and written only when they change. */
+const READOUT_MS = 250;
+const setText = (el: HTMLElement | null, text: string) => {
+  if (el && el.textContent !== text) el.textContent = text;
+};
+
 /** The audio thread's load in full: average, peak, overloads, and what to do about it. */
 function DspReadout() {
   const line = useRef<HTMLSpanElement>(null);
   const ahead = useRef<HTMLSpanElement>(null);
-  useFrame(() => {
+  const last = useRef(0);
+  useFrame((now) => {
+    // words, not a meter: a few times a second is plenty, and the text is only touched when it changes
+    if (now - last.current < READOUT_MS) return;
+    last.current = now;
     const d = engine.dsp();
     const block = (128 / engine.sampleRate) * 1000;
-    if (line.current)
-      line.current.textContent = d.fine
+    setText(
+      line.current,
+      d.fine
         ? `${Math.round(d.load * 100)}% average, ${Math.round(d.peak * 100)}% peak, ${d.overloads} overload${d.overloads === 1 ? '' : 's'} (${engine.remote ? 'periods' : 'blocks'} of ${block.toFixed(1)} ms)`
-        : `${Math.round(d.load * 100)}% average (this browser's audio thread can't time a single block, so no peak)`;
-    if (ahead.current)
-      ahead.current.textContent = d.ahead
+        : `${Math.round(d.load * 100)}% average (this browser's audio thread can't time a single block, so no peak)`,
+    );
+    setText(
+      ahead.current,
+      d.ahead
         ? `${d.ahead.loads.map((x) => `${Math.round(x * 100)}%`).join(', ')}; ${engine.remote ? 'HO[LO] Engine’s render thread' : 'the audio thread'} waited for them ${d.ahead.stalls} time${d.ahead.stalls === 1 ? '' : 's'} while playing`
         : engine.remote
           ? 'off (HO[LO] Engine was started with --threads 0, or its computer has too few cores)'
-          : 'off (this page has no shared memory, or this device too few cores)';
+          : 'off (this page has no shared memory, or this device too few cores)',
+    );
   });
   return (
     <div className="vstack" style={{ gap: 4 }}>
@@ -235,7 +261,7 @@ function EngineLink() {
       <div className="vstack" style={{ gap: 4 }}>
         <div className="hstack" style={{ flexWrap: 'wrap' }}>
           <span className="status-dot" />
-          <span style={{ fontWeight: 600 }}>HO[LO] Engine</span>
+          <span className="strong">HO[LO] Engine</span>
           <span className="muted">isn’t running on this device</span>
           {!c.looking && (
             <button type="button" className="btn ghost" onClick={() => void companion.find(!share, true)}>
@@ -258,7 +284,7 @@ function EngineLink() {
     <div className="vstack" style={{ gap: 4 }}>
       <div className="hstack" style={{ flexWrap: 'wrap' }}>
         <span className="status-dot ok" />
-        <span style={{ fontWeight: 600 }}>HO[LO] Engine</span>
+        <span className="strong">HO[LO] Engine</span>
         <span className="muted">
           plays this studio through {d.name}: {d.backend} {d.mode === 'exclusive' ? 'exclusive mode' : 'shared'},{' '}
           {d.rate} Hz, {ms(d.period)} ms period{d.depth > 1 ? ` (${d.depth}× its shortest)` : ''}
@@ -289,8 +315,11 @@ function EngineLink() {
   );
 }
 
+/** Where this device's time from key to ear goes, live. A row starting with two spaces is a detail of the one above. */
 function LatencyReadout() {
-  const ref = useRef<HTMLDivElement>(null);
+  const ref = useRef<HTMLUListElement>(null);
+  const shown = useRef('');
+  const last = useRef(0);
   const lowLatency = useApp((s) => s.lowLatency);
   const project = useApp((s) => s.project);
   // plugins on the master that hold the sound back (the limiter's look-ahead), when not bypassed
@@ -299,13 +328,26 @@ function LatencyReadout() {
     : (project?.master.inserts
         .filter((p) => p.type === 'limiter' && !p.bypass)
         .reduce((a, p) => a + (p.params.lookahead ?? 3), 0) ?? 0);
-  useFrame(() => {
+  const show = (rows: string[]) => {
     const el = ref.current;
-    if (!el) return;
+    const text = rows.join('\n');
+    if (!el || shown.current === text) return;
+    shown.current = text;
+    el.replaceChildren(
+      ...rows.map((row) => {
+        const li = document.createElement('li');
+        if (row.startsWith('  ')) li.className = 'sub';
+        li.textContent = row.trimStart();
+        return li;
+      }),
+    );
+  };
+  useFrame((now) => {
+    if (now - last.current < READOUT_MS) return;
+    last.current = now;
     const l = engine.latency();
     if (!engine.ctx) {
-      if (el.textContent !== 'Start the studio to see the numbers.')
-        el.textContent = 'Start the studio to see the numbers.';
+      show(['Start the studio to see the numbers.']);
       return;
     }
     const native = l.companion;
@@ -323,8 +365,8 @@ function LatencyReadout() {
           ? `  USB MIDI to the speakers ${notes.median.toFixed(1)} ms (worst ${notes.worst.toFixed(1)} ms, last ${notes.count} notes)`
           : '  USB MIDI to the speakers: play a few notes to measure it',
         '  live MIDI read natively by HO[LO] Engine',
-      ].join('\n');
-      if (el.textContent !== rows) el.textContent = rows;
+      ];
+      show(rows);
       return;
     }
     const out = l.base + l.output;
@@ -340,16 +382,10 @@ function LatencyReadout() {
         ? `  USB MIDI to the engine ${m.median.toFixed(1)} ms (worst ${m.worst.toFixed(1)} ms, last ${m.count} notes)`
         : '  USB MIDI to the engine: play a few notes to measure it',
       `  live MIDI ${l.sharedMemory ? 'through shared memory' : 'through messages: open HO[LO] over HTTPS for shared memory'}`,
-    ].join('\n');
-    if (el.textContent !== rows) el.textContent = rows;
+    ];
+    show(rows);
   });
-  return (
-    <div
-      ref={ref}
-      className="mono"
-      style={{ whiteSpace: 'pre', fontSize: 11, lineHeight: 1.6, color: 'var(--text-2)' }}
-    />
-  );
+  return <ul ref={ref} className="mono latency-readout" />;
 }
 
 function platformTip(): string {
@@ -533,7 +569,8 @@ function SettingsDialog() {
   useFrame((now) => {
     for (const [name, el] of lights.current) {
       const t = midi.lastActivity.get(name) ?? 0;
-      el.className = `status-dot ${now - t < 90 ? 'flash' : 'ok'}`;
+      const cls = `status-dot ${now - t < 90 ? 'flash' : 'ok'}`;
+      if (el.className !== cls) el.className = cls;
     }
   });
   useEffect(() => midi.onPorts(() => store.set({ midiPorts: midi.ports })), []);
@@ -552,7 +589,7 @@ function SettingsDialog() {
               onBlur={(e) => renameDevice(e.currentTarget.value)}
               onKeyDown={(e) => {
                 if (e.key === 'Enter') e.currentTarget.blur();
-                e.stopPropagation();
+                else if (e.key !== 'Escape') e.stopPropagation();
               }}
             />
             <span
@@ -648,7 +685,7 @@ function SettingsDialog() {
             </button>
           )}
           {status === 'on' && (
-            <div className="list" style={{ border: '1px solid var(--line)', borderRadius: 8, overflow: 'hidden' }}>
+            <div className="list boxed">
               {ports.length === 0 && (
                 <div className="list-item muted">No MIDI devices yet. Plug one in: it appears here straight away.</div>
               )}
@@ -661,7 +698,7 @@ function SettingsDialog() {
                       else lights.current.delete(p.name);
                     }}
                   />
-                  <span style={{ fontWeight: 600 }}>{p.name}</span>
+                  <span className="strong">{p.name}</span>
                   <span className="meta">
                     {p.source === 'device'
                       ? p.manufacturer || 'USB'
@@ -777,7 +814,7 @@ function NetworkMidiPanel() {
             On the iPhone, plug the keyboard in and connect a network session to that address in a MIDI app (midimittr,
             for one); on a Mac, Audio MIDI Setup → Network.
           </span>
-          <div className="list" style={{ border: '1px solid var(--line)', borderRadius: 8, overflow: 'hidden' }}>
+          <div className="list boxed">
             {status.sessions.length === 0 && <div className="list-item muted">No device connected.</div>}
             {status.sessions.map((s) => (
               <div key={`${s.name}-${s.since}`} className="list-item" style={{ cursor: 'default' }}>
@@ -795,12 +832,26 @@ function NetworkMidiPanel() {
 
 /** A QR code as SVG (dark modules on white, with the quiet zone scanners need). */
 function QrCode({ text, size = 196 }: { text: string; size?: number }) {
-  const qr = qrcode(0, 'M');
-  qr.addData(text);
-  qr.make();
-  const n = qr.getModuleCount();
-  let d = '';
-  for (let r = 0; r < n; r++) for (let c = 0; c < n; c++) if (qr.isDark(r, c)) d += `M${c + 4} ${r + 4}h1v1h-1z`;
+  // the generator is a file of its own, fetched the first time a code is shown
+  const [code, setCode] = useState<{ n: number; d: string } | null>(null);
+  useEffect(() => {
+    let wanted = true;
+    void import('qrcode-generator').then(({ default: qrcode }) => {
+      const qr = qrcode(0, 'M');
+      qr.addData(text);
+      qr.make();
+      const n = qr.getModuleCount();
+      let d = '';
+      for (let r = 0; r < n; r++) for (let c = 0; c < n; c++) if (qr.isDark(r, c)) d += `M${c + 4} ${r + 4}h1v1h-1z`;
+      if (wanted) setCode({ n, d });
+    });
+    return () => {
+      wanted = false;
+    };
+  }, [text]);
+  // its white square holds the place while the generator loads
+  if (!code) return <div style={{ width: size, height: size, borderRadius: 10, background: '#fff', flex: 'none' }} />;
+  const { n, d } = code;
   return (
     <svg
       width={size}
@@ -828,9 +879,9 @@ function RemoteDialog() {
         <QrCode text={url} />
         <div className="vstack" style={{ gap: 10, flex: '1 1 240px', minWidth: 0 }}>
           <p style={{ margin: 0 }}>
-            Scan this with the phone by your instruments, or open <b className="mono">{url}</b> on it. It drives this
-            studio: play, stop, record, cycle, the tracks and their faders, markers, and a keyboard and pads that play
-            into the selected track.
+            Scan this with the phone by your instruments, or open <b className="mono wrap-any">{url}</b> on it. It
+            drives this studio: play, stop, record, cycle, the tracks and their faders, markers, and a keyboard and pads
+            that play into the selected track.
           </p>
           {local && (
             <p className="muted" style={{ margin: 0, color: 'var(--cycle)' }}>

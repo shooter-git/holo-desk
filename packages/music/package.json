@@ -17,6 +17,6 @@
     "@holo/session": "workspace:*"
   },
   "devDependencies": {
-    "rolldown": "1.2.14"
+    "rolldown": "1.2.15"
   }
 }

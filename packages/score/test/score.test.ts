@@ -6,12 +6,14 @@ import {
   BarAccidentals,
   beatGrid,
   beatsOf,
+  fretChords,
   keyAlters,
   notate,
   scoreText,
   spellInKey,
   splitValues,
   strength,
+  TUNINGS,
   toMEI,
   transposeSpelling,
   tupletFor,
@@ -279,5 +281,55 @@ describe('drawing', () => {
     const svg = tk.renderToSVG(1);
     expect(tk.getLog()).toBe('');
     for (const id of doc.refs.keys()) expect(svg).toContain(`id="${id}"`);
+  });
+});
+
+describe('tablature', () => {
+  it('plays a passage where the hand already is', () => {
+    // an A minor run: played in one place, the fretted notes within a hand's reach
+    const run = [57, 60, 62, 64, 67, 69].map((p) => [p]);
+    const frets = fretChords(run, TUNINGS.guitar as number[]);
+    const used = frets.map((c) => c[0]?.[1] ?? -1).filter((f) => f > 0);
+    expect(used.length).toBeGreaterThan(3);
+    expect(Math.max(...used) - Math.min(...used)).toBeLessThanOrEqual(4);
+    // an open E chord stays open
+    const [chord] = fretChords([[40, 47, 52, 56, 59, 64]], TUNINGS.guitar as number[]);
+    expect(chord?.map((f) => f?.join('/'))).toEqual(['6/0', '5/2', '4/2', '3/1', '2/0', '1/0']);
+    // a note's own string is kept; one no string reaches is left out
+    const [own] = fretChords([[64]], TUNINGS.guitar as number[], 0, [[2]]);
+    expect(own).toEqual([[2, 5]]);
+    expect(fretChords([[30]], TUNINGS.guitar as number[])).toEqual([[null]]);
+    // a capo: frets count from it
+    expect(fretChords([[66]], TUNINGS.guitar as number[], 2)[0]).toEqual([[1, 0]]);
+  });
+
+  it('draws tab under the staff, and as the staff, without a complaint from Verovio', async () => {
+    const tk = new VerovioToolkit(await createVerovioModule());
+    for (const only of [false, true]) {
+      const p = one('Guitar', parseNotation('E3:1 G3:1 (C4 E4):2 | r:2 A3:2', { unit: q }), (p) => {
+        const t = p.tracks[0];
+        if (t) t.score = { tab: { tuning: TUNINGS.guitar as number[], ...(only ? { only } : {}) } };
+        const r = p.tracks[0]?.regions[0];
+        if (r) r.length = 8 * q;
+      });
+      const doc = notate(p);
+      const part = doc.parts[0];
+      expect(part?.staves.length).toBe(1);
+      expect(!!part?.tab).toBe(!only);
+      const mei = toMEI(doc);
+      expect(mei).toContain('notationtype="tab.guitar"');
+      expect(mei).toContain(only ? '<tabGrp' : 'tab.fret=');
+      tk.setOptions({ pageWidth: 2100, adjustPageHeight: true });
+      expect(tk.loadData(mei)).toBeTruthy();
+      const svg = tk.renderToSVG(1);
+      expect(tk.getLog()).toBe('');
+      for (const id of doc.refs.keys()) if (!only || !id.startsWith('r')) expect(svg).toContain(`id="${id}"`);
+      // the score text has the notes once
+      expect(
+        scoreText(doc)
+          .split('\n')
+          .filter((l) => l.startsWith('  P1')).length,
+      ).toBe(2);
+    }
   });
 });

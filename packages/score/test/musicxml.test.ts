@@ -123,6 +123,20 @@ describe('MusicXML', () => {
     expect(back).toBe(out);
   });
 
+  it('keeps the strings a guitar part is played on', () => {
+    const p = song('Guitar', parseNotation('E4:1 B3:1 (G3 D4):2', { unit: q }), (p) => {
+      const t = p.tracks[0];
+      if (t) t.score = { tab: { tuning: [64, 59, 55, 50, 45, 40] } };
+      // the E played on the B string, not open
+      const n = p.tracks[0]?.regions[0]?.notes[0];
+      if (n) n.n = { tb: [2, 64] };
+    });
+    const xml = toMusicXml(notate(p));
+    expect(xml).toContain('<technical><string>2</string><fret>5</fret></technical>');
+    const back = readMusicXml(xml).project;
+    expect(back.tracks[0]?.regions[0]?.notes.find((n) => n.p === 64)?.n?.tb).toEqual([2, 64]);
+  });
+
   it('keeps drums on their staff', () => {
     const drums: Note[] = [];
     for (let i = 0; i < 8; i++) drums.push({ t: i * 480, d: 60, p: 42, v: 70 });

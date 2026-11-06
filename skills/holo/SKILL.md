@@ -79,6 +79,7 @@ holo score show --part P2 --bars 9-12  # one part (it keeps its number)
 holo score check                       # out-of-range notes, slips, a bar missing between bars
 holo score write bars.txt              # bars from a file (or - for stdin, or the text itself)
 holo score part P2 --staves 2 --clefs G,F   # a part's staves, clefs, transposition (--transpose 2,1|none)
+holo score part P3 --tab on --tuning drop-d --capo 2   # tab under a fretted part (--tab only: tab alone; off)
 holo score meta --composer "…" --lyricist "…"
 holo score pickup 1                    # the song starts with a one-beat upbeat (bar 0)
 holo score unroll                      # write the repeats and jumps out as they play

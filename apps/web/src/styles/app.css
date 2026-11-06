@@ -3740,6 +3740,16 @@ html[data-layout="phone-landscape"] .toasts {
   font-weight: 700;
 }
 
+/* typing words into the score: lyrics a syllable a note, chord symbols a beat */
+.score-text .input {
+  width: 14em;
+  max-width: 50vw;
+}
+
+.score-text .hint {
+  font-size: 12px;
+}
+
 .score.writing .score-page {
   cursor: crosshair;
 }

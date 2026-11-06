@@ -480,6 +480,8 @@ function head(
     }
     if (e.artic.includes('arp')) n.push('<arpeggiate/>');
   }
+  // tab: the string and fret each note is played on
+  if (h.tab) n.push(`<technical><string>${h.tab[0]}</string><fret>${h.tab[1]}</fret></technical>`);
   if (n.length) parts.push(`<notations>${n.join('')}</notations>`);
   if (k === 0 && e.lyrics) {
     const before = o.prev?.kind === 'chord' ? o.prev.lyrics : undefined;

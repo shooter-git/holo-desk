@@ -395,25 +395,26 @@ describe('rendering ahead', () => {
     expect(same(split(batches, BLOCKS, 2, owners), reference)).toBe(true);
   }, 60_000);
 
+  // owners at random: workers wait on each other both ways
+  const shuffled = aheadOwners(graph, 3, () => 0.1).map((o, i) => (o < 0 ? o : (i * 7) % 3));
+  // (no stop and start again: a start from a stop skips what the workers played of the stop)
+  const going = new Map([...batches].filter(([k]) => k < 800));
+  const all: ToWorklet[] = [
+    { type: 'ahead', owners: shuffled },
+    ...[...going].sort((a, b) => a[0] - b[0]).flatMap(([, list]) => list),
+  ];
+
   it('hands over between threads and plays the same numbers, whoever plays what', async () => {
-    // owners at random: workers wait on each other both ways
-    const shuffled = aheadOwners(graph, 3, () => 0.1).map((o, i) => (o < 0 ? o : (i * 7) % 3));
-    // (no stop and start again: a start from a stop skips what the workers played of the stop)
-    const going = new Map([...batches].filter(([k]) => k < 800));
     const out = await threaded(going, BLOCKS, 3, shuffled);
-    // replayed with each message before the block the workers took it in at
-    const all: ToWorklet[] = [
-      { type: 'ahead', owners: shuffled },
-      ...[...going].sort((a, b) => a[0] - b[0]).flatMap(([, list]) => list),
-    ];
-    const replay = new Map<number, ToWorklet[]>();
-    let taken = 0;
-    out.counts.forEach((count, k) => {
-      if (count > taken) replay.set(k, all.slice(taken, count));
-      taken = count;
-    });
-    expect(taken).toBe(all.length);
-    expect(same(out.channels, one(withoutOwners(replay), BLOCKS))).toBe(true);
+    expect(same(out.channels, replayed(out, all))).toBe(true);
+  }, 60_000);
+
+  it('plays the same numbers when the workers are well ahead before the audio thread starts', async () => {
+    // the song arrives after blocks the workers played stopped: the audio thread skips those and
+    // starts at the block the song does (as it does starting from a stop)
+    const out = await threaded(going, BLOCKS, 3, shuffled, 12);
+    expect(out.played.some((b, k) => b > k)).toBe(true);
+    expect(same(out.channels, replayed(out, all))).toBe(true);
   }, 60_000);
 });
 
@@ -507,6 +508,36 @@ describe('live notes while the song renders ahead', () => {
   }, 60_000);
 });
 
+/**
+ * What the audio thread played, replayed on one engine: each message before the block the workers
+ * took it in at, and each block heard compared with that block of the replay (the audio thread skips
+ * the blocks the workers played stopped before the song starts, and plays every block after).
+ */
+function replayed(out: { counts: number[]; played: number[] }, all: ToWorklet[]): Float32Array[] {
+  const start = all.findIndex((m) => m.type === 'play') + 1;
+  const replay = new Map<number, ToWorklet[]>();
+  let taken = 0;
+  out.counts.forEach((count, k) => {
+    const b = out.played[k] as number;
+    if (k > 0) {
+      const gap = b - (out.played[k - 1] as number);
+      if (taken >= start) expect(gap).toBe(1);
+      else expect(gap).toBeGreaterThan(0);
+    }
+    if (count > taken) replay.set(b, all.slice(taken, count));
+    taken = count;
+  });
+  expect(taken).toBe(all.length);
+  const ref = one(withoutOwners(replay), (out.played.at(-1) as number) + 1);
+  return ref.map((c) => {
+    const heard = new Float32Array(out.played.length * AHEAD_BLOCK);
+    out.played.forEach((b, k) => {
+      heard.set(c.subarray(b * AHEAD_BLOCK, (b + 1) * AHEAD_BLOCK), k * AHEAD_BLOCK);
+    });
+    return heard;
+  });
+}
+
 /** The replay's messages without the owners (one engine has no use for them). */
 function withoutOwners(replay: Map<number, ToWorklet[]>): Map<number, ToWorklet[]> {
   const out = new Map<number, ToWorklet[]>();
@@ -517,13 +548,19 @@ function withoutOwners(replay: Map<number, ToWorklet[]>): Map<number, ToWorklet[
   return out;
 }
 
-/** Workers as threads, the audio thread here: as fast as they go, with messages sent as the song plays. */
+/**
+ * Workers as threads, the audio thread here: as fast as they go, with messages sent as the song plays.
+ * `late`: the song goes out once the workers have played that many blocks stopped, and until they have
+ * taken it in the audio thread only plays when they are near the lead (so it is sure to
+ * skip to the song's start). Returns the ring block each block heard was, and the messages taken in by then.
+ */
 async function threaded(
   batches: Map<number, ToWorklet[]>,
   blocks: number,
   workers: number,
   owners: number[],
-): Promise<{ channels: Float32Array[]; counts: number[]; stalls: number }> {
+  late = 0,
+): Promise<{ channels: Float32Array[]; counts: number[]; played: number[]; stalls: number }> {
   const control = aheadControl();
   const room = aheadRoom(64);
   const data = aheadData(room);
@@ -550,12 +587,16 @@ async function threaded(
     ahead: { control, data, edges: room, workers, self: -1 },
   });
   const player = new AheadPlayer(core, link, workers);
+  let sent = 0;
   const send = (m: ToWorklet) => {
     for (const t of threads) t.postMessage(m);
     player.receive(structuredClone(m));
+    sent++;
   };
   send({ type: 'ahead', owners });
+  while (link.leader() < late && !errors.length) await new Promise((done) => setTimeout(done, 1));
   const counts: number[] = [];
+  const played: number[] = [];
   const L = new Float32Array(blocks * AHEAD_BLOCK);
   const R = new Float32Array(blocks * AHEAD_BLOCK);
   const l = new Float32Array(AHEAD_BLOCK);
@@ -567,8 +608,13 @@ async function threaded(
     // messages go out as the audio thread reaches their block (the workers take them in later on)
     for (let b = sentUpTo + 1; b <= k; b++) for (const m of batches.get(b) ?? []) send(m);
     sentUpTo = k;
+    if (late && link.messages(link.leader() - 1) < sent && link.leader() - link.consumed() < link.lead() - 8) {
+      await new Promise((done) => setTimeout(done, 1));
+      continue;
+    }
     if (player.process(l, r, undefined, k * AHEAD_BLOCK)) {
-      counts.push(link.messages(k));
+      counts.push(player.taken);
+      played.push(link.consumed() - 1);
       L.set(l, k * AHEAD_BLOCK);
       R.set(r, k * AHEAD_BLOCK);
       k++;
@@ -581,5 +627,5 @@ async function threaded(
   for (const t of threads) t.postMessage({ type: 'aheadQuit' });
   await Promise.all(threads.map((t) => t.terminate()));
   expect(errors).toEqual([]);
-  return { channels: [L, R], counts, stalls };
+  return { channels: [L, R], counts, played, stalls };
 }

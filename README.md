@@ -33,13 +33,22 @@ pnpm build && pnpm start    # or `pnpm dev` while working on HO[LO] itself
 
 Open <http://localhost:47800> and press **Start the studio**.
 
-**In Docker** (the server, the built studio and your data in `./data`):
+**In Docker** (the server, the built studio and your data in `./data`), from the image CI publishes:
 
 ```bash
 cp .env.example .env
-pnpm up                     # docker compose … up -d --build
-docker compose --project-directory . -f deploy/compose.yml exec holo node apps/server/src/packs-cli.ts install
+pnpm run update             # pull ghcr.io/shooter-git/holo-desk:stable and start it (or: pnpm run update main)
+pnpm run autoupdate on      # then it keeps itself up to date (Linux: a systemd timer, as you)
 ```
+
+Install sample packs from the studio's Library (**More packs → Install**). Every image is published by
+CI with a signed record of what built it: `stable` and the version on each release, `main` on every
+change merged, `sha-<commit>` always. The timer looks every 15 minutes and never restarts HO[LO] while a
+studio is playing or recording; an open studio offers to reload when its host has been updated. Songs
+and packs live in `./data`, outside the image, so an update never touches them.
+
+To run your own changes instead, `pnpm run up` builds from this checkout (`holo-desk:local`); automatic
+updates wait until you `pnpm run update` again.
 
 ## Your other devices
 

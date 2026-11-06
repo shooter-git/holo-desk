@@ -5,10 +5,10 @@
  */
 import type { FormKind } from '@holo/score';
 import { keyText } from '@holo/session';
-import { useSyncExternalStore } from 'react';
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { unrollRepeats } from '../app/actions.ts';
 import { openMenuAt } from '../ui/menu.tsx';
-import type { Entry } from './entry.ts';
+import type { Entry, TextTarget } from './entry.ts';
 
 const VALUES: [number, string, string][] = [
   [1, 'Whole note', '7'],
@@ -103,6 +103,8 @@ export function Palette({ entry }: { entry: Entry }) {
   if (!s) return null;
   const more = (el: Element) =>
     openMenuAt(el, [
+      { label: 'Lyrics from the selected note', hint: '⇧L', onSelect: () => entry.lyrics() },
+      { label: 'Chord symbols from here', hint: '⇧Q', onSelect: () => entry.chordSymbols() },
       { label: 'Respell (F♯ ↔ G♭)', hint: 'J', onSelect: () => entry.respell() },
       { label: 'Tidy rhythms: write played-in notes as shown', onSelect: () => entry.tidy() },
       { heading: 'Clef from this bar' },
@@ -113,6 +115,10 @@ export function Palette({ entry }: { entry: Entry }) {
       ...FORM.map(([kind, label]) => ({ label, onSelect: () => entry.form(kind, label) })),
       { label: 'None in this bar', onSelect: () => entry.form(null, 'no repeats here') },
       { label: 'Unroll repeats: write them out as they play', onSelect: () => unrollRepeats() },
+      { heading: 'Tab (fretted parts)' },
+      { label: 'Tab under the staff', onSelect: () => entry.tab('under') },
+      { label: 'Tab only', onSelect: () => entry.tab('only') },
+      { label: 'No tab', onSelect: () => entry.tab('off') },
     ]);
   const keys = (el: Element) =>
     openMenuAt(el, [
@@ -125,6 +131,8 @@ export function Palette({ entry }: { entry: Entry }) {
         })),
       ]),
     ]);
+  // (a new place, a new field: what's there already, ready to type over)
+  if (s.text) return <TextEntry key={s.text.n} entry={entry} target={s.text} />;
   return (
     <div className="score-palette" role="toolbar" aria-label="Writing">
       <div className="seg">
@@ -251,6 +259,76 @@ export function Palette({ entry }: { entry: Entry }) {
       >
         More ▾
       </button>
+    </div>
+  );
+}
+
+/**
+ * Words into the score: a syllable a note (Space or - goes to the next note, - joining them), or a
+ * chord symbol a beat (Space goes on a beat). Enter finishes, Esc leaves.
+ */
+function TextEntry({ entry, target }: { entry: Entry; target: TextTarget }) {
+  const [value, setValue] = useState(() => entry.textNow());
+  const input = useRef<HTMLInputElement>(null);
+  // (asked for with Shift+L or Shift+Q: the typing goes here, over what's there)
+  useEffect(() => {
+    input.current?.focus();
+    input.current?.select();
+  }, []);
+  const lyric = target.kind === 'lyric';
+  const onKey = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      entry.closeText();
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      entry.commitText(value, false);
+    } else if (e.key === ' ' || e.key === 'Tab') {
+      e.preventDefault();
+      entry.commitText(value, true);
+    } else if (e.key === '-' && lyric && value.trim()) {
+      e.preventDefault();
+      entry.commitText(`${value.replace(/-$/, '')}-`, true);
+    }
+  };
+  return (
+    <div className="score-palette score-text" role="toolbar" aria-label={lyric ? 'Lyrics' : 'Chord symbols'}>
+      <span className="muted">{lyric ? `Lyrics, verse ${target.verse}` : 'Chord symbol'}</span>
+      <input
+        ref={input}
+        className="input"
+        value={value}
+        spellCheck={false}
+        aria-label={lyric ? 'Syllable' : 'Chord symbol'}
+        placeholder={lyric ? 'a syllable' : 'Dm7, G7/B, Cmaj7…'}
+        onChange={(e) => setValue(e.target.value)}
+        onKeyDown={onKey}
+        onBlur={() =>
+          // (gone elsewhere: done; the next note's field taking over isn't leaving)
+          setTimeout(() => {
+            if (!document.activeElement?.closest('.score-text')) entry.closeText();
+          }, 0)
+        }
+      />
+      <span className="muted hint">
+        {lyric ? 'Space: next note · -: joined to the next · Enter: done' : 'Space: next beat · Enter: done'}
+      </span>
+      {lyric && (
+        <div className="seg">
+          {[1, 2, 3].map((v) => (
+            <button
+              key={v}
+              type="button"
+              className={`btn${target.verse === v ? ' on' : ''}`}
+              title={`Verse ${v}`}
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => entry.lyrics(v)}
+            >
+              {v}
+            </button>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

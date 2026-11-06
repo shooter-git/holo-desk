@@ -3,7 +3,7 @@
  * reads and writes notation with (and anyone who'd rather type music than click it).
  */
 import { readFileSync } from 'node:fs';
-import { checkScore, notate, partsLine, type ScoreDoc, scoreText, writeScoreText } from '@holo/score';
+import { checkScore, notate, partsLine, type ScoreDoc, scoreText, withTab, writeScoreText } from '@holo/score';
 import { meterAt, type Op, PPQ, type Project, type TrackScore, unrollOps } from '@holo/session';
 
 export interface ScoreContext {
@@ -21,6 +21,7 @@ export const SCORE_HELP = `holo score: the song as a score (parts P1, P2… in t
   holo score check                     what a player would stumble on: ranges, slips, missing bars
   holo score parts                     the parts: staves, clefs, transposition
   holo score part P1 [--staves 2] [--clefs G,F] [--transpose 2,1|none] [--name N] [--abbr A] [--hidden on|off]
+      [--tab on|only|off] [--tuning guitar|drop-d|dadgad|open-g|bass|bass-5|ukulele|mandolin|banjo|64,59,…] [--capo 2]
   holo score meta [--composer C] [--lyricist L] [--arranger A] [--subtitle S] [--copyright C]
   holo score pickup BEATS              the song starts with an upbeat of BEATS beats (0: none)
   holo score unroll                    write the repeats and jumps out as they play (no repeat signs after)
@@ -156,6 +157,18 @@ export async function scoreCommand(ctx: ScoreContext): Promise<void> {
       if (abbr) score.abbr = abbr;
       const hidden = ctx.flag('hidden');
       if (hidden) score.hidden = hidden === 'on';
+      const tab = ctx.flag('tab');
+      const tuning = ctx.flag('tuning');
+      const capo = ctx.flag('capo');
+      if (tab || tuning || capo) {
+        const mode = tab === 'only' ? 'only' : tab === 'off' ? 'off' : score.tab?.only && !tab ? 'only' : 'under';
+        const strings = tuning && /^[\d,\s]+$/.test(tuning) ? tuning.split(',').map(Number) : tuning;
+        Object.assign(
+          score,
+          withTab({ name: track?.name ?? part.name, score }, mode, strings, capo ? Number(capo) : undefined),
+        );
+        if (mode === 'off') delete score.tab;
+      }
       await ctx.ops(project, [{ op: 'updateTrack', track: part.track, patch: { score } }], `Score: ${part.name}`);
       return;
     }

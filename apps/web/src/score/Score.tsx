@@ -10,7 +10,7 @@ import { clefAt, keyAlters, notate, type ScoreDoc, staffPlace, toMEI, writtenKey
 import type { Note, Project } from '@holo/session';
 import { PenLine, ScanLine, ZoomIn, ZoomOut } from 'lucide-react';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
-import { ensureAudio, locate } from '../app/actions.ts';
+import { apply, ensureAudio, locate } from '../app/actions.ts';
 import { setKeyScope } from '../app/keys.ts';
 import { isPhone, useLayout } from '../app/layout.ts';
 import { store, useApp } from '../app/store.ts';
@@ -46,6 +46,9 @@ export function ScoreBar() {
   const write = useApp((s) => s.scoreWrite);
   const trackName = useApp((s) => s.project?.tracks.find((t) => t.id === s.selectedTrack)?.name ?? '');
   const phone = isPhone(useLayout());
+  const concert = useApp((s) => !!s.project?.score?.concert);
+  // (only a song with a transposing part has a choice to make)
+  const transposes = useApp((s) => !!s.project && (concert || scoreOf(s.project).parts.some((p) => p.tr)));
   const zoomBy = (f: number) =>
     store.set({ scoreZoom: Math.round(Math.max(ZOOM_RANGE[0], Math.min(ZOOM_RANGE[1], zoom * f))) });
   return (
@@ -97,6 +100,30 @@ export function ScoreBar() {
         <ScanLine />
         {!phone && 'Scan'}
       </button>
+      {transposes && (
+        <button
+          type="button"
+          className={`btn${concert ? ' on' : ''}`}
+          title={
+            concert
+              ? 'Concert pitch: every part as it sounds. Click for the parts as their players read them'
+              : 'Transposed: each part as its player reads it. Click for concert pitch'
+          }
+          aria-pressed={concert}
+          onClick={() => {
+            const p = store.get().project;
+            if (!p) return;
+            const { concert: _, ...rest } = p.score ?? {};
+            const score = concert ? rest : { ...rest, concert: true };
+            apply(
+              [{ op: 'setProject', patch: { score: Object.keys(score).length ? score : null } }],
+              concert ? 'Score: transposed' : 'Score: concert pitch',
+            );
+          }}
+        >
+          {phone ? 'C' : 'Concert'}
+        </button>
+      )}
       <span className="grow" />
       <button type="button" className="btn ghost icon" title="Smaller" onClick={() => zoomBy(0.85)}>
         <ZoomOut />
@@ -113,7 +140,8 @@ function notesById(doc: ScoreDoc): Map<string, { track: string; notes: Note[] }>
   const out = new Map<string, { track: string; notes: Note[] }>();
   for (const [id, ref] of doc.refs) out.set(id, { track: ref.track, notes: [ref.note] });
   for (const part of doc.parts) {
-    for (const staff of part.staves) {
+    // (a tab staff's frets are the same notes)
+    for (const staff of part.tab ? [...part.staves, part.tab] : part.staves) {
       for (const b of staff.bars) {
         for (const v of b.voices) {
           for (const e of v.events) {

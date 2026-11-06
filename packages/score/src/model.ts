@@ -64,6 +64,11 @@ export interface Part {
   drums: boolean;
   /** Comfortable range (sounding), for the checks. */
   range?: [number, number];
+  /**
+   * Tablature under the part's staff: the same notes as strings and frets (drawn only; the notes
+   * are the staff's). A part written only as tab has its staff as tab instead.
+   */
+  tab?: Staff;
 }
 
 export interface Staff {
@@ -75,6 +80,8 @@ export interface Staff {
   clefs: [number, string][];
   /** One per bar, in step with the score's bars. */
   bars: StaffBar[];
+  /** A tab staff: its open strings (sounding, the highest first) and capo. */
+  tab?: { tuning: number[]; capo: number };
 }
 
 export interface StaffBar {

@@ -17,6 +17,7 @@ import {
   projectEnd,
   type Region,
   type Track,
+  type TrackScore,
   ticksPerBar,
 } from '@holo/session';
 import { drumPlace, FEET, partDefaults } from './instruments.ts';
@@ -46,6 +47,7 @@ import {
   spellInKey,
   transposeSpelling,
 } from './spell.ts';
+import { fretChords, tuningFor } from './tab.ts';
 import { assignVoices, type Chord } from './voices.ts';
 
 export interface NotateOptions {
@@ -84,7 +86,7 @@ export function notate(project: Project, opts: NotateOptions = {}): ScoreDoc {
   for (const track of tracks) {
     const part = notatePart(track, bars, staffNumber, concert, refs, ids, warnings);
     parts.push(part);
-    staffNumber += part.staves.length;
+    staffNumber += part.staves.length + (part.tab ? 1 : 0);
   }
   return { title: project.title, credits: project.score ?? {}, bars, parts, refs, warnings };
 }
@@ -326,6 +328,7 @@ function notatePart(
   beam(staves, bars);
   const octaves = octaveSpans(regions, staves);
   spell(staves, bars, tr, drums, track, octaves);
+  const tab = settings.tab && !drums ? tabulate(staves, settings.tab, track.name, firstStaff, ids, refs) : undefined;
   const controls = markings(regions, staves);
   for (const c of controls) {
     const at = 'tick' in c ? c.tick : eventTick(staves, c.start);
@@ -341,7 +344,78 @@ function notatePart(
   };
   if (settings.abbr) part.abbr = settings.abbr;
   if (defaults.range) part.range = defaults.range;
+  if (tab) part.tab = tab;
   return part;
+}
+
+/**
+ * Strings and frets for a part's notes (on its first staff), chosen for the hand (fretChords). The
+ * tab is drawn under the staff, the same notes again; a part that's tab only has its staff drawn as
+ * tab instead (and nothing is returned).
+ */
+function tabulate(
+  staves: Staff[],
+  settings: NonNullable<TrackScore['tab']>,
+  name: string,
+  firstStaff: number,
+  ids: { chord: number; head: number },
+  refs: Map<string, NoteRef>,
+): Staff | undefined {
+  const src = staves[0];
+  if (!src) return undefined;
+  const tuning = settings.tuning?.length ? settings.tuning : tuningFor(name);
+  const capo = settings.capo ?? 0;
+  // the chords the hand plays: every note starting at a tick, whatever its voice
+  const at = new Map<number, Head[]>();
+  for (const sb of src.bars) {
+    for (const v of sb.voices) {
+      for (const e of v.events) {
+        if (e.kind !== 'chord') continue;
+        for (const h of e.heads) if (h.tie !== 'm' && h.tie !== 't') at.set(e.tick, [...(at.get(e.tick) ?? []), h]);
+      }
+    }
+  }
+  const ticks = [...at.keys()].sort((a, b) => a - b);
+  const chords = ticks.map((t) => (at.get(t) as Head[]).map((h) => h.pitch));
+  const fixed = ticks.map((t) =>
+    (at.get(t) as Head[]).map((h) => {
+      const tb = h.ref.note.n?.tb;
+      return tb && tb[1] === h.ref.note.p ? tb[0] : null;
+    }),
+  );
+  const frets = fretChords(chords, tuning, capo, fixed);
+  ticks.forEach((t, i) => {
+    (at.get(t) as Head[]).forEach((h, k) => {
+      const f = frets[i]?.[k];
+      if (f) h.tab = f;
+    });
+  });
+  if (settings.only) {
+    src.clefs = [[src.clefs[0]?.[0] ?? 0, 'tab']];
+    src.tab = { tuning, capo };
+    return undefined;
+  }
+  // the same bars again, for the tab staff: its own ids, pointing at the same notes
+  return {
+    n: firstStaff + staves.length,
+    local: staves.length + 1,
+    clefs: [[src.clefs[0]?.[0] ?? 0, 'tab']],
+    tab: { tuning, capo },
+    bars: src.bars.map((sb) => ({
+      voices: sb.voices.map((v) => ({
+        n: v.n,
+        events: v.events.map((e): ScoreEvent => {
+          if (e.kind === 'rest') return { ...e, id: `r${ids.chord++}` };
+          const heads = e.heads.map((h) => {
+            const id = `n${ids.head++}`;
+            refs.set(id, h.ref);
+            return { ...h, id };
+          });
+          return { ...e, id: `c${ids.chord++}`, heads };
+        }),
+      })),
+    })),
+  };
 }
 
 function quantizeItems(items: Item[], bars: Bar[], fixed?: number): void {

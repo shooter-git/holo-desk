@@ -106,12 +106,15 @@ export function toMEI(doc: ScoreDoc, opts: MeiOptions = {}): string {
   out.push('<staffGrp>');
   const named = opts.labels !== false;
   for (const part of doc.parts) {
-    const defs = part.staves.map((s) => staffDef(s, part, first, named));
-    if (part.staves.length > 1) {
+    const all = part.tab ? [...part.staves, part.tab] : part.staves;
+    const defs = all.map((s) => staffDef(s, part, first, named && all.length === 1));
+    if (all.length > 1) {
       const label = named
         ? `<label>${esc(part.name)}</label>${part.abbr ? `<labelAbbr>${esc(part.abbr)}</labelAbbr>` : ''}`
         : '';
-      out.push(`<staffGrp${attrs({ symbol: 'brace', 'bar.thru': 'true' })}>${label}${defs.join('')}</staffGrp>`);
+      // a grand staff braced; a staff and its tab bracketed
+      const symbol = part.staves.length > 1 ? 'brace' : 'bracket';
+      out.push(`<staffGrp${attrs({ symbol, 'bar.thru': 'true' })}>${label}${defs.join('')}</staffGrp>`);
     } else out.push(defs.join(''));
   }
   out.push('</staffGrp></scoreDef>');
@@ -126,8 +129,9 @@ export function toMEI(doc: ScoreDoc, opts: MeiOptions = {}): string {
       if (bar.showKey) {
         out.push('<staffGrp>');
         for (const part of doc.parts) {
-          for (const s of part.staves)
-            out.push(`<staffDef${attrs({ n: s.n, 'key.sig': keySig(writtenKey(bar.key, part)) })}/>`);
+          for (const s of part.staves) {
+            if (!s.tab) out.push(`<staffDef${attrs({ n: s.n, 'key.sig': keySig(writtenKey(bar.key, part)) })}/>`);
+          }
         }
         out.push('</staffGrp>');
       }
@@ -153,18 +157,32 @@ export function toMEI(doc: ScoreDoc, opts: MeiOptions = {}): string {
   return out.join('\n');
 }
 
+const COURSE = ['c', 'c', 'd', 'd', 'e', 'f', 'f', 'g', 'g', 'a', 'a', 'b'];
+
 function staffDef(staff: Staff, part: Part, bar: Bar, named: boolean): string {
   const clef = clefAt(staff.clefs, bar.start);
+  const label = named
+    ? `<label>${esc(part.name)}</label>${part.abbr ? `<labelAbbr>${esc(part.abbr)}</labelAbbr>` : ''}`
+    : '';
+  if (staff.tab) {
+    // a tab staff: a line a string, the open strings named (sounding pitch; a capo raises them)
+    const { tuning, capo } = staff.tab;
+    const courses = tuning
+      .map((p, i) => {
+        const q = Math.round(p) + capo;
+        const pc = ((q % 12) + 12) % 12;
+        return `<course${attrs({ n: i + 1, pname: COURSE[pc], accid: [1, 3, 6, 8, 10].includes(pc) ? 's' : undefined, oct: Math.floor(q / 12) - 1 })}/>`;
+      })
+      .join('');
+    const a = { n: staff.n, lines: tuning.length, notationtype: 'tab.guitar', ...clefAttrs('tab') };
+    return `<staffDef${attrs(a)}>${label}<tuning>${courses}</tuning></staffDef>`;
+  }
   const a: Record<string, string | number | undefined> = {
     n: staff.n,
     lines: clef === 'tab' ? 6 : 5,
     'key.sig': keySig(writtenKey(bar.key, part)),
     ...clefAttrs(clef),
   };
-  const label =
-    named && part.staves.length === 1
-      ? `<label>${esc(part.name)}</label>${part.abbr ? `<labelAbbr>${esc(part.abbr)}</labelAbbr>` : ''}`
-      : '';
   return `<staffDef${attrs(a)}>${label}</staffDef>`;
 }
 
@@ -191,15 +209,17 @@ function measure(doc: ScoreDoc, bar: Bar): string {
     })}>`,
   );
   for (const part of doc.parts) {
-    for (const staff of part.staves) {
+    for (const staff of part.tab ? [...part.staves, part.tab] : part.staves) {
       const sb = staff.bars[bar.index];
+      // the tab under a staff: its notes again, as frets only (the staff above has their rhythm)
+      const mode: Mode = staff === part.tab ? 'frets' : staff.tab ? 'tab' : 'notes';
       out.push(`<staff${attrs({ n: staff.n })}>`);
       for (const voice of sb?.voices ?? []) {
         out.push(`<layer${attrs({ n: voice.n })}>`);
-        const clefsHere = staff.clefs.filter(
-          ([t]) => t > bar.start - 1 && t < bar.start + bar.length && t !== staff.clefs[0]?.[0],
-        );
-        out.push(layer(voice.events, voice.n === 1 ? clefsHere : []));
+        const clefsHere = staff.tab
+          ? []
+          : staff.clefs.filter(([t]) => t > bar.start - 1 && t < bar.start + bar.length && t !== staff.clefs[0]?.[0]);
+        out.push(layer(voice.events, voice.n === 1 ? clefsHere : [], mode, staff.clefs));
         out.push('</layer>');
       }
       out.push('</staff>');
@@ -235,7 +255,22 @@ function measure(doc: ScoreDoc, bar: Bar): string {
   return out.join('\n');
 }
 
-function layer(events: ScoreEvent[], clefs: [number, string][]): string {
+/** How a staff's events are written: notes; tab (frets with their rhythm); frets alone, under a staff. */
+type Mode = 'notes' | 'tab' | 'frets';
+
+/**
+ * How many octaves an octave clef's notes sound from where they're written: Verovio places a note by
+ * the octave it sounds in (the clef's 8 moves it on the staff), the score keeps the written one.
+ */
+const clefOctaves = (clef: string) => (/8vb$/.test(clef) ? -1 : /8va$/.test(clef) ? 1 : /15ma$/.test(clef) ? 2 : 0);
+
+function layer(
+  events: ScoreEvent[],
+  clefs: [number, string][],
+  mode: Mode = 'notes',
+  staffClefs: [number, string][] = [],
+): string {
+  if (mode === 'frets') return events.map(frets).join('');
   const out: string[] = [];
   let tuplet: number | null = null;
   let beamId: number | null = null;
@@ -268,7 +303,9 @@ function layer(events: ScoreEvent[], clefs: [number, string][]): string {
       out.push('<beam>');
       beamId = bm;
     }
-    out.push(e.kind === 'rest' ? rest(e) : chord(e));
+    out.push(
+      e.kind === 'rest' ? rest(e) : mode === 'tab' ? tabGroup(e) : chord(e, clefOctaves(clefAt(staffClefs, e.tick))),
+    );
   }
   if (beamId !== null) out.push('</beam>');
   if (tuplet !== null) out.push('</tuplet>');
@@ -282,7 +319,7 @@ function rest(e: Extract<ScoreEvent, { kind: 'rest' }>): string {
   return `<rest${attrs({ 'xml:id': e.id, dur: dur(e.value), dots: e.dots || undefined })}/>`;
 }
 
-function chord(e: ChordEvent): string {
+function chord(e: ChordEvent, octaves = 0): string {
   const artic = e.artic
     .map((a) => ARTIC[a])
     .filter(Boolean)
@@ -307,16 +344,41 @@ function chord(e: ChordEvent): string {
     .join('');
   if (e.heads.length === 1) {
     const h = e.heads[0] as Head;
-    return `<note${attrs({ 'xml:id': h.id, ...noteAttrs(h), ...shared })}>${verses}</note>`;
+    return `<note${attrs({ 'xml:id': h.id, ...noteAttrs(h, octaves), ...shared })}>${verses}</note>`;
   }
-  const heads = e.heads.map((h) => `<note${attrs({ 'xml:id': h.id, ...noteAttrs(h) })}/>`).join('');
+  const heads = e.heads.map((h) => `<note${attrs({ 'xml:id': h.id, ...noteAttrs(h, octaves) })}/>`).join('');
   return `<chord${attrs({ 'xml:id': e.id, ...shared })}>${heads}${verses}</chord>`;
 }
 
-function noteAttrs(h: Head): Record<string, string | number | undefined> {
+/** A note's string and fret, for a tab staff. */
+const fretAttrs = (h: Head) => ({ 'tab.course': h.tab?.[0], 'tab.fret': h.tab?.[1] });
+
+/** The notes that start here, with a string and fret (a tied note isn't played again). */
+const struck = (e: ChordEvent) => e.heads.filter((h) => h.tab && h.tie !== 'm' && h.tie !== 't');
+
+/** Under a staff: the frets where notes are played (no rhythm: the staff has it), space elsewhere. */
+function frets(e: ScoreEvent): string {
+  const shared = { dur: dur(e.value), dots: e.dots || undefined };
+  if (e.kind === 'rest') return e.full ? '<mSpace/>' : `<space${attrs(shared)}/>`;
+  const heads = struck(e);
+  if (!heads.length) return `<space${attrs(shared)}/>`;
+  const notes = heads.map((h) => `<note${attrs({ 'xml:id': h.id, ...fretAttrs(h) })}/>`).join('');
+  return `<tabGrp${attrs({ 'xml:id': e.id, ...shared })}>${notes}</tabGrp>`;
+}
+
+/** Tab on its own: the frets, with the rhythm drawn above them. */
+function tabGroup(e: ChordEvent): string {
+  const heads = struck(e);
+  const shared = { 'xml:id': e.id, dur: dur(e.value), dots: e.dots || undefined };
+  if (!heads.length) return `<space${attrs({ dur: dur(e.value), dots: e.dots || undefined })}/>`;
+  const notes = heads.map((h) => `<note${attrs({ 'xml:id': h.id, ...fretAttrs(h) })}/>`).join('');
+  return `<tabGrp${attrs(shared)}><tabDurSym/>${notes}</tabGrp>`;
+}
+
+function noteAttrs(h: Head, octaves = 0): Record<string, string | number | undefined> {
   return {
     pname: letterOf(h.step).toLowerCase(),
-    oct: h.octave,
+    oct: h.octave + octaves,
     accid: h.accid !== undefined ? ACCID[String(h.accid)] : undefined,
     'accid.ges': h.accid === undefined && h.alter !== 0 ? ACCID_GES[String(h.alter)] : undefined,
     tie: h.tie,

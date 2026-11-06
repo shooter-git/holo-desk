@@ -16,6 +16,7 @@ export * from './scan/image.ts';
 export * from './scan/model.ts';
 export * from './scan/systems.ts';
 export * from './spell.ts';
+export * from './tab.ts';
 export * from './text.ts';
 export * from './voices.ts';
 export * from './write.ts';

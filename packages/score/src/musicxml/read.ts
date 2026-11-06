@@ -375,6 +375,9 @@ export function readMusicXml(source: string, fallbackTitle = 'Imported'): Import
             }
             const fing = textOf(nt, 'technical/fingering');
             if (fing) hints.fi = fing;
+            // the string it's played on (tab): kept while the note keeps its pitch
+            const string = Number(textOf(nt, 'technical/string'));
+            if (string >= 1 && string <= 12 && !drums) hints.tb = [string, pitch];
             const head = HEADS[textOf(e, 'notehead')];
             if (head && head !== 'normal' && !drums) hints.hd = head;
             if (grace) hints.g = grace.attrs.slash === 'yes' ? 'a' : 'p';

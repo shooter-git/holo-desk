@@ -15,20 +15,26 @@ import {
   fromWritten,
   letterPitch,
   locate,
+  lyricLine,
+  nextBeat,
+  placesOf,
   quantizeToScore,
   respell,
   type ScoreDoc,
   type Spelling,
+  setChordSymbol,
   setClef,
   setForm,
   setKey,
+  setLyric,
   setMeter,
   setVoice,
   spellInKey,
   toggleArticulation,
+  withTab,
   writtenKeyAt,
 } from '@holo/score';
-import { type Note, type Op, PPQ, type Project } from '@holo/session';
+import { type Note, type Op, PPQ, type Project, type TrackScore } from '@holo/session';
 import { apply, ensureAudio } from '../app/actions.ts';
 import { store, toast } from '../app/store.ts';
 import { engine } from '../audio/engine.ts';
@@ -45,7 +51,28 @@ export interface EntryState extends Caret {
   near: Spelling | null;
   /** The chord just written: Shift+letter adds to it, a tie lengthens it. */
   last: Note[];
+  /** Words being typed in: a note's syllable (and its verse), or the chord symbol at a tick. */
+  text?: TextTarget | null;
 }
+
+export type TextTarget =
+  | { kind: 'lyric'; note: Note; verse: number; n: number }
+  | { kind: 'chord'; tick: number; n: number };
+
+/** On a drum part, letters enter drums (with Shift, together with the one just written). */
+export const DRUM_KEYS: Record<string, [number, string]> = {
+  b: [36, 'Bass drum'],
+  n: [38, 'Snare'],
+  x: [37, 'Side stick'],
+  h: [42, 'Hi-hat, closed'],
+  o: [46, 'Hi-hat, open'],
+  p: [44, 'Hi-hat, foot'],
+  c: [49, 'Crash'],
+  r: [51, 'Ride'],
+  u: [50, 'High tom'],
+  m: [47, 'Mid tom'],
+  f: [43, 'Floor tom'],
+};
 
 export const lengthOf = (value: number, dots: number): number => (WHOLE / value) * (2 - 1 / 2 ** dots);
 
@@ -361,6 +388,118 @@ export class Entry {
     if (this.commit(r.ops, 'Score: tidy rhythms')) toast('The notes now start and end where the score shows them');
   }
 
+  /** Whether the caret's part is a drum part. */
+  private drums(): boolean {
+    const c = this.ctx();
+    return !!c?.doc.parts.find((p) => p.track === c.s.track)?.drums;
+  }
+
+  /** A drum written at the caret (Shift: with the one just written). */
+  drum(pitch: number, together: boolean): void {
+    const c = this.ctx();
+    if (!c) return;
+    if (together && c.s.last.length) {
+      const r = addToChord(c.project, c.s.last, [{ p: pitch }]);
+      if (this.commit(r.ops, 'Score: drum', [...c.s.last, ...r.notes])) this.set({ last: [...c.s.last, ...r.notes] });
+      this.audition(r.notes);
+      return;
+    }
+    const len = this.length();
+    const r = enter(c.project, c.doc, c.s, [{ p: pitch }], len);
+    if (this.commit(r.ops, 'Score: drum', r.notes)) {
+      this.advance(len, r.notes, null);
+      this.audition(r.notes);
+    }
+  }
+
+  /** Tab for the caret's part: under its staff, on its own, or none. */
+  tab(mode: 'under' | 'only' | 'off'): void {
+    const c = this.ctx();
+    const track = c?.project.tracks.find((t) => t.id === c.s.track);
+    if (!c || !track) return;
+    const score: TrackScore = withTab(track, mode);
+    this.commit(
+      [{ op: 'updateTrack', track: track.id, patch: { score } }],
+      mode === 'off' ? 'Score: no tab' : 'Score: tab',
+    );
+  }
+
+  /** Lyrics from the selected note (or the first at the caret): a syllable a note, Space to go on. */
+  lyrics(verse = 1): void {
+    const c = this.ctx();
+    if (!c) return;
+    const places = placesOf(c.doc);
+    let note: Note | undefined = store.get().selectedNotes.find((n) => places.get(n)?.track === c.s.track);
+    if (!note) {
+      let best: [Note, number] | null = null;
+      for (const [n, p] of places) {
+        if (p.track !== c.s.track || p.staff !== c.s.staff || p.voice !== c.s.voice) continue;
+        const at = locate(c.project, n);
+        const t = at ? at.region.start + n.t : Number.POSITIVE_INFINITY;
+        if (t >= c.s.tick && (!best || t < best[1])) best = [n, t];
+      }
+      note = best?.[0];
+    }
+    if (!note) {
+      toast('Write the notes first: lyrics go on them, a syllable a note');
+      return;
+    }
+    const line = lyricLine(c.doc, note);
+    const top =
+      line.find((n) => n === note) ??
+      line.find(
+        (n) => locate(c.project, n)?.region === locate(c.project, note as Note)?.region && n.t === (note as Note).t,
+      ) ??
+      note;
+    store.set({ selectedNotes: [top], selectedTrack: c.s.track });
+    this.set({ text: { kind: 'lyric', note: top, verse, n: (this.state?.text?.n ?? 0) + 1 } });
+  }
+
+  /** Chord symbols from the caret (or the selected note): Space goes on a beat. */
+  chordSymbols(): void {
+    const c = this.ctx();
+    if (!c) return;
+    const sel = store.get().selectedNotes[0];
+    const at = sel ? locate(c.project, sel) : null;
+    const tick = at && sel ? at.region.start + sel.t : c.s.tick;
+    this.set({ text: { kind: 'chord', tick, n: (this.state?.text?.n ?? 0) + 1 } });
+  }
+
+  /** What's there now for the words being typed (a syllable, a chord symbol). */
+  textNow(): string {
+    const t = this.state?.text;
+    const project = store.get().project;
+    if (!t || !project) return '';
+    if (t.kind === 'chord') return project.chords.find((x) => x.tick === t.tick)?.symbol ?? '';
+    return t.note.n?.ly?.[t.verse - 1] ?? '';
+  }
+
+  /** The words typed in, written; then on to the next note or beat (`next`), or done. */
+  commitText(value: string, next: boolean): void {
+    const c = this.ctx();
+    const t = c?.s.text;
+    if (!c || !t) return;
+    if (t.kind === 'chord') {
+      if (value.trim() !== this.textNow()) this.commit(setChordSymbol(c.project, t.tick, value), 'Score: chord symbol');
+      this.set({ text: next ? { ...t, tick: nextBeat(c.doc, t.tick), n: t.n + 1 } : null });
+      return;
+    }
+    const line = lyricLine(c.doc, t.note);
+    const after = line[line.indexOf(t.note) + 1];
+    if (value.trim() !== this.textNow()) {
+      const r = setLyric(c.project, t.note, t.verse, value);
+      this.commit(r.ops, 'Score: lyric');
+    }
+    if (next && after) {
+      store.set({ selectedNotes: [after] });
+      this.set({ text: { ...t, note: after, n: t.n + 1 } });
+    } else this.set({ text: null });
+  }
+
+  closeText(): void {
+    if (this.state?.text) this.set({ text: null });
+  }
+
   /** A key while writing: true when it was the Score's. */
   key_(e: KeyboardEvent): boolean {
     if (!this.state) return false;
@@ -369,6 +508,20 @@ export class Entry {
     const lower = k.length === 1 ? k.toLowerCase() : k;
     // Musical Typing plays notes into the score itself (as a MIDI keyboard does)
     if (store.get().typing && /^[a-z;']$/.test(lower) && !'.0123456789'.includes(lower)) return false;
+    if (e.shiftKey && !e.altKey && (lower === 'l' || lower === 'q')) {
+      if (lower === 'l') this.lyrics();
+      else this.chordSymbols();
+      return true;
+    }
+    if (!e.altKey && /^[a-z]$/.test(lower) && this.drums()) {
+      // (a drum part's letters are its drums; the others write nothing)
+      const drum = DRUM_KEYS[lower];
+      if (drum) {
+        this.drum(drum[0], e.shiftKey);
+        return true;
+      }
+      if (/^[a-g]$/.test(lower)) return true;
+    }
     if (/^[a-g]$/.test(lower) && !e.altKey) {
       this.letter(lower, e.shiftKey);
       return true;

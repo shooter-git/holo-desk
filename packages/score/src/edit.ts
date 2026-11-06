@@ -16,13 +16,14 @@ import {
   type NoteNotation,
   newRegion,
   type Op,
+  PPQ,
   type Project,
   type Region,
   type Track,
   ticksPerBar,
 } from '@holo/session';
 import { gateFor, levelAt, slurredAt, staffMarks, velocityFor } from './bake.ts';
-import type { ScoreDoc } from './model.ts';
+import type { ScoreDoc, ScoreEvent } from './model.ts';
 import { clefAt } from './notate.ts';
 import {
   fifthsShift,
@@ -622,4 +623,69 @@ export function staffPlace(clef: string, below: number): Spelling {
   const top = topLineOf(clef);
   const index = top.octave * 7 + top.step - below;
   return { step: ((index % 7) + 7) % 7, alter: 0, octave: Math.floor(index / 7) };
+}
+
+/** A syllable on a note in a verse (1…); empty takes it away. Lyrics go on a chord's top note. */
+export function setLyric(project: Project, note: Note, verse: number, text: string): EditResult {
+  return mapNotes(project, [note], (n) => {
+    const ly = [...(n.n?.ly ?? [])];
+    while (ly.length < verse) ly.push('');
+    ly[verse - 1] = text.trim();
+    while (ly.length && !ly[ly.length - 1]) ly.pop();
+    const hints: NoteNotation = { ...n.n };
+    if (ly.length) hints.ly = ly;
+    else delete hints.ly;
+    const out: Note = { ...n };
+    if (Object.keys(hints).length) out.n = hints;
+    else delete out.n;
+    return out;
+  });
+}
+
+/**
+ * The notes a line of lyrics goes on, in order, from the voice a note is in: each chord's top note,
+ * a note held by a tie only once.
+ */
+export function lyricLine(doc: ScoreDoc, note: Note): Note[] {
+  for (const part of doc.parts) {
+    for (const staff of part.staves) {
+      for (const n of [1, 2, 3, 4]) {
+        const tops: Note[] = [];
+        for (const b of staff.bars) {
+          for (const e of b.voices.find((v) => v.n === n)?.events ?? []) {
+            if (e.kind !== 'chord' || e.grace) continue;
+            const struck = e.heads.filter((h) => h.tie !== 'm' && h.tie !== 't');
+            if (!struck.length) continue;
+            const top = struck.reduce((a, h) => (h.pitch > a.pitch ? h : a));
+            tops.push(top.ref.note);
+          }
+        }
+        if (tops.includes(note) || staff.bars.some((b) => voiceHas(b.voices, n, note))) return tops;
+      }
+    }
+  }
+  return [];
+}
+
+const voiceHas = (voices: readonly { n: number; events: readonly ScoreEvent[] }[], n: number, note: Note) =>
+  voices.some((v) => v.n === n && v.events.some((e) => e.kind === 'chord' && e.heads.some((h) => h.ref.note === note)));
+
+/** A chord symbol at a tick (replacing the one there); empty takes it away. */
+export function setChordSymbol(project: Project, tick: number, symbol: string): Op[] {
+  const text = symbol.trim();
+  const others = project.chords.filter((c) => c.tick !== tick);
+  if (!text && others.length === project.chords.length) return [];
+  const chords = text ? [...others, { tick, symbol: text }].sort((a, b) => a.tick - b.tick) : others;
+  return [{ op: 'setProject', patch: { chords } }];
+}
+
+/** The beat after a tick, in its bar's meter (a dotted quarter in 6/8): where the next chord symbol goes. */
+export function nextBeat(doc: ScoreDoc, tick: number): number {
+  const bar = doc.bars.find((b) => tick >= b.start && tick < b.start + b.length) ?? doc.bars[doc.bars.length - 1];
+  if (!bar) return tick + PPQ;
+  const { num, den } = bar.meter;
+  const beat = den === 8 && num % 3 === 0 && num > 3 ? (PPQ * 3) / 2 : (PPQ * 4) / den;
+  const from = bar.start - bar.offset;
+  const next = from + (Math.floor((tick - from) / beat + 1e-9) + 1) * beat;
+  return next;
 }

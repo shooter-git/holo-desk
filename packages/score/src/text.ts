@@ -58,6 +58,8 @@ export function partsLine(doc: ScoreDoc): string {
       const bits: string[] = [];
       if (p.staves.length > 1) bits.push(`${p.staves.length} staves`);
       if (p.drums) bits.push('drums');
+      if (p.tab) bits.push('with tab');
+      else if (p.staves[0]?.tab) bits.push('tab');
       if (p.tr) {
         const iv = INTERVALS[`${p.tr[0]},${p.tr[1]}`] ?? `${p.tr[0]} semitones`;
         bits.push(p.tr[0] < 0 ? `written ${iv} sounding` : `written ${iv} above sounding`);

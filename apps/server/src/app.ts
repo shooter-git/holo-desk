@@ -54,6 +54,7 @@ import {
   useDataDir,
 } from './pack-install.ts';
 import { Packs } from './packs.ts';
+import { scanRoutes } from './scans.ts';
 
 const ISOLATION = {
   'cross-origin-opener-policy': 'same-origin',
@@ -177,10 +178,18 @@ export async function buildApp(config: Config): Promise<{ app: FastifyInstance; 
     },
   );
 
+  // sheet music on its way into songs: photographed or scanned pages, and their systems
+  const scans = scanRoutes(app, {
+    dataDir: config.dataDir,
+    projectExists: (id) => !!store.get(id),
+    changed: (scan) => live.tell({ type: 'scan', id: scan.id, project: scan.project }),
+  });
+
   app.delete<{ Params: { id: string } }>('/api/projects/:id', async (req, reply) => {
     if (!store.remove(req.params.id)) return reply.code(404).send({ error: 'No such project' });
-    // its recordings go with it
+    // its recordings and its scans go with it
     rmSync(audioDir(req.params.id), { recursive: true, force: true });
+    scans.removeFor(req.params.id);
     return { ok: true };
   });
 

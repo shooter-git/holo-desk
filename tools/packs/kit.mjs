@@ -46,6 +46,73 @@ export async function githubTree(repo, commit, downloads) {
 
 export const raw = (repo, commit) => `https://raw.githubusercontent.com/${repo}/${commit}/`;
 
+/** What a piece is called on its pad in the studio. */
+const TITLES = {
+  kick: 'Kick',
+  snare: 'Snare',
+  'snare-edge': 'Snare edge',
+  rimshot: 'Rimshot',
+  sidestick: 'Side stick',
+  'cross-stick': 'Cross-stick',
+  buzz: 'Snare buzz',
+  'rack-tom': 'Rack tom',
+  'floor-tom': 'Floor tom',
+  'hat-closed': 'Hi-hat closed',
+  'hat-pedal': 'Hi-hat pedal',
+  'hat-open': 'Hi-hat open',
+  'hat-half': 'Hi-hat half open',
+  'hat-three-quarter': 'Hi-hat ¾ open',
+  'hat-loose': 'Hi-hat loose',
+  crash: 'Crash',
+  'crash-sizzle': 'Sizzle crash',
+  china: 'China',
+  stack: 'Stack',
+  ride: 'Ride',
+  'ride-bell': 'Ride bell',
+  'ride-edge': 'Ride edge',
+  'ride-sizzle': 'Sizzle ride',
+  'flat-ride': 'Flat ride',
+  'flat-ride-crash': 'Flat ride crash',
+  gong: 'Gong',
+};
+
+/** A piece's name on its pad: its own `title`, else its kind's (a tom by its size). */
+export function pieceTitle(piece) {
+  if (piece.title) return piece.title;
+  if (TITLES[piece.name]) return TITLES[piece.name];
+  const tom = /^tom-(\d+)$/.exec(piece.name);
+  if (tom) return `Tom ${tom[1]}″`;
+  throw new Error(`${piece.name}: give the piece a title for its pad`);
+}
+
+/**
+ * The kit's pads: `spec.pads` names every piece once, in rows of four (the top row first). Each pad
+ * plays its piece's first key, or the piece's `pad`.
+ */
+export function padsOf(spec) {
+  const byName = new Map(spec.pieces.map((p) => [p.name, p]));
+  const order = spec.pads ?? spec.pieces.map((p) => p.name);
+  const missing = spec.pieces.map((p) => p.name).filter((n) => !order.includes(n));
+  const unknown = order.filter((n) => !byName.has(n));
+  const twice = order.filter((n, i) => order.indexOf(n) !== i);
+  if (missing.length || unknown.length || twice.length)
+    throw new Error(
+      `${spec.id} pads: ${[
+        missing.length ? `no pad for ${missing.join(', ')}` : '',
+        unknown.length ? `no piece ${unknown.join(', ')}` : '',
+        twice.length ? `twice: ${twice.join(', ')}` : '',
+      ]
+        .filter(Boolean)
+        .join('; ')}`,
+    );
+  return order.map((name) => {
+    const piece = byName.get(name);
+    const key = piece.pad ?? piece.keys[0];
+    if (!piece.keys.includes(key)) throw new Error(`${name}: its pad (${key}) isn't one of its keys`);
+    return { key, name: pieceTitle(piece) };
+  });
+}
+
 /** A mono microphone's gains into left and right at an SFZ pan (0 left, 63.5 centre, 127 right): constant power, unity in the centre. */
 export function panGains(gain, pan = 63.5) {
   const p = Math.max(-1, Math.min(1, (pan - 63.5) / 63.5));
@@ -93,6 +160,8 @@ export async function buildKit(spec) {
   const out = arg('out', null);
   const downloads = spec.downloads;
   const pieces = spec.pieces;
+  // checked before anything is fetched: every piece has its pad
+  const pads = padsOf(spec);
   // fetch every microphone of every hit kept
   for (const piece of pieces) {
     piece.hits = spreadPick(
@@ -278,6 +347,7 @@ export async function buildKit(spec) {
     polyphony: 96,
     notePolyphony: 3,
     offTime: 0.035,
+    pads,
     zones,
   };
   const source = { kind: 'mix', note: spec.note, bases: spec.bases, downloads: {}, bits: 24, files };

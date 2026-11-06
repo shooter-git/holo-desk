@@ -10303,6 +10303,80 @@
    "polyphony": 96,
    "notePolyphony": 3,
    "offTime": 0.035,
+   "pads": [
+    {
+     "key": 49,
+     "name": "Crash"
+    },
+    {
+     "key": 51,
+     "name": "Ride"
+    },
+    {
+     "key": 46,
+     "name": "Hi-hat open"
+    },
+    {
+     "key": 42,
+     "name": "Hi-hat closed"
+    },
+    {
+     "key": 47,
+     "name": "Rack tom"
+    },
+    {
+     "key": 41,
+     "name": "Floor tom"
+    },
+    {
+     "key": 40,
+     "name": "Rimshot"
+    },
+    {
+     "key": 44,
+     "name": "Hi-hat pedal"
+    },
+    {
+     "key": 39,
+     "name": "Snare buzz"
+    },
+    {
+     "key": 37,
+     "name": "Cross-stick"
+    },
+    {
+     "key": 38,
+     "name": "Snare"
+    },
+    {
+     "key": 36,
+     "name": "Kick"
+    },
+    {
+     "key": 22,
+     "name": "Hi-hat half open"
+    },
+    {
+     "key": 26,
+     "name": "Hi-hat ¾ open"
+    },
+    {
+     "key": 53,
+     "name": "Ride bell"
+    },
+    {
+     "key": 59,
+     "name": "Flat ride"
+    },
+    {
+     "key": 57,
+     "name": "Sizzle crash"
+    },
+    {
+     "key": 55,
+     "name": "Flat ride crash"
+    }
+   ],
    "zones": [
     {
      "file": "jazz/hat-half/hat-half_v1_rr1.wav",

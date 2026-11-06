@@ -3,16 +3,23 @@
  * and General MIDI drum pads. They send MIDI like any device, so they play, record and reach the AI
  * the same way.
  */
-import { GM_DRUMS, type MiddleC, noteName } from '@holo/session';
-import { useRef, useState } from 'react';
+import { type Instrument, type MiddleC, noteName } from '@holo/session';
+import { useEffect, useRef, useState } from 'react';
 import { ensureAudio } from '../app/actions.ts';
 import { sendMidi } from '../app/live.ts';
 import { toast, useApp } from '../app/store.ts';
 import { midi } from '../audio/midi.ts';
-import { useSize } from './frame.ts';
+import { type InstrumentMap, instrumentManifest } from '../audio/pack-files.ts';
+import { useMedia, useSize } from './frame.ts';
+import { padManifestKey, padsFor, padTrack } from './pads.ts';
 
 const PORT = 'On-screen';
-const PADS = [49, 51, 46, 42, 50, 47, 45, 43, 39, 37, 38, 36, 56, 54, 70, 75];
+/** The pads' channel (General MIDI's drums). */
+const PAD_CHANNEL = 10;
+/** A short landscape screen: the pads in rows of eight, so each keeps a finger's height. */
+const WIDE_PADS = '(orientation: landscape) and (max-height: 540px)';
+/** The highest octave the chromatic pads start on (their sixteen notes stay within MIDI). */
+const PAD_TOP_OCTAVE = 8;
 const BLACK = [1, 3, 6, 8, 10];
 /** Semitones from C of the white keys in an octave. */
 const WHITES = [0, 2, 4, 5, 7, 9, 11];
@@ -44,9 +51,16 @@ interface PlayPadProps {
   onMidi?: (data: number[]) => void;
   color?: string;
   middleC?: MiddleC;
+  /** HO[LO] Remote: the instrument its notes reach in the studio (the pads follow it). */
+  instrument?: Instrument | null;
 }
 
-export function PlayPad({ onMidi, color: colorProp, middleC: middleCProp }: PlayPadProps = {}) {
+export function PlayPad({
+  onMidi,
+  color: colorProp,
+  middleC: middleCProp,
+  instrument: instrumentProp,
+}: PlayPadProps = {}) {
   const [mode, setMode] = useState<'keys' | 'pads'>('keys');
   const [toStudio, setToStudio] = useState(remote);
   const others = useApp((s) => Math.max(0, s.peers.filter((p) => p.role === 'editor').length - 1));
@@ -64,11 +78,36 @@ export function PlayPad({ onMidi, color: colorProp, middleC: middleCProp }: Play
   const [lit, setLit] = useState<Set<number>>(new Set());
   const touches = useRef(new Map<number, number>());
 
+  // the pads follow the instrument their notes reach (its map says what each key plays)
+  const ownInstrument = useApp((s) => padTrack(s.project, s.selectedTrack, PORT, PAD_CHANNEL)?.instrument ?? null);
+  const instrument = onMidi ? (instrumentProp ?? null) : ownInstrument;
+  const mapKey = padManifestKey(instrument);
+  const [map, setMap] = useState<{ key: string; manifest: InstrumentMap } | null>(null);
+  useEffect(() => {
+    if (!mapKey || (instrument?.type !== 'sampler' && instrument?.type !== 'performance')) return;
+    let live = true;
+    instrumentManifest(instrument.pack, instrument.name).then(
+      (manifest) => {
+        if (live) setMap({ key: mapKey, manifest });
+      },
+      () => undefined,
+    );
+    return () => {
+      live = false;
+    };
+  }, [mapKey, instrument]);
+  const wide = useMedia(WIDE_PADS);
+
   const whiteCount = size.w > 900 ? 21 : size.w > 560 ? 14 : 10;
   // a wide keyboard reaches further, so the top octave moves down with the width: a key past 127
   // would play as a note seven octaves below (the engine keeps the low seven bits)
-  const top = topOctave(whiteCount);
+  const top = mode === 'pads' ? PAD_TOP_OCTAVE : topOctave(whiteCount);
   const shownOctave = Math.min(octave, top);
+  const grid = padsFor(instrument, map && map.key === mapKey ? map.manifest : null, {
+    wide,
+    octave: shownOctave,
+    middleC,
+  });
   const whites: number[] = [];
   for (let n = (shownOctave + 1) * 12; whites.length < whiteCount; n++) if (!BLACK.includes(n % 12)) whites.push(n);
   const keyW = size.w / whiteCount;
@@ -97,11 +136,22 @@ export function PlayPad({ onMidi, color: colorProp, middleC: middleCProp }: Play
     <div className="playpad">
       <div className="pane-bar">
         <div className="seg">
-          <button type="button" className={`btn${mode === 'keys' ? ' on' : ''}`} onClick={() => setMode('keys')}>
-            Keyboard
+          {/* short names: on a phone the bar holds these, where the notes go, and the octave */}
+          <button
+            type="button"
+            className={`btn${mode === 'keys' ? ' on' : ''}`}
+            title="Keyboard"
+            onClick={() => setMode('keys')}
+          >
+            Keys
           </button>
-          <button type="button" className={`btn${mode === 'pads' ? ' on' : ''}`} onClick={() => setMode('pads')}>
-            Drum pads
+          <button
+            type="button"
+            className={`btn${mode === 'pads' ? ' on' : ''}`}
+            title="Pads: a kit's pieces, or notes for an instrument played by pitch"
+            onClick={() => setMode('pads')}
+          >
+            Pads
           </button>
         </div>
         {!onMidi && (
@@ -125,7 +175,7 @@ export function PlayPad({ onMidi, color: colorProp, middleC: middleCProp }: Play
           </button>
         )}
         <span className="grow" />
-        {mode === 'keys' && (
+        {(mode === 'keys' || grid.chromatic) && (
           <>
             <button
               type="button"
@@ -148,12 +198,18 @@ export function PlayPad({ onMidi, color: colorProp, middleC: middleCProp }: Play
         )}
       </div>
       {mode === 'pads' ? (
-        <div className="pads">
-          {PADS.map((n) => (
+        <div
+          className="pads"
+          style={{
+            gridTemplateColumns: `repeat(${grid.cols}, minmax(0, 1fr))`,
+            gridTemplateRows: `repeat(${Math.ceil(grid.pads.length / grid.cols)}, minmax(0, 1fr))`,
+          }}
+        >
+          {grid.pads.map(({ note: n, name }) => (
             <button
               key={n}
               type="button"
-              aria-label={GM_DRUMS[n] ?? `Note ${n}`}
+              aria-label={name}
               aria-pressed={lit.has(n)}
               className={`pad${lit.has(n) ? ' hit' : ''}`}
               style={{ ['--pad-color' as string]: color }}
@@ -192,7 +248,7 @@ export function PlayPad({ onMidi, color: colorProp, middleC: middleCProp }: Play
                 update();
               }}
             >
-              {GM_DRUMS[n] ?? n}
+              {name}
             </button>
           ))}
         </div>

@@ -717,7 +717,12 @@ function PlayTab() {
         <b>{armed.length ? armed.map((t) => t.name).join(', ') : (selected?.name ?? 'the selected track')}</b>
         {armed.length ? ' (armed)' : ''} on {activeStudio()?.name ?? 'the studio'}
       </div>
-      <PlayPad onMidi={sendMidi} color={(armed[0] ?? selected)?.color} middleC={s?.middleC} />
+      <PlayPad
+        onMidi={sendMidi}
+        color={(armed[0] ?? selected)?.color}
+        middleC={s?.middleC}
+        instrument={(armed[0] ?? selected)?.instrument}
+      />
     </div>
   );
 }

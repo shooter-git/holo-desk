@@ -161,12 +161,13 @@ checked against its pinned checksum) while the Library shows how far it has got.
 |---|---|
 | `steinway` | A Steinway Model D (bitKlavier Grand, CC BY 4.0): 16 velocity layers, the hammers and dampers heard as each key is let go (quieter the longer it was held), the sustain pedal's own sound, undamped top strings. Two microphone positions (the stage pair, and close inside the piano) and a Light version with half the layers and shorter tails for phones and tablets. |
 | `rock-kit` | A big vintage rock kit (Karoryfer's Big Rusty Drums, CC0): 24" kick, 14x8 snare, 14/15/18/22" toms, crash, ride, china, hi-hats; up to 14 layers and 4 round robins a drum. |
-| `prog-kit` | A progressive-rock kit: six toms from 10" to 22", a 14x8 aluminium snare, sizzle cymbals, a china, a stack and a gong (Big Rusty Drums, Frankensnare, VSCO 2; all CC0). |
+| `prog-kit` | A progressive-rock kit: six toms (14" to 22", the two highest a 14" tuned up), a 14x8 aluminium snare, sizzle cymbals, a china, a stack and a gong (Big Rusty Drums, Frankensnare, VSCO 2; all CC0). |
 | `jazz-kit` | A contemporary jazz kit (Virtuosity Drums, CC0): a 36-layer snare at the centre and off it, taking turns, feathering kick, ride, flat ride and hi-hats, all from one session's microphones. |
 
 The kits are on the General MIDI drum keys your pads send (36 kick, 38 snare, 42/44/46 hi-hat, 41 to
 50 toms, 49 crash, 51 ride…), with the hi-hat choking itself, and Roland's edge keys for the half-open
-hats (22, 26). Velocity follows each drum's real loudness: every layer is measured and set where one
+hats (22, 26). The studio's drum pads show the kit's own pieces, each pad named for what it
+plays. Velocity follows each drum's real loudness: every layer is measured and set where one
 velocity curve meets it, so a drum gets louder smoothly the harder it's hit and changes its timbre at
 each layer, the same way for every drum and every key of the piano.
 

@@ -4,7 +4,7 @@
  * what it's doing when it changes (a few times a second while it plays) and its levels a dozen times a
  * second, and the remote's buttons, faders and pads go back to it as commands and MIDI.
  */
-import type { MeterPoint, MiddleC, TempoPoint } from '@holo/session';
+import type { Instrument, MeterPoint, MiddleC, TempoPoint } from '@holo/session';
 import { useSyncExternalStore } from 'react';
 
 export interface StudioTrack {
@@ -13,6 +13,8 @@ export interface StudioTrack {
   color: string;
   kind: 'instrument' | 'audio';
   sub: string;
+  /** What it plays (the remote's pads follow it; a studio before this didn't say). */
+  instrument?: Instrument;
   armed: boolean;
   mute: boolean;
   solo: boolean;

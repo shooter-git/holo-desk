@@ -33,6 +33,7 @@ const SNARE = ['snare', 'kick'];
 
 const tom = (size, pan, keys, tune = 0, name = `tom-${size}`) => ({
   name,
+  ...(tune ? { title: `Tom ${size}″ up ${tune}` } : {}),
   keys,
   tune,
   hits: r(`tom_${size}/center`, { cl: 'cl', oh: 'oh' }, `t${size}`),
@@ -80,10 +81,38 @@ await buildKit({
   level: -19,
   downloads,
   bases,
+  // the pads, in rows of four: cymbals and hats, the four highest toms, the gong, the snare's strokes and the
+  // kick, then the low toms and the rest
+  pads: [
+    'crash',
+    'ride',
+    'hat-open',
+    'hat-closed',
+    'tom-14-up4',
+    'tom-14-up2',
+    'tom-14',
+    'tom-15',
+    'gong',
+    'sidestick',
+    'snare',
+    'kick',
+    'tom-18',
+    'tom-22',
+    'rimshot',
+    'hat-pedal',
+    'hat-half',
+    'hat-loose',
+    'crash-sizzle',
+    'china',
+    'stack',
+    'ride-bell',
+    'ride-sizzle',
+  ],
   pieces: [
     {
       name: 'kick',
       keys: [35, 36],
+      pad: 36,
       hits: r('kick_24/kick', { kick: 'kick', oh: 'oh' }, 'k'),
       mics: { kick: [fader(100)], oh: [0.2] },
       ring: 1.4,

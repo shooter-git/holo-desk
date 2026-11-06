@@ -14,16 +14,24 @@ const IN_FLIGHT = 6;
 /** A sample file decoded at a context's rate, by pack and file (Performance instruments share them). */
 const decoded = new Map<string, Promise<[Float32Array, Float32Array]>>();
 
-/** An instrument's manifest (with its Performance data), fetched once. */
-const manifests = new Map<string, Promise<InstrumentManifest>>();
+/** An instrument's map as the studio reads it: what the engine plays, and what the studio shows of it. */
+export type InstrumentMap = InstrumentManifest & {
+  /** Its name in the Library ("Rock Kit"). */
+  title?: string;
+  /** A kit's pads, every piece once, in rows of four (the top row first): the key each plays and what sounds there. */
+  pads?: { key: number; name: string }[];
+};
 
-export function instrumentManifest(pack: string, name: string): Promise<InstrumentManifest> {
+/** An instrument's manifest (with its Performance data), fetched once. */
+const manifests = new Map<string, Promise<InstrumentMap>>();
+
+export function instrumentManifest(pack: string, name: string): Promise<InstrumentMap> {
   const key = `${pack}/${name}`;
   let m = manifests.get(key);
   if (!m) {
     m = fetch(`/api/packs/${encodeURIComponent(pack)}/instruments/${encodeURIComponent(name)}`).then((res) => {
       if (!res.ok) throw new Error(`No instrument ${key} (${res.status})`);
-      return res.json() as Promise<InstrumentManifest>;
+      return res.json() as Promise<InstrumentMap>;
     });
     m.catch(() => manifests.delete(key));
     manifests.set(key, m);

@@ -3295,11 +3295,7 @@ html[data-layout="phone-landscape"] .toasts {
   .remote-lcd .wide-only {
     display: none;
   }
-  /* the pads in two rows of eight, so each keeps a finger's height */
-  .pads {
-    grid-template-columns: repeat(8, minmax(0, 1fr));
-    grid-template-rows: repeat(2, minmax(0, 1fr));
-  }
+  /* (the pads go to rows of eight here: PlayPad lays them out, by what the instrument has) */
 }
 
 /* ---------- the View menu: show or hide parts of the studio ---------- */

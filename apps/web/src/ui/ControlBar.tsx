@@ -47,22 +47,9 @@ import { store, useApp, useShow } from '../app/store.ts';
 import { engine } from '../audio/engine.ts';
 import { midi } from '../audio/midi.ts';
 import { startDrag, TAP, Wordmark } from './controls.tsx';
-import { useFrame } from './frame.ts';
+import { useFrame, useMedia } from './frame.ts';
 import { openMenuAt } from './menu.tsx';
 import { ViewMenu } from './ViewMenu.tsx';
-
-/** Whether a media query holds, kept current as the window changes. */
-function useMedia(query: string): boolean {
-  const [match, setMatch] = useState(() => window.matchMedia(query).matches);
-  useEffect(() => {
-    const mq = window.matchMedia(query);
-    const on = () => setMatch(mq.matches);
-    on();
-    mq.addEventListener('change', on);
-    return () => mq.removeEventListener('change', on);
-  }, [query]);
-  return match;
-}
 
 /** Where the bar is too narrow for the full display: the position shortens and the time goes (the CSS hides the rest). */
 const NARROW_BAR = '(max-width: 900px), (max-width: 1100px) and (pointer: coarse)';

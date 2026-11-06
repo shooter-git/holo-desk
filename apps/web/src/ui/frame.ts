@@ -14,6 +14,19 @@ function loop(now: number): void {
   else running = false;
 }
 
+/** Whether a media query holds, kept current as the window changes. */
+export function useMedia(query: string): boolean {
+  const [match, setMatch] = useState(() => window.matchMedia(query).matches);
+  useEffect(() => {
+    const mq = window.matchMedia(query);
+    const on = () => setMatch(mq.matches);
+    on();
+    mq.addEventListener('change', on);
+    return () => mq.removeEventListener('change', on);
+  }, [query]);
+  return match;
+}
+
 /** Call `fn` every animation frame while the component is mounted. */
 export function useFrame(fn: Frame): void {
   const ref = useRef(fn);

@@ -108,6 +108,21 @@ export interface SampleZone {
   loopEnd: number;
   /** Round-robin slot (0 = always). */
   rr: number;
+  /** The choke group its notes belong to (absent: none). */
+  group?: number;
+  /** A note of this group silences this zone's sounding notes (the open hi-hat, by the closed one). */
+  offBy?: number;
+  /**
+   * When it plays, if not when a key is struck: when a note is let go (a piano's damper falling on the
+   * string, its key coming back up), or when the sustain pedal goes down or comes up (its own sound).
+   */
+  trigger?: 'release' | 'pedalDown' | 'pedalUp';
+  /** Release samples of different parts sound together (one of each part per note let go). */
+  part?: number;
+  /** A release sample's dB lost for each second its note was held, in place of the instrument's releaseDecay. */
+  decay?: number;
+  /** Seconds its notes take to fade when let go, in place of the instrument's (a bass string's damper is slower). */
+  release?: number;
 }
 
 export interface SamplerSpec {
@@ -123,6 +138,18 @@ export interface SamplerSpec {
   velocityRange: number;
   /** Seconds to fade a note in: just enough to avoid a click, the sample keeps its own attack. */
   attack: number;
+  /** Notes it sounds at once (64 when absent); past that the oldest let-go note is cut. */
+  polyphony?: number;
+  /** Notes one key sounds at once: struck again past this, its oldest fades (in offTime). */
+  notePolyphony?: number;
+  /** Seconds a choked or re-struck note takes to fade (0.02 when absent). */
+  offTime?: number;
+  /** Keys from this one up have no dampers: letting them go doesn't stop them (a piano's top strings). */
+  undamped?: number;
+  /** dB a release sample loses for each second its note was held (the string has quietened under it). */
+  releaseDecay?: number;
+  /** dB between the softest and the hardest velocity for release samples (velocityRange when absent). */
+  releaseVelocityRange?: number;
 }
 
 /**

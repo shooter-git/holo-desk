@@ -79,7 +79,11 @@ export type ToCompanion =
 
 export type FromCompanion =
   | FromWorklet
-  | { type: 'hello'; version: string; platform: string }
+  /**
+   * Who it is: its version, its computer's platform, and the fingerprint of the engine it carries
+   * (liveSource: absent from Engines older than the fingerprint); a studio whose own differs says so.
+   */
+  | { type: 'hello'; version: string; platform: string; arch?: string; engine?: string }
   | { type: 'device'; device: CompanionDevice }
   | { type: 'deviceError'; message: string }
   | { type: 'midiPorts'; ports: CompanionPort[] }

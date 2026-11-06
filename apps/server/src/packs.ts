@@ -20,6 +20,13 @@ export interface Zone {
   loopEnd: number;
   rate: number;
   rr: number;
+  group?: number;
+  offBy?: number;
+  trigger?: 'release' | 'pedalDown' | 'pedalUp';
+  part?: number;
+  decay?: number;
+  release?: number;
+  fadeOut?: number;
 }
 
 export interface PackInstrument {
@@ -41,6 +48,8 @@ export type PackSource =
   | { kind: 'cut'; note?: string }
   /** Files decoded from a published archive (which one, and what's taken from it, is in the manifest). */
   | { kind: 'archive'; note?: string }
+  /** Files made from published recordings: mixed, trimmed and faded (the recipe is in the manifest). */
+  | { kind: 'mix'; note?: string }
   | { kind: 'local'; note?: string }
   | { kind: 'imported'; from: string };
 

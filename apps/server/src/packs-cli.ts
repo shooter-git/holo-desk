@@ -3,38 +3,34 @@
  *
  *   list                         what's available and what's installed
  *   install [ids…|all] [--from DIR]
- *                                fetch the samples (sparse git checkouts of the CC0 libraries at their
- *                                pinned commits, notes cut from published downloads, or files decoded
- *                                from a published archive), or take them from a folder you already have
+ *                                fetch the samples (sparse git checkouts of the libraries at their pinned
+ *                                commits, notes cut from published downloads, files decoded from a
+ *                                published archive, or made from a library's recordings: trimmed, a kit's
+ *                                microphones mixed), or take them from a folder you already have
  *                                (hard-linked when it can); each file is checked against packs/checksums
  *   import PATH [--name N] [--id ID] [--license L]
  *                                your own pack: an .sfz, a folder (of SFZ or of samples named by note), or a .zip
  *   refresh                      bring installed packs' maps up to date with packs/manifests (no download)
  *   remove ID                    uninstall a pack
  */
-import { execFileSync } from 'node:child_process';
-import {
-  copyFileSync,
-  existsSync,
-  linkSync,
-  mkdirSync,
-  mkdtempSync,
-  readdirSync,
-  readFileSync,
-  rmSync,
-  writeFileSync,
-} from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { basename, dirname, extname, join, resolve } from 'node:path';
-import { fetchFiles, type PackManifest, packPaths, parseChecksums, pinPack, SampleCache, sha256 } from '@holo/music';
+import { basename, dirname, join, resolve } from 'node:path';
 import { loadConfig } from './config.ts';
 import { extractZip, importFolder } from './pack-import.ts';
-import type { Pack } from './packs.ts';
+import {
+  availablePacks as available,
+  packFiles as files,
+  installedPack,
+  installPack,
+  packChecksums,
+  presentFiles,
+  refreshPack,
+  removePack,
+} from './pack-install.ts';
 
 const config = loadConfig();
 const packsDir = join(config.dataDir, 'packs');
-const manifestsDir = resolve(import.meta.dirname, '../../../packs/manifests');
-const checksumsDir = resolve(import.meta.dirname, '../../../packs/checksums');
 const [command = 'list', ...rest] = process.argv.slice(2);
 
 function flag(name: string): string | undefined {
@@ -45,44 +41,8 @@ function flag(name: string): string | undefined {
   return v;
 }
 
-type Manifest = Pack & { format: string; version: number; hlLibrary?: string };
-
-function available(): Manifest[] {
-  if (!existsSync(manifestsDir)) return [];
-  return readdirSync(manifestsDir)
-    .filter((f) => f.endsWith('.json'))
-    .map((f) => JSON.parse(readFileSync(join(manifestsDir, f), 'utf8')) as Manifest);
-}
-
-function installed(id: string): Manifest | null {
-  const p = join(packsDir, id, 'holo-pack.json');
-  return existsSync(p) ? (JSON.parse(readFileSync(p, 'utf8')) as Manifest) : null;
-}
-
-function files(pack: Pack): string[] {
-  return packPaths(pack as unknown as PackManifest);
-}
-
-function checksums(id: string): Record<string, string> | null {
-  const file = join(checksumsDir, `${id}.sha256`);
-  return existsSync(file) ? parseChecksums(readFileSync(file, 'utf8')) : null;
-}
-
-/** Files that aren't the ones HO[LO] pins (an experience's build would refuse them). */
-function mismatched(pack: Pack): string[] {
-  const sums = checksums(pack.id);
-  if (!sums) return [];
-  const root = join(packsDir, pack.id, pack.root || 'samples');
-  return files(pack).filter((f) => {
-    const path = join(root, f);
-    return existsSync(path) && sums[f] !== undefined && sha256(readFileSync(path)) !== sums[f];
-  });
-}
-
-function present(pack: Pack): number {
-  const root = join(packsDir, pack.id, pack.root || 'samples');
-  return files(pack).filter((f) => existsSync(join(root, f))).length;
-}
+const installed = (id: string) => installedPack(packsDir, id);
+const present = (pack: Parameters<typeof presentFiles>[1]) => presentFiles(packsDir, pack);
 
 async function rescan(): Promise<void> {
   try {
@@ -90,91 +50,6 @@ async function rescan(): Promise<void> {
   } catch {
     // the server picks packs up when it next starts
   }
-}
-
-function place(src: string, dest: string): void {
-  mkdirSync(dirname(dest), { recursive: true });
-  if (existsSync(dest)) return;
-  try {
-    linkSync(src, dest);
-  } catch {
-    copyFileSync(src, dest);
-  }
-}
-
-function fromFolder(pack: Manifest, from: string): number {
-  const root = join(packsDir, pack.id, pack.root || 'samples');
-  let n = 0;
-  const missing: string[] = [];
-  for (const f of files(pack)) {
-    const candidates = [join(from, f), ...(pack.hlLibrary ? [join(from, pack.hlLibrary, f)] : [])];
-    const src = candidates.find((c) => existsSync(c));
-    if (src) {
-      place(src, join(root, f));
-      n++;
-    } else missing.push(f);
-  }
-  if (missing.length) console.log(`  ${missing.length} sample(s) not found under ${from}, e.g. ${missing[0]}`);
-  return n;
-}
-
-/**
- * Files made from the downloads the pack's recipe names (notes cut from runs, FLAC decoded from an
- * archive), each checked, into the pack's folder.
- */
-async function fromRecipe(pack: Manifest): Promise<void> {
-  const sums = checksums(pack.id);
-  if (!sums) throw new Error(`${pack.name} has no checksums (packs/checksums/${pack.id}.sha256)`);
-  const pinned = pinPack(pack as unknown as PackManifest, sums);
-  // fetched beside the packs (in Docker the data folder is what's writable), then linked into place
-  const cache = new SampleCache(mkdtempSync(join(packsDir, '.fetch-')));
-  const root = join(packsDir, pack.id, pack.root || 'samples');
-  try {
-    const want = files(pack).map((path) => ({ pack: pinned, path, sha256: pinned.files[path] as string }));
-    await fetchFiles(want, { cache, log: (line) => console.log(`  ${line}`) });
-    for (const f of want) place(cache.path(f.sha256, extname(f.path)), join(root, f.path));
-  } finally {
-    rmSync(cache.dir, { recursive: true, force: true });
-  }
-}
-
-function fromGit(pack: Manifest): void {
-  if (pack.source.kind !== 'git')
-    throw new Error(
-      `${pack.name} can't be downloaded: install it with --from (${'note' in pack.source ? pack.source.note : ''})`,
-    );
-  const root = join(packsDir, pack.id, pack.root || 'samples');
-  const dirs = [...new Set(files(pack).map((f) => dirname(f)))].map((d) => `/${d}/`);
-  const git = (...args: string[]) => execFileSync('git', args, { stdio: 'inherit' });
-  const commit = pack.source.commit;
-  if (commit) {
-    // the commit HO[LO] pins: the files every experience's build checks against
-    if (!existsSync(join(root, '.git'))) {
-      mkdirSync(root, { recursive: true });
-      git('-C', root, 'init', '-q');
-      git('-C', root, 'remote', 'add', 'origin', pack.source.url);
-    }
-    git('-C', root, 'sparse-checkout', 'set', '--no-cone', ...dirs);
-    git('-C', root, 'fetch', '-q', '--depth', '1', '--filter=blob:none', 'origin', commit);
-    git('-C', root, 'checkout', '-q', commit);
-    return;
-  }
-  if (!existsSync(join(root, '.git'))) {
-    mkdirSync(dirname(root), { recursive: true });
-    git(
-      'clone',
-      '--filter=blob:none',
-      '--no-checkout',
-      '--depth',
-      '1',
-      '--branch',
-      pack.source.branch ?? 'master',
-      pack.source.url,
-      root,
-    );
-  }
-  git('-C', root, 'sparse-checkout', 'set', '--no-cone', ...dirs);
-  git('-C', root, 'checkout');
 }
 
 async function main(): Promise<void> {
@@ -217,14 +92,13 @@ async function main(): Promise<void> {
       }
       console.log(`${m.name}:`);
       try {
-        if (from) console.log(`  ${fromFolder(m, resolve(from))} sample(s) from ${from}`);
-        else if (m.source.kind === 'cut' || m.source.kind === 'archive') await fromRecipe(m);
-        else fromGit(m);
-        writeFileSync(join(packsDir, m.id, 'holo-pack.json'), `${JSON.stringify(m)}\n`);
-        const wrong = mismatched(m);
-        console.log(`  ready: ${present(m)}/${files(m).length} samples${checksums(m.id) ? ', checked' : ''}`);
-        if (wrong.length) {
-          console.error(`  ${wrong.length} file(s) aren't the ones HO[LO] pins, e.g. ${wrong[0]}`);
+        const r = await installPack(packsDir, m.id, {
+          ...(from ? { from } : {}),
+          log: (line) => console.log(`  ${line}`),
+        });
+        console.log(`  ready: ${r.present}/${r.total} samples${packChecksums(m.id) ? ', checked' : ''}`);
+        if (r.wrong.length) {
+          console.error(`  ${r.wrong.length} file(s) aren't the ones HO[LO] pins, e.g. ${r.wrong[0]}`);
           process.exitCode = 1;
         }
       } catch (err) {
@@ -266,18 +140,13 @@ async function main(): Promise<void> {
     return;
   }
   if (command === 'refresh') {
-    for (const m of available()) {
-      if (!installed(m.id)) continue;
-      writeFileSync(join(packsDir, m.id, 'holo-pack.json'), `${JSON.stringify(m)}\n`);
-      console.log(`${m.name}: map refreshed`);
-    }
+    for (const m of available()) if (refreshPack(packsDir, m)) console.log(`${m.name}: map refreshed`);
     await rescan();
     return;
   }
   if (command === 'remove') {
     const id = rest[0];
-    if (!id || !installed(id)) throw new Error(`No installed pack "${id ?? ''}"`);
-    rmSync(join(packsDir, id), { recursive: true, force: true });
+    removePack(packsDir, id ?? '');
     console.log(`Removed ${id}`);
     await rescan();
     return;

@@ -371,6 +371,20 @@ export async function enableMidi(): Promise<void> {
 export function findCompanion(): void {
   midi.onPorts(() => store.set({ midiPorts: midi.ports }));
   companion.onmidi = (events) => midi.nativeEvents(events);
+  // an Engine built with another engine than the studio: said once a connection (the settings offer the matching one)
+  let staleSaid = false;
+  companion.subscribe(() => {
+    const m = companion.snapshot().matches;
+    if (m === false && !staleSaid) {
+      staleSaid = true;
+      toast(
+        'HO[LO] Engine on this computer was built with another engine than this studio, so it may play the newest instruments wrong. Audio & MIDI settings has the matching one.',
+        'error',
+        12000,
+      );
+    }
+    if (m === null) staleSaid = false;
+  });
   let ports = companion.snapshot().ports;
   companion.subscribe(() => {
     const snap = companion.snapshot();

@@ -48,6 +48,12 @@ if (parsed === 'version') {
 }
 const render = getAsset('render.cjs', 'utf8');
 const ahead = getAsset('ahead.cjs', 'utf8');
+// the fingerprint of the engine it was built with (the build leaves it as an asset)
+try {
+  parsed.engine = getAsset('engine.txt', 'utf8').trim();
+} catch {
+  // built before the fingerprint: a studio will say it's another engine
+}
 run(parsed, nativeFile(), {
   render: (workerData, transferList) => new Worker(render, { eval: true, workerData, transferList }),
   ahead: () => new Worker(ahead, { eval: true }),

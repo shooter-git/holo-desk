@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { brotliCompressSync, gzipSync, constants as zlib } from 'node:zlib';
 import react from '@vitejs/plugin-react';
 import { defineConfig, type Plugin } from 'vite';
+import { liveSource } from '../../packages/music/src/identity.ts';
 
 const here = fileURLToPath(new URL('.', import.meta.url));
 const server = `http://127.0.0.1:${process.env.HOLO_PORT ?? 47800}`;
@@ -76,6 +77,10 @@ function precompress(): Plugin {
     },
   };
 }
+
+// the engine this studio plays (and sends to HO[LO] Engine), as import.meta.env.VITE_HOLO_ENGINE in the dev
+// server and the build alike: an Engine built from another is told apart
+process.env.VITE_HOLO_ENGINE = liveSource(resolve(here, '../..'));
 
 export default defineConfig({
   plugins: [react(), serviceWorker(), precompress()],

@@ -4,7 +4,14 @@
  * next device restart of the audio thread) loads from disk instead of the network.
  */
 
-import type { SamplerSpec, SampleZone, ZoneManifest } from '@holo/engine';
+import {
+  fadeTail,
+  playingExtras,
+  type SamplerSpec,
+  type SampleZone,
+  type ZoneManifest,
+  zoneExtras,
+} from '@holo/engine';
 import { engine } from './engine.ts';
 import { channelData, instrumentManifest, packFileData } from './pack-files.ts';
 
@@ -153,19 +160,38 @@ export class SampleLibrary {
     let done = 0;
     progress?.(done, total);
     const zones: SampleZone[] = new Array(total);
+    // zones that play the same stretch of the same file (a drum on two pads) share one copy
+    const shared = new Map<string, Promise<{ left: Float32Array; right: Float32Array | null; k: number }>>();
+    const load = (z: ZoneManifest) => {
+      const key = `${z.file}|${z.start}|${z.end}|${z.fadeOut ?? 0}`;
+      let p = shared.get(key);
+      if (!p) {
+        p = (async () => {
+          const audio = await ctx.decodeAudioData(await packFileData(pack, z.file, priority));
+          // the decoder resampled to the context's rate: move the manifest's frames with it
+          const k = audio.sampleRate / z.rate;
+          const start = Math.max(0, Math.round(z.start * k));
+          const end = Math.min(audio.length, z.end > 0 ? Math.round(z.end * k) : audio.length);
+          // (in shared memory where the page has it: the audio thread and the workers play the one copy)
+          const left = channelData(audio, 0, start, end);
+          const right = audio.numberOfChannels > 1 ? channelData(audio, 1, start, end) : null;
+          if (z.fadeOut) {
+            fadeTail(left, Math.round(z.fadeOut * k));
+            if (right) fadeTail(right, Math.round(z.fadeOut * k));
+          }
+          return { left, right, k };
+        })();
+        shared.set(key, p);
+      }
+      return p;
+    };
     let next = 0;
     const worker = async () => {
       while (next < total) {
         const index = next++;
         const z = manifest.zones[index] as ZoneManifest;
-        const audio = await ctx.decodeAudioData(await packFileData(pack, z.file, priority));
-        // the decoder resampled to the context's rate: move the manifest's frames with it
-        const k = audio.sampleRate / z.rate;
+        const { left, right, k } = await load(z);
         const start = Math.max(0, Math.round(z.start * k));
-        const end = Math.min(audio.length, z.end > 0 ? Math.round(z.end * k) : audio.length);
-        // (in shared memory where the page has it: the audio thread and the workers play the one copy)
-        const left = channelData(audio, 0, start, end);
-        const right = audio.numberOfChannels > 1 ? channelData(audio, 1, start, end) : null;
         zones[index] = {
           left,
           right,
@@ -178,6 +204,7 @@ export class SampleLibrary {
           loopStart: z.loopEnd > z.loopStart ? Math.max(0, Math.round(z.loopStart * k) - start) : 0,
           loopEnd: z.loopEnd > z.loopStart ? Math.max(0, Math.round(z.loopEnd * k) - start) : 0,
           rr: z.rr,
+          ...zoneExtras(z),
         };
         done++;
         progress?.(done, total);
@@ -192,6 +219,7 @@ export class SampleLibrary {
       pitched: manifest.pitched !== false,
       velocityRange: manifest.velocityRange,
       attack: manifest.attack,
+      ...playingExtras(manifest),
     };
   }
 }

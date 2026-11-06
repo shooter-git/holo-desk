@@ -3,6 +3,7 @@ import { bandsResponse, peqBands } from '@holo/engine';
 import {
   type Bus,
   type Channel,
+  macroValue,
   type Op,
   type ParamDef,
   PEQ_BANDS,
@@ -16,9 +17,11 @@ import {
   SPACE_FILE,
   SPACE_NAMES,
   type Stage,
+  SYNTH_MACROS,
+  SYNTH_NOTES,
   type Track,
 } from '@holo/session';
-import { Headphones, Power, X } from 'lucide-react';
+import { Headphones, Power, RotateCcw, SlidersHorizontal, X } from 'lucide-react';
 import { memo, type ReactNode, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react';
 import {
   addBusWithSend,
@@ -183,6 +186,20 @@ export const Strip = memo(function Strip({ id, kind, name, color, channel, track
               }
             >
               <span className="grow">{instrumentLabel(track.instrument)}</span>
+              {track.instrument.type === 'synth' && SYNTH_MACROS[track.instrument.preset] && (
+                <button
+                  type="button"
+                  className="slot-edit"
+                  title="Its knobs"
+                  aria-label={`${instrumentLabel(track.instrument)}: its knobs`}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    store.set({ synth: id });
+                  }}
+                >
+                  <SlidersHorizontal size={12} />
+                </button>
+              )}
             </div>
           </div>
         )}
@@ -1044,6 +1061,72 @@ export function PluginWindow() {
           )}
       </div>
       <div className="muted plugin-note">{def.description}</div>
+    </Floating>
+  );
+}
+
+/** A synth's own knobs (Fat, Ethereal): turned, they change what's sounding. */
+export function SynthWindow() {
+  const id = useApp((s) => s.synth);
+  const project = useApp((s) => s.project);
+  const layout = useLayout();
+  const phone = isPhone(layout);
+  const vp = useViewport();
+  if (!id || !project) return null;
+  const track = project.tracks.find((t) => t.id === id);
+  const inst = track?.instrument;
+  if (!track || inst?.type !== 'synth') return null;
+  const defs = SYNTH_MACROS[inst.preset];
+  if (!defs) return null;
+  const close = () => store.set({ synth: null });
+  const change = (param: string, value: number) =>
+    gestureChange([
+      {
+        op: 'updateTrack',
+        track: track.id,
+        patch: { instrument: { ...inst, params: { ...inst.params, [param]: value } } },
+      } satisfies Op,
+    ]);
+  return (
+    <Floating
+      key={id}
+      width={phone ? vp.w : 460}
+      phone={phone}
+      label={inst.preset}
+      onClose={close}
+      header={
+        <>
+          <span className="name">{inst.preset}</span>
+          <span className="muted">{track.name}</span>
+          <button
+            type="button"
+            className="btn ghost icon"
+            title="Back to the preset's settings"
+            aria-label="Back to the preset's settings"
+            disabled={!inst.params}
+            onClick={() => updateTrack(track.id, { instrument: { type: 'synth', preset: inst.preset } }, 'Reset')}
+          >
+            <RotateCcw />
+          </button>
+          <button type="button" className="btn ghost icon" title="Close" aria-label="Close" onClick={close}>
+            <X />
+          </button>
+        </>
+      }
+    >
+      <div className="face">
+        {defs.map((p) => (
+          <Knob
+            key={p.id}
+            def={p}
+            value={macroValue(inst.preset, inst.params, p.id)}
+            onBegin={() => beginGesture(`${inst.preset}: ${p.name}`)}
+            onEnd={endGesture}
+            onChange={(v) => change(p.id, v)}
+          />
+        ))}
+      </div>
+      <div className="muted plugin-note">{SYNTH_NOTES[inst.preset]}</div>
     </Floating>
   );
 }

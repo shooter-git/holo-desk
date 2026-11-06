@@ -4,7 +4,7 @@
  * and your own devices reach it through Tailscale.
  */
 import { createHash } from 'node:crypto';
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, statSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { constants as zlib } from 'node:zlib';
@@ -36,6 +36,7 @@ import { Store } from './db.ts';
 import { Live, type RenderJob } from './live.ts';
 import { NetworkMidi } from './network-midi.ts';
 import { audioInfo, extractZip, importFolder, saveStream } from './pack-import.ts';
+import { availablePacks, Installer, installedPack } from './pack-install.ts';
 import { Packs } from './packs.ts';
 
 const ISOLATION = {
@@ -219,6 +220,33 @@ export async function buildApp(config: Config): Promise<{ app: FastifyInstance; 
     packs.scan();
     return packs.summaries();
   });
+  // the libraries HO[LO] ships maps for, installed from the Library (one at a time) as from `pnpm packs install`
+  const packsDir = join(config.dataDir, 'packs');
+  const installer = new Installer(packsDir, () => packs.scan());
+  app.get('/api/packs/available', async () => ({
+    packs: availablePacks().map((m) => {
+      const have = installedPack(packsDir, m.id);
+      return {
+        id: m.id,
+        name: m.name,
+        license: m.license,
+        credit: m.credit,
+        instruments: m.instruments.map((i) => ({ title: i.title, category: i.category })),
+        // installed, and its map is the one shipped (else `refresh` or a reinstall brings it up to date)
+        installed: have !== null,
+        current: have !== null && JSON.stringify(have) === JSON.stringify(m),
+      };
+    }),
+    job: installer.job,
+  }));
+  app.get('/api/packs/install', async () => installer.job);
+  app.post<{ Params: { id: string } }>('/api/packs/:id/install', async (req, reply) => {
+    try {
+      return reply.code(202).send(installer.start(req.params.id));
+    } catch (err) {
+      return reply.code(409).send({ error: err instanceof Error ? err.message : String(err) });
+    }
+  });
   // your own pack, uploaded as a ZIP (SFZ instruments, or folders of samples named by note)
   app.addContentTypeParser(['application/zip', 'application/x-zip-compressed'], (_req, payload, done) =>
     done(null, payload),
@@ -275,6 +303,44 @@ export async function buildApp(config: Config): Promise<{ app: FastifyInstance; 
     if (!path) return reply.code(404).send({ error: 'No such file' });
     const type = path.endsWith('.flac') ? 'audio/flac' : path.endsWith('.ogg') ? 'audio/ogg' : 'audio/wav';
     return sendFile(reply, path, type, SAMPLE_CACHE);
+  });
+
+  // ---- HO[LO] Engine: the downloads this host has (the image builds them from the studio's own sources) ----
+
+  const engineDir = process.env.HOLO_ENGINE_DIR ?? join(config.repoDir, 'apps/companion/dist');
+  /** Each computer's download, by the platform and architecture its Engine reports. */
+  const ENGINE_FILES: Record<string, string> = {
+    'win32-x64': 'holo-engine-windows-x64.exe',
+    'win32-arm64': 'holo-engine-windows-arm64.exe',
+    'linux-x64': 'holo-engine-linux-x64.zip',
+    'darwin-arm64': 'holo-engine-macos-arm64.zip',
+    'darwin-x64': 'holo-engine-macos-x64.zip',
+  };
+  app.get('/api/engine', async () => {
+    let engine: string | null = null;
+    try {
+      engine = (JSON.parse(readFileSync(join(engineDir, 'engine.json'), 'utf8')) as { engine?: string }).engine ?? null;
+    } catch {
+      // none built here
+    }
+    const downloads = Object.entries(ENGINE_FILES).flatMap(([target, file]) => {
+      const path = join(engineDir, file);
+      return existsSync(path) ? [{ target, file, size: statSync(path).size }] : [];
+    });
+    return { engine, downloads };
+  });
+  app.get<{ Params: { file: string } }>('/api/engine/files/:file', async (req, reply) => {
+    const file = req.params.file;
+    const path = join(engineDir, file);
+    if (!Object.values(ENGINE_FILES).includes(file) || !existsSync(path))
+      return reply.code(404).send({ error: 'No such download here' });
+    reply.header('content-disposition', `attachment; filename="${file}"`);
+    return sendFile(
+      reply,
+      path,
+      file.endsWith('.exe') ? 'application/vnd.microsoft.portable-executable' : 'application/zip',
+      'no-cache',
+    );
   });
 
   // ---- creations ----

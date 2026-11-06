@@ -6,6 +6,8 @@
  *   pnpm engine:build --release              the download for this computer: dist/holo-engine-<os>-<arch>[.exe]
  *   pnpm engine:build --release win32-x64    …for another computer (Windows and Linux build anywhere with Zig;
  *                                            macOS builds on a Mac, where Apple's frameworks are)
+ *   pnpm engine:build --fetch win32-x64      only fetch what that build downloads (HO[LO]'s Docker image does
+ *                                            this in a layer of its own, then builds the Windows and Linux ones)
  *
  * The native piece is one C file (native/holo_native.c) with miniaudio (fetched once, the release
  * pinned below and checked), compiled by Zig (`zig cc`, which cross-compiles with nothing else
@@ -47,6 +49,8 @@ async function miniaudio() {
 
 const args = process.argv.slice(2);
 const release = args.includes('--release');
+/** Only fetch what a build downloads (miniaudio, each target's Node), into the cache: a Docker layer of its own. */
+const fetchOnly = args.includes('--fetch');
 const targets = args.filter((a) => !a.startsWith('--'));
 if (!targets.length) targets.push(host);
 
@@ -123,9 +127,15 @@ function buildNative(target, header) {
   return file;
 }
 
+/**
+ * This Node is built against musl (Alpine, as in HO[LO]'s Docker image): its binary would run on no
+ * other Linux, so the Linux download takes nodejs.org's (glibc) build of the same version instead.
+ */
+const musl = process.platform === 'linux' && !process.report?.getReport?.()?.header?.glibcVersionRuntime;
+
 /** Node's binary for a target, the same version as the one building (the app's blob is made for it). */
 async function nodeBinary(target) {
-  if (target === host) return process.execPath;
+  if (target === host && !musl) return process.execPath;
   const [os, arch] = target.split('-');
   const v = process.version;
   const dir = join(cache, `node-${v}-${target}`);
@@ -191,6 +201,8 @@ async function single(target, native) {
         'render.cjs': join(dist, 'render.cjs'),
         'ahead.cjs': join(dist, 'ahead.cjs'),
         'holo_native.node': native,
+        // the fingerprint of the engine inside: told to every studio that connects
+        'engine.txt': join(dist, 'engine.txt'),
       },
     }),
   );
@@ -211,9 +223,22 @@ async function single(target, native) {
 }
 
 const header = await miniaudio();
+if (fetchOnly) {
+  for (const t of targets) if (!t.startsWith('darwin')) await nodeBinary(t);
+  process.exit(0);
+}
 const natives = new Map(targets.map((t) => [t, buildNative(t, header)]));
 if (release) {
   mkdirSync(dist, { recursive: true });
   await bundle();
+  // the engine these downloads carry (liveSource): what a studio compares its own with, and what the
+  // studio's host says of the downloads it offers (engine.json, beside them)
+  const { liveSource } = await import('../../packages/music/src/identity.ts');
+  const engine = liveSource(join(here, '../..'));
+  writeFileSync(join(dist, 'engine.txt'), `${engine}\n`);
   for (const t of targets) await single(t, natives.get(t));
+  writeFileSync(
+    join(dist, 'engine.json'),
+    `${JSON.stringify({ engine, version: JSON.parse(readFileSync(join(here, 'package.json'), 'utf8')).version, targets }, null, 2)}\n`,
+  );
 }

@@ -42,10 +42,10 @@ function files(dir: string, rel: string, out: string[]): void {
   }
 }
 
-/** The fingerprint of an engine's sources in a folder laid out as HO[LO]'s repository. */
-export function engineSource(root: string): string {
+/** The fingerprint of some of HO[LO]'s sources (paths relative to its repository), however they're read. */
+function fingerprint(root: string, paths: readonly string[]): string {
   const list: string[] = [];
-  for (const p of ENGINE_PATHS) files(join(root, p), p, list);
+  for (const p of paths) files(join(root, p), p, list);
   list.sort();
   const h = createHash('sha256');
   for (const path of list) {
@@ -55,6 +55,23 @@ export function engineSource(root: string): string {
     h.update(text, 'latin1');
   }
   return h.digest('hex');
+}
+
+/** The fingerprint of an engine's sources in a folder laid out as HO[LO]'s repository. */
+export function engineSource(root: string): string {
+  return fingerprint(root, ENGINE_PATHS);
+}
+
+/**
+ * What plays a song live, and so what HO[LO] Engine carries: the engine (its instruments, its mixer,
+ * the messages it takes) and the session format. A studio and an Engine built from the same of these
+ * play alike; built from different ones, the Engine may play the newest instruments wrong or not at
+ * all (the studio says so).
+ */
+export const LIVE_PATHS = ['packages/engine/src', 'packages/session/src'] as const;
+
+export function liveSource(root: string): string {
+  return fingerprint(root, LIVE_PATHS);
 }
 
 /** The engine package's version in a folder laid out as HO[LO]'s repository. */

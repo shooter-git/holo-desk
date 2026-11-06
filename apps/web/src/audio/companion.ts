@@ -20,12 +20,22 @@ import {
   type ToCompanion,
 } from '@holo/engine/companion';
 
+/** The fingerprint of the engine this studio was built with (liveSource): an Engine's own is compared with it. */
+export const STUDIO_ENGINE: string = import.meta.env.VITE_HOLO_ENGINE ?? '';
+
 export interface CompanionSnapshot {
   /** Its sound device once it has opened it for this studio: the studio then plays through it. */
   device: CompanionDevice | null;
   ports: CompanionPort[];
   stats: CompanionStats | null;
   version: string;
+  /** Its computer (platform-arch, as Node names them: "win32-x64"), once it has said hello. */
+  target: string;
+  /**
+   * Whether it carries the engine this studio was built with (null until it says): one built from
+   * another may play the newest instruments wrong, or not at all.
+   */
+  matches: boolean | null;
   /** Something to tell (another tab took it, the device wouldn't open). */
   note: string | null;
   /** Looking for it by itself (a public site waits to be asked, as browsers then ask the user). */
@@ -39,7 +49,16 @@ export interface Measured {
 }
 
 class Companion {
-  private snap: CompanionSnapshot = { device: null, ports: [], stats: null, version: '', note: null, looking: false };
+  private snap: CompanionSnapshot = {
+    device: null,
+    ports: [],
+    stats: null,
+    version: '',
+    target: '',
+    matches: null,
+    note: null,
+    looking: false,
+  };
   private ws: WebSocket | null = null;
   private exclusive = true;
   /** The studio's latency setting as a floor under the companion's buffer depth. */
@@ -174,7 +193,7 @@ class Companion {
       if (this.ws !== ws) return;
       this.ws = null;
       const was = this.snap.device !== null;
-      this.set({ device: null, ports: [], stats: null });
+      this.set({ device: null, ports: [], stats: null, matches: null });
       if (was) this.retry = 2000;
       if (this.snap.note !== REPLACED) this.later();
     };
@@ -200,7 +219,13 @@ class Companion {
     switch (msg.type) {
       case 'hello':
         this.failing = 0;
-        this.set({ version: msg.version, note: null });
+        this.set({
+          version: msg.version,
+          target: `${msg.platform}-${msg.arch ?? 'x64'}`,
+          // an Engine from before the fingerprint says nothing of its engine: another one, then
+          matches: msg.engine === STUDIO_ENGINE,
+          note: null,
+        });
         void (this.beforeOpen?.() ?? Promise.resolve()).finally(() =>
           this.send({ type: 'open', exclusive: this.exclusive, floor: this.floor }),
         );

@@ -13,6 +13,7 @@ import {
   formatBarBeat,
   type Instrument,
   type MiddleC,
+  macroValues,
   meterAt,
   type Note,
   newAudioTrack,
@@ -28,6 +29,7 @@ import {
   parsePosition,
   parseProject,
   pluginDef,
+  SYNTH_MACROS,
   SYNTH_PRESETS,
   secondsToTick,
   TRACK_COLORS,
@@ -236,6 +238,8 @@ Writing (positions are bar.beat.sixteenth: 14, 14.3, 14.3.2; notes as "D5:1 B5:2
   holo clear --track T --from 14 --to 18
   holo track add NAME --instrument synth:"Warm Pad"|pack/name
   holo track set T [--volume -6] [--pan -0.3] [--mute on|off] [--solo on|off] [--instrument …] [--arm on|off]
+  holo synth T [knob=value…]           a synth's own knobs (Fat Mono/Poly, Ethereal Pad/Keys): shown, or set
+                                      e.g. holo synth Bass cutoff=500 glide=0.12 drive=0.7
   holo fx add T|bus-name|master TYPE [param=value…]     e.g. holo fx add Keys harmonizer key=9 scale=6 voice1=2
   holo fx set T TYPE|ID param=value…
   holo fx remove T TYPE|ID
@@ -447,6 +451,47 @@ async function main(): Promise<void> {
         return;
       }
       throw new Error('holo track add NAME --instrument … | holo track set NAME --volume …');
+    }
+
+    case 'synth': {
+      // a synth's own knobs (Fat, Ethereal): shown, or set
+      const project = await song();
+      const track = trackOf(project, words.shift() ?? '');
+      const inst = track.instrument;
+      const defs = inst.type === 'synth' ? SYNTH_MACROS[inst.preset] : undefined;
+      if (inst.type !== 'synth' || !defs)
+        throw new Error(
+          `${track.name} plays no synth with knobs (they are ${Object.keys(SYNTH_MACROS)
+            .map((p) => `synth:"${p}"`)
+            .join(', ')})`,
+        );
+      if (!words.length) {
+        const now = macroValues(inst.preset, inst.params);
+        console.log(`${track.name}: ${inst.preset}`);
+        for (const d of defs)
+          console.log(
+            `  ${d.id.padEnd(11)} ${String(now[d.id]).padEnd(8)} ${d.min}..${d.max}${d.unit ? ` ${d.unit}` : ''}`,
+          );
+        return;
+      }
+      const params = parseParams(words);
+      for (const [k, v] of Object.entries(params)) {
+        const d = defs.find((x) => x.id === k);
+        if (!d) throw new Error(`${inst.preset} has no "${k}": ${defs.map((x) => x.id).join(', ')}`);
+        if (v < d.min || v > d.max) throw new Error(`${k} goes from ${d.min} to ${d.max}`);
+      }
+      await ops(
+        project,
+        [
+          {
+            op: 'updateTrack',
+            track: track.id,
+            patch: { instrument: { ...inst, params: { ...inst.params, ...params } } },
+          },
+        ],
+        `${track.name}'s ${inst.preset}: ${words.join(' ')}`,
+      );
+      return;
     }
 
     case 'fx': {

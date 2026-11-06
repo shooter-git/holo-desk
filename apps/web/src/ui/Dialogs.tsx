@@ -17,7 +17,7 @@ import { api, type Creation, type ProjectRow } from '../app/api.ts';
 import { KEY_COMMANDS } from '../app/keys.ts';
 import { device, renameDevice } from '../app/live.ts';
 import { store, toast, useApp } from '../app/store.ts';
-import { companion } from '../audio/companion.ts';
+import { companion, STUDIO_ENGINE } from '../audio/companion.ts';
 import { engine } from '../audio/engine.ts';
 import { midi } from '../audio/midi.ts';
 import { Wordmark } from './controls.tsx';
@@ -251,12 +251,63 @@ function DspReadout() {
 /** Where to get HO[LO] Engine: one file for each computer, nothing to install. */
 const ENGINE_DOWNLOADS = 'https://github.com/shooter-git/holo-desk/releases/latest';
 
+/** The Engine downloads this studio's host has, and the engine they carry (its image builds them). */
+interface EngineDownloads {
+  engine: string | null;
+  downloads: { target: string; file: string; size: number }[];
+}
+let downloadsAsked: Promise<EngineDownloads> | null = null;
+function useEngineDownloads(): EngineDownloads | null {
+  const [d, setD] = useState<EngineDownloads | null>(null);
+  useEffect(() => {
+    downloadsAsked ??= fetch('/api/engine')
+      .then((r) => (r.ok ? (r.json() as Promise<EngineDownloads>) : { engine: null, downloads: [] }))
+      .catch(() => ({ engine: null, downloads: [] }));
+    void downloadsAsked.then(setD);
+  }, []);
+  return d;
+}
+
+const TARGET_NAMES: Record<string, string> = {
+  'win32-x64': 'Windows',
+  'win32-arm64': 'Windows on Arm',
+  'linux-x64': 'Linux',
+  'darwin-arm64': 'a Mac (Apple silicon)',
+  'darwin-x64': 'a Mac (Intel)',
+};
+
+/** This device as an Engine names its computer, by what the browser says of it (a guess where it says little). */
+function thisDevice(): string {
+  const nav = navigator as Navigator & { userAgentData?: { platform?: string } };
+  const p = (nav.userAgentData?.platform ?? navigator.platform ?? '').toLowerCase();
+  if (p.includes('win')) return 'win32-x64';
+  if (p.includes('mac')) return 'darwin-arm64';
+  if (p.includes('linux') && !/android/i.test(navigator.userAgent)) return 'linux-x64';
+  return '';
+}
+
+/** The host's download for a computer, only if it carries this studio's engine. */
+function matchingDownload(d: EngineDownloads | null, target: string) {
+  if (!d || d.engine !== STUDIO_ENGINE) return null;
+  return d.downloads.find((x) => x.target === target) ?? null;
+}
+
+function DownloadLink({ file, target, size }: { file: string; target: string; size: number }) {
+  return (
+    <a href={`/api/engine/files/${encodeURIComponent(file)}`} download={file}>
+      Download it for {TARGET_NAMES[target] ?? target} ({Math.round(size / 1048576)} MB)
+    </a>
+  );
+}
+
 /** HO[LO] Engine on this device: what it plays through, and whether it has the device to itself. */
 function EngineLink() {
   const c = useSyncExternalStore(companion.subscribe, companion.snapshot);
   const share = useApp((s) => s.shareDevice);
+  const downloads = useEngineDownloads();
   const d = c.device;
   if (!d) {
+    const own = matchingDownload(downloads, thisDevice());
     return (
       <div className="vstack" style={{ gap: 4 }}>
         <div className="hstack" style={{ flexWrap: 'wrap' }}>
@@ -272,18 +323,46 @@ function EngineLink() {
         <span className="muted" style={{ fontSize: 11 }}>
           {c.note ??
             'A small app for the computer you play on: it plays the studio with native audio and reads every USB MIDI instrument itself, a few milliseconds from key to ear. Start it and the studio uses it; quit it and the browser plays again.'}{' '}
-          <a href={ENGINE_DOWNLOADS} target="_blank" rel="noreferrer">
-            Get HO[LO] Engine
-          </a>
+          {own ? (
+            <>
+              <DownloadLink {...own} /> (built with this studio, from its host), or{' '}
+              <a href={ENGINE_DOWNLOADS} target="_blank" rel="noreferrer">
+                for another computer
+              </a>
+            </>
+          ) : (
+            <a href={ENGINE_DOWNLOADS} target="_blank" rel="noreferrer">
+              Get HO[LO] Engine
+            </a>
+          )}
         </span>
       </div>
     );
   }
   const ms = (frames: number) => ((frames / d.rate) * 1000).toFixed(1);
+  const fix = c.matches === false ? matchingDownload(downloads, c.target) : null;
   return (
     <div className="vstack" style={{ gap: 4 }}>
+      {c.matches === false && (
+        <span className="engine-stale" role="status">
+          This HO[LO] Engine was built with another engine than this studio, so it may play the newest instruments
+          wrong, or not at all. Quit it and start the matching one:{' '}
+          {fix ? (
+            <DownloadLink {...fix} />
+          ) : (
+            <>
+              this studio’s host has none for {TARGET_NAMES[c.target] ?? c.target} (build it with{' '}
+              <kbd>pnpm engine:build --release</kbd>, or see{' '}
+              <a href={ENGINE_DOWNLOADS} target="_blank" rel="noreferrer">
+                the releases
+              </a>
+              ).
+            </>
+          )}
+        </span>
+      )}
       <div className="hstack" style={{ flexWrap: 'wrap' }}>
-        <span className="status-dot ok" />
+        <span className={`status-dot ${c.matches === false ? 'warn' : 'ok'}`} />
         <span className="strong">HO[LO] Engine</span>
         <span className="muted">
           plays this studio through {d.name}: {d.backend} {d.mode === 'exclusive' ? 'exclusive mode' : 'shared'},{' '}

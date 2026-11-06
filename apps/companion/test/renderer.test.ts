@@ -566,7 +566,7 @@ describe.skipIf(!existsSync(addon))('HO[LO] Engine end to end (the native piece,
   it('takes a studio, opens the device, plays live notes and sends the meters back', async () => {
     const lines: string[] = [];
     const app = await run(
-      { port: 0, shared: false, nullAudio: true, origins: [], threads: 2 },
+      { port: 0, shared: false, nullAudio: true, origins: [], threads: 2, engine: 'the-engine-it-carries' },
       addon,
       threads,
       (line) => lines.push(line),
@@ -588,7 +588,9 @@ describe.skipIf(!existsSync(addon))('HO[LO] Engine end to end (the native piece,
           check();
         });
       ws.onmessage = (e) => got.push(decodeMessage(e.data as ArrayBuffer) as FromCompanion);
-      await waitFor((m) => m.type === 'hello');
+      // it says which engine it carries, and on what computer
+      const hello = await waitFor((m) => m.type === 'hello');
+      expect(hello).toMatchObject({ engine: 'the-engine-it-carries', platform: process.platform, arch: process.arch });
       ws.send(encodeMessage({ type: 'open', exclusive: true }));
       const device = await waitFor((m) => m.type === 'device');
       expect(device).toMatchObject({ device: { backend: 'Null', mode: 'shared' } });

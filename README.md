@@ -11,7 +11,7 @@
 - **Record and edit audio.** Audio tracks record a microphone or an instrument through an audio interface (lined up with what you heard, using this device's measured round trip), or take WAV, FLAC, MP3, Ogg and AIFF files dropped on the tracks. Trim from either edge, drag fades, set gain, normalize, and time-stretch without changing pitch (Alt-drag a region's end, as in Logic) in the tracks area or the Audio Editor.
 - **Mix and automate.** Channel strips with instruments, MIDI effects, audio effects, sends, buses, pan, faders and meters. Put a channel on a **Stage**: a near seat and a far seat, each with its own rooms and depth, and a Distance that moves it between them. Automation lanes (press <kbd>A</kbd>) draw how volume, pan, mute, sends, distance and any plugin parameter move through the song, in straight lines or smooth curves, sample-accurately.
 - **Bounce.** <kbd>Ctrl B</kbd> renders the song (or the cycle) to a 24-bit WAV with the same engine, faster than real time, and keeps a copy with the song. The stock plugins are Channel EQ, Parametric EQ (eight free bands), Compressor, Noise Gate, Transient Softener, Limiter, Space Designer (convolution with generated rooms, halls and cathedrals, or any impulse response), Shimmer, Space Reverb, Tape Delay, Chorus, Wow & Flutter, Stereo Width, Tape Warmth, Saturation, Arpeggiator, Harmonizer, Scale Quantizer and Velocity Processor. Plugins that look ahead (the limiter, Shimmer) are delay-compensated: everything else waits for them, so it all arrives together. A song can carry its **finish** (mastering to a loudness under a true-peak ceiling, with glue) and be marked a **loop**, so a game's music renders as it plays forever, its end ringing into its start.
-- **Real instruments.** CC0 sample libraries (VSCO 2 Community Edition, the Versilian Community Sample Library, Karoryfer's Meatbass, a FreePats guitar) with every sample measured for its true pitch, level and loop. **Performance** instruments play a whole part as a real player would (dynamic layers, round robins, legato hand-overs, re-bowing, attacks that land on the beat), and **Glass** is a bowed-glass voice. There is also a built-in synth and drum kit, so something always plays. **Import your own packs** as SFZ or folders of WAV files.
+- **Real instruments.** Free sample libraries (VSCO 2 Community Edition, the Versilian Community Sample Library, Karoryfer's Meatbass, a FreePats guitar, a Steinway Model D, and rock, prog and jazz drum kits) with every sample measured for its true pitch, level and loop. **Performance** instruments play a whole part as a real player would (dynamic layers, round robins, legato hand-overs, re-bowing, attacks that land on the beat), and **Glass** is a bowed-glass voice. There are built-in synths and a drum kit, so something always plays: among them **Fat Mono** and **Fat Poly** (three drifting oscillators driven into a transistor-ladder filter, the mono one gliding when you play legato) and **Ethereal Pad** and **Ethereal Keys** (a wide supersaw with shimmering partials in a shimmering hall of its own), each with six knobs in its window (the button on its instrument slot). **Import your own packs** as SFZ or folders of WAV files.
 - **An AI collaborator.** A [Claude Code](https://claude.com/claude-code) skill that reads the open session and writes into it as undoable steps. It harmonizes, writes counter-melodies and bass lines, sets up a live harmonizer that follows your playing, and listens to what you play and answers it.
 - **Round trips with your own projects.** A game or an app whose music is code can send a piece into HO[LO] and get your edits back, and render the song itself so you can compare its own sound with the studio's, edits and all ([how](docs/creations.md)).
 - **Music for your next project.** `holo init` gives a new game or app ("an experience") its songs folder and a pinned copy of HO[LO]'s engine, so the project builds its own music, sample for sample as the studio renders it, with or without HO[LO] Desk; `holo update-engine` moves it on when you choose ([how](docs/creations.md#music-for-a-new-project-an-experience)).
@@ -27,7 +27,7 @@ You need Node.js 24 or newer and pnpm 10 (`corepack enable`), or just Docker.
 git clone https://github.com/shooter-git/holo-desk.git && cd holo-desk
 pnpm install
 cp .env.example .env
-pnpm packs install          # the CC0 sample libraries (a few GB, fetched with git)
+pnpm packs install          # the sample libraries (a few GB), or install them from the studio's Library
 pnpm build && pnpm start    # or `pnpm dev` while working on HO[LO] itself
 ```
 
@@ -93,9 +93,12 @@ on. It plays the studio's sound itself, with native audio (WASAPI exclusive mode
 on macOS), and reads every USB MIDI instrument natively: keyboards, drum pads, controllers, an
 interface carrying several instruments. The browser stays the screen.
 
-1. Download it for that computer from the [releases](https://github.com/shooter-git/holo-desk/releases/latest):
-   `holo-engine-windows-x64.exe`, `holo-engine-macos-arm64.zip` (Apple silicon), `holo-engine-macos-x64.zip`
-   or `holo-engine-linux-x64.zip`. It's one file, with nothing to install.
+1. Download it for that computer from the studio itself: **Audio & MIDI** settings → **Download it for
+   Windows** (or Linux). HO[LO]'s Docker image builds these from the same sources as the studio, so the
+   one it offers always plays as the studio does. For a Mac, or without the image, take it from the
+   [releases](https://github.com/shooter-git/holo-desk/releases/latest): `holo-engine-windows-x64.exe`,
+   `holo-engine-macos-arm64.zip` (Apple silicon), `holo-engine-macos-x64.zip` or `holo-engine-linux-x64.zip`.
+   It's one file, with nothing to install.
 2. Start it. On Windows, the first time, SmartScreen says it doesn't know the app: **More info → Run
    anyway**. On a Mac, unzip it and the first time right-click it and choose **Open**. A small window
    says it's waiting for the studio.
@@ -104,7 +107,8 @@ interface carrying several instruments. The browser stays the screen.
    settings says so and shows its numbers. Close the window and the browser plays again.
 
 It plays the same engine as the studio (the same code, the same sound) and opens every MIDI device it
-finds, as they're plugged in. Notes go where the browser would send them: armed tracks by their input and
+finds, as they're plugged in. It tells the studio which engine it carries: when HO[LO] has moved on (new
+instruments, say) and the Engine hasn't, the studio says so and offers the matching one. Notes go where the browser would send them: armed tracks by their input and
 channel, else the selected track. What you play comes back to the studio, timed as you heard it, for
 recording. On Windows it has the sound device to itself while the studio is open (exclusive mode: other
 apps are silent); tick **Share the sound device with other apps** in Audio & MIDI settings to let them
@@ -139,9 +143,26 @@ pnpm packs install --from ~/samples    # from files you already have (hard-linke
 pnpm packs import ~/Downloads/MyPiano.zip --name "My Piano"
 ```
 
-You can also import from the studio: **Library → Import a sample pack (.zip)**. SFZ instruments come
-in with their mapping. Folders of samples named by note (C4, F#3, `_v2`, `_rr1`…) become instruments,
-and a folder of one-shot hits becomes a drum kit on the General MIDI keys.
+Or install them from the studio: the Library's **More packs** lists every pack HO[LO] ships maps for
+that isn't installed yet, and **Install** has the computer that runs HO[LO] fetch it (every file is
+checked against its pinned checksum) while the Library shows how far it has got.
+
+| Pack | What's in it |
+|---|---|
+| `steinway` | A Steinway Model D (bitKlavier Grand, CC BY 4.0): 16 velocity layers, the hammers and dampers heard as each key is let go (quieter the longer it was held), the sustain pedal's own sound, undamped top strings. Two microphone positions (the stage pair, and close inside the piano) and a Light version with half the layers and shorter tails for phones and tablets. |
+| `rock-kit` | A big vintage rock kit (Karoryfer's Big Rusty Drums, CC0): 24" kick, 14x8 snare, 14/15/18/22" toms, crash, ride, china, hi-hats; up to 14 layers and 4 round robins a drum. |
+| `prog-kit` | A progressive-rock kit: six toms from 10" to 22", a 14x8 aluminium snare, sizzle cymbals, a china, a stack and a gong (Big Rusty Drums, Frankensnare, VSCO 2; all CC0). |
+| `jazz-kit` | A contemporary jazz kit (Virtuosity Drums, CC0): a 36-layer snare at the centre and off it, taking turns, feathering kick, ride, flat ride and hi-hats, all from one session's microphones. |
+
+The kits are on the General MIDI drum keys your pads send (36 kick, 38 snare, 42/44/46 hi-hat, 41 to
+50 toms, 49 crash, 51 ride…), with the hi-hat choking itself, and Roland's edge keys for the half-open
+hats (22, 26). Velocity follows each drum's real loudness: every layer is measured and set where one
+velocity curve meets it, so a drum gets louder smoothly the harder it's hit and changes its timbre at
+each layer, the same way for every drum and every key of the piano.
+
+You can also import your own from the studio: **Library → Import a sample pack (.zip)**. SFZ
+instruments come in with their mapping. Folders of samples named by note (C4, F#3, `_v2`, `_rr1`…)
+become instruments, and a folder of one-shot hits becomes a drum kit on the General MIDI keys.
 
 ## Key commands
 

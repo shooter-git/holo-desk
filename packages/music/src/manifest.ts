@@ -18,6 +18,12 @@ export interface PinnedEngine extends EngineIdentity {
   packs: string;
   /** sha256 of that file. */
   packsSha256: string;
+  /** Every pack the engine knows (its lock), by id and hash: absent from engines pinned before the lock. */
+  catalog?: Record<string, string>;
+  /** The packs in that file, by id (the ones the songs play). */
+  pinned?: string[];
+  /** The packs repository's commit the catalog is from: where a pack a new song plays is fetched. */
+  packsAt?: { repo: string; commit: string };
 }
 
 export interface BuildSettings {

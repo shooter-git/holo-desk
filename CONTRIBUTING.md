@@ -32,4 +32,7 @@ pnpm lint && pnpm typecheck && pnpm test
 Commits are signed off with GitHub's private noreply address, never a personal one; the pre-commit
 hook checks. Don't commit secrets, `.env`, sample audio or anything from `data/`.
 
+New sample packs, and changes to one, go to [HO[LO] Packs](https://github.com/shooter-git/holo-packs)
+(its README says how to add one). Then `pnpm packs lock` here pins its new commit, in a change of its own.
+
 By contributing you agree that your contributions are licensed under the MIT licence.

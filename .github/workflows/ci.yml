@@ -31,6 +31,8 @@ jobs:
         run: pnpm typecheck
       - name: Tests
         run: pnpm test
+      - name: The pinned packs resolve (each map fetched from HO[LO] Packs and checked against the lock)
+        run: pnpm packs lock --check
       - name: Build the studio
         run: pnpm build
       - name: Build the Docker image

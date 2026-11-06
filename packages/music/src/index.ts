@@ -7,6 +7,8 @@ export * from './identity.ts';
 export * from './lzma.ts';
 export * from './manifest.ts';
 export * from './mix.ts';
+export * from './pack-lock.ts';
 export * from './packs.ts';
 export * from './sevenzip.ts';
 export * from './source.ts';
+export * from './sync.ts';

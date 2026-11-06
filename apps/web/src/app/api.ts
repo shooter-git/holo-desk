@@ -102,7 +102,14 @@ export const api = {
       body: JSON.stringify({ title }),
     }),
   send: (id: string) =>
-    call<{ ok: boolean; path: string; edited: string[] }>(`/api/projects/${id}/send`, { method: 'POST' }),
+    call<{
+      ok: boolean;
+      path: string;
+      edited: string[];
+      /** The packs the experience pins now (added, let go, and those it can't), in a line. */
+      note?: string;
+      packs?: { added: string[]; dropped: string[]; missing: { id: string; why: string }[] };
+    }>(`/api/projects/${id}/send`, { method: 'POST' }),
   settings: () => call<{ middleC: 'C3' | 'C4' }>('/api/settings'),
   saveSettings: (s: { middleC: 'C3' | 'C4' }) =>
     call<{ middleC: 'C3' | 'C4' }>('/api/settings', { method: 'PUT', body: JSON.stringify(s) }),

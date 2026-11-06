@@ -3,7 +3,7 @@
  * instruments (every sample's key and velocity range, true pitch, level and loop) and the sample
  * files under its root.
  */
-import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
+import { type Dirent, existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, normalize, resolve, sep } from 'node:path';
 
 export interface Zone {
@@ -72,6 +72,8 @@ interface Loaded {
   pack: Pack;
   dir: string;
   root: string;
+  /** Its folder's size on disk. */
+  bytes: number;
 }
 
 export class Packs {
@@ -106,7 +108,8 @@ export class Packs {
           }
           inst.size = Math.round((bytes / 1048576) * 10) / 10;
         }
-        this.packs.set(pack.id, { pack, dir, root });
+        // the whole folder (what removing it frees)
+        this.packs.set(pack.id, { pack, dir, root, bytes: folderBytes(dir) });
       } catch (err) {
         console.error(`Skipping pack ${entry.name}: ${err instanceof Error ? err.message : String(err)}`);
       }
@@ -114,12 +117,13 @@ export class Packs {
   }
 
   summaries() {
-    return [...this.packs.values()].map(({ pack }) => ({
+    return [...this.packs.values()].map(({ pack, bytes }) => ({
       id: pack.id,
       name: pack.name,
       license: pack.license,
       credit: pack.credit,
       source: pack.source,
+      bytes,
       instruments: pack.instruments.map((i) => ({
         name: i.name,
         title: i.title,
@@ -156,4 +160,31 @@ export class Packs {
     if (!path.startsWith(loaded.root + sep)) return null;
     return existsSync(path) && statSync(path).isFile() ? path : null;
   }
+}
+
+/** The bytes a folder's files take (each file once, however many links it has here). */
+export function folderBytes(dir: string): number {
+  const seen = new Set<string>();
+  let total = 0;
+  const walk = (d: string) => {
+    let entries: Dirent[];
+    try {
+      entries = readdirSync(d, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const e of entries) {
+      const path = join(d, e.name);
+      if (e.isDirectory()) walk(path);
+      else if (e.isFile()) {
+        const st = statSync(path);
+        const key = `${st.dev}:${st.ino}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        total += st.size;
+      }
+    }
+  };
+  walk(dir);
+  return total;
 }

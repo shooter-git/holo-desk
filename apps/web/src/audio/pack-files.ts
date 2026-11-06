@@ -63,6 +63,22 @@ function turn(priority: number): Promise<() => void> {
 }
 
 /** A pack's file, from the device's cache when it has it (else fetched and kept there). */
+/** Let go of a pack's files kept on this device (it was removed): how many went. */
+export async function forgetPackFiles(pack: string): Promise<number> {
+  if (!('caches' in globalThis)) return 0;
+  try {
+    const cache = await caches.open(CACHE);
+    const prefix = `/packs/${encodeURIComponent(pack)}/`;
+    let n = 0;
+    for (const req of await cache.keys()) {
+      if (new URL(req.url).pathname.startsWith(prefix) && (await cache.delete(req))) n++;
+    }
+    return n;
+  } catch {
+    return 0;
+  }
+}
+
 export async function packFileData(pack: string, file: string, priority = 1): Promise<ArrayBuffer> {
   const url = `/packs/${encodeURIComponent(pack)}/files/${file.split('/').map(encodeURIComponent).join('/')}`;
   const release = await turn(priority);

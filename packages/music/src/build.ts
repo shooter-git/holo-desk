@@ -10,7 +10,6 @@ import { join, normalize, relative, resolve, sep } from 'node:path';
 import { encodeWav, renderSession } from '@holo/engine';
 import { type Project, parseProject } from '@holo/session';
 import { type FetchOptions, fetchFiles, sha256 } from './fetch.ts';
-import type { EngineIdentity } from './identity.ts';
 import {
   type BuildSettings,
   DEFAULT_BUILD,
@@ -20,7 +19,9 @@ import {
   type PinnedEngine,
   readManifest,
 } from './manifest.ts';
+import { packSha256 } from './pack-lock.ts';
 import { type PinnedPacks, parsePinnedPacks, songFiles } from './packs.ts';
+import type { PinnedSelf } from './pinned.ts';
 import { audioFolder, experienceSource } from './source.ts';
 
 export interface Experience {
@@ -32,6 +33,8 @@ export interface Experience {
   sessions: string;
   out: string;
   packs: PinnedPacks;
+  /** Every pack the engine knows (absent for engines pinned before the lock). */
+  catalog?: Record<string, string>;
 }
 
 const inside = (root: string, rel: string, what: string) => {
@@ -55,7 +58,7 @@ export function findRoot(from: string): string {
  * An experience as its manifest pins it. `self` is the engine reading it: a pinned renderer checks
  * that it is the one the manifest names, and that the pinned libraries are the ones it was made with.
  */
-export function openExperience(root: string, self?: (EngineIdentity & { packsSha256: string }) | null): Experience {
+export function openExperience(root: string, self?: PinnedSelf | null): Experience {
   const manifest = readManifest(root);
   const engine = manifest.engine;
   if (!engine) throw new Error(`${MANIFEST} pins no engine: set the project up with \`holo init\``);
@@ -68,8 +71,24 @@ export function openExperience(root: string, self?: (EngineIdentity & { packsSha
   const packsFile = inside(root, engine.packs, 'The pinned libraries');
   const text = readFileSync(packsFile);
   const got = sha256(text);
-  if (got !== engine.packsSha256 || (self && self.packsSha256 !== got)) {
+  // the file the manifest names (the studio rewrites both when it adds a pack); an engine from before
+  // the lock plays only the one file it was pinned with
+  if (got !== engine.packsSha256 || (self?.packsSha256 !== undefined && self.packsSha256 !== got)) {
     throw new Error(`${engine.packs} isn't the file the engine was pinned with: restore it, or \`holo update-engine\``);
+  }
+  const packs = parsePinnedPacks(text.toString('utf8'));
+  // each pack only as the map the engine pins: none edited, none from another engine
+  const catalog = self?.catalog ?? engine.catalog;
+  if (catalog) {
+    for (const p of packs.packs) {
+      const want = catalog[p.id];
+      if (!want || packSha256(p) !== want) {
+        throw new Error(
+          `${engine.packs}: ${p.id} ${want ? "isn't the map" : "isn't one of the packs"} this engine pins: ` +
+            `restore the file, or \`holo update-engine\``,
+        );
+      }
+    }
   }
   const build = { ...DEFAULT_BUILD, ...manifest.build };
   if (build.format !== 'wav' && build.format !== 'wav24')
@@ -81,7 +100,8 @@ export function openExperience(root: string, self?: (EngineIdentity & { packsSha
     build,
     sessions: inside(root, manifest.sessions, 'The sessions folder'),
     out: inside(root, build.out, 'The build folder'),
-    packs: parsePinnedPacks(text.toString('utf8')),
+    packs,
+    ...(catalog ? { catalog } : {}),
   };
 }
 
@@ -195,7 +215,7 @@ export async function renderSong(
   fetch: FetchOptions,
   progress?: (text: string) => void,
 ): Promise<RenderedSong> {
-  const { files, problems } = songFiles(project, exp.packs);
+  const { files, problems } = songFiles(project, exp.packs, exp.catalog);
   if (problems.length) throw new Error(`"${project.title}" can't be built:\n  ${problems.join('\n  ')}`);
   await fetchFiles(files, fetch);
   const rate = songRate(exp, project);

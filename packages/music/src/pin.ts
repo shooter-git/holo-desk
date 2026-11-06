@@ -1,22 +1,46 @@
 /**
  * Pinning HO[LO]'s engine for an experience (on the computer with HO[LO]'s repository, by `holo init`
  * and `holo update-engine`): the engine as one commit has it, taken out of git (so work in progress
- * never goes into a pin), bundled into one file a project commits, beside the sample libraries it
- * plays (maps, sources and checksums) and HO[LO]'s license.
+ * never goes into a pin), bundled into one file a project commits, beside the sample packs its songs
+ * play (maps, sources and checksums) and HO[LO]'s license.
+ *
+ * The renderer knows every pack its commit's lock pins (the `catalog`: each pack's hash), and plays
+ * the ones in packs.json if each is its catalog's map. So packs.json holds only what the songs play,
+ * and a pack a new song plays can be added to it later (the studio's Send does) without pinning again,
+ * as long as that pack hasn't changed since.
  */
 import { execFileSync } from 'node:child_process';
 import { copyFileSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { sha256 } from './fetch.ts';
-import { ENGINE_PATHS, type EngineIdentity, engineCommit, engineSource, engineVersion } from './identity.ts';
+import {
+  ENGINE_PATHS,
+  type EngineIdentity,
+  engineCode,
+  engineCommit,
+  engineSource,
+  engineVersion,
+  LEGACY_ENGINE_PATHS,
+  LOCK_FILE,
+} from './identity.ts';
+import { mapsDir, PackMaps, readLock } from './pack-lock.ts';
 import { formatPinnedPacks, type PackManifest, type PinnedPack, parseChecksums, pinPack } from './packs.ts';
 
 export const RENDERER = 'holo-music.mjs';
 export const PACKS = 'packs.json';
 
 export interface Pin {
-  identity: EngineIdentity & { packsSha256: string };
+  /** The engine, as its renderer knows itself. */
+  identity: EngineIdentity;
+  /** Every pack the engine's lock pins, by id and hash (absent for an engine from before the lock). */
+  catalog?: Record<string, string>;
+  /** The packs repository's commit that catalog is from. */
+  packsAt?: { repo: string; commit: string };
+  /** The packs in packs.json, by id. */
+  pinned: string[];
+  /** Packs asked for that the engine doesn't pin (an imported pack, or one newer than the engine). */
+  unpinned: string[];
   /** sha256 of the renderer. */
   sha256: string;
   packsSha256: string;
@@ -24,10 +48,22 @@ export interface Pin {
   files: string[];
 }
 
+/** Whether a ref has a file. */
+function hasAt(repo: string, ref: string, path: string): boolean {
+  try {
+    execFileSync('git', ['-C', repo, 'cat-file', '-e', `${ref}:${path}`], { stdio: 'ignore' });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /** The engine's sources at a ref, in a scratch folder laid out as the repository. */
 function checkout(repo: string, ref: string): string {
   const dir = mkdtempSync(join(tmpdir(), 'holo-pin-'));
   const tar = join(dir, 'engine.tar');
+  // an engine from before the packs had a repository of their own carried their maps
+  const paths = hasAt(repo, ref, LOCK_FILE) ? ENGINE_PATHS : LEGACY_ENGINE_PATHS;
   execFileSync(
     'git',
     [
@@ -39,7 +75,7 @@ function checkout(repo: string, ref: string): string {
       tar,
       ref,
       '--',
-      ...ENGINE_PATHS,
+      ...paths,
       'packages/engine/package.json',
       'LICENSE',
       'CREDITS.md',
@@ -53,8 +89,8 @@ function checkout(repo: string, ref: string): string {
   return dir;
 }
 
-/** The pinned libraries: every pack HO[LO] ships maps and checksums for. */
-function pinnedPacks(src: string): PinnedPack[] {
+/** Every pack an engine from before the lock carried (it pinned them all). */
+function legacyPacks(src: string): PinnedPack[] {
   const out: PinnedPack[] = [];
   const dir = join(src, 'packs/manifests');
   for (const f of readdirSync(dir)
@@ -65,16 +101,14 @@ function pinnedPacks(src: string): PinnedPack[] {
     try {
       sums = readFileSync(join(src, 'packs/checksums', `${manifest.id}.sha256`), 'utf8');
     } catch {
-      throw new Error(
-        `${manifest.id} has no checksums (packs/checksums/${manifest.id}.sha256): run tools/pack-checksums.mjs`,
-      );
+      throw new Error(`${manifest.id} has no checksums (packs/checksums/${manifest.id}.sha256)`);
     }
     out.push(pinPack(manifest, parseChecksums(sums)));
   }
   return out;
 }
 
-const README = (id: EngineIdentity & { packsSha256: string }, node: string) => `# HO[LO]'s engine, pinned
+const README = (id: EngineIdentity, node: string) => `# HO[LO]'s engine, pinned
 
 This folder is a copy of [HO[LO] Desk](https://github.com/shooter-git/holo-desk)'s engine, pinned so
 this project builds its music itself, exactly as the studio renders it, with or without HO[LO] Desk.
@@ -82,9 +116,11 @@ Don't edit it: \`holo update-engine\` replaces it (and reports how far each song
 
 - \`${RENDERER}\`: the renderer and the build, one file (MIT, see LICENSE). Engine ${id.version}+${id.commit?.slice(0, 7) ?? id.source.slice(0, 7)}${id.date ? ` of ${id.date.slice(0, 10)}` : ''}.
 - \`NOTICE.md\`: the code the engine follows and its authors (NumPy's generator, SciPy's filter design).
-- \`${PACKS}\`: the sample libraries the engine plays: their instrument maps, where their files
-  come from (a git commit, published downloads and how they're cut, or an archive and what's decoded
-  from it) and every file's sha256.
+- \`${PACKS}\`: the sample packs this project's songs play: their instrument maps, where their
+  files come from (a git commit, published downloads and how they're cut or mixed, or an archive and
+  what's decoded from it) and every file's sha256. Only the packs the songs play are here: the studio's
+  Send adds one a new song plays (or \`holo update-engine\` does), and the renderer checks each against
+  the engine's own list of packs (from [HO[LO] Packs](https://github.com/shooter-git/holo-packs)).
   Samples are never committed: a build fetches what its songs play and checks each file.
 
 Build the music with Node.js ${node} (the version it's pinned with):
@@ -106,21 +142,52 @@ function notice(credits: string): string {
   );
 }
 
+export interface PinOptions {
+  repo: string;
+  /** The commit (or branch, tag) to pin: HEAD by default. */
+  ref?: string;
+  /** Where the pin goes (made if needed). */
+  dir: string;
+  node?: string;
+  /** The packs to put in packs.json (those the songs play): none by default. */
+  packs?: string[];
+  /** Where packs' maps come from: by default fetched from the packs repository, kept in HO[LO]'s data folder. */
+  maps?: PackMaps;
+}
+
 /** Pin the engine at `ref` of the repository into `dir` (made if needed). */
-export async function pinEngine(opts: { repo: string; ref?: string; dir: string; node?: string }): Promise<Pin> {
+export async function pinEngine(opts: PinOptions): Promise<Pin> {
   const ref = opts.ref ?? 'HEAD';
   const src = checkout(opts.repo, ref);
   try {
     const at = engineCommit(opts.repo, ref);
-    const packsText = formatPinnedPacks(pinnedPacks(src));
+    const lock = readLock(src);
+    const want = [...new Set(opts.packs ?? [])].sort();
+    let packs: PinnedPack[];
+    let catalog: Record<string, string> | undefined;
+    let unpinned: string[];
+    if (lock) {
+      catalog = { ...lock.packs };
+      const maps =
+        opts.maps && opts.maps.lock.commit === lock.commit ? opts.maps : new PackMaps(lock, mapsDir(opts.repo));
+      const known = want.filter((id) => catalog?.[id]);
+      unpinned = want.filter((id) => !catalog?.[id]);
+      packs = await Promise.all(known.map((id) => maps.get(id)));
+    } else {
+      // an engine from before the lock: every pack it carried, as it pinned them
+      packs = legacyPacks(src);
+      unpinned = want.filter((id) => !packs.some((p) => p.id === id));
+    }
+    const packsText = formatPinnedPacks(packs);
     const packsSha256 = sha256(Buffer.from(packsText));
-    const identity = {
+    const base = {
       version: engineVersion(src),
       source: engineSource(src),
       commit: at?.commit ?? null,
       date: at?.date ?? null,
-      packsSha256,
     };
+    // what the renderer knows of itself: the packs it may play (or, before the lock, the one file it plays)
+    const identity = lock ? { ...base, code: engineCode(src), catalog } : { ...base, packsSha256 };
     const { rolldown } = await import('rolldown');
     const bundle = await rolldown({
       input: join(src, 'packages/music/src/main.ts'),
@@ -168,8 +235,19 @@ export async function pinEngine(opts: { repo: string; ref?: string; dir: string;
     copyFileSync(join(src, 'LICENSE'), join(opts.dir, 'LICENSE'));
     writeFileSync(join(opts.dir, 'NOTICE.md'), notice(readFileSync(join(src, 'CREDITS.md'), 'utf8')));
     writeFileSync(join(opts.dir, 'README.md'), README(identity, opts.node ?? process.versions.node));
+    const {
+      catalog: _c,
+      packsSha256: _p,
+      ...self
+    } = identity as typeof identity & {
+      catalog?: unknown;
+      packsSha256?: unknown;
+    };
     return {
-      identity,
+      identity: self,
+      ...(catalog && lock ? { catalog, packsAt: { repo: lock.repo, commit: lock.commit } } : {}),
+      pinned: packs.map((p) => p.id).sort(),
+      unpinned,
       sha256: sha256(Buffer.from(code)),
       packsSha256,
       files: [RENDERER, PACKS, 'LICENSE', 'NOTICE.md', 'README.md'],

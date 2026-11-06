@@ -1,8 +1,10 @@
 /**
- * Installing the sample libraries HO[LO] ships maps for (packs/manifests): from their pinned source
- * (a sparse git checkout at the pinned commit, notes cut from published downloads, files decoded or
- * mixed from a published archive), or from a folder you already have; each file is checked against
- * packs/checksums. The command line (`pnpm packs install`) and the studio's Library both use this.
+ * Installing the sample packs HO[LO] pins (packs.lock.json: a commit of the packs repository and
+ * every pack's hash), from their pinned source (a sparse git checkout at the pinned commit, notes cut
+ * from published downloads, files decoded or mixed from a published archive), or from a folder you
+ * already have; each file is checked against the pack's checksums. A pack's map comes from the packs
+ * repository at the locked commit, checked against the lock and kept in the data folder. The command
+ * line (`pnpm packs install`) and the studio's Library both use this.
  */
 import { execFile } from 'node:child_process';
 import {
@@ -11,31 +13,68 @@ import {
   linkSync,
   mkdirSync,
   mkdtempSync,
-  readdirSync,
   readFileSync,
   rmSync,
   writeFileSync,
 } from 'node:fs';
 import { dirname, extname, join, resolve } from 'node:path';
 import { promisify } from 'node:util';
-import { fetchFiles, type PackManifest, packPaths, parseChecksums, pinPack, SampleCache, sha256 } from '@holo/music';
-import type { Pack } from './packs.ts';
+import {
+  fetchFiles,
+  manifestOf,
+  mapsDir,
+  type PackManifest,
+  PackMaps,
+  packPaths,
+  readLock,
+  SampleCache,
+  sha256,
+} from '@holo/music';
+import { folderBytes, type Pack } from './packs.ts';
 
 const run = promisify(execFile);
 
 export type Manifest = Pack & { format: string; version: number; hlLibrary?: string };
 
 const repo = resolve(import.meta.dirname, '../../..');
-export const MANIFESTS_DIR = join(repo, 'packs/manifests');
-export const CHECKSUMS_DIR = join(repo, 'packs/checksums');
 
-/** The libraries HO[LO] ships maps for. */
-export function availablePacks(): Manifest[] {
-  if (!existsSync(MANIFESTS_DIR)) return [];
-  return readdirSync(MANIFESTS_DIR)
-    .filter((f) => f.endsWith('.json'))
-    .map((f) => JSON.parse(readFileSync(join(MANIFESTS_DIR, f), 'utf8')) as Manifest)
-    .sort((a, b) => a.name.localeCompare(b.name));
+let maps: PackMaps | null | undefined;
+let chosen = false;
+
+/** The packs HO[LO] pins, their maps fetched once and kept in the data folder (null without a lock). */
+export function shippedMaps(): PackMaps | null {
+  if (maps === undefined) {
+    const lock = readLock(repo);
+    maps = lock ? new PackMaps(lock, mapsDir(repo)) : null;
+  }
+  return maps;
+}
+
+/** Keep the maps in this data folder (the server's), unless other maps were chosen. */
+export function useDataDir(dataDir: string): void {
+  if (chosen) return;
+  const lock = readLock(repo);
+  maps = lock ? new PackMaps(lock, join(dataDir, 'pack-maps')) : null;
+}
+
+/** Use other maps (tests: a lock and maps of their own; null for none; undefined for HO[LO]'s own). */
+export function useShippedMaps(next: PackMaps | null | undefined): void {
+  maps = next;
+  chosen = next !== undefined;
+}
+
+/** The packs HO[LO] pins, by name (their maps fetched from the packs repository the first time). */
+export async function availablePacks(): Promise<Manifest[]> {
+  const m = shippedMaps();
+  if (!m) return [];
+  return (await m.all()).map((p) => manifestOf(p) as unknown as Manifest).sort((a, b) => a.name.localeCompare(b.name));
+}
+
+/** One of the packs HO[LO] pins, or null when it pins none by that id. */
+export async function availablePack(id: string): Promise<Manifest | null> {
+  const m = shippedMaps();
+  if (!m?.lock.packs[id]) return null;
+  return manifestOf(await m.get(id)) as unknown as Manifest;
 }
 
 export function installedPack(packsDir: string, id: string): Manifest | null {
@@ -47,9 +86,9 @@ export function packFiles(pack: Pack): string[] {
   return packPaths(pack as unknown as PackManifest);
 }
 
+/** A pinned pack's checksums, once its map is here (null for a pack HO[LO] doesn't pin). */
 export function packChecksums(id: string): Record<string, string> | null {
-  const file = join(CHECKSUMS_DIR, `${id}.sha256`);
-  return existsSync(file) ? parseChecksums(readFileSync(file, 'utf8')) : null;
+  return shippedMaps()?.cached(id)?.files ?? null;
 }
 
 const samplesDir = (packsDir: string, pack: Pack) => join(packsDir, pack.id, pack.root || 'samples');
@@ -101,9 +140,8 @@ function fromFolder(packsDir: string, pack: Manifest, from: string, log: (line: 
  * archive, hits mixed from their microphones), each checked, into the pack's folder.
  */
 async function fromRecipe(packsDir: string, pack: Manifest, log: (line: string) => void): Promise<void> {
-  const sums = packChecksums(pack.id);
-  if (!sums) throw new Error(`${pack.name} has no checksums (packs/checksums/${pack.id}.sha256)`);
-  const pinned = pinPack(pack as unknown as PackManifest, sums);
+  const pinned = shippedMaps()?.cached(pack.id);
+  if (!pinned) throw new Error(`${pack.name} has no checksums: it isn't one of the packs HO[LO] pins`);
   // fetched beside the packs (in Docker the data folder is what's writable), then linked into place
   const cache = new SampleCache(mkdtempSync(join(packsDir, '.fetch-')));
   const root = samplesDir(packsDir, pack);
@@ -171,13 +209,8 @@ export async function installPack(
   opts: { from?: string; log?: (line: string) => void } = {},
 ): Promise<InstallResult> {
   const log = opts.log ?? (() => undefined);
-  const m = availablePacks().find((x) => x.id === id);
-  if (!m)
-    throw new Error(
-      `No pack "${id}". Available: ${availablePacks()
-        .map((x) => x.id)
-        .join(', ')}`,
-    );
+  const m = await availablePack(id);
+  if (!m) throw new Error(`No pack "${id}". Available: ${shippedMaps()?.ids().join(', ') || 'none'}`);
   mkdirSync(packsDir, { recursive: true });
   if (opts.from) log(`${fromFolder(packsDir, m, resolve(opts.from), log)} sample(s) from ${opts.from}`);
   else if (m.source.kind === 'cut' || m.source.kind === 'archive' || m.source.kind === 'mix')
@@ -192,9 +225,13 @@ export async function installPack(
   };
 }
 
-export function removePack(packsDir: string, id: string): void {
-  if (!installedPack(packsDir, id)) throw new Error(`No installed pack "${id}"`);
-  rmSync(join(packsDir, id), { recursive: true, force: true });
+/** Uninstall a pack (shipped or imported): its folder goes, samples and all. Returns the bytes freed. */
+export function removePack(packsDir: string, id: string): number {
+  if (!/^[a-z0-9][a-z0-9_-]*$/i.test(id) || !installedPack(packsDir, id)) throw new Error(`No installed pack "${id}"`);
+  const dir = join(packsDir, id);
+  const bytes = folderBytes(dir);
+  rmSync(dir, { recursive: true, force: true });
+  return bytes;
 }
 
 /** Bring an installed pack's map up to date with the shipped one (no download). */
@@ -210,9 +247,14 @@ export function refreshPack(packsDir: string, m: Manifest): boolean {
  * fixes (a kit's pad names, say) without a download. A pack whose samples changed is left as it is,
  * for a reinstall. Returns the packs' names.
  */
-export function refreshMaps(packsDir: string): string[] {
+export async function refreshMaps(packsDir: string): Promise<string[]> {
   const done: string[] = [];
-  for (const m of availablePacks()) {
+  const shipped = shippedMaps();
+  if (!shipped) return done;
+  for (const id of shipped.ids()) {
+    // only the packs installed here: no map is fetched for one that isn't
+    if (!installedPack(packsDir, id)) continue;
+    const m = manifestOf(await shipped.get(id)) as unknown as Manifest;
     const have = installedPack(packsDir, m.id);
     if (!have || JSON.stringify(have) === JSON.stringify(m)) continue;
     if (JSON.stringify(have.source) !== JSON.stringify(m.source)) continue;
@@ -247,10 +289,17 @@ export class Installer {
     this.onDone = onDone;
   }
 
-  start(id: string): InstallJob {
+  /** The pack being installed now, if any. */
+  installing(): string | null {
+    return this.job?.state === 'running' ? this.job.id : null;
+  }
+
+  async start(id: string): Promise<InstallJob> {
     if (this.job?.state === 'running') throw new Error(`${this.job.name} is installing: one pack at a time`);
-    const m = availablePacks().find((x) => x.id === id);
+    const m = await availablePack(id);
     if (!m) throw new Error(`No pack "${id}"`);
+    // another may have started while the map came
+    if (this.installing()) throw new Error(`${this.job?.name} is installing: one pack at a time`);
     const job: InstallJob = {
       id,
       name: m.name,

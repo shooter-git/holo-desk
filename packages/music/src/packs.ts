@@ -163,6 +163,14 @@ export function songImpulseFiles(project: Project): { pack: string; name: string
   return out;
 }
 
+/** The packs a song plays (its instruments' and its spaces'), by id: what `songFiles` looks up. */
+export function songPacks(project: Project): string[] {
+  const ids = new Set<string>();
+  for (const i of songInstruments(project)) ids.add(i.pack);
+  for (const r of songImpulseFiles(project)) ids.add(r.pack);
+  return [...ids].sort();
+}
+
 export interface NeededFile {
   pack: PinnedPack;
   path: string;
@@ -174,7 +182,11 @@ export interface NeededFile {
  * spaces' responses. (A Performance part loads only the files its notes reach; fetching all of an
  * instrument's is a little more than it needs, and the next song may want the rest.)
  */
-export function songFiles(project: Project, packs: PinnedPacks): { files: NeededFile[]; problems: string[] } {
+export function songFiles(
+  project: Project,
+  packs: PinnedPacks,
+  catalog?: Record<string, string>,
+): { files: NeededFile[]; problems: string[] } {
   const files = new Map<string, NeededFile>();
   const problems: string[] = [];
   const byId = new Map(packs.packs.map((p) => [p.id, p]));
@@ -187,7 +199,9 @@ export function songFiles(project: Project, packs: PinnedPacks): { files: Needed
     const pack = byId.get(id);
     if (!pack) {
       problems.push(
-        `${id}/${name}: "${id}" isn't one of the sample libraries this engine pins (${[...byId.keys()].join(', ')})`,
+        catalog?.[id]
+          ? `${id}/${name}: "${id}" isn't pinned for this project yet: Send the song from the studio, or holo update-engine`
+          : `${id}/${name}: "${id}" isn't one of the sample libraries this engine pins (${[...byId.keys()].join(', ') || 'none yet'})`,
       );
       continue;
     }
@@ -202,7 +216,11 @@ export function songFiles(project: Project, packs: PinnedPacks): { files: Needed
   for (const { pack: id, name } of songImpulseFiles(project)) {
     const pack = byId.get(id);
     const ir = pack?.impulses?.find((r) => r.name === name);
-    if (!pack || !ir) problems.push(`the space ${id}/${name} isn't in the pinned libraries`);
+    if (!pack && catalog?.[id])
+      problems.push(
+        `the space ${id}/${name}: "${id}" isn't pinned for this project yet: Send the song from the studio, or holo update-engine`,
+      );
+    else if (!pack || !ir) problems.push(`the space ${id}/${name} isn't in the pinned libraries`);
     else want(pack, ir.file);
   }
   return { files: [...files.values()], problems };

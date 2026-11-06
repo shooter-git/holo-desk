@@ -42,7 +42,7 @@ COPY --from=deps /app/packages/cli/node_modules ./packages/cli/node_modules
 COPY package.json pnpm-workspace.yaml ./
 COPY apps/server ./apps/server
 COPY packages ./packages
-COPY packs ./packs
+COPY packs.lock.json ./
 COPY --from=build /app/apps/web/dist ./apps/web/dist
 ENV NODE_ENV=production \
     HOLO_HOST=0.0.0.0 \

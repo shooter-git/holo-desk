@@ -44,6 +44,7 @@ import { Creations, sessionText } from './creations.ts';
 import { Store } from './db.ts';
 import { Live, type RenderJob } from './live.ts';
 import { NetworkMidi } from './network-midi.ts';
+import { omrRoutes } from './omr.ts';
 import { audioInfo, extractZip, importFolder, saveStream } from './pack-import.ts';
 import {
   availablePacks,
@@ -184,6 +185,15 @@ export async function buildApp(config: Config): Promise<{ app: FastifyInstance; 
     dataDir: config.dataDir,
     projectExists: (id) => !!store.get(id),
     changed: (scan) => live.tell({ type: 'scan', id: scan.id, project: scan.project }),
+  });
+
+  // the recognition engines, a second reader of scanned pages (when their container is running)
+  omrRoutes(app, {
+    url: config.omrUrl ?? null,
+    dataDir: config.dataDir,
+    scan: scans.get,
+    save: scans.save,
+    project: (id) => store.get(id),
   });
 
   // the AI buttons: your own Claude Code, through the runner on the host (HO[LO] holds no key)

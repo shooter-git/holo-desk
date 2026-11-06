@@ -11,6 +11,8 @@ export interface Config {
   repoDir: string;
   /** HO[LO] as a network MIDI session (RTP-MIDI: an iPhone's USB MIDI, a Mac's network MIDI). */
   networkMidi: { port: number; host: string } | null;
+  /** The recognition engines' container (pnpm omr on), when it's running: a second reader of scans. */
+  omrUrl?: string | null;
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
@@ -24,6 +26,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     webDir: resolve(root, env.HOLO_WEB_DIR ?? 'apps/web/dist'),
     repoDir: root,
     // off unless asked for: it listens on UDP (in Docker, where it's published decides who reaches it)
+    omrUrl: env.HOLO_OMR_URL?.replace(/\/$/, '') || null,
     networkMidi:
       env.HOLO_NETWORK_MIDI === 'on'
         ? { port: Number(env.HOLO_NETWORK_MIDI_PORT ?? 5004), host: env.HOLO_NETWORK_MIDI_HOST ?? '0.0.0.0' }

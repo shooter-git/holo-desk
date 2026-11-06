@@ -11,6 +11,7 @@ export * from './musicxml/write.ts';
 export { parseXml, type XmlNode } from './musicxml/xml.ts';
 export * from './notate.ts';
 export * from './rhythm.ts';
+export * from './scan/compare.ts';
 export * from './scan/image.ts';
 export * from './scan/model.ts';
 export * from './scan/systems.ts';

@@ -220,3 +220,6 @@ export const startAi = (id: string, task: 'read' | 'check' | 'fix') =>
   call(`/api/scans/${id}/ai`, json('POST', { task }));
 export const stopAi = (job: string) => call(`/api/ai/jobs/${job}/cancel`, { method: 'POST' });
 export const deleteScan = (id: string) => call(`/api/scans/${id}`, { method: 'DELETE' });
+export const omrStatus = () => call<{ available: boolean; engines: string[] }>('/api/omr');
+export const compareEngines = (id: string) =>
+  call<{ summary: string[]; flagged: number }>(`/api/scans/${id}/engines`, { method: 'POST' });

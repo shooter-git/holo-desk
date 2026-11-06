@@ -21,6 +21,8 @@ services:
       # network MIDI listens in here; the ports below decide who can reach it (pnpm netmidi on / off)
       HOLO_NETWORK_MIDI: "on"
       HOLO_NETWORK_MIDI_REACH: ${HOLO_NETWORK_MIDI_BIND:-127.0.0.1}
+      # the recognition engines, when they're on (pnpm omr on): reached on their own network
+      HOLO_OMR_URL: ${HOLO_OMR_URL:-}
     # this machine only: your devices reach it over HTTPS on your tailnet (pnpm tailnet on)
     ports:
       - "127.0.0.1:${HOLO_PORT:-47800}:47800"
@@ -30,6 +32,18 @@ services:
     volumes:
       - ${HOLO_DATA_DIR:-./data}:/data
       - ${HOLO_CREATIONS_DIR:-./data/creations}:/creations
+    networks: [default, engines]
+
+  # sheet-music recognition engines, a second reader of scans (pnpm omr on / off). Audiveris and homr
+  # (AGPL-3.0) run inside, unmodified; the container has no way out to the internet, and nothing
+  # outside this machine's HO[LO] can reach it
+  omr:
+    profiles: ["omr"]
+    build:
+      context: deploy/omr
+    image: holo-omr:local
+    restart: unless-stopped
+    networks: [engines]
 
   # HTTPS on your local network, for devices that aren't on a tailnet (pnpm lan on / off)
   lan:
@@ -48,3 +62,9 @@ services:
     volumes:
       - ./deploy/Caddyfile.lan:/etc/caddy/Caddyfile:ro
       - ${HOLO_DATA_DIR:-./data}/caddy:/data
+
+networks:
+  default: {}
+  # internal: nothing on it reaches the internet
+  engines:
+    internal: true

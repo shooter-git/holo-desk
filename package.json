@@ -33,6 +33,7 @@
     "down": "docker compose --project-directory . -f deploy/compose.yml --env-file .env down",
     "skill:install": "node tools/install-skill.mjs",
     "lan": "node --env-file-if-exists=.env tools/lan.mjs",
+    "omr": "node tools/omr.mjs",
     "runner": "node --env-file-if-exists=.env --disable-warning=ExperimentalWarning packages/cli/src/main.ts runner",
     "netmidi": "node --env-file-if-exists=.env tools/netmidi.mjs",
     "banner": "node tools/banner.mjs",

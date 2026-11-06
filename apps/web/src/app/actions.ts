@@ -4,7 +4,7 @@
  * and the AI all call these.
  */
 
-import { frameToTick } from '@holo/engine';
+import { frameToTick, tickToFrame } from '@holo/engine';
 import type { LiveRoute } from '@holo/engine/companion';
 import {
   applyOps,
@@ -34,6 +34,8 @@ import {
   ticksPerBar,
   tickToBarBeat,
   tickToSeconds,
+  unrollOps,
+  writtenSpans,
 } from '@holo/session';
 import { bounce, bounceRange } from '../audio/bounce.ts';
 import { companion } from '../audio/companion.ts';
@@ -556,6 +558,18 @@ export function moveBars(bars: number): void {
   locate(target);
 }
 
+/** The song's repeats and jumps written out, as they play: one undo step. */
+export function unrollRepeats(): void {
+  const p = store.get().project;
+  if (!p) return;
+  const ops = unrollOps(p);
+  if (!ops.length) {
+    toast('This song has no repeats or jumps to write out');
+    return;
+  }
+  if (apply(ops, 'Unroll Repeats')) toast('The repeats are written out: the song plays the same, straight through');
+}
+
 export function toggleCycle(): void {
   const p = store.get().project;
   if (!p) return;
@@ -607,7 +621,8 @@ function startRecording(): void {
   offRecord = midi.onEvent((e) => {
     const s = store.get();
     if (!s.recording || !s.project) return;
-    const tick = engine.heardTick(e.time, e.frame);
+    // (in ticks of the song as played: where it repeats, each pass's notes go back where they were played)
+    const tick = engine.heardPlayedTick(e.time, e.frame);
     if (tick === null || tick < 0) return;
     const channel = (e.status & 0x0f) + 1;
     const project = s.project;
@@ -652,29 +667,50 @@ function finishRecording(): void {
   const s = store.get();
   const p = s.project;
   if (!p) return;
-  const end = engine.positionTick();
+  const end = engine.positionTick() < 0 ? 0 : engine.playedPosition();
+  const map = engine.playMap;
   const ops: Op[] = [];
+  let count = 0;
   for (const take of takes.values()) {
     for (const n of take.held.values()) n.d = Math.max(1, Math.round(end) - n.t);
     if (!take.notes.length && !take.cc.size) continue;
     const ticks = [...take.notes.map((n) => n.t), ...[...take.cc.values()].flatMap((l) => l.map((x) => x[0]))];
-    const ends = [...take.notes.map((n) => n.t + n.d), ...ticks];
-    const m = meterAt(p.meter, Math.min(...ticks));
-    const bar = ticksPerBar(m);
-    const start = Math.floor(Math.min(...ticks) / bar) * bar;
-    const stop = Math.max(start + bar, Math.ceil(Math.max(...ends) / bar) * bar);
-    const region = newRegion(start, stop - start, 'Recording');
-    region.notes = take.notes.map((n) => ({ ...n, t: n.t - start }));
-    region.cc = Object.fromEntries(
-      [...take.cc].map(([k, pts]) => [k, pts.map(([t, v]): [number, number] => [t - start, v])]),
-    );
-    ops.push({ op: 'addRegion', track: take.track, region });
+    const last = Math.max(...take.notes.map((n) => n.t + n.d), ...ticks) + 1;
+    // each time through the music it was played over, a region where that music is written; where a
+    // later pass goes over the same bars, it plays and the earlier ones are kept, muted (as takes are)
+    const regions: Region[] = [];
+    for (const span of writtenSpans(map, Math.min(...ticks), last)) {
+      const len = span.to - span.from;
+      const inside = (t: number) => t >= span.at && t < span.at + len;
+      const notes = take.notes
+        .filter((n) => inside(n.t))
+        .map((n) => ({ ...n, t: n.t - span.at + span.from, d: Math.min(n.d, span.at + len - n.t) }));
+      const cc = [...take.cc]
+        .map(([k, pts]): [string, [number, number][]] => [
+          k,
+          pts.filter(([t]) => inside(t)).map(([t, v]): [number, number] => [t - span.at + span.from, v]),
+        ])
+        .filter(([, pts]) => pts.length);
+      if (!notes.length && !cc.length) continue;
+      const at = [...notes.map((n) => n.t), ...cc.flatMap(([, pts]) => pts.map((x) => x[0]))];
+      const ends = [...notes.map((n) => n.t + n.d), ...at];
+      const m = meterAt(p.meter, Math.min(...at));
+      const bar = ticksPerBar(m);
+      const start = Math.floor(Math.min(...at) / bar) * bar;
+      const stop = Math.max(start + bar, Math.ceil(Math.max(...ends) / bar) * bar);
+      const region = newRegion(start, stop - start, span.n > 1 ? `Recording (time ${span.n})` : 'Recording');
+      region.notes = notes.map((n) => ({ ...n, t: n.t - start }));
+      region.cc = Object.fromEntries(cc.map(([k, pts]) => [k, pts.map(([t, v]): [number, number] => [t - start, v])]));
+      for (const r of regions) if (r.start < stop && start < r.start + r.length) r.muted = true;
+      regions.push(region);
+      count += notes.length;
+    }
+    for (const region of regions) ops.push({ op: 'addRegion', track: take.track, region });
   }
   takes = new Map();
   if (ops.length) {
     apply(ops, 'Record');
-    const n = ops.reduce((c, o) => c + (o.op === 'addRegion' ? o.region.notes.length : 0), 0);
-    toast(`Recorded ${n} note${n === 1 ? '' : 's'}`);
+    toast(`Recorded ${count} note${count === 1 ? '' : 's'}`);
   }
 }
 
@@ -704,17 +740,17 @@ async function keepTake(take: RecordedTake): Promise<void> {
   const name = `${track.name} #${String(n).padStart(2, '0')}`;
   try {
     const file = await audioFiles.uploadRecording(p.id, take.channels, sr, `${name}.wav`);
+    // (ticks of the song as played: where it repeats, the take is cut where each pass was played over)
     const start = Math.max(0, Math.round(frameToTick(engine.segments, take.frame)));
     const end = Math.round(frameToTick(engine.segments, take.frame + first.length - skip));
-    const region = newRegion(start, Math.max(1, end - start), name);
-    region.audio = { file: file.id, offset: skip / sr, gain: 0, fadeIn: 0, fadeOut: 0, stretch: 1 };
-    apply(
-      [
-        { op: 'addFile', file },
-        { op: 'addRegion', track: track.id, region },
-      ],
-      'Record Audio',
-    );
+    const ops: Op[] = [{ op: 'addFile', file }];
+    for (const span of writtenSpans(engine.playMap, start, Math.max(start + 1, end))) {
+      const into = (tickToFrame(engine.segments, span.at) - take.frame) / sr;
+      const region = newRegion(span.from, span.to - span.from, span.n > 1 ? `${name} (time ${span.n})` : name);
+      region.audio = { file: file.id, offset: skip / sr + into, gain: 0, fadeIn: 0, fadeOut: 0, stretch: 1 };
+      ops.push({ op: 'addRegion', track: track.id, region });
+    }
+    apply(ops, 'Record Audio');
     toast(`Recorded ${name} (${file.seconds.toFixed(1)} s)`);
   } catch (err) {
     toast(`The recording couldn’t be kept: ${err instanceof Error ? err.message : String(err)}`, 'error', 8000);

@@ -81,6 +81,7 @@ holo score write bars.txt              # bars from a file (or - for stdin, or th
 holo score part P2 --staves 2 --clefs G,F   # a part's staves, clefs, transposition (--transpose 2,1|none)
 holo score meta --composer "…" --lyricist "…"
 holo score pickup 1                    # the song starts with a one-beat upbeat (bar 0)
+holo score unroll                      # write the repeats and jumps out as they play
 ```
 
 A file of bars reads like this:
@@ -105,6 +106,13 @@ hairpin and `!` to end it, `(` and `)` around a slur, `"pizz."` above or `_"dolc
 included): a bar that doesn't is refused with the reason, and nothing in it is written. Each bar
 replaces what the staves and voices it names had there; the others keep theirs. Dynamics and
 articulations become how it plays (velocity, length), so the score sounds as it reads.
+
+Repeats are written once and played as marked: `|:` and `:|` (`:|x3`), `ending 1` / `ending 2`,
+`segno`, `coda`, `to coda`, `fine`, `D.C. al Fine`, `D.S. al Coda` in the bar headers. The timeline
+keeps the music as written; playback, bounces and renders follow the repeats and jumps, and trills,
+mordents, turns, tremolos and arpeggios play as the notes they stand for. Write a repeated passage
+once with its signs rather than copying it out; `holo score unroll` writes it out when a part should
+differ the second time.
 
 ## Live: what "real time" means here
 

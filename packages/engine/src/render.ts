@@ -3,7 +3,7 @@
  * renders (the server, `holo render-audio`, a creation's build) run this same function with the
  * same sample decoding, so the same session always gives the same numbers.
  */
-import { type AudioClip, type Project, projectEnd } from '@holo/session';
+import { type AudioClip, type Project, performed, playedAt, playedTimes, playMap, projectEnd } from '@holo/session';
 import {
   clipKey,
   compileClips,
@@ -234,12 +234,22 @@ export async function loadImpulse(source: RenderSource, from: ImpulseSource, rat
 /** A loop's tails must have died away before its last turn is kept: this long at least before it. */
 const LOOP_SETTLE = 45;
 
-export async function renderSession(project: Project, source: RenderSource, opts: RenderOptions): Promise<Rendered> {
+export async function renderSession(written: Project, source: RenderSource, opts: RenderOptions): Promise<Rendered> {
   const sr = opts.sampleRate;
+  // the song as it's heard: its repeats and jumps played out (`from` and `to` are where they first play)
+  const map = playMap(written);
+  const project = performed(written);
   const segments = compileTempo(project, sr);
   const loop = opts.loop !== false && opts.from === undefined && opts.to === undefined ? project.loop : undefined;
-  const from = loop ? loop.start : (opts.from ?? 0);
-  const to = loop ? loop.end : (opts.to ?? projectEnd(project));
+  const from = loop ? loop.start : opts.from !== undefined ? playedAt(map, opts.from) : 0;
+  const reached = opts.to !== undefined ? playedTimes(map, opts.to, true).filter((t) => t > from) : [];
+  const to = loop
+    ? loop.end
+    : opts.to === undefined
+      ? projectEnd(project)
+      : reached.length
+        ? Math.min(...reached)
+        : from + Math.max(0, opts.to - (opts.from ?? 0));
   const start = Math.round(tickToFrame(segments, from));
   const stop = Math.round(tickToFrame(segments, to));
   const turn = stop - start;

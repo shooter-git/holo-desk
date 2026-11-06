@@ -4,7 +4,7 @@
  */
 import { readFileSync } from 'node:fs';
 import { checkScore, notate, partsLine, type ScoreDoc, scoreText, writeScoreText } from '@holo/score';
-import { meterAt, type Op, PPQ, type Project, type TrackScore } from '@holo/session';
+import { meterAt, type Op, PPQ, type Project, type TrackScore, unrollOps } from '@holo/session';
 
 export interface ScoreContext {
   words: string[];
@@ -23,6 +23,7 @@ export const SCORE_HELP = `holo score: the song as a score (parts P1, P2… in t
   holo score part P1 [--staves 2] [--clefs G,F] [--transpose 2,1|none] [--name N] [--abbr A] [--hidden on|off]
   holo score meta [--composer C] [--lyricist L] [--arranger A] [--subtitle S] [--copyright C]
   holo score pickup BEATS              the song starts with an upbeat of BEATS beats (0: none)
+  holo score unroll                    write the repeats and jumps out as they play (no repeat signs after)
 
 The text: "bar 5  time 3/4  key D minor  tempo 96 \\"Andante\\"  |:" then a line a staff (and voice):
   P1: mf ( d5:q. e5:e f5:q ) a5:q        P2 s2: [d3 a3]:w        P2 s1 v2: r:h c4:h
@@ -180,6 +181,15 @@ export async function scoreCommand(ctx: ScoreContext): Promise<void> {
         [{ op: 'setProject', patch: { meter } }],
         beats > 0 ? `Score: a pickup of ${beats}` : 'Score: no pickup',
       );
+      return;
+    }
+    case 'unroll': {
+      const ops = unrollOps(project);
+      if (!ops.length) {
+        console.log('The song has no repeats or jumps to write out.');
+        return;
+      }
+      await ctx.ops(project, ops, 'Unroll Repeats');
       return;
     }
     default:

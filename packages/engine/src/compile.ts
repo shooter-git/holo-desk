@@ -21,6 +21,7 @@ import {
   EVENT_SIZE,
   type GraphSpec,
   type InstrumentSpec,
+  type MeterSpan,
   type TempoSegment,
   type TrackSpec,
 } from './protocol.ts';
@@ -258,9 +259,17 @@ function mixOrder(project: Project): Project['buses'] {
   return out;
 }
 
-export function meterTicks(project: Project): { beatTicks: number; barTicks: number } {
+/**
+ * The song's beat and bar for the metronome: the first meter's (what engines before meter changes
+ * read), and every meter from where it starts.
+ */
+export function meterTicks(project: Project): { beatTicks: number; barTicks: number; meters: MeterSpan[] } {
   const m = project.meter[0] ?? { tick: 0, num: 4, den: 4 };
-  return { beatTicks: ticksPerBeat(m), barTicks: ticksPerBar(m) };
+  return {
+    beatTicks: ticksPerBeat(m),
+    barTicks: ticksPerBar(m),
+    meters: project.meter.map((x) => ({ tick: x.tick, beatTicks: ticksPerBeat(x), barTicks: ticksPerBar(x) })),
+  };
 }
 
 /** Every response a song's spaces need at a rate (Space Designer's, Shimmer's), once each. */

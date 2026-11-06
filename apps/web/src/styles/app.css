@@ -4044,3 +4044,23 @@ footer.scan-bar {
     width: 64px;
   }
 }
+
+/* the Remote's Scan tab: the same tools, inside the tab */
+.remote-scan {
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr);
+  height: 100%;
+  min-height: 0;
+}
+
+.scan-window.inline {
+  position: relative;
+  inset: auto;
+  z-index: auto;
+  min-height: 0;
+  padding: 0;
+}
+
+.remote-hint.bad {
+  color: var(--danger);
+}

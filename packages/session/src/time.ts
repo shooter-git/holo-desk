@@ -46,10 +46,16 @@ export function meterAt(meter: readonly MeterPoint[], tick: number): MeterPoint 
 export const ticksPerBeat = (m: Pick<MeterPoint, 'den'>): number => (PPQ * 4) / m.den;
 export const ticksPerBar = (m: Pick<MeterPoint, 'num' | 'den'>): number => m.num * ticksPerBeat(m);
 
-/** The tick where a bar starts; bars count from 1, as on screen. */
+/**
+ * The number of the song's first bar: 1, as on screen; 0 when the song starts with a pickup (the
+ * first full bar of the music is bar 1, as on a score).
+ */
+export const firstBar = (meter: readonly MeterPoint[]): number => (meter[0]?.pickup ? 0 : 1);
+
+/** The tick where a bar starts; bars count from 1 (from 0 with a pickup), as on screen. */
 export function barToTick(meter: readonly MeterPoint[], bar: number): number {
   let tick = 0;
-  let barsSoFar = 1;
+  let barsSoFar = firstBar(meter);
   for (let i = 0; i < meter.length; i++) {
     const point = meter[i] as MeterPoint;
     const next = meter[i + 1];
@@ -73,7 +79,7 @@ export interface BarBeat {
 
 /** A tick as bar, beat, sixteenth and remaining ticks, all from 1 except the ticks (as Logic shows it). */
 export function tickToBarBeat(meter: readonly MeterPoint[], tick: number): BarBeat {
-  let barsSoFar = 1;
+  let barsSoFar = firstBar(meter);
   for (let i = 0; i < meter.length; i++) {
     const point = meter[i] as MeterPoint;
     const next = meter[i + 1];
@@ -97,7 +103,7 @@ export function tickToBarBeat(meter: readonly MeterPoint[], tick: number): BarBe
       tick: Math.floor(inBeat - div * sixteenth),
     };
   }
-  return { bar: 1, beat: 1, div: 1, tick: 0 };
+  return { bar: firstBar(meter), beat: 1, div: 1, tick: 0 };
 }
 
 export function formatBarBeat(meter: readonly MeterPoint[], tick: number, ticks = false): string {

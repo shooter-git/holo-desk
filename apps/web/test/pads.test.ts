@@ -1,53 +1,41 @@
-import { readdirSync, readFileSync } from 'node:fs';
-import { join, resolve } from 'node:path';
 import { newProject, newTrack } from '@holo/session';
 import { describe, expect, it } from 'vitest';
 import type { InstrumentMap } from '../src/audio/pack-files.ts';
 import { GM_PADS, padsFor, padTrack, playsHits } from '../src/ui/pads.ts';
 
-const MANIFESTS = resolve(import.meta.dirname, '../../../packs/manifests');
 const opts = { wide: false, octave: 3, middleC: 'C4' as const };
 
-/** Every instrument HO[LO] ships a map for. */
-const shipped = readdirSync(MANIFESTS)
-  .filter((f) => f.endsWith('.json'))
-  .flatMap((f) => {
-    const pack = JSON.parse(readFileSync(join(MANIFESTS, f), 'utf8')) as {
-      id: string;
-      instruments: InstrumentMap[];
-    };
-    return pack.instruments.map((i) => ({ ...i, pack: pack.id }));
-  });
+const zone = (file: string, lo: number, hi = lo) => ({ file, lo, hi, root: lo, lovel: 1, hivel: 127 });
 
-/** The pieces a key strikes (a kit's pieces are its sample folders). */
-const struck = (m: InstrumentMap, key: number) =>
-  new Set(m.zones.filter((z) => !z.trigger && z.lo <= key && key <= z.hi).map((z) => z.file.replace(/\/[^/]*$/, '')));
+/**
+ * Instruments as packs map them: a kit (its pads named, each piece a folder), one unpitched sound and
+ * a piano. (Every real pack's pads are checked in the packs repository, with this code.)
+ */
+const shipped = [
+  {
+    pack: 'test-kit',
+    name: 'kit',
+    title: 'Test Kit',
+    pitched: false,
+    zones: [
+      zone('kit/kick/kick_v1.wav', 36),
+      zone('kit/snare/snare_v1.wav', 38),
+      zone('kit/hat-closed/hat_v1.wav', 42),
+      zone('kit/hat-open/hat_v1.wav', 46),
+    ],
+    pads: [
+      { key: 36, name: 'Kick' },
+      { key: 38, name: 'Snare' },
+      { key: 42, name: 'Hi-hat closed' },
+      { key: 46, name: 'Hi-hat open' },
+    ],
+  },
+  { pack: 'test', name: 'bongo_hi', title: 'Bongo High', pitched: false, zones: [zone('bongo/hi.wav', 0, 127)] },
+  { pack: 'test', name: 'grand', title: 'Grand', pitched: true, zones: [zone('piano/c4.wav', 0, 127)] },
+] as unknown as (InstrumentMap & { pack: string })[];
 
-/** A pad's name says what it plays: every word of its piece's folder is in it (letters and digits). */
-const flat = (s: string) => s.toLowerCase().replace(/[^a-z0-9¾]/g, '');
-const WORDS: Record<string, string[]> = { 'hat-three-quarter': ['hat', '¾'] };
-
-describe("the pads of every pack's instruments", () => {
+describe("the pads of a pack's instruments", () => {
   const kits = shipped.filter((m) => m.pads?.length);
-
-  it('the kits name their pads, and each pad plays the one piece its name says', () => {
-    expect(kits.map((m) => m.pack).sort()).toEqual(['jazz-kit', 'prog-kit', 'rock-kit']);
-    for (const m of kits) {
-      const pads = m.pads ?? [];
-      const pieces = pads.map((p) => {
-        const hit = [...struck(m, p.key)];
-        expect(hit, `${m.pack} ${p.name} (${p.key})`).toHaveLength(1);
-        const folder = (hit[0] as string).split('/').pop() as string;
-        for (const w of WORDS[folder] ?? folder.split('-'))
-          expect(flat(p.name), `${m.pack}: "${p.name}" plays ${folder}`).toContain(flat(w));
-        return hit[0];
-      });
-      // every piece once: none twice, none left without a pad
-      expect(new Set(pieces).size).toBe(pads.length);
-      const all = new Set(m.zones.filter((z) => !z.trigger).map((z) => z.file.replace(/\/[^/]*$/, '')));
-      expect([...all].sort()).toEqual([...pieces].sort());
-    }
-  });
 
   it('the kick, snare and hats sit where General MIDI has them', () => {
     for (const m of kits) {

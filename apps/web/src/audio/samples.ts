@@ -29,6 +29,10 @@ export interface PackSummary {
   name: string;
   license: string;
   credit: string;
+  /** Where its samples came from: `imported` for a pack of your own. */
+  source?: { kind: string };
+  /** Its folder's size on disk (what removing it frees). */
+  bytes?: number;
   instruments: InstrumentSummary[];
   /** Impulse responses for Space Designer. */
   impulses?: { name: string; title: string; seconds: number | null }[];

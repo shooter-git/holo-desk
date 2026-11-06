@@ -193,13 +193,35 @@ and hands them to the audio thread (transferred, not copied). Files are kept in 
 storage, so the next load needs no network. Zones that play the same stretch of one file (a drum on two
 pads) share one copy.
 
-Packs HO[LO] ships maps for (`packs/manifests`, with every file's checksum in `packs/checksums`) are
-installed from the Library (**More packs → Install**) or `pnpm packs install`, from their pinned source:
-a git commit, notes cut from published downloads, an archive, or files *made* from a library's
-recordings (the `mix` source: a drum hit's microphones mixed at fixed gains, a note trimmed and faded,
-all in plain arithmetic, so the same downloads make the same bytes anywhere). The recipes that write
-those maps are in `tools/packs/`: they measure every layer's loudness and set it where one velocity
-curve meets it, so an instrument gets louder smoothly the harder it's played.
+The packs HO[LO] plays live in their own repository, [HO[LO] Packs](https://github.com/shooter-git/holo-packs):
+a folder a pack, with its map, every file's checksum and, for the packs made from recordings, the recipe
+that wrote them.
+
+**The lock.** `packs.lock.json` pins one commit of that repository and every pack's hash: the sha256 of
+the pack's line in an experience's `packs.json`, its map and checksums together.
+- The server fetches a pack's map from GitHub at that commit the first time it's needed
+  (`packages/music/src/pack-lock.ts`, `PackMaps`).
+- It keeps the map only if its hash is the lock's, in the data folder (`pack-maps/<hash>.json`), so a
+  map is fetched once whoever needs it, the studio or `holo`.
+- `pnpm packs lock` moves the lock to the packs repository's latest commit, and `--check` verifies
+  every locked map, as CI does.
+
+**Install and Remove.** Packs are installed from the Library (**More packs → Install**, which shows
+each pack's size first) or `pnpm packs install`, from their pinned source:
+- a git commit;
+- notes cut from published downloads;
+- an archive;
+- files *made* from a library's recordings: the `mix` source, a drum hit's microphones mixed at fixed
+  gains, a note trimmed and faded. It's all plain arithmetic, so the same downloads make the same bytes
+  anywhere.
+
+**Remove** (`DELETE /api/packs/:id`, or `pnpm packs remove`) frees a pack's folder. The Library first
+names the songs that play it (`GET /api/packs/:id/songs`), and clears the pack's files from this
+device's cache.
+
+**The recipes**, in HO[LO] Packs, run this repository's own code. They measure every layer's loudness
+and set it where one velocity curve meets it, so an instrument gets louder smoothly the harder it's
+played.
 
 What a pack can ask of the sampler besides its zones, each only where it does (so other packs play as
 they always have): choke groups (the closed hi-hat silences the open one), how often one key may sound

@@ -132,6 +132,12 @@ export class Creations {
     return parseProject(JSON.parse(readFileSync(file, 'utf8')));
   }
 
+  /** An experience's folder (a creation that builds its music with a pinned engine), else null. */
+  experienceRoot(name: string): string | null {
+    const c = this.find(name);
+    return c?.manifest.engine ? c.root : null;
+  }
+
   /** Whether a creation exists here and declares a render. */
   renderable(name: string): { title: string } | null {
     const c = this.find(name);

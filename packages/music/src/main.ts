@@ -164,7 +164,7 @@ async function main(): Promise<void> {
       for (const s of songs) {
         try {
           const project = parseProject(JSON.parse(readFileSync(s.file, 'utf8')));
-          const found = songFiles(project, exp.packs);
+          const found = songFiles(project, exp.packs, exp.catalog);
           for (const f of found.files) need.set(f.sha256, f);
           problems.push(...found.problems.map((p) => `${s.piece}: ${p}`));
           for (const a of project.files ?? []) {

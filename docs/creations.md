@@ -79,9 +79,9 @@ my-experience/
                          date, fingerprint, the exact Node.js) and the build's settings
   music/holo/            HO[LO]'s engine, pinned (don't edit it: holo update-engine replaces it)
     holo-music.mjs       the renderer and the build, one file (MIT)
-    packs.json           the sample libraries it plays: instrument maps, where each file comes from
-                         (a git commit, published downloads and how they're cut, or an archive and
-                         what's decoded from it) and its sha256
+    packs.json           the sample packs its songs play, and no others: instrument maps, where each
+                         file comes from (a git commit, published downloads and how they're cut or
+                         mixed, or an archive and what's decoded from it) and its sha256
     LICENSE, NOTICE.md, README.md
   music/sessions/        its songs, <piece>.holo.json, and <piece>.audio/ for a song's own recordings
   package.json           "music": "node music/holo/holo-music.mjs build"
@@ -119,15 +119,30 @@ builds them all). A song whose file is gone takes its build with it.
   `"wav24"` is 24-bit PCM. Anything smaller for delivery (Opus, AAC…) is the project's own step, made
   from these masters. `"rate"` sets the rate (each song's own, 48 kHz when it has none) and `"tail"`
   the seconds after a song's end (a loop has its own).
-- **Samples are fetched, never committed.** The first build fetches what its songs play: VSCO 2, the
-  VCSL and Meatbass from GitHub at the commit HO[LO] pins, the Iowa clarinet and bassoon cut from the
-  University of Iowa's own downloads, the FreePats guitar decoded from the FreePats project's own
-  archive (a 7z of FLAC files, read by the build itself). Every file is checked against its sha256
-  before it is used, and kept in a cache shared by every project (`~/.cache/holo-music`, or
-  `HOLO_MUSIC_CACHE`), the downloads it was made from beside it. `--from DIR` points a build at a
-  folder that already has a library (a HO[LO] data folder's `packs`, say), checked all the same.
-  Generated spaces need no files. Packs you imported yourself aren't pinned: a song that plays one says
-  so when it's built.
+- **Only the packs its songs play are pinned.** `packs.json` holds the maps of the packs the songs
+  play, so a project commits a few hundred KB, not every pack HO[LO] has.
+  - The engine knows every pack its commit's `packs.lock.json` pinned (its *catalog*: each pack's
+    hash, kept in `holo.creation.json` and in the renderer). It plays a pack only as that map.
+  - When you **Send** a song that plays a pack the project doesn't pin yet (or make a new one, or
+    *Hear it as…*), the studio adds it. It fetches the pack's map from
+    [HO[LO] Packs](https://github.com/shooter-git/holo-packs) at the commit the engine was pinned with,
+    checks it against the catalog, then rewrites `packs.json` and `holo.creation.json` together.
+  - A Send that leaves a pack unplayed lets it go. Send's note says what it pinned.
+  - A pack newer than the project's engine needs `holo update-engine`, which the note says too.
+  - Edited a song by hand to play another pack? Its build says the pack isn't pinned yet. Send it from
+    the studio, or run `holo update-engine`, which pins exactly what the songs play.
+- **Samples are fetched, never committed.** The first build fetches what its songs play:
+  - VSCO 2, the VCSL and Meatbass from GitHub at the commit each pack pins;
+  - the Iowa clarinet and bassoon cut from the University of Iowa's own downloads;
+  - the FreePats guitar decoded from the FreePats project's own archive (a 7z of FLAC files, read by
+    the build itself);
+  - the Steinway and the kits made from their libraries' recordings.
+
+  Every file is checked against its sha256 before it is used. Files are kept in a cache shared by every
+  project (`~/.cache/holo-music`, or `HOLO_MUSIC_CACHE`), with the downloads they were made from beside
+  them. `--from DIR` points a build at a folder that already has a pack (a HO[LO] data folder's
+  `packs`, say), checked all the same. Generated spaces need no files. Packs you imported yourself
+  aren't pinned: a song that plays one says so when it's built.
 - **Node.js is pinned too**, to the exact version that ran `holo init` (or `holo update-engine`): the
   build refuses another, so a rebuild is the same on any computer. Install that version (nvm, fnm,
   volta…), or pass `--any-node` to build with yours (the build records it).
@@ -150,12 +165,21 @@ experience's group in *Songs* says so: **Builds with engine 0.1.0+4ba9e85 · hol
 mystery. (The studio knows its own engine's commit from git, or, in Docker, from the stamp its image
 carries: CI writes it before publishing the image, and `pnpm run up` before building one.)
 
+"Newer" means newer in what the experience plays:
+- the engine's code changed, or
+- a pack its songs play has a new map.
+
+A pack it doesn't play, new or changed, doesn't count. So a new pack arriving in the studio doesn't
+badge every experience.
+
 ```bash
 holo update-engine ../my-experience
 ```
 
 pins this HO[LO]'s engine (as its last commit has it: work in progress never goes into a pin; `--ref`
-pins another commit or tag), rebuilds every song with it and says how far each one moved:
+pins another commit or tag) with the packs its songs play, rebuilds every song with it and says how far
+each one moved. When the engine is the same and only the packs its songs play changed, it pins those
+and builds what changed, nothing more:
 
 ```
 How far each song moved:

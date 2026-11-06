@@ -7,19 +7,25 @@
  *                                commits, notes cut from published downloads, files decoded from a
  *                                published archive, or made from a library's recordings: trimmed, a kit's
  *                                microphones mixed), or take them from a folder you already have
- *                                (hard-linked when it can); each file is checked against packs/checksums
+ *                                (hard-linked when it can); each file is checked against the pack's checksums
  *   import PATH [--name N] [--id ID] [--license L]
  *                                your own pack: an .sfz, a folder (of SFZ or of samples named by note), or a .zip
- *   refresh                      bring installed packs' maps up to date with packs/manifests (no download)
+ *   refresh                      bring installed packs' maps up to date with the pinned ones (no download)
  *   remove ID                    uninstall a pack
+ *   lock [REF] [--check]         pin the packs repository (github.com/shooter-git/holo-packs) at REF, main
+ *                                by default: every pack's map fetched and hashed into packs.lock.json.
+ *                                --check fetches the locked maps instead, and checks each against the lock
+ *
+ * The packs' maps and checksums live in the packs repository; packs.lock.json pins one commit of it.
  */
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
+import { formatLock, LOCK_FILE, lockAt, PackMaps, readLock } from '@holo/music';
 import { loadConfig } from './config.ts';
 import { extractZip, importFolder } from './pack-import.ts';
 import {
-  availablePacks as available,
+  availablePacks,
   packFiles as files,
   installedPack,
   installPack,
@@ -27,6 +33,7 @@ import {
   presentFiles,
   refreshPack,
   removePack,
+  shippedMaps,
 } from './pack-install.ts';
 
 const config = loadConfig();
@@ -53,10 +60,15 @@ async function rescan(): Promise<void> {
 }
 
 async function main(): Promise<void> {
+  if (command === 'lock') {
+    await lock();
+    return;
+  }
   mkdirSync(packsDir, { recursive: true });
+  const available = availablePacks;
   if (command === 'list') {
     const ids = new Set<string>();
-    for (const m of available()) {
+    for (const m of await available()) {
       ids.add(m.id);
       const inst = installed(m.id);
       const status = inst ? `installed (${present(inst)}/${files(inst).length} samples)` : 'not installed';
@@ -78,15 +90,13 @@ async function main(): Promise<void> {
   }
   if (command === 'install') {
     const from = flag('from');
-    const want = rest.length === 0 || rest.includes('all') ? available().map((m) => m.id) : rest;
+    const ids = shippedMaps()?.ids() ?? [];
+    const want = rest.length === 0 || rest.includes('all') ? ids : rest;
+    const all = await available();
     for (const id of want) {
-      const m = available().find((x) => x.id === id);
+      const m = all.find((x) => x.id === id);
       if (!m) {
-        console.error(
-          `No pack "${id}". Available: ${available()
-            .map((x) => x.id)
-            .join(', ')}`,
-        );
+        console.error(`No pack "${id}". Available: ${ids.join(', ') || 'none'}`);
         process.exitCode = 1;
         continue;
       }
@@ -140,14 +150,14 @@ async function main(): Promise<void> {
     return;
   }
   if (command === 'refresh') {
-    for (const m of available()) if (refreshPack(packsDir, m)) console.log(`${m.name}: map refreshed`);
+    for (const m of await available()) if (refreshPack(packsDir, m)) console.log(`${m.name}: map refreshed`);
     await rescan();
     return;
   }
   if (command === 'remove') {
     const id = rest[0];
-    removePack(packsDir, id ?? '');
-    console.log(`Removed ${id}`);
+    const freed = removePack(packsDir, id ?? '');
+    console.log(`Removed ${id} (${(freed / 1e6).toFixed(0)} MB)`);
     await rescan();
     return;
   }
@@ -156,6 +166,35 @@ async function main(): Promise<void> {
       .split('*/')[0]
       ?.replace(/^\/\*\*?/, '')
       .replace(/^ \* ?/gm, ''),
+  );
+}
+
+/** `lock`: pin the packs repository at a commit, or check the pinned maps. */
+async function lock(): Promise<void> {
+  const repo = resolve(import.meta.dirname, '../../..');
+  const file = join(repo, LOCK_FILE);
+  const was = readLock(repo);
+  if (rest.includes('--check')) {
+    if (!was) throw new Error(`No ${LOCK_FILE}`);
+    // no kept maps: every one fetched from the locked commit and checked against the lock
+    const maps = await new PackMaps(was, null).all();
+    console.log(`${LOCK_FILE}: ${maps.length} pack(s) at ${was.repo}@${was.commit.slice(0, 7)}, each its locked map`);
+    return;
+  }
+  const ref = rest.find((a) => !a.startsWith('--')) ?? 'main';
+  const next = await lockAt(was?.repo ?? 'shooter-git/holo-packs', ref);
+  const ids = [...new Set([...Object.keys(was?.packs ?? {}), ...Object.keys(next.packs)])].sort();
+  for (const id of ids) {
+    const a = was?.packs[id];
+    const b = next.packs[id];
+    if (a === b) continue;
+    console.log(`  ${id}: ${!a ? 'new' : !b ? 'no longer in the packs repository' : 'its map changed'}`);
+  }
+  writeFileSync(file, formatLock(next));
+  console.log(
+    was?.commit === next.commit
+      ? `${LOCK_FILE} pins ${next.repo}@${next.commit.slice(0, 7)} already (${ids.length} packs)`
+      : `${LOCK_FILE}: ${next.repo}@${next.commit.slice(0, 7)}, ${Object.keys(next.packs).length} packs. Commit it.`,
   );
 }
 

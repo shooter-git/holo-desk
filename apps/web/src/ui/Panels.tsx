@@ -1,6 +1,18 @@
 /** The Inspector (the selected region and track, and its channel strip) and the Library (instruments). */
 import { type Instrument, SYNTH_PRESETS, tickToBarBeat } from '@holo/session';
-import { AudioWaveform, Check, Download, Drum, Music, Piano, Search, Sparkles, Upload, Waves } from 'lucide-react';
+import {
+  AudioWaveform,
+  Check,
+  Download,
+  Drum,
+  Music,
+  Piano,
+  Search,
+  Sparkles,
+  Trash2,
+  Upload,
+  Waves,
+} from 'lucide-react';
 import { memo, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import {
   addTrack,
@@ -13,7 +25,8 @@ import {
   updateTrack,
 } from '../app/actions.ts';
 import { store, toast, useApp } from '../app/store.ts';
-import { library } from '../audio/samples.ts';
+import { forgetPackFiles } from '../audio/pack-files.ts';
+import { library, type PackSummary } from '../audio/samples.ts';
 import { NumberBox } from './AudioEditor.tsx';
 import { Strip } from './Mixer.tsx';
 import { instrumentLabel } from './Tracks.tsx';
@@ -438,8 +451,85 @@ interface AvailablePack {
   license: string;
   credit: string;
   instruments: { title: string; category: string }[];
+  /** Its samples' size on disk: what installing it takes. */
+  bytes: number | null;
   installed: boolean;
   current: boolean;
+}
+
+/** A size on disk, as people read one. */
+function diskSize(bytes: number): string {
+  if (bytes >= 1e9) return `${(bytes / 1e9).toFixed(1)} GB`;
+  if (bytes >= 1e6) return `${Math.round(bytes / 1e6)} MB`;
+  return `${Math.max(1, Math.round(bytes / 1e3))} KB`;
+}
+
+/**
+ * An installed pack's size, and removing it to make room: asked first, naming what it frees and the
+ * songs that play it (their tracks go quiet until it's back).
+ */
+function PackFoot({ pack }: { pack: PackSummary }) {
+  const [asking, setAsking] = useState<{ songs: { id: string; title: string }[] } | null>(null);
+  const [busy, setBusy] = useState(false);
+  const own = pack.source?.kind === 'imported';
+  const ask = async () => {
+    try {
+      const res = await fetch(`/api/packs/${encodeURIComponent(pack.id)}/songs`);
+      setAsking(res.ok ? ((await res.json()) as { songs: { id: string; title: string }[] }) : { songs: [] });
+    } catch {
+      setAsking({ songs: [] });
+    }
+  };
+  const remove = async () => {
+    setBusy(true);
+    try {
+      const res = await fetch(`/api/packs/${encodeURIComponent(pack.id)}`, { method: 'DELETE' });
+      const body = (await res.json()) as { freed?: number; error?: string };
+      if (!res.ok) throw new Error(body.error ?? 'The pack could not be removed');
+      await forgetPackFiles(pack.id);
+      toast(`Removed ${pack.name}${body.freed ? `: ${diskSize(body.freed)} freed` : ''}`);
+      await library.refresh();
+    } catch (err) {
+      toast(err instanceof Error ? err.message : String(err), 'error', 8000);
+      setBusy(false);
+      setAsking(null);
+    }
+  };
+  const n = asking?.songs.length ?? 0;
+  return (
+    <div className="pack-foot">
+      {!asking ? (
+        <>
+          <span className="muted">{pack.bytes ? `${diskSize(pack.bytes)} on disk` : ''}</span>
+          <button type="button" className="btn ghost" onClick={() => void ask()} aria-label={`Remove ${pack.name}`}>
+            <Trash2 /> Remove
+          </button>
+        </>
+      ) : (
+        <div className="pack-remove" role="alertdialog" aria-label={`Remove ${pack.name}?`}>
+          <div>
+            Remove <b>{pack.name}</b>
+            {pack.bytes ? ` and free ${diskSize(pack.bytes)}` : ''}?{' '}
+            {n
+              ? `${n === 1 ? 'One song plays' : `${n} songs play`} it (${asking.songs
+                  .slice(0, 3)
+                  .map((x) => x.title)
+                  .join(', ')}${n > 3 ? '…' : ''}): those tracks go quiet until it's back.`
+              : 'No song plays it.'}{' '}
+            {own ? 'It is a pack you imported: importing it again brings it back.' : 'More packs can install it again.'}
+          </div>
+          <div className="hstack">
+            <button type="button" className="btn danger" disabled={busy} onClick={() => void remove()}>
+              <Trash2 /> {busy ? 'Removing…' : 'Remove'}
+            </button>
+            <button type="button" className="btn ghost" disabled={busy} onClick={() => setAsking(null)}>
+              Keep it
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
 }
 
 interface InstallJob {
@@ -457,7 +547,7 @@ interface InstallJob {
  * (from their pinned sources, every file checked), one at a time, while the Library shows how far
  * it has got.
  */
-function MorePacks({ query }: { query: string }) {
+function MorePacks({ query, installed }: { query: string; installed: string }) {
   const [packs, setPacks] = useState<AvailablePack[] | null>(null);
   const [job, setJob] = useState<InstallJob | null>(null);
 
@@ -472,9 +562,11 @@ function MorePacks({ query }: { query: string }) {
       // offline: the installed packs still play
     }
   }, []);
+  // again when the installed packs change (one removed comes back here)
   useEffect(() => {
+    void installed;
     void load();
-  }, [load]);
+  }, [load, installed]);
 
   // while one installs, follow it; when it's done, the Library shows its instruments
   const running = job?.state === 'running';
@@ -533,7 +625,10 @@ function MorePacks({ query }: { query: string }) {
             <div key={p.id} className="more-pack">
               <div className="more-pack-head">
                 <b>{p.name}</b>
-                <span className="meta muted">{p.license.length > 14 ? 'Free use' : p.license}</span>
+                <span className="meta muted">
+                  {p.bytes ? `${diskSize(p.bytes)} · ` : ''}
+                  {p.license.length > 14 ? 'Free use' : p.license}
+                </span>
               </div>
               <div className="muted more-pack-list">{p.instruments.map((i) => i.title).join(' · ')}</div>
               {mine?.state === 'running' ? (
@@ -697,9 +792,15 @@ export function LibraryPanel({ overlay = false, full = false }: { overlay?: bool
               </div>
             ))}
           <div className="muted pack-credit">{pack.credit}</div>
+          <PackFoot pack={pack} />
         </details>
       ))}
-      <MorePacks query={query} />
+      {packs.length > 0 && (
+        <div className="muted library-disk">
+          Packs take {diskSize(packs.reduce((sum, p) => sum + (p.bytes ?? 0), 0))} on the computer that runs HO[LO].
+        </div>
+      )}
+      <MorePacks query={query} installed={packs.map((p) => p.id).join(',')} />
       <div className="library-import">
         <input
           ref={file}

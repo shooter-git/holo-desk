@@ -1,0 +1,17 @@
+{
+  "format": "holo-packs-lock",
+  "version": 1,
+  "repo": "shooter-git/holo-packs",
+  "commit": "e054f46864b1e713a6f6ee2453dd314dfcd336a2",
+  "packs": {
+    "freepats-guitar": "0bdb07b107ba7091cb065088f916a31b26b32d3d1a5a2a824ed40a15c785af1d",
+    "iowa": "82367777e4dd9f159d8a4dbc4fa2a4e028857faa9506f2b89faffd4642c2276d",
+    "jazz-kit": "8cd78a226c03eb365df7c10dd95f82f143aa889df7df96162e514c21fc926137",
+    "meatbass": "07461e52328803ce05f082b4d6b34cd64cc4172335bec9954bb9845ca61168ed",
+    "prog-kit": "b612621e2a3bce1a06353ca9c95040ade7731de059264ecfc01f79569e57a0a7",
+    "rock-kit": "1de65ee9919cf050a694b764ce14db1bc7c3cd1662f731ea6a6de95161a40ef8",
+    "steinway": "f0c488d9e77329280a7b5015ef39abeca5f568b8e458c05f3240ac69fed0861e",
+    "vcsl": "6435b77b33e643e820fa8b6f2beec1fef3ae75922b8c8087d0d69a4fd024e7a9",
+    "vsco2": "bac1b0aa71b8c90cac161e829fe2b4bbbb6f05eb2c7cd00f797b5822f60dfbb2"
+  }
+}

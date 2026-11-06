@@ -11,7 +11,15 @@ import { constants as zlib } from 'node:zlib';
 import fastifyCompress from '@fastify/compress';
 import fastifyStatic from '@fastify/static';
 import fastifyWebsocket from '@fastify/websocket';
-import { engineLabel, engineRelation, studioEngine } from '@holo/music';
+import {
+  describePackChange,
+  engineLabel,
+  engineRelation,
+  type PackChange,
+  songPacks,
+  studioEngine,
+  syncPinnedPacks,
+} from '@holo/music';
 import {
   applyOps,
   describeNotes,
@@ -36,7 +44,15 @@ import { Store } from './db.ts';
 import { Live, type RenderJob } from './live.ts';
 import { NetworkMidi } from './network-midi.ts';
 import { audioInfo, extractZip, importFolder, saveStream } from './pack-import.ts';
-import { availablePacks, Installer, installedPack, refreshMaps } from './pack-install.ts';
+import {
+  availablePacks,
+  Installer,
+  installedPack,
+  refreshMaps,
+  removePack,
+  shippedMaps,
+  useDataDir,
+} from './pack-install.ts';
 import { Packs } from './packs.ts';
 
 const ISOLATION = {
@@ -55,9 +71,18 @@ export interface Services {
 export async function buildApp(config: Config): Promise<{ app: FastifyInstance; services: Services }> {
   const app = Fastify({ logger: { level: process.env.HOLO_LOG ?? 'warn' }, bodyLimit: 64 * 1024 * 1024 });
   const store = new Store(config.dataDir);
-  // the packs whose shipped map changed (their samples didn't) play by the new one
-  for (const name of refreshMaps(join(config.dataDir, 'packs'))) console.log(`${name}: its map is brought up to date`);
+  // the packs' maps (from the packs repository, at the commit packs.lock.json pins) kept in the data folder
+  useDataDir(config.dataDir);
   const packs = new Packs(join(config.dataDir, 'packs'));
+  // the installed packs whose pinned map changed (their samples didn't) play by the new one
+  void refreshMaps(join(config.dataDir, 'packs'))
+    .then((names) => {
+      for (const name of names) console.log(`${name}: its map is brought up to date`);
+      if (names.length) packs.scan();
+    })
+    .catch((err: unknown) =>
+      console.warn(`The packs' maps couldn't be checked (${err instanceof Error ? err.message : String(err)})`),
+    );
   const live = new Live();
   live.latestRevision = (id) => store.get(id)?.revision ?? null;
   const creations = new Creations(config.creationsDir);
@@ -242,28 +267,61 @@ export async function buildApp(config: Config): Promise<{ app: FastifyInstance; 
   // the libraries HO[LO] ships maps for, installed from the Library (one at a time) as from `pnpm packs install`
   const packsDir = join(config.dataDir, 'packs');
   const installer = new Installer(packsDir, () => packs.scan());
-  app.get('/api/packs/available', async () => ({
-    packs: availablePacks().map((m) => {
-      const have = installedPack(packsDir, m.id);
-      return {
-        id: m.id,
-        name: m.name,
-        license: m.license,
-        credit: m.credit,
-        instruments: m.instruments.map((i) => ({ title: i.title, category: i.category })),
-        // installed, and its map is the one shipped (else `refresh` or a reinstall brings it up to date)
-        installed: have !== null,
-        current: have !== null && JSON.stringify(have) === JSON.stringify(m),
-      };
-    }),
-    job: installer.job,
-  }));
+  app.get('/api/packs/available', async () => {
+    let shipped: Awaited<ReturnType<typeof availablePacks>>;
+    try {
+      shipped = await availablePacks();
+    } catch (err) {
+      // no network, and the maps not fetched yet: the installed packs still play
+      return { packs: [], job: installer.job, offline: true, error: err instanceof Error ? err.message : String(err) };
+    }
+    return {
+      packs: shipped.map((m) => {
+        const have = installedPack(packsDir, m.id);
+        return {
+          id: m.id,
+          name: m.name,
+          license: m.license,
+          credit: m.credit,
+          // its samples' size on disk: what installing it takes
+          bytes: (m as { bytes?: number }).bytes ?? null,
+          instruments: m.instruments.map((i) => ({ title: i.title, category: i.category })),
+          // installed, and its map is the one pinned (else `refresh` or a reinstall brings it up to date)
+          installed: have !== null,
+          current: have !== null && JSON.stringify(have) === JSON.stringify(m),
+        };
+      }),
+      job: installer.job,
+    };
+  });
   app.get('/api/packs/install', async () => installer.job);
   app.post<{ Params: { id: string } }>('/api/packs/:id/install', async (req, reply) => {
     try {
-      return reply.code(202).send(installer.start(req.params.id));
+      return reply.code(202).send(await installer.start(req.params.id));
     } catch (err) {
       return reply.code(409).send({ error: err instanceof Error ? err.message : String(err) });
+    }
+  });
+  /** The songs that play a pack (what removing it would silence), by title. */
+  app.get<{ Params: { id: string } }>('/api/packs/:id/songs', async (req) => {
+    const songs: { id: string; title: string }[] = [];
+    for (const row of store.list()) {
+      const project = store.get(row.id);
+      if (project && songPacks(project).includes(req.params.id)) songs.push({ id: row.id, title: project.title });
+    }
+    return { songs };
+  });
+  /** Uninstall a pack, to make room: its samples go; songs that play it are silent there until it's back. */
+  app.delete<{ Params: { id: string } }>('/api/packs/:id', async (req, reply) => {
+    const id = req.params.id;
+    if (installer.installing() === id)
+      return reply.code(409).send({ error: `${installer.job?.name ?? id} is installing: remove it once it's done` });
+    try {
+      const freed = removePack(packsDir, id);
+      packs.scan();
+      return { ok: true, id, freed };
+    } catch (err) {
+      return reply.code(404).send({ error: err instanceof Error ? err.message : String(err) });
     }
   });
   // your own pack, uploaded as a ZIP (SFZ instruments, or folders of samples named by note)
@@ -443,6 +501,35 @@ export async function buildApp(config: Config): Promise<{ app: FastifyInstance; 
     }));
   });
 
+  /**
+   * An experience's pinned packs kept to the ones its songs play: after a song is written into it, or
+   * (adding only) before it renders one the studio has that isn't sent yet. What changed, and a line
+   * saying so (a pack its engine can't play, say).
+   */
+  const repin = async (
+    creation: string,
+    opts: { extra?: Project[]; addOnly?: boolean } = {},
+  ): Promise<{ packs: PackChange; note: string } | null> => {
+    const root = creations.experienceRoot(creation);
+    if (!root) return null;
+    const title = creations.list().find((c) => c.name === creation)?.title ?? creation;
+    const name = (id: string) => shippedMaps()?.cached(id)?.name ?? installedPack(packsDir, id)?.name ?? id;
+    try {
+      const packs = await syncPinnedPacks(root, {
+        mapsDir: join(config.dataDir, 'pack-maps'),
+        studioPacks: studio.packs,
+        ...opts,
+      });
+      return { packs, note: describePackChange(title, packs, name) };
+    } catch (err) {
+      const packs: PackChange = { added: [], dropped: [], missing: [] };
+      return {
+        packs,
+        note: `${title}'s packs couldn't be brought up to date: ${err instanceof Error ? err.message : String(err)}`,
+      };
+    }
+  };
+
   /** A new song for an experience: in the studio, and its file in the experience at once. */
   app.post<{ Params: { name: string }; Body: { title?: string; piece?: string } }>(
     '/api/creations/:name/songs',
@@ -453,7 +540,9 @@ export async function buildApp(config: Config): Promise<{ app: FastifyInstance; 
       project.origin = { creation: req.params.name, piece, exportedAt: new Date().toISOString() };
       const saved = store.save({ ...project, revision: 0 }, null, 'studio');
       if (!saved) return reply.code(500).send({ error: 'The song could not be saved' });
-      return reply.code(201).send({ project: saved, path: creations.write(saved) });
+      const path = creations.write(saved);
+      const pinned = await repin(req.params.name);
+      return reply.code(201).send({ project: saved, path, ...(pinned ?? {}) });
     },
   );
 
@@ -510,10 +599,13 @@ export async function buildApp(config: Config): Promise<{ app: FastifyInstance; 
         project = adopted;
       }
       const path = creations.write(project, audioDir(project.id));
+      // the packs it plays, pinned in the experience (and those no song plays any more, let go)
+      const pinned = project.origin ? await repin(project.origin.creation) : null;
       return {
         ok: true,
         path,
         edited: project.tracks.filter((t) => t.origin?.edited).map((t) => t.name),
+        ...(pinned ?? {}),
       };
     },
   );
@@ -542,6 +634,8 @@ export async function buildApp(config: Config): Promise<{ app: FastifyInstance; 
       (j) => j.project === project.id && (j.state === 'waiting' || j.state === 'running'),
     );
     if (running) return { ok: true, id: running.id, already: true };
+    // the packs this song plays, as the studio has it now, pinned for the experience's own engine
+    const pinned = await repin(origin.creation, { extra: [project], addOnly: true });
     const job: RenderJob = {
       id: newId('rnd'),
       project: project.id,
@@ -555,7 +649,7 @@ export async function buildApp(config: Config): Promise<{ app: FastifyInstance; 
       error: null,
     };
     live.render(job);
-    return { ok: true, id: job.id };
+    return { ok: true, id: job.id, ...(pinned?.note ? { note: pinned.note } : {}) };
   });
 
   app.get<{ Params: { id: string } }>('/api/renders/:id', async (req, reply) => {

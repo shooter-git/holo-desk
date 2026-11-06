@@ -282,13 +282,15 @@ Experiences (a new project whose music is made here and built by the project its
   holo init [DIR] [--name N] [--title T] [--out music/build] [--format wav|wav24] [--ref REF]
                                       set a project up: its holo.creation.json, music/sessions for its songs,
                                       HO[LO]'s engine pinned in music/holo (as commit REF has it, HEAD by
-                                      default), and npm run music to build them
+                                      default) with the packs its songs play, and npm run music to build them
   holo new "Title" --for EXPERIENCE [--piece P]
                                       a song for an experience: written into it, and open in the studio
   holo send --to EXPERIENCE [--piece P]
-                                      the open song into an experience (it belongs to it from then on)
+                                      the open song into an experience (it belongs to it from then on); the
+                                      packs it plays are pinned there, those no song plays let go
   holo update-engine [DIR] [--ref REF]
-                                      pin this HO[LO]'s engine, rebuild every song, say how far each moved
+                                      pin this HO[LO]'s engine and the packs the songs play, rebuild every
+                                      song, say how far each moved
 
 Every change is one undo step in the studio, labelled "${AUTHOR}: …". --song ID picks a song other than the open one.
 Note names are scientific (middle C = C4 = MIDI 60) unless --names logic (middle C = C3).`;
@@ -1037,11 +1039,12 @@ async function main(): Promise<void> {
     case 'send': {
       const id = await songId();
       const to = flag('to');
-      const r = await call<{ path: string; edited: string[] }>(`/api/projects/${id}/send`, {
+      const r = await call<{ path: string; edited: string[]; note?: string }>(`/api/projects/${id}/send`, {
         method: 'POST',
         ...(to ? { body: JSON.stringify({ creation: to, ...(flag('piece') ? { piece: flag('piece') } : {}) }) } : {}),
       });
       console.log(`Sent to ${r.path}${r.edited.length ? `; edited tracks: ${r.edited.join(', ')}` : ''}`);
+      if (r.note) console.log(r.note);
       return;
     }
 

@@ -1171,9 +1171,10 @@ export async function renderInCreation(): Promise<void> {
   await saveNow();
   try {
     const res = await fetch(`/api/projects/${p.id}/render`, { method: 'POST' });
-    const body = (await res.json()) as { ok?: boolean; error?: string; already?: boolean };
+    const body = (await res.json()) as { ok?: boolean; error?: string; already?: boolean; note?: string };
     if (!res.ok) throw new Error(body.error ?? 'The render could not start');
     store.set({ dialog: null, bouncing: `${p.origin.creation} is rendering ${p.title}…` });
+    if (body.note) toast(body.note, undefined, 10000);
   } catch (err) {
     toast(err instanceof Error ? err.message : String(err), 'error', 10000);
   }
@@ -1185,11 +1186,12 @@ export async function sendToCreation(): Promise<void> {
   await saveNow();
   try {
     const r = await api.send(p.id);
-    toast(
-      r.edited.length
-        ? `Sent to ${p.origin.creation}: ${r.edited.length} edited track${r.edited.length === 1 ? '' : 's'} (${r.path})`
-        : `Sent to ${p.origin.creation} (${r.path})`,
-    );
+    const sent = r.edited.length
+      ? `Sent to ${p.origin.creation}: ${r.edited.length} edited track${r.edited.length === 1 ? '' : 's'} (${r.path})`
+      : `Sent to ${p.origin.creation} (${r.path})`;
+    // what its pinned packs did: a pack it can't play yet is worth reading
+    const cant = r.packs?.missing.some((m) => m.why !== 'imported') ?? false;
+    toast(r.note ? `${sent}. ${r.note}` : sent, cant ? 'error' : undefined, r.note ? 12000 : undefined);
   } catch (err) {
     toast(err instanceof Error ? err.message : String(err), 'error', 8000);
   }

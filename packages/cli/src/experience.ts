@@ -25,6 +25,7 @@ import {
   type Experience,
   type ExperienceManifest,
   engineLabel,
+  experiencePacks,
   findRoot,
   listSongs,
   MANIFEST,
@@ -49,15 +50,25 @@ const SCRIPT = `node ${PIN_DIR}/${RENDERER} build`;
 type Log = (line: string) => void;
 
 function pinned(pin: Pin): PinnedEngine {
-  const { packsSha256, ...identity } = pin.identity;
   return {
-    ...identity,
+    ...pin.identity,
     node: process.versions.node,
     file: `${PIN_DIR}/${RENDERER}`,
     sha256: pin.sha256,
     packs: `${PIN_DIR}/${PACKS}`,
-    packsSha256,
+    packsSha256: pin.packsSha256,
+    ...(pin.catalog ? { catalog: pin.catalog, pinned: pin.pinned } : {}),
+    ...(pin.packsAt ? { packsAt: pin.packsAt } : {}),
   };
+}
+
+/** What a pin couldn't pin, in a line for each reason. */
+function unpinnedNote(pin: Pin, log: Log): void {
+  if (pin.unpinned.length)
+    log(
+      `  not pinned: ${pin.unpinned.join(', ')} (packs of your own, or newer than this engine): ` +
+        `a song that plays one says so when it's built`,
+    );
 }
 
 /** The studio's "Hear it as…": the experience renders the song with its own pinned engine. */
@@ -102,8 +113,10 @@ export async function init(repo: string, dir: string, opts: InitOptions, log: Lo
   const format = (opts.format ?? DEFAULT_BUILD.format) as 'wav' | 'wav24';
   if (format !== 'wav' && format !== 'wav24') throw new Error('--format is wav (32-bit float) or wav24 (24-bit PCM)');
   mkdirSync(root, { recursive: true });
-  const pin = await pinEngine({ repo, dir: join(root, PIN_DIR), ...(opts.ref ? { ref: opts.ref } : {}) });
   const sessions = opts.sessions ?? 'music/sessions';
+  // the packs its songs play: none yet, unless the folder has songs already
+  const packs = experiencePacks(resolve(root, sessions));
+  const pin = await pinEngine({ repo, dir: join(root, PIN_DIR), packs, ...(opts.ref ? { ref: opts.ref } : {}) });
   mkdirSync(join(root, sessions), { recursive: true });
   if (!existsSync(join(root, sessions, '.gitkeep'))) writeFileSync(join(root, sessions, '.gitkeep'), '');
   const build = { ...DEFAULT_BUILD, out: opts.out ?? DEFAULT_BUILD.out, format };
@@ -149,7 +162,11 @@ export async function init(repo: string, dir: string, opts: InitOptions, log: Lo
   const e = manifest.engine as PinnedEngine;
   log(`"${manifest.title}" (${name}) is set up in ${root}:`);
   log(`  ${MANIFEST}   its name, its songs' folder, the engine (${engineLabel(e)}) and Node.js ${e.node}`);
-  log(`  ${PIN_DIR}/          the pinned engine: ${RENDERER} (the renderer, one file), ${PACKS}, LICENSE, README.md`);
+  log(
+    `  ${PIN_DIR}/          the pinned engine: ${RENDERER} (the renderer, one file), ${PACKS} ` +
+      `(${pin.pinned.length ? `the packs its songs play: ${pin.pinned.join(', ')}` : 'the packs its songs play: none yet'}), LICENSE, README.md`,
+  );
+  unpinnedNote(pin, log);
   log(`  ${sessions}/      its songs, a <piece>.holo.json each (and <piece>.audio/ for a song's recordings)`);
   log(`  npm run music        builds the songs whose files changed into ${build.out}/ (script ${script})`);
   const studio = creationsDir(repo);
@@ -178,12 +195,34 @@ export async function updateEngine(repo: string, dir: string, opts: { ref?: stri
   if (!was) throw new Error(`${root} pins no engine: \`holo init\` sets it up`);
   const scratch = mkdtempSync(join(tmpdir(), 'holo-update-'));
   try {
-    const pin = await pinEngine({ repo, dir: join(scratch, 'pin'), ...(opts.ref ? { ref: opts.ref } : {}) });
+    // the packs its songs play, and no others
+    const packs = experiencePacks(resolve(root, manifest.sessions));
+    const pin = await pinEngine({ repo, dir: join(scratch, 'pin'), packs, ...(opts.ref ? { ref: opts.ref } : {}) });
     const next = pinned(pin);
     const oldFile = join(root, was.file);
     const intact = existsSync(oldFile) && sha256(readFileSync(oldFile)) === was.sha256;
+    const into = join(root, PIN_DIR);
     if (next.source === was.source && next.node === was.node && intact) {
-      log(`${manifest.title} is on this engine already (${engineLabel(was)}, Node.js ${was.node}): nothing to do.`);
+      const before = was.pinned ?? null;
+      if (was.catalog && before && before.join() === next.pinned?.join()) {
+        log(`${manifest.title} is on this engine already (${engineLabel(was)}, Node.js ${was.node}): nothing to do.`);
+        unpinnedNote(pin, log);
+        return;
+      }
+      // the same engine: only the packs move to the ones its songs play (the songs sound as they did)
+      mkdirSync(into, { recursive: true });
+      for (const f of pin.files) copyFileSync(join(scratch, 'pin', f), join(into, f));
+      writeManifest(root, { ...manifest, engine: next, render: manifest.render ?? RENDER });
+      const added = pin.pinned.filter((id) => !before?.includes(id));
+      const dropped = (before ?? []).filter((id) => !pin.pinned.includes(id));
+      log(
+        `${manifest.title} stays on engine ${engineLabel(was)}; its ${PACKS} holds the packs its songs play: ` +
+          `${pin.pinned.join(', ') || 'none'}${added.length ? ` (added ${added.join(', ')})` : ''}` +
+          `${before ? (dropped.length ? ` (dropped ${dropped.join(', ')})` : '') : ' (it held every pack before)'}.`,
+      );
+      unpinnedNote(pin, log);
+      execFileSync(process.execPath, [join(root, next.file), 'build', '--root', root], { stdio: 'inherit' });
+      log(`\nCommit ${MANIFEST} and ${relative(root, into)}/ together.`);
       return;
     }
     const songs = listSongs({ sessions: resolve(root, manifest.sessions) });
@@ -221,7 +260,7 @@ export async function updateEngine(repo: string, dir: string, opts: { ref?: stri
       if (failed) log(`  ${s.piece}: no render with the old engine (${failed})`);
     }
     // the new engine in its place, then every song built with it
-    const into = join(root, PIN_DIR);
+    unpinnedNote(pin, log);
     mkdirSync(into, { recursive: true });
     for (const f of pin.files) copyFileSync(join(scratch, 'pin', f), join(into, f));
     writeManifest(root, { ...manifest, engine: next, render: manifest.render ?? RENDER });

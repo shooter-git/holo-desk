@@ -123,9 +123,14 @@ Then compose and edit through the song files and `holo` commands:
 - `holo render` (with `pnpm runner` running on the host) has the project render the open song with its own
   pinned engine, beside the studio's mix.
 - A badge in *Songs* (**Builds with engine … · holo update-engine**) means the project's pinned engine is
-  older than the studio's. Tell the user; `holo update-engine ../moon-garden` moves it to the studio's
-  engine, rebuilds every song and reports how far each moved. Run it only when the user agrees: it
-  changes what the project builds.
+  older than the studio's in what it plays: its code, or a pack its songs play. Tell the user;
+  `holo update-engine ../moon-garden` moves it to the studio's engine, rebuilds every song and reports
+  how far each moved. Run it only when the user agrees: it changes what the project builds.
+- An experience pins only the sample packs its songs play (`music/holo/packs.json`). `holo send` (and
+  the studio's Send) adds a pack a song starts playing and lets go of one no song plays, and says so.
+  If it says a pack can't be played with the project's engine, that pack is newer than the engine:
+  `holo update-engine` (with the user's go-ahead). The packs and their pages are in
+  [HO[LO] Packs](https://github.com/shooter-git/holo-packs).
 - Don't use `holo init` on a project that already has a `holo.creation.json` (it refuses), and never on a
   creation whose music is its own code: that one keeps its own round trip (next section).
 

@@ -13,12 +13,14 @@ import { fetchFiles, SampleCache, sha256 } from '../src/fetch.ts';
 import {
   type EngineIdentity,
   engineChanged,
+  engineCode,
   engineLabel,
   engineRelation,
   engineSource,
   liveSource,
 } from '../src/identity.ts';
-import { type ExperienceManifest, slug, titleOf, writeManifest } from '../src/manifest.ts';
+import { type ExperienceManifest, readManifest, slug, titleOf, writeManifest } from '../src/manifest.ts';
+import { formatLock, manifestOf, packSha256, parseLock } from '../src/pack-lock.ts';
 import {
   formatChecksums,
   formatPinnedPacks,
@@ -28,8 +30,10 @@ import {
   parsePinnedPacks,
   pinPack,
   songFiles,
+  songPacks,
 } from '../src/packs.ts';
 import { experienceSource } from '../src/source.ts';
+import { describePackChange, syncPinnedPacks } from '../src/sync.ts';
 
 const work = mkdtempSync(join(tmpdir(), 'holo-music-test-'));
 afterAll(() => rmSync(work, { recursive: true, force: true }));
@@ -114,6 +118,54 @@ describe('the engine an experience is built with', () => {
     put('packages/session/src/ops.ts', 'export const b = 2;\n');
     expect(liveSource(root)).not.toBe(first);
     expect(liveSource(REPO)).not.toBe(engineSource(REPO));
+  });
+
+  it('fingerprints the packs it plays by its lock, and its code apart from them', () => {
+    const root = join(work, 'locked');
+    const put = (path: string, text: string) => {
+      mkdirSync(join(root, path, '..'), { recursive: true });
+      writeFileSync(join(root, path), text);
+    };
+    const lock = (hash: string) =>
+      formatLock({
+        format: 'holo-packs-lock',
+        version: 1,
+        repo: 'test/packs',
+        commit: 'c'.repeat(40),
+        packs: { tones: hash.repeat(64) },
+      });
+    put('packages/engine/src/core.ts', 'export const a = 1;\n');
+    put('packs.lock.json', lock('a'));
+    const source = engineSource(root);
+    const code = engineCode(root);
+    // a pack's map moved on: another engine, the same code
+    put('packs.lock.json', lock('b'));
+    expect(engineSource(root)).not.toBe(source);
+    expect(engineCode(root)).toBe(code);
+    // the code changed
+    put('packages/engine/src/core.ts', 'export const a = 2;\n');
+    expect(engineCode(root)).not.toBe(code);
+    expect(parseLock(lock('a')).packs.tones).toBe('a'.repeat(64));
+    expect(() => parseLock(lock('a').replace('test/packs', 'not a repo'))).toThrow(/owner\/name/);
+  });
+
+  it("is the same sound when only packs its experience doesn't play changed", () => {
+    const catalog = { tones: 'a'.repeat(64), drums: 'b'.repeat(64) };
+    const pinned = identity({ code: 'c'.repeat(64), date: '2026-10-01T00:00:00.000Z' });
+    const studio = {
+      ...identity({ source: 'f'.repeat(64), code: 'c'.repeat(64), date: '2026-11-01T00:00:00.000Z' }),
+      packs: { tones: 'a'.repeat(64), drums: 'd'.repeat(64), strings: 'e'.repeat(64) },
+    };
+    // it plays the tones only: the drums changed and the strings arrived, neither matters
+    expect(engineRelation({ ...pinned, catalog, pinned: ['tones'] }, studio)).toBe('same');
+    // it plays the drums: they changed
+    expect(engineRelation({ ...pinned, catalog, pinned: ['drums', 'tones'] }, studio)).toBe('older');
+    // the code changed
+    expect(engineRelation({ ...pinned, catalog, pinned: ['tones'] }, { ...studio, code: 'd'.repeat(64) })).toBe(
+      'older',
+    );
+    // pinned before the catalog: the whole engine, as before
+    expect(engineRelation(pinned, studio)).toBe('older');
   });
 
   it('puts two engines in order by their commits, and says when it cannot', () => {
@@ -228,6 +280,11 @@ describe('the pinned libraries', () => {
     expect(problems).toHaveLength(2);
     expect(problems[0]).toMatch(/isn't one of the sample libraries/);
     expect(problems[1]).toMatch(/no instrument "missing"/);
+    // the packs it plays, whatever's pinned: what an experience pins for it
+    expect(songPacks(song)).toEqual(['nope', 'tones']);
+    // a pack its engine knows that the project doesn't pin yet says how to get it
+    const known = songFiles(song, { format: 'holo-packs', version: 1, packs: [pinned] }, { nope: 'a'.repeat(64) });
+    expect(known.problems[0]).toMatch(/isn't pinned for this project yet: Send the song from the studio/);
   });
 });
 
@@ -494,6 +551,117 @@ describe("building an experience's music", () => {
   });
 });
 
+/** The lock HEAD has (pins are made from commits), or null for a commit from before the lock. */
+function headLock() {
+  try {
+    return parseLock(execFileSync('git', ['-C', REPO, 'show', 'HEAD:packs.lock.json'], { encoding: 'utf8' }));
+  } catch {
+    return null;
+  }
+}
+
+describe('the packs an experience pins', () => {
+  /** An experience whose engine knows the tones and the drums (from a packs repository at a commit). */
+  function pinnedExperience(name: string) {
+    const made = experience(name, { a: song('A') });
+    const file = join(made.root, 'music/holo/packs.json');
+    const tones = parsePinnedPacks(readFileSync(file, 'utf8')).packs[0] as PinnedPack;
+    const drums: PinnedPack = { ...tones, id: 'drums', name: 'Drums' };
+    const catalog = { drums: packSha256(drums), tones: packSha256(tones) };
+    const m = readManifest(made.root);
+    const engine = { ...(m.engine as NonNullable<ExperienceManifest['engine']>) };
+    writeManifest(made.root, {
+      ...m,
+      engine: { ...engine, catalog, pinned: ['tones'], packsAt: { repo: 'test/packs', commit: 'c'.repeat(40) } },
+    });
+    // the packs repository at that commit
+    const files = new Map([
+      ['packs/drums/pack.json', JSON.stringify(manifestOf(drums), null, 1)],
+      ['packs/drums/files.sha256', formatChecksums(drums.files)],
+    ]);
+    const asked: string[] = [];
+    const fetch = async (url: string) => {
+      asked.push(url);
+      const text = files.get(url.replace(`https://raw.githubusercontent.com/test/packs/${'c'.repeat(40)}/`, ''));
+      return { ok: text !== undefined, status: text ? 200 : 404, text: async () => text ?? '' };
+    };
+    const self = { version: engine.version, source: engine.source, commit: null, date: null, catalog };
+    return { ...made, file, catalog, fetch, asked, self };
+  }
+  const playing = (title: string, pack: string) => {
+    const p = song(title);
+    p.tracks = [newTrack('Kit', { type: 'sampler', pack, name: 'tone' }, '#fff')];
+    return p;
+  };
+  const sessions = (root: string) => join(root, 'music/sessions');
+
+  it('are the ones its songs play: added as its engine knows them, let go when no song plays them', async () => {
+    const x = pinnedExperience('pins');
+    writeFileSync(join(sessions(x.root), 'b.holo.json'), JSON.stringify(playing('B', 'drums')));
+    const added = await syncPinnedPacks(x.root, { mapsDir: null, fetch: x.fetch, studioPacks: x.catalog });
+    expect(added).toEqual({ added: ['drums'], dropped: [], missing: [] });
+    // from the packs repository at the engine's own commit, checked against its catalog
+    expect(x.asked.every((u) => u.includes(`/test/packs/${'c'.repeat(40)}/packs/drums/`))).toBe(true);
+    const exp = openExperience(x.root, x.self);
+    expect(exp.packs.packs.map((p) => p.id)).toEqual(['drums', 'tones']);
+    expect(readManifest(x.root).engine?.pinned).toEqual(['drums', 'tones']);
+
+    // played but not sent yet ("Hear it as…"): added only, nothing let go
+    rmSync(join(sessions(x.root), 'b.holo.json'));
+    expect((await syncPinnedPacks(x.root, { mapsDir: null, fetch: x.fetch, addOnly: true })).dropped).toEqual([]);
+    // sent: no song plays the drums now
+    expect(await syncPinnedPacks(x.root, { mapsDir: null, fetch: x.fetch })).toEqual({
+      added: [],
+      dropped: ['drums'],
+      missing: [],
+    });
+    expect(openExperience(x.root, x.self).packs.packs.map((p) => p.id)).toEqual(['tones']);
+  });
+
+  it("says what it can't pin: a pack newer than its engine, or one of your own", async () => {
+    const x = pinnedExperience('cant');
+    writeFileSync(join(sessions(x.root), 'c.holo.json'), JSON.stringify(playing('C', 'strings')));
+    writeFileSync(join(sessions(x.root), 'd.holo.json'), JSON.stringify(playing('D', 'mine')));
+    const before = readFileSync(x.file, 'utf8');
+    const change = await syncPinnedPacks(x.root, {
+      mapsDir: null,
+      fetch: x.fetch,
+      studioPacks: { ...x.catalog, strings: 'e'.repeat(64) },
+    });
+    expect(change.missing).toEqual([
+      { id: 'mine', why: 'imported' },
+      { id: 'strings', why: 'newer' },
+    ]);
+    expect(readFileSync(x.file, 'utf8')).toBe(before);
+    const said = describePackChange('Cant', change, (id) => (id === 'strings' ? 'Strings' : id));
+    expect(said).toMatch(/can't play Strings with its engine: holo update-engine/);
+    expect(said).toMatch(/mine is a pack of your own/);
+    // its map couldn't be fetched: said so, nothing written
+    writeFileSync(join(sessions(x.root), 'e.holo.json'), JSON.stringify(playing('E', 'drums')));
+    const away = await syncPinnedPacks(x.root, {
+      mapsDir: null,
+      fetch: async () => {
+        throw new Error('offline');
+      },
+    });
+    expect(away.missing.find((m) => m.id === 'drums')?.why).toBe('unreachable');
+    expect(readFileSync(x.file, 'utf8')).toBe(before);
+  });
+
+  it("are played only as the engine's catalog has them", () => {
+    const x = pinnedExperience('edited');
+    const doc = parsePinnedPacks(readFileSync(x.file, 'utf8'));
+    const edited = formatPinnedPacks(doc.packs.map((p) => ({ ...p, credit: 'edited by hand' })));
+    writeFileSync(x.file, edited);
+    const m = readManifest(x.root);
+    writeManifest(x.root, {
+      ...m,
+      engine: { ...(m.engine as NonNullable<ExperienceManifest['engine']>), packsSha256: sha256(Buffer.from(edited)) },
+    });
+    expect(() => openExperience(x.root, x.self)).toThrow(/tones isn't the map this engine pins/);
+  });
+});
+
 describe('a pinned engine', () => {
   it('bundles into one file, the same every time, that knows which engine it is', async () => {
     const { pinEngine } = await import('../src/pin.ts');
@@ -505,7 +673,15 @@ describe('a pinned engine', () => {
     expect(sha256(readFileSync(file))).toBe(a.sha256);
     const said = JSON.parse(execFileSync(process.execPath, [file, 'version', '--json'], { encoding: 'utf8' }));
     expect(said.source).toBe(a.identity.source);
-    expect(said.packsSha256).toBe(a.packsSha256);
+    // a commit with a lock: the renderer knows every pack it pins, and plays only those maps (none
+    // asked for here); one from before the lock plays the one libraries file it was pinned with
+    const lock = headLock();
+    if (lock) {
+      expect(said.code).toBe(a.identity.code);
+      expect(said.catalog).toEqual(lock.packs);
+      expect(said.packsSha256).toBeUndefined();
+      expect(a.pinned).toEqual([]);
+    } else expect(said.packsSha256).toBe(a.packsSha256);
     expect(readFileSync(join(work, 'pin-a', 'LICENSE'), 'utf8')).toMatch(/MIT License/);
   }, 60_000);
 
@@ -520,10 +696,16 @@ describe('a pinned engine', () => {
       const { root, cache } = experience('pinned', { synth });
       const pin = await pinEngine({ repo: REPO, dir: join(root, 'music/holo') });
       const m = JSON.parse(readFileSync(join(root, 'holo.creation.json'), 'utf8')) as ExperienceManifest;
-      const { packsSha256, ...id } = pin.identity;
       writeManifest(root, {
         ...m,
-        engine: { ...(m.engine as NonNullable<ExperienceManifest['engine']>), ...id, sha256: pin.sha256, packsSha256 },
+        engine: {
+          ...(m.engine as NonNullable<ExperienceManifest['engine']>),
+          ...pin.identity,
+          sha256: pin.sha256,
+          packsSha256: pin.packsSha256,
+          ...(pin.catalog ? { catalog: pin.catalog, pinned: pin.pinned } : {}),
+          ...(pin.packsAt ? { packsAt: pin.packsAt } : {}),
+        },
       });
       const bundle = join(root, 'music/holo/holo-music.mjs');
       const run = () =>

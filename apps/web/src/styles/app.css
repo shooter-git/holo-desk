@@ -1703,6 +1703,30 @@ button.list-item {
   font-size: 11px;
 }
 
+.pack-foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 10px 10px;
+  font-size: 11px;
+}
+
+.pack-foot > .btn {
+  margin-left: auto;
+}
+
+.pack-remove {
+  display: grid;
+  gap: 8px;
+  width: 100%;
+  line-height: 1.5;
+}
+
+.library-disk {
+  padding: 6px 10px 2px;
+  font-size: 11px;
+}
+
 .library-import {
   padding: 10px;
 }

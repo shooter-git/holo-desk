@@ -1,23 +1,34 @@
 /**
  * Which engine a song is built with. HO[LO]'s sound is its engine's code (the engine, the session
- * format and the build an experience carries) and the maps of the sample libraries it plays; an
- * engine's `source` is a fingerprint of all of them, the same however it is read (a checkout, a
- * commit taken out of git, the studio's Docker image). Its commit and date say where it came from,
- * so two engines can be put in order.
+ * format and the build an experience carries) and the maps of the sample packs it plays (pinned by
+ * packs.lock.json: a commit of the packs repository and every pack's hash). An engine's `source` is a
+ * fingerprint of all of them and its `code` of the code alone, each the same however it is read (a
+ * checkout, a commit taken out of git, the studio's Docker image). Its commit and date say where it
+ * came from, so two engines can be put in order.
  */
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 
-/** What the sound depends on, relative to HO[LO]'s repository. */
-export const ENGINE_PATHS = [
-  'packages/engine/src',
-  'packages/session/src',
-  'packages/music/src',
-  'packs/manifests',
-  'packs/checksums',
-] as const;
+/** The packs an engine plays: a commit of the packs repository and every pack's hash there. */
+export const LOCK_FILE = 'packs.lock.json';
+
+/** The packs a lock in a folder pins, by id (none without a lock). */
+function lockedPacks(root: string): Record<string, string> {
+  const file = join(root, LOCK_FILE);
+  if (!existsSync(file)) return {};
+  return (JSON.parse(readFileSync(file, 'utf8')) as { packs?: Record<string, string> }).packs ?? {};
+}
+
+/** The engine's code, relative to HO[LO]'s repository. */
+export const CODE_PATHS = ['packages/engine/src', 'packages/session/src', 'packages/music/src'] as const;
+
+/** What the sound depends on: the code and the packs it plays. */
+export const ENGINE_PATHS = [...CODE_PATHS, LOCK_FILE] as const;
+
+/** What it depended on before the packs had a repository of their own (their maps were in HO[LO]'s). */
+export const LEGACY_ENGINE_PATHS = [...CODE_PATHS, 'packs/manifests', 'packs/checksums'] as const;
 
 export interface EngineIdentity {
   /** The engine package's version. */
@@ -30,15 +41,21 @@ export interface EngineIdentity {
   date: string | null;
   /** The files differ from that commit (an engine being worked on). */
   changed?: boolean;
+  /** sha256 of the code alone (CODE_PATHS): absent from engines pinned before it was kept. */
+  code?: string;
 }
 
-function files(dir: string, rel: string, out: string[]): void {
-  if (!existsSync(dir)) return;
-  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+function files(path: string, rel: string, out: string[]): void {
+  if (!existsSync(path)) return;
+  if (statSync(path).isFile()) {
+    out.push(rel);
+    return;
+  }
+  for (const entry of readdirSync(path, { withFileTypes: true })) {
     if (entry.name.startsWith('.')) continue;
-    const path = `${rel}/${entry.name}`;
-    if (entry.isDirectory()) files(join(dir, entry.name), path, out);
-    else if (entry.isFile()) out.push(path);
+    const sub = `${rel}/${entry.name}`;
+    if (entry.isDirectory()) files(join(path, entry.name), sub, out);
+    else if (entry.isFile()) out.push(sub);
   }
 }
 
@@ -57,9 +74,21 @@ function fingerprint(root: string, paths: readonly string[]): string {
   return h.digest('hex');
 }
 
+/** The paths an engine in a folder depends on: its lock, or (an older engine) the maps it carried. */
+export function enginePaths(root: string): readonly string[] {
+  return existsSync(join(root, LOCK_FILE)) || !existsSync(join(root, 'packs/manifests'))
+    ? ENGINE_PATHS
+    : LEGACY_ENGINE_PATHS;
+}
+
 /** The fingerprint of an engine's sources in a folder laid out as HO[LO]'s repository. */
 export function engineSource(root: string): string {
-  return fingerprint(root, ENGINE_PATHS);
+  return fingerprint(root, enginePaths(root));
+}
+
+/** The fingerprint of an engine's code alone: what decides how it plays the packs it pins. */
+export function engineCode(root: string): string {
+  return fingerprint(root, CODE_PATHS);
 }
 
 /**
@@ -79,10 +108,13 @@ export function engineVersion(root: string): string {
   return (JSON.parse(readFileSync(join(root, 'packages/engine/package.json'), 'utf8')) as { version: string }).version;
 }
 
+/** Every path an engine has depended on (its lock, and the maps older ones carried), for git. */
+const HISTORY_PATHS = [...new Set<string>([...ENGINE_PATHS, ...LEGACY_ENGINE_PATHS])];
+
 /** The last commit that changed the engine at a ref, and its date, from git. */
 export function engineCommit(repo: string, ref = 'HEAD'): { commit: string; date: string } | null {
   try {
-    const out = execFileSync('git', ['-C', repo, 'log', '-1', '--format=%H%n%cI', ref, '--', ...ENGINE_PATHS], {
+    const out = execFileSync('git', ['-C', repo, 'log', '-1', '--format=%H%n%cI', ref, '--', ...HISTORY_PATHS], {
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'ignore'],
     }).trim();
@@ -97,7 +129,7 @@ export function engineCommit(repo: string, ref = 'HEAD'): { commit: string; date
 export function engineChanged(repo: string): boolean {
   try {
     return (
-      execFileSync('git', ['-C', repo, 'status', '--porcelain', '--', ...ENGINE_PATHS], {
+      execFileSync('git', ['-C', repo, 'status', '--porcelain', '--', ...HISTORY_PATHS], {
         encoding: 'utf8',
         stdio: ['ignore', 'pipe', 'ignore'],
       }).trim() !== ''
@@ -113,22 +145,30 @@ export function engineChanged(repo: string): boolean {
  */
 export const STAMP_FILE = 'packages/music/engine-stamp.json';
 
+/** The engine a studio runs: its identity, its code's fingerprint and the packs its lock pins. */
+export interface StudioEngine extends EngineIdentity {
+  code: string;
+  /** Each pack's id and hash (packs.lock.json); empty for an engine without a lock. */
+  packs: Record<string, string>;
+}
+
 /** The engine a checkout or an image runs: from git when it has it, else from the stamp. */
-export function studioEngine(root: string): EngineIdentity {
+export function studioEngine(root: string): StudioEngine {
   const source = engineSource(root);
   const version = engineVersion(root);
+  const own = { code: engineCode(root), packs: lockedPacks(root) };
   if (existsSync(join(root, '.git'))) {
     const at = engineCommit(root);
-    if (at) return { version, source, ...at, ...(engineChanged(root) ? { changed: true } : {}) };
+    if (at) return { version, source, ...own, ...at, ...(engineChanged(root) ? { changed: true } : {}) };
   }
   try {
     const stamp = JSON.parse(readFileSync(join(root, STAMP_FILE), 'utf8')) as Partial<EngineIdentity>;
     if (stamp.source === source && stamp.commit && stamp.date)
-      return { version, source, commit: stamp.commit, date: stamp.date };
+      return { version, source, ...own, commit: stamp.commit, date: stamp.date };
   } catch {
     // no stamp
   }
-  return { version, source, commit: null, date: null };
+  return { version, source, ...own, commit: null, date: null };
 }
 
 /** A short name for an engine: its version and commit ("0.1.0+4ba9e85"). */
@@ -137,15 +177,30 @@ export function engineLabel(e: Pick<EngineIdentity, 'version' | 'commit' | 'chan
   return `${e.version}+${at}${e.changed ? '.changed' : ''}`;
 }
 
+/** The packs an experience's engine knows (`catalog`: every pack its lock pinned) and plays (`pinned`). */
+export interface PackPins {
+  catalog?: Record<string, string>;
+  pinned?: string[];
+}
+
 /**
  * How an experience's pinned engine stands to the studio's: the same sound, older (the studio has
  * moved on: `holo update-engine`), newer (the studio is behind: rebuild it), or different with no
- * way to tell (an engine whose commit isn't known).
+ * way to tell (an engine whose commit isn't known). The same sound is the same code playing the same
+ * maps of the packs the experience plays: a pack it doesn't play, new or changed, makes no difference.
  */
 export type EngineRelation = 'same' | 'older' | 'newer' | 'different';
 
-export function engineRelation(pinned: EngineIdentity, studio: EngineIdentity): EngineRelation {
+export function engineRelation(
+  pinned: EngineIdentity & PackPins,
+  studio: EngineIdentity & { packs?: Record<string, string> },
+): EngineRelation {
   if (pinned.source === studio.source) return 'same';
+  const { catalog, pinned: plays } = pinned;
+  if (pinned.code && catalog && plays && pinned.code === studio.code && studio.packs) {
+    const packs = studio.packs;
+    if (plays.every((id) => catalog[id] !== undefined && packs[id] === catalog[id])) return 'same';
+  }
   if (!pinned.date || !studio.date) return 'different';
   const a = Date.parse(pinned.date);
   const b = Date.parse(studio.date);

@@ -41,7 +41,8 @@ pnpm run update             # pull ghcr.io/shooter-git/holo-desk:stable and star
 pnpm run autoupdate on      # then it keeps itself up to date (Linux: a systemd timer, as you)
 ```
 
-Install sample packs from the studio's Library (**More packs → Install**). Every image is published by
+Install sample packs from the studio's Library (**More packs → Install**; browse them at
+[HO[LO] Packs](https://github.com/shooter-git/holo-packs)). Every image is published by
 CI with a signed record of what built it: `stable` and the version on each release, `main` on every
 change merged, `sha-<commit>` always. The timer looks every 15 minutes and never restarts HO[LO] while a
 studio is playing or recording; an open studio offers to reload when its host has been updated. Songs
@@ -151,18 +152,36 @@ pnpm packs list
 pnpm packs install vsco2 vcsl          # by name, or all
 pnpm packs install --from ~/samples    # from files you already have (hard-linked)
 pnpm packs import ~/Downloads/MyPiano.zip --name "My Piano"
+pnpm packs remove rock-kit             # to make room: its samples go
 ```
 
-Or install them from the studio: the Library's **More packs** lists every pack HO[LO] ships maps for
-that isn't installed yet, and **Install** has the computer that runs HO[LO] fetch it (every file is
-checked against its pinned checksum) while the Library shows how far it has got.
+Or install them from the studio: the Library's **More packs** lists every pack HO[LO] pins that isn't
+installed yet, with its size. **Install** has the computer that runs HO[LO] fetch it while the Library
+shows how far it has got. Every file is checked against its pinned checksum. **Remove**, on an
+installed pack, frees the disk it takes: it names the songs that play it first, and More packs can
+install it again.
 
-| Pack | What's in it |
-|---|---|
-| `steinway` | A Steinway Model D (bitKlavier Grand, CC BY 4.0): 16 velocity layers, the hammers and dampers heard as each key is let go (quieter the longer it was held), the sustain pedal's own sound, undamped top strings. Two microphone positions (the stage pair, and close inside the piano) and a Light version with half the layers and shorter tails for phones and tablets. |
-| `rock-kit` | A big vintage rock kit (Karoryfer's Big Rusty Drums, CC0): 24" kick, 14x8 snare, 14/15/18/22" toms, crash, ride, china, hi-hats; up to 14 layers and 4 round robins a drum. |
-| `prog-kit` | A progressive-rock kit: six toms (14" to 22", the two highest a 14" tuned up), a 14x8 aluminium snare, sizzle cymbals, a china, a stack and a gong (Big Rusty Drums, Frankensnare, VSCO 2; all CC0). |
-| `jazz-kit` | A contemporary jazz kit (Virtuosity Drums, CC0): a 36-layer snare at the centre and off it, taking turns, feathering kick, ride, flat ride and hi-hats, all from one session's microphones. |
+**The packs live in their own repository, [HO[LO] Packs](https://github.com/shooter-git/holo-packs).**
+Each pack there has its own page: where its sounds come from, every instrument, its licence, its size
+and a kit's pads. Its catalog lists every instrument by family (pianos, drum kits, strings, woodwinds,
+brass…). There's no audio there, or here: each pack is a map of its samples, their sources and their
+checksums. HO[LO] pins one commit of it in `packs.lock.json`, with every pack's hash. New packs reach
+the studio when that lock moves on:
+
+```bash
+pnpm packs lock                        # pin HO[LO] Packs' latest commit (then commit packs.lock.json)
+pnpm packs lock --check                # every pinned map fetched and checked against the lock
+```
+
+Today they include:
+- a Steinway Model D (bitKlavier Grand, CC BY 4.0);
+- three drum kits: Rock, Prog and Jazz;
+- VSCO 2's orchestra and the Versilian Community Sample Library;
+- a jazz double bass;
+- a classical guitar;
+- the University of Iowa's clarinet and bassoon.
+
+[Browse them all](https://github.com/shooter-git/holo-packs#instruments).
 
 The kits are on the General MIDI drum keys your pads send (36 kick, 38 snare, 42/44/46 hi-hat, 41 to
 50 toms, 49 crash, 51 ride…), with the hi-hat choking itself, and Roland's edge keys for the half-open
@@ -202,8 +221,7 @@ pnpm lint       # Biome
 | `packages/cli` | the `holo` command |
 | `skills/holo` | the Claude Code skill |
 | `local/` | not in the repository (git ignores it): your own tools for your own creations, such as an importer |
-| `packs/manifests` | the CC0 packs' sample maps (no audio), their sources pinned |
-| `packs/checksums` | every sample's sha256, checked by installs and by every experience's build |
+| `packs.lock.json` | the sample packs HO[LO] plays: a commit of [HO[LO] Packs](https://github.com/shooter-git/holo-packs) (their maps, sources and checksums; no audio) and every pack's hash |
 | `deploy` | Docker |
 | `docs` | [architecture](docs/architecture.md), [session format](docs/session-format.md), [creations](docs/creations.md), [latency](docs/latency-and-devices.md) |
 

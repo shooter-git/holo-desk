@@ -153,6 +153,15 @@ and an older HO[LO] still plays it.
 - **Form**: `start`/`end` repeat a passage (`times`, 2 when unset); `ending` is a first or second
   ending to `e`, taken on `passes`; `segno`, `coda`, `toCoda`, `fine`; `dc`/`ds` jump to the start or
   the segno, `al` `fine` or `coda`, and `repeats: true` plays the repeats again after the jump.
+  The timeline holds the music once, as written. Playing it follows the form: a repeat goes back to
+  the last `start` (or the last `end`, or the top, where a pickup plays again), an ending is skipped
+  on the passes it doesn't list, the first `dc`/`ds` jumps once, and only after it do `toCoda` and
+  `fine` count. `performed(project)` (in `@holo/session`) is the song as heard, which the engines play;
+  `playMap`, `writtenAt` and `playedAt` go between the two timelines, and `unrollOps` writes the form
+  out. Engines from before the form (a creation's pinned copy) play the music straight through.
+- **Ornaments**: `tr`, `mord`, `pmord`, `turn`, `trem1`–`trem4` and `arp` in a note's `n.a` play as
+  the notes they stand for (a trill on the note above in the key, about 13 a second, ending on the
+  note; a chord rolled from the bottom), made at playback by `realize`: the song keeps the one note.
 - **A pickup**: the first meter point's `pickup` is how many ticks of the first bar are written (an
   upbeat). The bar stays a full bar on the timeline; it is bar 0, and the next is bar 1.
 - **Tempo marks**: a tempo point may carry `text` ("Allegro", "rit."), `mm` (show ♩ = 120), and a

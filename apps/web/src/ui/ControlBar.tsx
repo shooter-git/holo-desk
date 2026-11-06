@@ -1,5 +1,5 @@
 /** The control bar: views, the transport, the display (position, time, tempo, signature, key) and status. */
-import { formatBarBeat, KEYS, type MeterPoint, tickToSeconds } from '@holo/session';
+import { formatBarBeat, KEYS, type MeterPoint, performed, tickToSeconds } from '@holo/session';
 import {
   Bot,
   Circle,
@@ -99,7 +99,8 @@ export function Lcd({ compact = false }: { compact?: boolean }) {
       if (pos.current.textContent !== text) pos.current.textContent = text;
     }
     if (time.current) {
-      const text = formatTime(tickToSeconds(p.tempo, Math.max(0, tick)));
+      // (the time it's been playing: where the song repeats, the second time through is later)
+      const text = formatTime(tickToSeconds(performed(p).tempo, Math.max(0, engine.playedPosition())));
       if (time.current.textContent !== text) time.current.textContent = text;
     }
   });

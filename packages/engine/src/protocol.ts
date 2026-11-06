@@ -183,6 +183,13 @@ export interface InputSpec {
   record: boolean;
 }
 
+/** A meter from a tick on: its beat and bar in ticks. */
+export interface MeterSpan {
+  tick: number;
+  beatTicks: number;
+  barTicks: number;
+}
+
 export interface TempoSegment {
   frame: number;
   tick: number;
@@ -222,7 +229,8 @@ export type ToWorklet =
   | { type: 'aheadData'; data: SharedArrayBuffer; edges: number }
   | { type: 'graph'; graph: GraphSpec }
   | { type: 'sequence'; num: number; events: Float64Array }
-  | { type: 'tempo'; segments: TempoSegment[]; ppq: number; beatTicks: number; barTicks: number }
+  /** `meters`: where each meter starts (older engines click the first meter's beat throughout). */
+  | { type: 'tempo'; segments: TempoSegment[]; ppq: number; beatTicks: number; barTicks: number; meters?: MeterSpan[] }
   | { type: 'sampler'; spec: SamplerSpec }
   /** No track plays this instrument any more: its samples are let go. */
   | { type: 'forgetSampler'; key: string }

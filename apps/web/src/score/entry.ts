@@ -11,6 +11,7 @@ import {
   type Caret,
   enter,
   extend,
+  type FormKind,
   fromWritten,
   letterPitch,
   locate,
@@ -19,6 +20,7 @@ import {
   type ScoreDoc,
   type Spelling,
   setClef,
+  setForm,
   setKey,
   setMeter,
   setVoice,
@@ -338,6 +340,17 @@ export class Entry {
   time(num: number, den: number): void {
     const c = this.ctx();
     if (c) this.commit(setMeter(c.project, this.barStart(c.doc), num, den), `Score: ${num}/${den}`);
+  }
+
+  /** A repeat sign, an ending or a jump in the caret's bar (null: none there any more). */
+  form(kind: FormKind | null, label: string): void {
+    const c = this.ctx();
+    if (!c) return;
+    const start = this.barStart(c.doc);
+    const bar = c.doc.bars.find((b) => b.start === start);
+    if (!bar) return;
+    if (!this.commit(setForm(c.project, start, start + bar.length, kind), `Score: ${label}`) && kind === null)
+      toast('This bar has no repeats or jumps');
   }
 
   /** Played-in music written as it's shown. */

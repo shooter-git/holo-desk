@@ -34,6 +34,7 @@ import {
   type InstrumentSpec,
   METER_CHANNELS,
   METER_FLOATS,
+  type MeterSpan,
   type PluginSpec,
   RING_EVENTS,
   RING_HEADER,
@@ -700,6 +701,8 @@ export class EngineCore implements Host {
   private ppq = 960;
   private beatTicks = 960;
   private barTicks = 3840;
+  /** Where each meter starts (none: the one beat and bar above throughout). */
+  private meterSpans: MeterSpan[] = [];
   private metronome = false;
   private clickLevel = 0.5;
   private clickPhase = 0;
@@ -866,6 +869,7 @@ export class EngineCore implements Host {
         this.ppq = msg.ppq;
         this.beatTicks = msg.beatTicks;
         this.barTicks = msg.barTicks;
+        this.meterSpans = msg.meters ?? [];
         break;
       case 'audio':
         this.audio.set(msg.key, msg.channels);
@@ -1587,16 +1591,30 @@ export class EngineCore implements Host {
     m[at + 3] = s.watchGr;
   }
 
+  /** The first beat at or after a tick, and whether it starts a bar: by the meter there (a count-in by the first). */
+  private nextBeat(tick: number): [number, boolean] {
+    let at = 0;
+    while (at + 1 < this.meterSpans.length && (this.meterSpans[at + 1] as MeterSpan).tick <= tick) at++;
+    const m = this.meterSpans[at] ?? { tick: 0, beatTicks: this.beatTicks, barTicks: this.barTicks };
+    const from = tick < m.tick ? 0 : m.tick;
+    let beat = from + Math.ceil((tick - from) / m.beatTicks - 1e-9) * m.beatTicks;
+    const next = this.meterSpans[at + 1];
+    // a meter that starts before the next beat would have come: its first beat is where it starts
+    if (next && beat > next.tick) beat = next.tick;
+    const start = next && beat === next.tick ? next.tick : from;
+    const bar = next && beat === next.tick ? next.barTicks : m.barTicks;
+    return [beat, Math.round(beat - start) % bar === 0];
+  }
+
   /** Clicks on the beats (an accent on each bar); during a count-in they play whatever the metronome says. */
   private clicks(out0: Float32Array, out1: Float32Array, n: number): void {
     let startAt = -1;
     if (this.playing && (this.metronome || this.pos < 0)) {
       const t0 = this.tickAtSigned(this.pos);
       const t1 = this.tickAtSigned(this.pos + n);
-      const beat = Math.ceil(t0 / this.beatTicks - 1e-9) * this.beatTicks;
+      const [beat, bar] = this.nextBeat(t0);
       if (beat < t1 && (this.metronome || beat < 0)) {
         startAt = Math.max(0, Math.min(n - 1, Math.round(this.frameAtSigned(beat) - this.pos)));
-        const bar = Math.round(beat) % this.barTicks === 0;
         this.clickFreq = bar ? 1760 : 1175;
         this.clickNext = bar ? 1 : 0.6;
       }

@@ -10,6 +10,7 @@ import {
   quantizeToScore,
   respell,
   scoreText,
+  setForm,
   staffPlace,
   toggleArticulation,
   writeScoreText,
@@ -152,5 +153,31 @@ describe('places on a staff', () => {
     const shown = scoreText(notate(applyOps(p, result.ops))).split('\n');
     expect(shown).toContain('  clef P1 s1 F');
     expect(shown.at(-1)).toBe('  P1: d3:w');
+  });
+
+  it('puts repeat signs, endings and jumps in a bar, and takes them away', () => {
+    const p = newProject('Form');
+    const bar = PPQ * 4;
+    let q = applyOps(p, setForm(p, bar, 2 * bar, 'start'));
+    q = applyOps(q, setForm(q, 2 * bar, 3 * bar, 'ending1'));
+    q = applyOps(q, setForm(q, 3 * bar, 4 * bar, 'ending2'));
+    q = applyOps(q, setForm(q, 3 * bar, 4 * bar, 'dcFine'));
+    expect(q.form).toEqual([
+      { tick: bar, k: 'start' },
+      { tick: 2 * bar, k: 'ending', e: 3 * bar, passes: [1] },
+      { tick: 3 * bar, k: 'end' },
+      { tick: 3 * bar, k: 'ending', e: 4 * bar, passes: [2] },
+      { tick: 4 * bar, k: 'dc', al: 'fine' },
+    ]);
+    // a D.S. where the D.C. was replaces it
+    q = applyOps(q, setForm(q, 3 * bar, 4 * bar, 'dsCoda'));
+    expect(q.form?.filter((f) => f.tick === 4 * bar)).toEqual([{ tick: 4 * bar, k: 'ds', al: 'coda' }]);
+    // the bar's own signs go; its neighbours' stay
+    q = applyOps(q, setForm(q, 2 * bar, 3 * bar, null));
+    expect(q.form?.map((f) => [f.tick / bar, f.k])).toEqual([
+      [1, 'start'],
+      [3, 'ending'],
+      [4, 'ds'],
+    ]);
   });
 });

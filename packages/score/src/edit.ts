@@ -5,6 +5,7 @@
  * (as MuseScore does); dynamics and articulations set velocities and lengths as they're written.
  */
 import {
+  type FormMark,
   type KeyPoint,
   keyAt,
   keysOf,
@@ -456,6 +457,60 @@ export function setMeter(project: Project, tick: number, num: number, den: numbe
   if (tick === 0 && first?.pickup) point.pickup = first.pickup;
   const meter = [...project.meter.filter((m) => m.tick !== tick), point].sort((a, b) => a.tick - b.tick);
   return [{ op: 'setProject', patch: { meter } }];
+}
+
+/** Where a repeat sign, ending or jump goes in a bar: at its start, or at its end (the bar line after it). */
+export type FormKind =
+  | 'start'
+  | 'end'
+  | 'ending1'
+  | 'ending2'
+  | 'segno'
+  | 'coda'
+  | 'toCoda'
+  | 'fine'
+  | 'dc'
+  | 'dcFine'
+  | 'dsCoda'
+  | 'dsFine';
+
+const AT_START = new Set<FormMark['k']>(['start', 'segno', 'coda', 'ending']);
+
+/**
+ * A repeat sign, an ending or a jump in the bar [start, end): a start sign, segno or coda where it
+ * begins; an end sign, To Coda, Fine or D.C./D.S. at its end. The same kind there before is replaced;
+ * a first ending brings its end repeat sign with it. `null` takes away all of them in the bar.
+ */
+export function setForm(project: Project, start: number, end: number, kind: FormKind | null): Op[] {
+  const form = project.form ?? [];
+  if (kind === null) {
+    const kept = form.filter((f) => (AT_START.has(f.k) ? f.tick !== start : f.tick !== end));
+    if (kept.length === form.length) return [];
+    return [{ op: 'setProject', patch: { form: kept.length ? kept : null } }];
+  }
+  const add: FormMark[] =
+    kind === 'ending1'
+      ? [
+          { tick: start, k: 'ending', e: end, passes: [1] },
+          { tick: end, k: 'end' },
+        ]
+      : kind === 'ending2'
+        ? [{ tick: start, k: 'ending', e: end, passes: [2] }]
+        : kind === 'dc'
+          ? [{ tick: end, k: 'dc' }]
+          : kind === 'dcFine'
+            ? [{ tick: end, k: 'dc', al: 'fine' }]
+            : kind === 'dsCoda'
+              ? [{ tick: end, k: 'ds', al: 'coda' }]
+              : kind === 'dsFine'
+                ? [{ tick: end, k: 'ds', al: 'fine' }]
+                : [{ tick: AT_START.has(kind) ? start : end, k: kind }];
+  const replaced = (f: FormMark) =>
+    add.some(
+      (a) => a.tick === f.tick && (a.k === f.k || ((a.k === 'dc' || a.k === 'ds') && (f.k === 'dc' || f.k === 'ds'))),
+    );
+  const next = [...form.filter((f) => !replaced(f)), ...add].sort((a, b) => a.tick - b.tick);
+  return [{ op: 'setProject', patch: { form: next } }];
 }
 
 /**

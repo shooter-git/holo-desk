@@ -3,8 +3,10 @@
  * the common articulations and dynamics), the rest in one menu. Every button has a key, shown in its
  * tooltip, so the row can be ignored once the keys are known.
  */
+import type { FormKind } from '@holo/score';
 import { keyText } from '@holo/session';
 import { useSyncExternalStore } from 'react';
+import { unrollRepeats } from '../app/actions.ts';
 import { openMenuAt } from '../ui/menu.tsx';
 import type { Entry } from './entry.ts';
 
@@ -78,6 +80,21 @@ const TIMES: [number, number][] = [
   [2, 2],
 ];
 
+const FORM: [FormKind, string][] = [
+  ['start', 'Repeat from here'],
+  ['end', 'Repeat to here'],
+  ['ending1', '1st ending (with its repeat)'],
+  ['ending2', '2nd ending'],
+  ['segno', 'Segno 𝄋'],
+  ['coda', 'Coda 𝄌'],
+  ['toCoda', 'To Coda, at the end'],
+  ['fine', 'Fine, at the end'],
+  ['dc', 'D.C. at the end'],
+  ['dcFine', 'D.C. al Fine at the end'],
+  ['dsCoda', 'D.S. al Coda at the end'],
+  ['dsFine', 'D.S. al Fine at the end'],
+];
+
 export function Palette({ entry }: { entry: Entry }) {
   const s = useSyncExternalStore(
     (fn) => entry.subscribe(fn),
@@ -92,6 +109,10 @@ export function Palette({ entry }: { entry: Entry }) {
       ...CLEFS.map(([c, name]) => ({ label: name, onSelect: () => entry.clef(c) })),
       { heading: 'Time from this bar' },
       ...TIMES.map(([n, d]) => ({ label: `${n}/${d}`, onSelect: () => entry.time(n, d) })),
+      { heading: 'Repeats and jumps in this bar' },
+      ...FORM.map(([kind, label]) => ({ label, onSelect: () => entry.form(kind, label) })),
+      { label: 'None in this bar', onSelect: () => entry.form(null, 'no repeats here') },
+      { label: 'Unroll repeats: write them out as they play', onSelect: () => unrollRepeats() },
     ]);
   const keys = (el: Element) =>
     openMenuAt(el, [

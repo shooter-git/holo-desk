@@ -576,6 +576,17 @@ export function ControlBar() {
         >
           <ListMusic />
         </button>
+        {/* the Inspector opens at the left, so its button stays on this side */}
+        <button
+          type="button"
+          className={`btn icon${inspector ? ' on' : ''}`}
+          title="Inspector (I)"
+          aria-label="Inspector (I)"
+          aria-pressed={inspector}
+          onClick={() => store.set({ inspector: !inspector })}
+        >
+          <PanelLeft />
+        </button>
         {touch && (
           <div className="seg cb-undo">
             <button
@@ -618,7 +629,7 @@ export function ControlBar() {
         )}
       </div>
       <div className="right">
-        {/* the panels they open sit at the side (the Library at the right) */}
+        {/* the Library opens at the right, so its button sits here */}
         <div className="seg">
           <button
             type="button"
@@ -629,16 +640,6 @@ export function ControlBar() {
             onClick={() => store.set({ library: !library })}
           >
             <Library />
-          </button>
-          <button
-            type="button"
-            className={`btn icon${inspector ? ' on' : ''}`}
-            title="Inspector (I)"
-            aria-label="Inspector (I)"
-            aria-pressed={inspector}
-            onClick={() => store.set({ inspector: !inspector })}
-          >
-            <PanelLeft />
           </button>
         </div>
         <div className="seg">

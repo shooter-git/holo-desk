@@ -93,12 +93,13 @@ on. It plays the studio's sound itself, with native audio (WASAPI exclusive mode
 on macOS), and reads every USB MIDI instrument natively: keyboards, drum pads, controllers, an
 interface carrying several instruments. The browser stays the screen.
 
-1. Download it for that computer from the studio itself: **Audio & MIDI** settings → **Download it for
-   Windows** (or Linux). HO[LO]'s Docker image builds these from the same sources as the studio, so the
-   one it offers always plays as the studio does. For a Mac, or without the image, take it from the
-   [releases](https://github.com/shooter-git/holo-desk/releases/latest): `holo-engine-windows-x64.exe`,
-   `holo-engine-macos-arm64.zip` (Apple silicon), `holo-engine-macos-x64.zip` or `holo-engine-linux-x64.zip`.
-   It's one file, with nothing to install.
+1. Download it for that computer from the studio itself: **Audio & MIDI** settings → **Download it for…**
+   links the build that carries the studio's own engine. CI builds one for Windows, macOS and Linux
+   whenever the engine changes on `main`, and publishes it as a pre-release named for the engine
+   (`engine-<fingerprint>`); a build of your own checkout (`pnpm engine:build --release`) is offered
+   first. The [releases](https://github.com/shooter-git/holo-desk/releases/latest) have them too:
+   `holo-engine-windows-x64.exe`, `holo-engine-macos-arm64.zip` (Apple silicon), `holo-engine-macos-x64.zip`
+   or `holo-engine-linux-x64.zip`. It's one file, with nothing to install.
 2. Start it. On Windows, the first time, SmartScreen says it doesn't know the app: **More info → Run
    anyway**. On a Mac, unzip it and the first time right-click it and choose **Open**. A small window
    says it's waiting for the studio.

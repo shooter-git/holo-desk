@@ -305,8 +305,14 @@ export async function buildApp(config: Config): Promise<{ app: FastifyInstance; 
     return sendFile(reply, path, type, SAMPLE_CACHE);
   });
 
-  // ---- HO[LO] Engine: the downloads this host has (the image builds them from the studio's own sources) ----
+  // ---- HO[LO] Engine: where to get the one that carries a studio's engine ----
 
+  /**
+   * CI builds HO[LO] Engine whenever main's engine changes, and publishes it as a pre-release named for
+   * the engine's fingerprint (.github/workflows/engine.yml); a build of this checkout
+   * (`pnpm engine:build --release`) stands before it. HOLO_ENGINE_REPO names a fork's repository.
+   */
+  const engineRepo = process.env.HOLO_ENGINE_REPO ?? 'shooter-git/holo-desk';
   const engineDir = process.env.HOLO_ENGINE_DIR ?? join(config.repoDir, 'apps/companion/dist');
   /** Each computer's download, by the platform and architecture its Engine reports. */
   const ENGINE_FILES: Record<string, string> = {
@@ -316,19 +322,72 @@ export async function buildApp(config: Config): Promise<{ app: FastifyInstance; 
     'darwin-arm64': 'holo-engine-macos-arm64.zip',
     'darwin-x64': 'holo-engine-macos-x64.zip',
   };
-  app.get('/api/engine', async () => {
-    let engine: string | null = null;
+  type EngineDownload = { target: string; file: string; size: number; url: string };
+  /** What GitHub said of each engine's pre-release, for a while (an hour of asking stays well inside its limits). */
+  const releases = new Map<string, { at: number; downloads: EngineDownload[]; page: string | null }>();
+  const releaseFor = async (engine: string) => {
+    const cached = releases.get(engine);
+    if (cached && Date.now() - cached.at < (cached.downloads.length ? 30 : 5) * 60_000) return cached;
+    let found: { at: number; downloads: EngineDownload[]; page: string | null } = {
+      at: Date.now(),
+      downloads: [],
+      page: null,
+    };
     try {
-      engine = (JSON.parse(readFileSync(join(engineDir, 'engine.json'), 'utf8')) as { engine?: string }).engine ?? null;
+      const res = await fetch(
+        `https://api.github.com/repos/${engineRepo}/releases/tags/engine-${engine.slice(0, 12)}`,
+        {
+          headers: { accept: 'application/vnd.github+json', 'user-agent': 'holo-desk' },
+          signal: AbortSignal.timeout(8000),
+        },
+      );
+      if (res.ok) {
+        const rel = (await res.json()) as {
+          body?: string;
+          html_url?: string;
+          assets?: { name: string; size: number; browser_download_url: string }[];
+        };
+        // the twelve characters name it; its notes carry the whole fingerprint
+        if (rel.body?.includes(engine)) {
+          const assets = rel.assets ?? [];
+          found = {
+            at: Date.now(),
+            page: rel.html_url ?? null,
+            downloads: Object.entries(ENGINE_FILES).flatMap(([target, file]) => {
+              const a = assets.find((x) => x.name === file);
+              return a ? [{ target, file, size: a.size, url: a.browser_download_url }] : [];
+            }),
+          };
+        }
+      }
+    } catch {
+      // GitHub out of reach: nothing to offer this time
+    }
+    releases.set(engine, found);
+    return found;
+  };
+  app.get<{ Querystring: { engine?: string } }>('/api/engine', async (req, reply) => {
+    const engine = req.query.engine ?? '';
+    if (!/^[0-9a-f]{64}$/.test(engine)) return reply.code(400).send({ error: 'Ask with ?engine=<the fingerprint>' });
+    // a build of this checkout, when it carries that engine
+    try {
+      const local = (JSON.parse(readFileSync(join(engineDir, 'engine.json'), 'utf8')) as { engine?: string }).engine;
+      if (local === engine) {
+        const downloads = Object.entries(ENGINE_FILES).flatMap(([target, file]) => {
+          const path = join(engineDir, file);
+          return existsSync(path)
+            ? [{ target, file, size: statSync(path).size, url: `/api/engine/files/${encodeURIComponent(file)}` }]
+            : [];
+        });
+        if (downloads.length) return { engine, from: 'this checkout', page: null, downloads };
+      }
     } catch {
       // none built here
     }
-    const downloads = Object.entries(ENGINE_FILES).flatMap(([target, file]) => {
-      const path = join(engineDir, file);
-      return existsSync(path) ? [{ target, file, size: statSync(path).size }] : [];
-    });
-    return { engine, downloads };
+    const rel = await releaseFor(engine);
+    return { engine, from: rel.downloads.length ? 'github' : null, page: rel.page, downloads: rel.downloads };
   });
+  // a build of this checkout's (pnpm engine:build --release), when there is one
   app.get<{ Params: { file: string } }>('/api/engine/files/:file', async (req, reply) => {
     const file = req.params.file;
     const path = join(engineDir, file);

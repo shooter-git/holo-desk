@@ -251,18 +251,25 @@ function DspReadout() {
 /** Where to get HO[LO] Engine: one file for each computer, nothing to install. */
 const ENGINE_DOWNLOADS = 'https://github.com/shooter-git/holo-desk/releases/latest';
 
-/** The Engine downloads this studio's host has, and the engine they carry (its image builds them). */
+/**
+ * Where to get the HO[LO] Engine that carries this studio's engine: CI's build for it (a pre-release on
+ * GitHub, published whenever main's engine changes), or a build of the host's own checkout.
+ */
 interface EngineDownloads {
-  engine: string | null;
-  downloads: { target: string; file: string; size: number }[];
+  from: 'github' | 'this checkout' | null;
+  page: string | null;
+  downloads: { target: string; file: string; size: number; url: string }[];
 }
 let downloadsAsked: Promise<EngineDownloads> | null = null;
 function useEngineDownloads(): EngineDownloads | null {
   const [d, setD] = useState<EngineDownloads | null>(null);
   useEffect(() => {
-    downloadsAsked ??= fetch('/api/engine')
-      .then((r) => (r.ok ? (r.json() as Promise<EngineDownloads>) : { engine: null, downloads: [] }))
-      .catch(() => ({ engine: null, downloads: [] }));
+    const none: EngineDownloads = { from: null, page: null, downloads: [] };
+    downloadsAsked ??= STUDIO_ENGINE
+      ? fetch(`/api/engine?engine=${STUDIO_ENGINE}`)
+          .then((r) => (r.ok ? (r.json() as Promise<EngineDownloads>) : none))
+          .catch(() => none)
+      : Promise.resolve(none);
     void downloadsAsked.then(setD);
   }, []);
   return d;
@@ -286,15 +293,14 @@ function thisDevice(): string {
   return '';
 }
 
-/** The host's download for a computer, only if it carries this studio's engine. */
+/** The download for a computer that carries this studio's engine, if there's one. */
 function matchingDownload(d: EngineDownloads | null, target: string) {
-  if (!d || d.engine !== STUDIO_ENGINE) return null;
-  return d.downloads.find((x) => x.target === target) ?? null;
+  return d?.downloads.find((x) => x.target === target) ?? null;
 }
 
-function DownloadLink({ file, target, size }: { file: string; target: string; size: number }) {
+function DownloadLink({ target, size, url }: { target: string; size: number; url: string }) {
   return (
-    <a href={`/api/engine/files/${encodeURIComponent(file)}`} download={file}>
+    <a href={url} {...(url.startsWith('/') ? {} : { target: '_blank', rel: 'noreferrer' })}>
       Download it for {TARGET_NAMES[target] ?? target} ({Math.round(size / 1048576)} MB)
     </a>
   );
@@ -325,7 +331,7 @@ function EngineLink() {
             'A small app for the computer you play on: it plays the studio with native audio and reads every USB MIDI instrument itself, a few milliseconds from key to ear. Start it and the studio uses it; quit it and the browser plays again.'}{' '}
           {own ? (
             <>
-              <DownloadLink {...own} /> (built with this studio, from its host), or{' '}
+              <DownloadLink {...own} /> (built from this studio’s engine), or{' '}
               <a href={ENGINE_DOWNLOADS} target="_blank" rel="noreferrer">
                 for another computer
               </a>
@@ -351,9 +357,10 @@ function EngineLink() {
             <DownloadLink {...fix} />
           ) : (
             <>
-              this studio’s host has none for {TARGET_NAMES[c.target] ?? c.target} (build it with{' '}
-              <kbd>pnpm engine:build --release</kbd>, or see{' '}
-              <a href={ENGINE_DOWNLOADS} target="_blank" rel="noreferrer">
+              there’s no build of this studio’s engine for {TARGET_NAMES[c.target] ?? c.target} yet (CI publishes one a
+              few minutes after the engine changes on main; or build it with <kbd>pnpm engine:build --release</kbd>, or
+              see{' '}
+              <a href={downloads?.page ?? ENGINE_DOWNLOADS} target="_blank" rel="noreferrer">
                 the releases
               </a>
               ).

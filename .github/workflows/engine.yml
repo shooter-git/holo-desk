@@ -1,10 +1,21 @@
 name: HO[LO] Engine
 
 # The downloads: one file for each computer. Built when a release is published (and attached to it),
-# or by hand (Actions → HO[LO] Engine → Run workflow) to try them first.
+# by hand (Actions → HO[LO] Engine → Run workflow) to try them first, and whenever main's engine
+# changes: then they're published as a pre-release named for the engine's fingerprint (engine-<12 hex>),
+# and a studio built from that engine links its Audio & MIDI settings to them.
 on:
   release:
     types: [published]
+  push:
+    branches: [main]
+    paths:
+      - 'packages/engine/src/**'
+      - 'packages/session/src/**'
+      - 'apps/companion/**'
+      - 'pnpm-lock.yaml'
+      - '.nvmrc'
+      - '.github/workflows/engine.yml'
   workflow_dispatch:
 
 permissions:
@@ -49,6 +60,21 @@ jobs:
           path: |
             apps/companion/dist/*.exe
             apps/companion/dist/*.zip
+      - name: Publish for this engine (main)
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          fp=$(node -e "import('./packages/music/src/identity.ts').then((m) => console.log(m.liveSource('.')))")
+          tag="engine-${fp:0:12}"
+          # the first of the two builds to get here makes the pre-release (never the latest release)
+          gh release create "$tag" --target "$GITHUB_SHA" --prerelease --latest=false \
+            --title "HO[LO] Engine for engine ${fp:0:12}" \
+            --notes "HO[LO] Engine built from $GITHUB_SHA, carrying the engine whose fingerprint is $fp. A studio built from the same engine links its Audio & MIDI settings here." \
+            2>/dev/null || true
+          cd apps/companion/dist
+          gh release upload "$tag" $(ls *.exe *.zip 2>/dev/null) --clobber
       - name: Attach to the release
         if: github.event_name == 'release'
         env:

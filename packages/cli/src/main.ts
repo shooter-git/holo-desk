@@ -36,6 +36,7 @@ import {
   ticksPerBar,
   tickToSeconds,
 } from '@holo/session';
+import { scanCommand } from './scan.ts';
 import { scoreCommand } from './score.ts';
 
 const BASE = (process.env.HOLO_URL ?? `http://127.0.0.1:${process.env.HOLO_PORT ?? 47800}`).replace(/\/$/, '');
@@ -238,6 +239,7 @@ Seeing
 Writing (positions are bar.beat.sixteenth: 14, 14.3, 14.3.2; notes as "D5:1 B5:2 (D4 F#4 A4):2 r:1")
   holo write --track T --at 14 [--unit 1/8] [--velocity 90] [--replace] "NOTES"
   holo score write FILE|-|"bar 5 …"   bars of a score from text, as \`holo score show\` prints them
+  holo scan list | show SCAN | status   sheet music scanned in the studio, read a system at a time
   holo clear --track T --from 14 --to 18
   holo track add NAME --instrument synth:"Warm Pad"|pack/name
   holo track set T [--volume -6] [--pan -0.3] [--mute on|off] [--solo on|off] [--instrument …] [--arm on|off]
@@ -344,7 +346,11 @@ async function main(): Promise<void> {
     }
 
     case 'score':
-      await scoreCommand({ words, flag, song, ops });
+      await scoreCommand({ words, flag, song, ops, call });
+      return;
+
+    case 'scan':
+      await scanCommand({ words, flag, call, base: BASE, songId });
       return;
 
     case 'show': {

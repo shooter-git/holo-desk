@@ -60,6 +60,9 @@ importers:
       '@holo/music':
         specifier: workspace:*
         version: link:../../packages/music
+      '@holo/score':
+        specifier: workspace:*
+        version: link:../../packages/score
       '@holo/session':
         specifier: workspace:*
         version: link:../../packages/session

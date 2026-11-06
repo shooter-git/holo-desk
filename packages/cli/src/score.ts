@@ -11,11 +11,12 @@ export interface ScoreContext {
   flag: (k: string) => string | undefined;
   song: () => Promise<Project>;
   ops: (project: Project, list: Op[], label: string) => Promise<void>;
+  call: <T>(path: string, init?: RequestInit) => Promise<T>;
 }
 
 export const SCORE_HELP = `holo score: the song as a score (parts P1, P2… in track order; pitches as written on the page)
   holo score show [--part P1|NAME] [--bars 5-8]   bars as text: what's written, with the marks
-  holo score write [FILE|-] [--part P1]          bars from text (a file, - for stdin, or the text itself):
+  holo score write [FILE|-] [--scan S --system 0.1]   bars from text (a file, - for stdin, or the text itself):
                                        each bar replaces what the staves and voices it names have there
   holo score check                     what a player would stumble on: ranges, slips, missing bars
   holo score parts                     the parts: staves, clefs, transposition
@@ -97,6 +98,21 @@ export async function scoreCommand(ctx: ScoreContext): Promise<void> {
       if (result.errors.length) {
         console.log(`Not written:\n${result.errors.map((e) => `  ${e}`).join('\n')}`);
         process.exitCode = 1;
+      }
+      // a scanned system's bars: it's read (or flagged with what was refused)
+      const scan = ctx.flag('scan');
+      const system = /^(\d+)\.(\d+)$/.exec(ctx.flag('system') ?? '');
+      if (scan && system) {
+        const body: Record<string, unknown> = {
+          state: result.written.length && !result.errors.length ? 'read' : 'new',
+        };
+        if (result.written.length) body.written = [Math.min(...result.written), Math.max(...result.written)];
+        if (result.errors.length) body.flags = result.errors;
+        await ctx.call(`/api/scans/${scan}/systems/${system[1]}/${system[2]}`, {
+          method: 'PATCH',
+          body: JSON.stringify(body),
+        });
+        console.log(`Scan ${scan} system ${system[1]}.${system[2]}: ${body.state}`);
       }
       return;
     }

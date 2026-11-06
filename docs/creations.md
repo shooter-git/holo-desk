@@ -147,8 +147,8 @@ checksum as the sample libraries are; neither is built yet.
 An experience stays on the engine it pinned until you move it. When the studio's engine is newer, the
 experience's group in *Songs* says so: **Builds with engine 0.1.0+4ba9e85 · holo update-engine**
 (hover it for the dates), so a difference between what you hear and what the project builds is never a
-mystery. (The studio knows its own engine's commit from git, or, in Docker, from the stamp `pnpm up`
-leaves.)
+mystery. (The studio knows its own engine's commit from git, or, in Docker, from the stamp its image
+carries: CI writes it before publishing the image, and `pnpm run up` before building one.)
 
 ```bash
 holo update-engine ../my-experience

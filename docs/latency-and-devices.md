@@ -58,6 +58,11 @@ meters and the DSP load come back from it. When it isn't running, nothing change
 and Web MIDI, as before. Download it and start it as the [README](../README.md#play-it-in-a-few-milliseconds-holo-engine)
 says.
 
+**Getting it, and keeping it matched.** Audio & MIDI settings links the build that carries the studio's
+own engine (CI builds one whenever the engine changes on `main`). HO[LO] Engine tells the studio which
+engine it carries; after HO[LO] changes, an older one is flagged with a warning and a link to the
+matching download, since it may play the newest instruments wrong.
+
 How a note travels with it:
 
 1. **USB and the operating system's MIDI** (WinMM on Windows, CoreMIDI on macOS, the ALSA sequencer on

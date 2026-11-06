@@ -6,3 +6,6 @@ data
 .env.*
 .claude
 *.log
+# HO[LO] Engine's local build leftovers (the image builds its own)
+apps/companion/.cache
+apps/companion/native/build

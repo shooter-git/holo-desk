@@ -2,6 +2,14 @@
  * The sampler: plays recorded notes from a pack. Each note takes the zone that covers its key and
  * velocity (the nearest one if none does), shifted to pitch with Hermite interpolation from the
  * sample's measured root, so every note lands in tune. Round robins rotate; loops cross-fade.
+ *
+ * What a played instrument needs besides, each only where its pack asks for it (so the packs that
+ * don't play exactly as before): choke groups (the closed hi-hat silences the open one), a limit on
+ * how often one key sounds at once (a drum struck again, a piano key struck again under the pedal:
+ * the oldest fades), release samples in parts that sound together (the damper falling on a piano
+ * string, quieter the longer the note was held, and its key coming back up), the sustain pedal's own
+ * sound going down and up, keys without dampers (a piano's top strings ring on when let go), and a
+ * release time of a zone's own.
  */
 
 import { type Controls, Envelope, Instrument, type Voice } from './instrument.ts';
@@ -16,20 +24,47 @@ class SampleVoice implements Voice {
   private pos = 0;
   private readonly env: Envelope;
   private killing = 0;
+  /** How fast `killing` falls each sample: a kill's, or a choke's. */
+  private killCoef = 0.995;
   private readonly xf: number;
+  /** Let go by its key (or the pedal) since the sampler last looked: its release sample is due. */
+  letGo = false;
+  /** A release or pedal sample's voice (never counted against a key's notes, never let go by a key). */
+  readonly isRelease: boolean;
+  /** Letting it go stops it: false for a string without a damper. */
+  private readonly damped: boolean;
+  /** The velocity that struck it, and the sampler's frame it started on (for its release sample). */
+  readonly velocity: number;
+  readonly born: number;
 
-  private readonly zone: SampleZone;
+  readonly zone: SampleZone;
   private readonly baseRatio: number;
   private readonly gain: number;
   private readonly loopLen: number;
   /** The sample read() made. */
   private y = 0;
-  constructor(zone: SampleZone, key: number, baseRatio: number, gain: number, sr: number, spec: SamplerSpec) {
+  constructor(
+    zone: SampleZone,
+    key: number,
+    baseRatio: number,
+    gain: number,
+    sr: number,
+    spec: SamplerSpec,
+    velocity = 127,
+    born = 0,
+    damped = true,
+  ) {
     this.zone = zone;
     this.baseRatio = baseRatio;
     this.gain = gain;
     this.key = key;
-    this.env = new Envelope(sr, spec.attack, spec.release);
+    this.velocity = velocity;
+    this.born = born;
+    this.damped = damped;
+    this.isRelease = zone.trigger !== undefined;
+    // a release or pedal sample plays to its end: no key lets it go, and it's the first to go when notes run short
+    if (this.isRelease) this.released = true;
+    this.env = new Envelope(sr, spec.attack, zone.release ?? spec.release);
     const loop = zone.loopEnd - zone.loopStart;
     this.loopLen = loop;
     this.xf = loop > 0 ? Math.min(2048, Math.floor(loop / 4)) : 0;
@@ -72,12 +107,30 @@ class SampleVoice implements Voice {
 
   release(): void {
     this.released = true;
+    // a string without a damper rings on to its end
+    if (!this.damped) return;
     this.env.release();
+    this.letGo = true;
   }
 
   kill(): void {
     this.released = true;
     this.killing = 1;
+    this.killCoef = 0.995;
+  }
+
+  /** Fade out at `coef` a sample (a choke, or a key struck again): never slower than a fade already under way. */
+  choke(coef: number): void {
+    this.released = true;
+    if (this.killing === 0) {
+      this.killing = 1;
+      this.killCoef = coef;
+    } else if (coef < this.killCoef) this.killCoef = coef;
+  }
+
+  /** Fading out (killed or choked). */
+  get choking(): boolean {
+    return this.killing > 0;
   }
 
   render(l: Float32Array, r: Float32Array, start: number, end: number, ctl: Controls): void {
@@ -97,7 +150,7 @@ class SampleVoice implements Voice {
       env.step();
       let e = env.level;
       if (this.killing > 0) {
-        this.killing *= 0.995;
+        this.killing *= this.killCoef;
         e *= this.killing;
         if (this.killing < 1e-3) {
           this.done = true;
@@ -131,23 +184,21 @@ class SampleVoice implements Voice {
   }
 }
 
-export class Sampler extends Instrument {
+/** Zones to pick from, with their round-robin slots. */
+class ZoneSet {
+  readonly zones: SampleZone[];
   /**
    * Round robins: zones that tie for a note take turns, counted per slot (the first tied zone's key
    * and velocity floor). Each zone's slot is numbered once, so a note allocates nothing to pick.
    */
   private readonly slotOf: Int32Array;
   private readonly rr: Int32Array;
-  private readonly velocityRange: number;
 
-  private readonly spec: SamplerSpec;
-  constructor(sr: number, spec: SamplerSpec) {
-    super(sr);
-    this.spec = spec;
-    this.velocityRange = spec.velocityRange;
+  constructor(zones: SampleZone[]) {
+    this.zones = zones;
     const slots = new Map<string, number>();
-    this.slotOf = new Int32Array(spec.zones.length);
-    spec.zones.forEach((z, i) => {
+    this.slotOf = new Int32Array(zones.length);
+    zones.forEach((z, i) => {
       const key = `${z.lo}:${z.lovel}`;
       let n = slots.get(key);
       if (n === undefined) {
@@ -159,8 +210,8 @@ export class Sampler extends Instrument {
     this.rr = new Int32Array(Math.max(1, slots.size));
   }
 
-  private pick(key: number, velocity: number): SampleZone | null {
-    const zones = this.spec.zones;
+  pick(key: number, velocity: number): SampleZone | null {
+    const zones = this.zones;
     let bestScore = Number.POSITIVE_INFINITY;
     let first = -1;
     let ties = 0;
@@ -193,18 +244,147 @@ export class Sampler extends Instrument {
     }
     return zones[first] as SampleZone;
   }
+}
+
+export class Sampler extends Instrument {
+  /** The zones a key strikes; those it plays when let go, a set per part; the pedal's own, going down and up. */
+  private readonly struck: ZoneSet;
+  private readonly releases: ZoneSet[];
+  private readonly pedalDown: ZoneSet | null;
+  private readonly pedalUp: ZoneSet | null;
+  private readonly velocityRange: number;
+  private readonly releaseVelocityRange: number;
+  /** A choked or re-struck note's fade, a sample. */
+  private readonly offCoef: number;
+  /** Frames rendered: how long a note was held, for its release sample. */
+  private frames = 0;
+  /** The pedal as the sampler last saw it (for its own sound going down and up). */
+  private pedal = false;
+
+  private readonly spec: SamplerSpec;
+  constructor(sr: number, spec: SamplerSpec) {
+    super(sr);
+    this.spec = spec;
+    this.velocityRange = spec.velocityRange;
+    this.releaseVelocityRange = spec.releaseVelocityRange ?? spec.velocityRange;
+    const triggered = spec.zones.some((z) => z.trigger !== undefined);
+    this.struck = new ZoneSet(triggered ? spec.zones.filter((z) => z.trigger === undefined) : spec.zones);
+    const parts = new Map<number, SampleZone[]>();
+    for (const z of spec.zones) {
+      if (z.trigger !== 'release') continue;
+      const part = z.part ?? 0;
+      parts.set(part, [...(parts.get(part) ?? []), z]);
+    }
+    this.releases = [...parts.keys()].sort((a, b) => a - b).map((p) => new ZoneSet(parts.get(p) as SampleZone[]));
+    const down = spec.zones.filter((z) => z.trigger === 'pedalDown');
+    const up = spec.zones.filter((z) => z.trigger === 'pedalUp');
+    this.pedalDown = down.length ? new ZoneSet(down) : null;
+    this.pedalUp = up.length ? new ZoneSet(up) : null;
+    this.offCoef = Math.exp(-6.9 / (Math.max(spec.offTime ?? 0.02, 0.001) * sr));
+    if (spec.polyphony) this.maxVoices = spec.polyphony;
+  }
+
+  /** The gain a velocity adds over `range` dB: the layers already differ in timbre; this is a smooth curve. */
+  private velocityGain(velocity: number, range = this.velocityRange): number {
+    const db = -((127 - velocity) / 126) * range;
+    return 10 ** (db / 20);
+  }
 
   protected startVoice(key: number, velocity: number): Voice | null {
-    const zone = this.pick(key, velocity);
+    const zone = this.struck.pick(key, velocity);
     if (!zone) return null;
-    const ratio = this.spec.pitched ? 2 ** ((key - zone.root) / 12) : 1;
-    // the layers already differ in loudness; velocity adds a smooth curve over `velocityRange` dB
-    const db = -((127 - velocity) / 126) * this.velocityRange;
-    return new SampleVoice(zone, key, ratio, zone.gain * 10 ** (db / 20), this.sr, this.spec);
+    const spec = this.spec;
+    // the same key struck again past its limit: its oldest notes fade
+    const limit = spec.notePolyphony ?? 0;
+    if (limit > 0) {
+      for (;;) {
+        let count = 0;
+        let oldest: SampleVoice | null = null;
+        for (const v of this.voices as SampleVoice[]) {
+          if (v.done || v.key !== key || v.isRelease || v.choking) continue;
+          count++;
+          if (!oldest || v.age < oldest.age) oldest = v;
+        }
+        if (count < limit || !oldest) break;
+        oldest.choke(this.offCoef);
+      }
+    }
+    // a note of a choke group silences what it chokes (the closed hi-hat, the open one)
+    if (zone.group) {
+      for (const v of this.voices as SampleVoice[]) {
+        if (!v.done && v.zone.offBy === zone.group) v.choke(this.offCoef);
+      }
+    }
+    const ratio = spec.pitched ? 2 ** ((key - zone.root) / 12) : 1;
+    const damped = spec.undamped === undefined || key < spec.undamped;
+    return new SampleVoice(
+      zone,
+      key,
+      ratio,
+      zone.gain * this.velocityGain(velocity),
+      this.sr,
+      spec,
+      velocity,
+      this.frames,
+      damped,
+    );
+  }
+
+  /**
+   * Each note let go since the last look starts its release samples, one of each part (quieter the
+   * longer it was held, by each zone's decay).
+   */
+  private releaseSamples(): void {
+    if (!this.releases.length) return;
+    const n = this.voices.length;
+    for (let i = 0; i < n; i++) {
+      const v = this.voices[i] as SampleVoice;
+      if (!v.letGo) continue;
+      v.letGo = false;
+      const held = (this.frames - v.born) / this.sr;
+      for (const set of this.releases) {
+        const zone = set.pick(v.key, v.velocity);
+        if (!zone) continue;
+        const db = -(zone.decay ?? this.spec.releaseDecay ?? 0) * held;
+        const gain = zone.gain * this.velocityGain(v.velocity, this.releaseVelocityRange) * 10 ** (db / 20);
+        if (gain < 1e-4) continue;
+        const ratio = this.spec.pitched ? 2 ** ((v.key - zone.root) / 12) : 1;
+        this.addVoice(new SampleVoice(zone, v.key, ratio, gain, this.sr, this.spec, v.velocity, this.frames));
+      }
+    }
+  }
+
+  /** The pedal's own sound, as it goes down or comes up (at its own pitch, whatever the keys). */
+  private pedalSound(set: ZoneSet | null): void {
+    const zone = set?.pick(0, 127);
+    if (zone) this.addVoice(new SampleVoice(zone, -1, 1, zone.gain, this.sr, this.spec, 127, this.frames));
   }
 
   override noteOff(key: number): void {
     if (this.spec.oneShot) return;
     super.noteOff(key);
+    this.releaseSamples();
+  }
+
+  override cc(num: number, value: number): void {
+    super.cc(num, value);
+    if (num === 64) {
+      const down = value >= 64;
+      if (down !== this.pedal) this.pedalSound(down ? this.pedalDown : this.pedalUp);
+      this.pedal = down;
+    }
+    this.releaseSamples();
+  }
+
+  override allNotesOff(hard: boolean): void {
+    super.allNotesOff(hard);
+    this.pedal = false;
+    if (hard) for (const v of this.voices as SampleVoice[]) v.letGo = false;
+    else this.releaseSamples();
+  }
+
+  override render(l: Float32Array, r: Float32Array, start: number, end: number): void {
+    super.render(l, r, start, end);
+    this.frames += end - start;
   }
 }

@@ -44,6 +44,8 @@ export interface AppState {
   plugin: { target: string; id: string } | null;
   /** The channel whose Stage window is open. */
   stage: string | null;
+  /** The track whose synth's knobs are open (Fat, Ethereal). */
+  synth: string | null;
   mobileTab: MobileTab;
 
   tool: Tool;
@@ -150,6 +152,7 @@ const initial: AppState = {
   dialog: null,
   plugin: null,
   stage: null,
+  synth: null,
   mobileTab: 'tracks',
   tool: 'pointer',
   grid: '1/16',

@@ -140,3 +140,138 @@ describe('the sampler', () => {
     expect(played(s, 80)).toBe(0.4);
   });
 });
+
+describe('the sampler, played', () => {
+  /** A steady tone of `level` (so a fade shows as the level falling), 2 s long. */
+  const tone = (level: number, extra: Partial<SampleZone> = {}): SampleZone => ({
+    left: new Float32Array(SR * 2).fill(level),
+    right: null,
+    root: 60,
+    lo: 0,
+    hi: 127,
+    lovel: 1,
+    hivel: 127,
+    gain: 1,
+    loopStart: 0,
+    loopEnd: 0,
+    rr: 0,
+    ...extra,
+  });
+  const base = (zones: SampleZone[], extra: Partial<SamplerSpec> = {}): SamplerSpec => ({
+    key: 't',
+    zones,
+    release: 0.05,
+    oneShot: false,
+    pitched: false,
+    velocityRange: 0,
+    attack: 0,
+    ...extra,
+  });
+  /** The level `frames` from now (the mix of every voice), rendering up to it. */
+  const level = (s: Sampler, frames: number) => {
+    const l = new Float32Array(frames);
+    s.render(l, new Float32Array(frames), 0, frames);
+    return l[frames - 1] as number;
+  };
+
+  it('chokes the open hi-hat when the closed one is struck', () => {
+    const open = tone(0.5, { lo: 46, hi: 46, offBy: 1 });
+    const closed = tone(0.25, { lo: 42, hi: 42, group: 1 });
+    const s = new Sampler(SR, base([open, closed], { oneShot: true, offTime: 0.01 }));
+    s.noteOn(46, 127);
+    expect(level(s, 64)).toBeCloseTo(0.5, 5);
+    s.noteOn(42, 127);
+    // 30 ms on, the open hat has gone and the closed one is all there is
+    expect(level(s, Math.round(SR * 0.03))).toBeCloseTo(0.25, 2);
+    // without the group, both ring
+    const t = new Sampler(SR, base([tone(0.5, { lo: 46, hi: 46 }), tone(0.25, { lo: 42, hi: 42 })], { oneShot: true }));
+    t.noteOn(46, 127);
+    t.noteOn(42, 127);
+    expect(level(t, Math.round(SR * 0.03))).toBeCloseTo(0.75, 5);
+  });
+
+  it('fades the oldest of a key struck past its limit', () => {
+    const s = new Sampler(SR, base([tone(0.1)], { oneShot: true, notePolyphony: 2, offTime: 0.01 }));
+    s.noteOn(60, 127);
+    s.noteOn(60, 127);
+    expect(level(s, 64)).toBeCloseTo(0.2, 5);
+    s.noteOn(60, 127);
+    expect(level(s, Math.round(SR * 0.03))).toBeCloseTo(0.2, 3);
+    // another key is its own
+    s.noteOn(61, 127);
+    expect(level(s, 64)).toBeCloseTo(0.3, 3);
+  });
+
+  it('plays the release sample when a note is let go, quieter the longer it was held', () => {
+    const struck = tone(0.5);
+    const rel = tone(0.2, { trigger: 'release' });
+    const spec = base([struck, rel], { release: 0.005, releaseDecay: 6 });
+    const s = new Sampler(SR, spec);
+    s.noteOn(60, 127);
+    expect(level(s, 64)).toBeCloseTo(0.5, 5);
+    s.noteOff(60);
+    // the note has faded; its release sample plays, from a note held 64 frames (all but its full level)
+    expect(level(s, Math.round(SR * 0.1))).toBeCloseTo(0.2, 2);
+    const t = new Sampler(SR, spec);
+    t.noteOn(60, 127);
+    level(t, SR); // held a second: 6 dB down
+    t.noteOff(60);
+    expect(level(t, Math.round(SR * 0.1))).toBeCloseTo(0.2 / 10 ** (6 / 20), 2);
+  });
+
+  it('holds the release sample for the pedal, and leaves strings without dampers ringing', () => {
+    const rel = { ...tone(0.2, { trigger: 'release' }), left: new Float32Array(Math.round(SR * 0.2)).fill(0.2) };
+    const s = new Sampler(SR, base([tone(0.5), rel], { release: 0.005, undamped: 90 }));
+    s.cc(64, 127);
+    s.noteOn(60, 127);
+    s.noteOff(60);
+    expect(level(s, Math.round(SR * 0.05))).toBeCloseTo(0.5, 5);
+    s.cc(64, 0);
+    expect(level(s, Math.round(SR * 0.1))).toBeCloseTo(0.2, 2);
+    level(s, Math.round(SR * 0.2));
+    // a top string rings on through note-off, and drops no damper
+    s.noteOn(96, 127);
+    s.noteOff(96);
+    expect(level(s, Math.round(SR * 0.6))).toBeCloseTo(0.5, 2);
+  });
+
+  it('plays one release sample of each part, each by its own decay', () => {
+    const short = (level: number, extra: Partial<SampleZone>) => ({
+      ...tone(level, extra),
+      left: new Float32Array(Math.round(SR * 0.5)).fill(level),
+    });
+    // the key coming back (part 1, no decay) and the string's ring-off (part 0, 20 dB a second)
+    const s = new Sampler(
+      SR,
+      base(
+        [
+          tone(0.5),
+          short(0.1, { trigger: 'release', decay: 20 }),
+          short(0.05, { trigger: 'release', part: 1, decay: 0 }),
+        ],
+        {
+          release: 0.005,
+        },
+      ),
+    );
+    s.noteOn(60, 127);
+    level(s, SR); // held a second
+    s.noteOff(60);
+    expect(level(s, Math.round(SR * 0.1))).toBeCloseTo(0.05 + 0.01, 3);
+  });
+
+  it('sounds the pedal going down and coming up, once each way', () => {
+    const blip = (level: number, trigger: 'pedalDown' | 'pedalUp') => ({
+      ...tone(level, { trigger }),
+      left: new Float32Array(Math.round(SR * 0.1)).fill(level),
+    });
+    const s = new Sampler(SR, base([tone(0.5), blip(0.01, 'pedalDown'), blip(0.02, 'pedalUp')]));
+    s.cc(64, 127);
+    expect(level(s, 64)).toBeCloseTo(0.01, 5);
+    s.cc(64, 120); // still down: nothing new
+    expect(level(s, 64)).toBeCloseTo(0.01, 5);
+    level(s, SR * 0.2);
+    s.cc(64, 0);
+    expect(level(s, 64)).toBeCloseTo(0.02, 5);
+  });
+});

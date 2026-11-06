@@ -31,6 +31,8 @@ export interface Options {
   origins: string[];
   /** Threads to render the song ahead on (0: the render thread plays it all); null: by the cores there are. */
   threads: number | null;
+  /** The fingerprint of the engine it carries (liveSource), told to every studio that connects. */
+  engine: string;
 }
 
 /** The threads HO[LO] Engine starts: the one that renders for the device, and those that render ahead. */
@@ -46,6 +48,7 @@ export function parseArgs(argv: string[]): Options | 'help' | 'version' {
     nullAudio: false,
     origins: (process.env.HOLO_ENGINE_ORIGINS ?? '').split(',').filter(Boolean),
     threads: process.env.HOLO_ENGINE_THREADS ? Number(process.env.HOLO_ENGINE_THREADS) : null,
+    engine: '',
   };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i] as string;
@@ -147,7 +150,7 @@ export function run(
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Private-Network', 'true');
     res.setHeader('Content-Type', 'application/json');
-    res.end(JSON.stringify({ name: 'HO[LO] Engine', version: VERSION, studio: client !== null }));
+    res.end(JSON.stringify({ name: 'HO[LO] Engine', version: VERSION, engine: o.engine, studio: client !== null }));
     void req;
   });
   const wss = new WebSocketServer({ noServer: true, maxPayload: 2 ** 31 - 1 });
@@ -160,7 +163,15 @@ export function run(
     }
     wss.handleUpgrade(req, socket, head, (ws) => {
       ws.binaryType = 'arraybuffer';
-      ws.send(encodeMessage({ type: 'hello', version: VERSION, platform: process.platform } satisfies FromCompanion));
+      ws.send(
+        encodeMessage({
+          type: 'hello',
+          version: VERSION,
+          platform: process.platform,
+          arch: process.arch,
+          engine: o.engine,
+        } satisfies FromCompanion),
+      );
       ws.on('message', (data: ArrayBuffer, binary: boolean) => {
         if (!binary) return; // a studio only sends binary frames
         let msg: ToCompanion;

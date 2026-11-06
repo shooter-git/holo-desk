@@ -8,7 +8,7 @@ import { AudioEditor, AudioEditorBar } from './AudioEditor.tsx';
 import { ControlBar, Lcd, SaveDot, TransportButtons } from './ControlBar.tsx';
 import { Wordmark } from './controls.tsx';
 import { Dialogs } from './Dialogs.tsx';
-import { Mixer, PluginWindow, StageWindow } from './Mixer.tsx';
+import { Mixer, PluginWindow, StageWindow, SynthWindow } from './Mixer.tsx';
 import { MenuHost } from './menu.tsx';
 import { Inspector, LibraryPanel } from './Panels.tsx';
 import { PianoRoll, PianoRollBar } from './PianoRoll.tsx';
@@ -407,6 +407,7 @@ export function App() {
         </div>
       )}
       <PluginWindow />
+      <SynthWindow />
       <StageWindow />
       <Dialogs />
       <MenuHost />

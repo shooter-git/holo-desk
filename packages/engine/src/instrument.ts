@@ -40,6 +40,8 @@ export abstract class Instrument {
   private expr = 1;
   private clock = 0;
   maxVoices = 64;
+  /** New settings while it plays (an instrument whose knobs move takes them without being made again). */
+  update?(params?: Record<string, number>): void;
 
   protected readonly sr: number;
   constructor(sr: number) {
@@ -55,7 +57,11 @@ export abstract class Instrument {
       return;
     }
     const v = this.startVoice(key, velocity, art);
-    if (!v) return;
+    if (v) this.addVoice(v);
+  }
+
+  /** A voice into a free place, or in place of the oldest let-go voice (else the oldest) when they're all taken. */
+  protected addVoice(v: Voice): void {
     v.age = this.clock++;
     let free = -1;
     for (let i = 0; i < this.voices.length; i++) {

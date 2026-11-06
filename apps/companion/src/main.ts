@@ -5,6 +5,7 @@
 import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { Worker } from 'node:worker_threads';
+import { liveSource } from '../../../packages/music/src/identity.ts';
 import { nativeName } from './native.ts';
 import { HELP, parseArgs, run, VERSION } from './server.ts';
 
@@ -24,6 +25,8 @@ if (!existsSync(addon)) {
   );
   process.exit(1);
 }
+// from the repository: the engine it carries is the one in these sources
+parsed.engine = liveSource(fileURLToPath(new URL('../../..', import.meta.url)));
 await run(parsed, addon, {
   render: (workerData, transferList) =>
     new Worker(new URL('./render.ts', import.meta.url), { workerData, transferList }),

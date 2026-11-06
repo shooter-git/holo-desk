@@ -10,6 +10,7 @@ import { homedir, tmpdir } from 'node:os';
 import { dirname, extname, join } from 'node:path';
 import { cutNote, decodeAiff, floatWav } from './cut.ts';
 import { decodeFlac, pcmWav } from './flac.ts';
+import { type DecodedInput, decodeInput, type MixSource, mixExtension, mixFile, mixUrl } from './mix.ts';
 import type { ArchiveSource, CutSource, GitSource, NeededFile, PinnedPack } from './packs.ts';
 import { SevenZip } from './sevenzip.ts';
 
@@ -39,6 +40,11 @@ export class SampleCache {
 
   read(hash: string, ext: string): Uint8Array {
     return new Uint8Array(readFileSync(this.path(hash, ext)));
+  }
+
+  /** Let a file go (a download every file made from it has been made from). */
+  drop(hash: string, ext: string): void {
+    rmSync(this.path(hash, ext), { force: true });
   }
 
   /** Keep a file, if it is the one wanted (written whole, then moved into place). */
@@ -113,6 +119,15 @@ async function cutDownload(source: CutSource, name: string, cache: SampleCache):
   return cache.read(hash, ext);
 }
 
+/** A mix source's download, kept in the cache (by its own checksum) until every file made from it is made. */
+async function mixDownload(source: MixSource, name: string, cache: SampleCache): Promise<Uint8Array> {
+  const hash = source.downloads[name];
+  if (!hash) throw new Error(`${name} isn't one of the pinned downloads`);
+  const ext = mixExtension(name);
+  if (!cache.has(hash, ext)) cache.put(hash, ext, await download(mixUrl(source, name)), name);
+  return cache.read(hash, ext);
+}
+
 /** An archive source's download, kept in the cache too (by its own checksum). */
 async function archiveDownload(source: ArchiveSource, cache: SampleCache): Promise<Uint8Array> {
   const ext = extname(new URL(source.url).pathname) || '.7z';
@@ -173,6 +188,9 @@ export async function fetchFiles(files: NeededFile[], opts: FetchOptions): Promi
   const jobs: { files: NeededFile[]; run: () => Promise<void> }[] = [];
   const byDownload = new Map<string, NeededFile[]>();
   const byArchive = new Map<PinnedPack, NeededFile[]>();
+  // a mix's downloads: how many files still to make from each (it's let go when none are left)
+  const uses = new Map<string, number>();
+  const useKey = (pack: PinnedPack, name: string) => `${pack.id}\0${name}`;
   for (const f of rest) {
     if (other.includes(f)) continue;
     const source = f.pack.source;
@@ -190,6 +208,25 @@ export async function fetchFiles(files: NeededFile[], opts: FetchOptions): Promi
     } else if (source.kind === 'archive') {
       if (!source.entries[f.path]) throw new Error(`${label(f)} has no entry in its pack's archive`);
       byArchive.set(f.pack, [...(byArchive.get(f.pack) ?? []), f]);
+    } else if (source.kind === 'mix') {
+      const recipe = source.files[f.path];
+      if (!recipe) throw new Error(`${label(f)} has no recipe in its pack's mix`);
+      for (const [name] of recipe.in) uses.set(useKey(f.pack, name), (uses.get(useKey(f.pack, name)) ?? 0) + 1);
+      jobs.push({
+        files: [f],
+        run: async () => {
+          const inputs = new Map<string, DecodedInput>();
+          for (const [name] of recipe.in) {
+            if (!inputs.has(name)) inputs.set(name, decodeInput(await mixDownload(source, name, cache)));
+          }
+          cache.put(f.sha256, extname(f.path), mixFile(recipe, inputs, source.bits), label(f));
+          for (const name of inputs.keys()) {
+            const left = (uses.get(useKey(f.pack, name)) ?? 1) - 1;
+            uses.set(useKey(f.pack, name), left);
+            if (left <= 0) cache.drop(source.downloads[name] as string, mixExtension(name));
+          }
+        },
+      });
     }
   }
   for (const [pack, group] of byArchive) {

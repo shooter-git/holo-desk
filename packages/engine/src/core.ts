@@ -7,9 +7,11 @@
  */
 
 import { AHEAD_BLOCK, type AheadEdge, AheadLink, aheadPlan } from './ahead.ts';
+import { FAT_PRESETS, FatSynth } from './analog.ts';
 import type { PreparedImpulse } from './convolver.ts';
 import { DrumSynth } from './drums.ts';
 import { Biquad, dbToGain, Smooth } from './dsp.ts';
+import { ETHEREAL_PRESETS, EtherealSynth } from './ethereal.ts';
 import { createEffect, type Effect, type Host } from './fx.ts';
 import { GlassLineVoice, GlassVoice } from './glass.ts';
 import type { Instrument } from './instrument.ts';
@@ -645,6 +647,8 @@ class TrackNode extends Strip {
   input: InputSpec | null = null;
   capture: Capture | null = null;
   instKey = '';
+  /** What each instrument was made from (a synth whose knobs move is told, not made again). */
+  instSpecs: InstrumentSpec[] = [];
   instruments: (Instrument | null)[] = [];
   midiFx: MidiFxSlot[] = [];
   seq: Float64Array<ArrayBufferLike> = new Float64Array(0);
@@ -1053,6 +1057,8 @@ export class EngineCore implements Host {
   private makeInstrument(spec: InstrumentSpec): Instrument | null {
     switch (spec.kind) {
       case 'synth':
+        if (FAT_PRESETS.includes(spec.preset)) return new FatSynth(this.sr, spec.preset, spec.params);
+        if (ETHEREAL_PRESETS.includes(spec.preset)) return new EtherealSynth(this.sr, spec.preset, spec.params);
         return new Synth(this.sr, spec.preset, spec.params);
       case 'drums':
         return new DrumSynth(this.sr);
@@ -1068,8 +1074,35 @@ export class EngineCore implements Host {
   private buildInstruments(node: TrackNode, spec: TrackSpec, force: boolean): void {
     const key = JSON.stringify([spec.instrument, spec.articulations]);
     if (!force && key === node.instKey && node.instruments.every((x) => x !== null)) return;
+    const specs = [spec.instrument, ...spec.articulations];
+    // the same synths with their knobs turned: each takes its new settings as it plays (made again, its
+    // notes and its hall's tail would be cut at every move of a knob)
+    if (
+      !force &&
+      specs.length === node.instSpecs.length &&
+      specs.every((s, i) => {
+        const was = node.instSpecs[i];
+        const inst = node.instruments[i];
+        return (
+          s.kind === 'synth' &&
+          was?.kind === 'synth' &&
+          s.preset === was.preset &&
+          inst !== null &&
+          inst?.update !== undefined
+        );
+      })
+    ) {
+      for (let i = 0; i < specs.length; i++) {
+        const s = specs[i] as InstrumentSpec;
+        node.instruments[i]?.update?.(s.kind === 'synth' ? s.params : undefined);
+      }
+      node.instSpecs = specs;
+      node.instKey = key;
+      return;
+    }
     for (const i of node.instruments) i?.allNotesOff(false);
-    node.instruments = [spec.instrument, ...spec.articulations].map((s) => this.makeInstrument(s));
+    node.instruments = specs.map((s) => this.makeInstrument(s));
+    node.instSpecs = specs;
     node.instKey = key;
   }
 

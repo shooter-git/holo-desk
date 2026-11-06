@@ -1,7 +1,7 @@
 /** The Inspector (the selected region and track, and its channel strip) and the Library (instruments). */
 import { type Instrument, SYNTH_PRESETS, tickToBarBeat } from '@holo/session';
-import { Check, Drum, Music, Piano, Search, Upload, Waves } from 'lucide-react';
-import { memo, useCallback, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import { AudioWaveform, Check, Download, Drum, Music, Piano, Search, Sparkles, Upload, Waves } from 'lucide-react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import {
   addTrack,
   apply,
@@ -388,6 +388,10 @@ const PRESET_ICON: Record<string, typeof Piano> = {
   'Warm Pad': Waves,
   'Bright Lead': Waves,
   Pluck: Waves,
+  'Fat Mono': AudioWaveform,
+  'Fat Poly': AudioWaveform,
+  'Ethereal Pad': Sparkles,
+  'Ethereal Keys': Sparkles,
 };
 
 /** What names an instrument: the same preset, or the same pack and name, is the same instrument. */
@@ -427,6 +431,137 @@ const LibraryItem = memo(function LibraryItem({
     </button>
   );
 });
+
+interface AvailablePack {
+  id: string;
+  name: string;
+  license: string;
+  credit: string;
+  instruments: { title: string; category: string }[];
+  installed: boolean;
+  current: boolean;
+}
+
+interface InstallJob {
+  id: string;
+  name: string;
+  state: 'running' | 'done' | 'error';
+  line: string;
+  done: number;
+  total: number;
+  error?: string;
+}
+
+/**
+ * The sample libraries HO[LO] ships maps for that aren't installed yet: installed by the server
+ * (from their pinned sources, every file checked), one at a time, while the Library shows how far
+ * it has got.
+ */
+function MorePacks({ query }: { query: string }) {
+  const [packs, setPacks] = useState<AvailablePack[] | null>(null);
+  const [job, setJob] = useState<InstallJob | null>(null);
+
+  const load = useCallback(async () => {
+    try {
+      const res = await fetch('/api/packs/available');
+      if (!res.ok) return;
+      const body = (await res.json()) as { packs: AvailablePack[]; job: InstallJob | null };
+      setPacks(body.packs);
+      setJob(body.job);
+    } catch {
+      // offline: the installed packs still play
+    }
+  }, []);
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  // while one installs, follow it; when it's done, the Library shows its instruments
+  const running = job?.state === 'running';
+  useEffect(() => {
+    if (!running) return;
+    let alive = true;
+    const timer = setInterval(async () => {
+      try {
+        const res = await fetch('/api/packs/install');
+        const next = (await res.json()) as InstallJob | null;
+        if (!alive) return;
+        setJob(next);
+        if (next && next.state !== 'running') {
+          if (next.state === 'done') toast(`${next.name} is installed`);
+          else toast(`${next.name}: ${next.error ?? 'the install failed'}`, 'error', 10000);
+          await library.refresh();
+          await load();
+        }
+      } catch {
+        // the host is away for a moment: ask again
+      }
+    }, 1000);
+    return () => {
+      alive = false;
+      clearInterval(timer);
+    };
+  }, [running, load]);
+
+  const install = async (p: AvailablePack) => {
+    try {
+      const res = await fetch(`/api/packs/${encodeURIComponent(p.id)}/install`, { method: 'POST' });
+      const body = (await res.json()) as InstallJob & { error?: string };
+      if (!res.ok) throw new Error(body.error ?? 'The pack could not be installed');
+      setJob(body);
+    } catch (err) {
+      toast(err instanceof Error ? err.message : String(err), 'error', 8000);
+    }
+  };
+
+  const q = query.trim().toLowerCase();
+  const missing = (packs ?? []).filter(
+    (p) =>
+      !p.installed &&
+      (!q || `${p.name} ${p.instruments.map((i) => `${i.title} ${i.category}`).join(' ')}`.toLowerCase().includes(q)),
+  );
+  if (!missing.length) return null;
+  return (
+    <details className="disclosure" open>
+      <summary>
+        More packs <span className="meta muted pack-license">{missing.length} to install</span>
+      </summary>
+      <div className="more-packs">
+        {missing.map((p) => {
+          const mine = job?.id === p.id ? job : null;
+          return (
+            <div key={p.id} className="more-pack">
+              <div className="more-pack-head">
+                <b>{p.name}</b>
+                <span className="meta muted">{p.license.length > 14 ? 'Free use' : p.license}</span>
+              </div>
+              <div className="muted more-pack-list">{p.instruments.map((i) => i.title).join(' · ')}</div>
+              {mine?.state === 'running' ? (
+                <div className="more-pack-progress" role="status">
+                  <progress max={Math.max(1, mine.total)} value={mine.done} aria-label={`Installing ${p.name}`} />
+                  <span className="muted">{mine.line}</span>
+                </div>
+              ) : (
+                <button type="button" className="btn" disabled={running} onClick={() => void install(p)}>
+                  <Download /> Install
+                </button>
+              )}
+              {mine?.state === 'error' && <div className="more-pack-error">{mine.error}</div>}
+            </div>
+          );
+        })}
+        <div className="muted note">Fetched by the computer that runs HO[LO], from each library's own source.</div>
+      </div>
+    </details>
+  );
+}
+
+/** The icon for a pack instrument's category. */
+function categoryIcon(category: string): typeof Piano {
+  if (/drum|kit|percussion/i.test(category)) return Drum;
+  if (/piano|keys/i.test(category)) return Piano;
+  return Music;
+}
 
 export function LibraryPanel({ overlay = false, full = false }: { overlay?: boolean; full?: boolean }) {
   const packs = useLibrary();
@@ -544,7 +679,7 @@ export function LibraryPanel({ overlay = false, full = false }: { overlay?: bool
                       <LibraryItem
                         key={i.name}
                         instrument={i.instrument}
-                        icon={Music}
+                        icon={categoryIcon(c.name)}
                         title={i.title}
                         meta={
                           st?.state === 'loading'
@@ -564,6 +699,7 @@ export function LibraryPanel({ overlay = false, full = false }: { overlay?: bool
           <div className="muted pack-credit">{pack.credit}</div>
         </details>
       ))}
+      <MorePacks query={query} />
       <div className="library-import">
         <input
           ref={file}
@@ -582,8 +718,8 @@ export function LibraryPanel({ overlay = false, full = false }: { overlay?: bool
       </div>
       {packs.length === 0 && (
         <div className="muted library-empty">
-          No sample packs installed yet. The built-in instruments above always work. To install the orchestral packs,
-          run <kbd>pnpm packs install</kbd> on the machine that runs HO[LO].
+          No sample packs installed yet. The built-in instruments above always work. Install packs from{' '}
+          <b>More packs</b> above, or run <kbd>pnpm packs install</kbd> on the machine that runs HO[LO].
         </div>
       )}
     </aside>

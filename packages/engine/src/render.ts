@@ -42,9 +42,66 @@ export interface ZoneManifest {
   loopEnd: number;
   rate: number;
   rr: number;
+  /** Choke group, the group that chokes it, release trigger and release time (see SampleZone). */
+  group?: number;
+  offBy?: number;
+  trigger?: 'release' | 'pedalDown' | 'pedalUp';
+  part?: number;
+  decay?: number;
+  release?: number;
+  /** Frames (at its rate) faded out before its end, as it's loaded: a sample kept shorter than its file. */
+  fadeOut?: number;
 }
 
-export interface InstrumentManifest {
+/**
+ * Fade a loaded sample's last `frames` out (an S curve to silence), in place: where a pack keeps a
+ * sample shorter than its file, it ends without a click.
+ */
+export function fadeTail(data: Float32Array, frames: number): void {
+  const n = Math.min(Math.round(frames), data.length);
+  for (let i = 0; i < n; i++) {
+    const t = (i + 1) / n;
+    const j = data.length - n + i;
+    data[j] = (data[j] as number) * (1 - t * t * (3 - 2 * t));
+  }
+}
+
+/** What a played instrument asks of the sampler besides its zones (see SamplerSpec). */
+export interface PlayingManifest {
+  polyphony?: number;
+  notePolyphony?: number;
+  offTime?: number;
+  undamped?: number;
+  releaseDecay?: number;
+  releaseVelocityRange?: number;
+}
+
+/** The zone's and the instrument's optional settings, as the sampler takes them (only those the pack has). */
+type ZoneExtras = Pick<SampleZone, 'group' | 'offBy' | 'trigger' | 'part' | 'decay' | 'release'>;
+
+export function zoneExtras(z: ZoneManifest): ZoneExtras {
+  const out: ZoneExtras = {};
+  if (z.group) out.group = z.group;
+  if (z.offBy) out.offBy = z.offBy;
+  if (z.trigger === 'release' || z.trigger === 'pedalDown' || z.trigger === 'pedalUp') out.trigger = z.trigger;
+  if (z.part) out.part = z.part;
+  if (z.decay !== undefined) out.decay = z.decay;
+  if (z.release !== undefined) out.release = z.release;
+  return out;
+}
+
+export function playingExtras(m: PlayingManifest): PlayingManifest {
+  const out: PlayingManifest = {};
+  if (m.polyphony) out.polyphony = m.polyphony;
+  if (m.notePolyphony) out.notePolyphony = m.notePolyphony;
+  if (m.offTime !== undefined) out.offTime = m.offTime;
+  if (m.undamped !== undefined) out.undamped = m.undamped;
+  if (m.releaseDecay !== undefined) out.releaseDecay = m.releaseDecay;
+  if (m.releaseVelocityRange !== undefined) out.releaseVelocityRange = m.releaseVelocityRange;
+  return out;
+}
+
+export interface InstrumentManifest extends PlayingManifest {
   pack: string;
   name: string;
   /** How a Performance instrument plays it (the creation's own sampler), when the pack has it. */
@@ -99,19 +156,35 @@ export async function buildSampler(
 ): Promise<SamplerSpec> {
   const manifest = await source.instrument(pack, name);
   const zones: SampleZone[] = [];
+  // zones that play the same stretch of the same file (a drum on two pads) share one copy
+  const shared = new Map<string, { left: Float32Array; right: Float32Array | null; k: number }>();
   for (const z of manifest.zones) {
-    const decoded = decodeWav(await source.sample(pack, z.file));
-    const k = sampleRate / decoded.rate;
+    const key = `${z.file}|${z.start}|${z.end}|${z.fadeOut ?? 0}`;
+    let copy = shared.get(key);
+    if (!copy) {
+      const decoded = decodeWav(await source.sample(pack, z.file));
+      const k = sampleRate / decoded.rate;
+      const convert = (c: Float32Array) => (decoded.rate === sampleRate ? c : resample(c, decoded.rate, sampleRate));
+      const left = convert(decoded.channels[0] as Float32Array);
+      const right = decoded.channels[1] ? convert(decoded.channels[1]) : null;
+      const start = Math.max(0, Math.round(z.start * k));
+      const end = Math.min(left.length, z.end > 0 ? Math.round(z.end * k) : left.length);
+      const l = left.slice(start, end);
+      const r = right ? right.slice(start, end) : null;
+      if (z.fadeOut) {
+        fadeTail(l, Math.round(z.fadeOut * k));
+        if (r) fadeTail(r, Math.round(z.fadeOut * k));
+      }
+      copy = { left: l, right: r, k };
+      shared.set(key, copy);
+    }
+    const { left: l, right: r, k } = copy;
     const at = (frames: number) => Math.round(frames * k);
-    const convert = (c: Float32Array) => (decoded.rate === sampleRate ? c : resample(c, decoded.rate, sampleRate));
-    const left = convert(decoded.channels[0] as Float32Array);
-    const right = decoded.channels[1] ? convert(decoded.channels[1]) : null;
     const start = Math.max(0, at(z.start));
-    const end = Math.min(left.length, z.end > 0 ? at(z.end) : left.length);
     const loops = z.loopEnd > z.loopStart;
     zones.push({
-      left: left.slice(start, end),
-      right: right ? right.slice(start, end) : null,
+      left: l,
+      right: r,
       root: z.root,
       lo: z.lo,
       hi: z.hi,
@@ -121,6 +194,7 @@ export async function buildSampler(
       loopStart: loops ? Math.max(0, at(z.loopStart) - start) : 0,
       loopEnd: loops ? Math.max(0, at(z.loopEnd) - start) : 0,
       rr: z.rr,
+      ...zoneExtras(z),
     });
   }
   return {
@@ -131,6 +205,7 @@ export async function buildSampler(
     pitched: manifest.pitched !== false,
     velocityRange: manifest.velocityRange,
     attack: manifest.attack,
+    ...playingExtras(manifest),
   };
 }
 

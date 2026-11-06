@@ -666,6 +666,9 @@ a.btn {
 .status-dot.busy {
   background: var(--cycle);
 }
+.status-dot.warn {
+  background: var(--warn);
+}
 .status-dot.bad {
   background: var(--rec);
 }
@@ -1296,6 +1299,34 @@ a.btn {
   color: #eadfff;
 }
 
+/* a synth's knobs, from its instrument slot */
+.slot-edit {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 18px;
+  height: 16px;
+  margin-right: -3px;
+  padding: 0;
+  border: 0;
+  border-radius: 3px;
+  background: rgb(255 255 255 / 0.08);
+  color: inherit;
+  cursor: pointer;
+}
+
+.slot-edit:hover,
+.slot-edit:focus-visible {
+  background: rgb(255 255 255 / 0.18);
+}
+
+@media (pointer: coarse) {
+  .slot-edit {
+    width: 30px;
+    height: 28px;
+  }
+}
+
 .slot.empty {
   color: var(--text-3);
   border-style: dashed;
@@ -1682,6 +1713,59 @@ button.list-item {
 
 .library-import .note {
   margin-top: 6px;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.more-packs {
+  padding: 4px 10px 10px;
+}
+
+.more-pack {
+  padding: 8px 0;
+  border-bottom: 1px solid var(--line-2);
+}
+
+.more-pack-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.more-pack-head .meta {
+  margin-left: auto;
+  font-size: 11px;
+}
+
+.more-pack-list {
+  margin: 4px 0 8px;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.more-pack .btn {
+  width: 100%;
+}
+
+.more-pack-progress {
+  display: grid;
+  gap: 4px;
+  font-size: 11px;
+}
+
+.more-pack-progress progress {
+  width: 100%;
+  accent-color: var(--accent);
+}
+
+.more-pack-error {
+  margin-top: 6px;
+  font-size: 11px;
+  color: var(--danger);
+}
+
+.more-packs .note {
+  margin-top: 8px;
   font-size: 11px;
   line-height: 1.5;
 }
@@ -3512,4 +3596,19 @@ html[data-layout="phone-landscape"] .toasts {
     animation: none;
     opacity: 0.6;
   }
+}
+
+/* HO[LO] Engine built with another engine than the studio's */
+.engine-stale {
+  padding: 6px 8px;
+  border: 1px solid var(--warn-line);
+  border-radius: var(--radius-s);
+  background: var(--warn-bg);
+  color: var(--warn-text);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.engine-stale a {
+  color: var(--warn);
 }

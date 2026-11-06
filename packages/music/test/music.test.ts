@@ -10,7 +10,14 @@ import { buildMusic, checkNode, listSongs, openExperience } from '../src/build.t
 import { distance } from '../src/compare.ts';
 import { cutNote, decodeAiff, floatWav } from '../src/cut.ts';
 import { fetchFiles, SampleCache, sha256 } from '../src/fetch.ts';
-import { type EngineIdentity, engineChanged, engineLabel, engineRelation, engineSource } from '../src/identity.ts';
+import {
+  type EngineIdentity,
+  engineChanged,
+  engineLabel,
+  engineRelation,
+  engineSource,
+  liveSource,
+} from '../src/identity.ts';
 import { type ExperienceManifest, slug, titleOf, writeManifest } from '../src/manifest.ts';
 import {
   formatChecksums,
@@ -85,6 +92,28 @@ describe('the engine an experience is built with', () => {
     write(b, 'export const x = 2;\n');
     expect(engineSource(a)).not.toBe(engineSource(b));
     expect(engineSource(REPO)).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it("fingerprints what plays live (HO[LO] Engine's engine) apart from the rest", () => {
+    const root = join(work, 'live');
+    const put = (path: string, text: string) => {
+      mkdirSync(join(root, path, '..'), { recursive: true });
+      writeFileSync(join(root, path), text);
+    };
+    put('packages/engine/src/core.ts', 'export const a = 1;\n');
+    put('packages/session/src/ops.ts', 'export const b = 1;\n');
+    put('packages/music/src/fetch.ts', 'export const c = 1;\n');
+    put('packs/manifests/p.json', '{}\n');
+    const first = liveSource(root);
+    expect(first).toMatch(/^[0-9a-f]{64}$/);
+    // a pack's map or the build's fetching don't change how an Engine plays...
+    put('packs/manifests/p.json', '{"x":1}\n');
+    put('packages/music/src/fetch.ts', 'export const c = 2;\n');
+    expect(liveSource(root)).toBe(first);
+    // ...the engine and the session format do
+    put('packages/session/src/ops.ts', 'export const b = 2;\n');
+    expect(liveSource(root)).not.toBe(first);
+    expect(liveSource(REPO)).not.toBe(engineSource(REPO));
   });
 
   it('puts two engines in order by their commits, and says when it cannot', () => {

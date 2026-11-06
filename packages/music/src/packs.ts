@@ -6,6 +6,7 @@
  */
 import { type InstrumentManifest, songImpulses } from '@holo/engine';
 import type { Instrument, Project } from '@holo/session';
+import type { MixSource } from './mix.ts';
 
 /** A git repository at one commit (GitHub's are fetched file by file, others with git). */
 export interface GitSource {
@@ -57,7 +58,9 @@ export interface LocalSource {
   note?: string;
 }
 
-export type PackSource = GitSource | CutSource | ArchiveSource | LocalSource;
+export type { MixSource } from './mix.ts';
+
+export type PackSource = GitSource | CutSource | ArchiveSource | MixSource | LocalSource;
 
 export type PackInstrument = Omit<InstrumentManifest, 'pack'> & { title?: string; category?: string };
 

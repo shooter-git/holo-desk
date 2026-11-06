@@ -10,13 +10,13 @@
     "typecheck": "tsc -p ."
   },
   "dependencies": {
-    "@fastify/compress": "9.2.2",
-    "@fastify/static": "10.1.6",
+    "@fastify/compress": "9.3.0",
+    "@fastify/static": "10.1.10",
     "@fastify/websocket": "11.3.4",
     "@holo/engine": "workspace:*",
     "@holo/music": "workspace:*",
     "@holo/session": "workspace:*",
-    "fastify": "5.12.7"
+    "fastify": "5.12.8"
   },
   "devDependencies": {
     "@types/ws": "8.18.2"

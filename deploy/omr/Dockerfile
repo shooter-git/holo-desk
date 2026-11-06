@@ -19,15 +19,21 @@ RUN ./gradlew --no-daemon :app:installDist \
 # ---- the engines' server ----
 FROM python:3.12-slim
 ARG HOMR_VERSION=0.7.0
-# Audiveris's Java, its OCR's language data
+# Audiveris's Java, the fonts it measures text with, and its OCR's English (the full data: it reads
+# lyrics and words in Tesseract's legacy mode, which the smaller packaged data leaves out)
 COPY --from=audiveris /opt/java/openjdk /opt/java
 COPY --from=audiveris /opt/audiveris /opt/audiveris
 RUN apt-get update \
- && apt-get install -y --no-install-recommends tesseract-ocr-eng libgl1 libglib2.0-0 \
+ && apt-get install -y --no-install-recommends fontconfig fonts-dejavu-core libgl1 libglib2.0-0 \
  && rm -rf /var/lib/apt/lists/*
+ADD --checksum=sha256:daa0c97d651c19fba3b25e81317cd697e9908c8208090c94c3905381c23fc047 \
+    https://github.com/tesseract-ocr/tessdata/raw/4.1.0/eng.traineddata /opt/tessdata/eng.traineddata
+# (GDK_SCALE set, Audiveris doesn't look for a desktop's GTK to scale its windows by: there are none)
 ENV JAVA_HOME=/opt/java \
     PATH=/opt/java/bin:/opt/audiveris/bin:$PATH \
-    TESSDATA_PREFIX=/usr/share/tesseract-ocr/5/tessdata \
+    TESSDATA_PREFIX=/opt/tessdata \
+    GDK_SCALE=1 \
+    JAVA_OPTS=-Djava.awt.headless=true \
     AUDIVERIS=/opt/audiveris/bin/Audiveris \
     HOMR=/opt/homr/bin/homr
 # homr in its own environment, its models fetched now (the running container can't reach the internet)

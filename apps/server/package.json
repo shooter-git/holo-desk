@@ -12,7 +12,7 @@
   "dependencies": {
     "@fastify/compress": "9.3.0",
     "@fastify/static": "10.1.10",
-    "@fastify/websocket": "11.3.4",
+    "@fastify/websocket": "11.3.6",
     "@holo/engine": "workspace:*",
     "@holo/music": "workspace:*",
     "@holo/session": "workspace:*",

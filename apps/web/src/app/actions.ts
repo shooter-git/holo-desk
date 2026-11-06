@@ -23,6 +23,7 @@ import {
   type Op,
   PPQ,
   type Project,
+  pluginDef,
   projectEnd,
   quantize,
   type Region,
@@ -39,7 +40,9 @@ import { companion } from '../audio/companion.ts';
 import { engine, type RecordedTake, warmEngine } from '../audio/engine.ts';
 import { audioFiles } from '../audio/files.ts';
 import { midi } from '../audio/midi.ts';
+import { instrumentManifest } from '../audio/pack-files.ts';
 import { library } from '../audio/samples.ts';
+import { NOTE_EFFECTS, playsHits } from '../ui/pads.ts';
 import { ApiError, api } from './api.ts';
 // (live.ts imports this module too: neither uses the other while loading, so the cycle is harmless)
 import { reconnectSoon } from './live.ts';
@@ -850,6 +853,45 @@ export function setInstrument(trackId: string, instrument: Instrument, rename = 
   const patch: TrackPatch = { instrument };
   if (rename) patch.name = defaultName(instrument);
   apply([{ op: 'updateTrack', track: trackId, patch }], 'Instrument');
+  void warnNoteEffects(trackId, instrument);
+}
+
+/**
+ * A kit (or any instrument that plays each key as its own hit) put on a track whose MIDI effects
+ * move or add notes: each hit would play other drums too (a Harmonizer's added note lands on
+ * another piece). Said once, with the effects a press away from bypassed.
+ */
+async function warnNoteEffects(trackId: string, instrument: Instrument): Promise<void> {
+  const effects = () =>
+    store
+      .get()
+      .project?.tracks.find((t) => t.id === trackId)
+      ?.midiFx.filter((p) => !p.bypass && NOTE_EFFECTS.has(p.type)) ?? [];
+  if (!effects().length) return;
+  let manifest = null;
+  if (instrument.type === 'sampler' || instrument.type === 'performance')
+    manifest = await instrumentManifest(instrument.pack, instrument.name).catch(() => null);
+  if (!playsHits(instrument, manifest)) return;
+  const live = effects();
+  const t = store.get().project?.tracks.find((x) => x.id === trackId);
+  // the instrument may have changed again while its map came
+  if (!live.length || !t || JSON.stringify(t.instrument) !== JSON.stringify(instrument)) return;
+  const what = manifest?.title ?? (instrument.type === 'synth' ? instrument.preset : 'This kit');
+  const names = live.map((p) => pluginDef(p.type)?.name ?? p.type);
+  const list = names.length === 1 ? names[0] : `${names.slice(0, -1).join(', ')} and ${names.at(-1)}`;
+  toast(
+    `${what} plays each note as a drum, and the ${list} on ${t.name} ${names.length === 1 ? 'changes' : 'change'} which notes play: each hit would sound other drums too.`,
+    'info',
+    12000,
+    {
+      label: names.length === 1 ? `Bypass ${names[0]}` : 'Bypass them',
+      run: () =>
+        apply(
+          live.map((p) => ({ op: 'updatePlugin', target: trackId, plugin: p.id, patch: { bypass: true } })),
+          'Bypass MIDI Effects',
+        ),
+    },
+  );
 }
 
 export function updateTrack(trackId: string, patch: TrackPatch, label = 'Track'): void {

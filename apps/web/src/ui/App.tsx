@@ -130,8 +130,24 @@ function Toasts() {
   return (
     <div className="toasts" aria-live="polite">
       {toasts.map((t) => (
-        <div key={t.id} className={`toast ${t.kind}`} role={t.kind === 'error' ? 'alert' : undefined}>
+        <div
+          key={t.id}
+          className={`toast ${t.kind}${t.action ? ' with-action' : ''}`}
+          role={t.kind === 'error' ? 'alert' : undefined}
+        >
           {t.text}
+          {t.action && (
+            <button
+              type="button"
+              className="btn"
+              onClick={() => {
+                t.action?.run();
+                store.set((s) => ({ toasts: s.toasts.filter((x) => x.id !== t.id) }));
+              }}
+            >
+              {t.action.label}
+            </button>
+          )}
         </div>
       ))}
     </div>

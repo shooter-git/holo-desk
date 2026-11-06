@@ -270,6 +270,7 @@ In the studio, live
 Files and creations
   holo bounce                         render the song (or the cycle) to a WAV, kept with the song on the host
   holo import-midi FILE.mid | holo export-midi [FILE.mid]
+  holo import-score FILE.musicxml|.mxl | holo export-score [FILE.musicxml]   scores, for and from notation programs
   holo audio FILE.wav|.flac [--track T] [--at 9] [--name N]   a recording or stem on an audio track
                                       (a new audio track unless --track names one)
   holo creations                      creations and their pieces
@@ -988,6 +989,35 @@ async function main(): Promise<void> {
       );
       const p = (await res.json()) as Project;
       console.log(`Imported "${p.title}" [${p.id}]`);
+      return;
+    }
+
+    case 'import-score': {
+      const file = resolve(words[0] ?? '');
+      if (!existsSync(file)) throw new Error('holo import-score FILE.musicxml|.mxl');
+      const res = await fetch(
+        `${BASE}/api/import/score?title=${encodeURIComponent(file.replace(/.*\//, '').replace(/\.(musicxml|xml|mxl)$/i, ''))}`,
+        {
+          method: 'POST',
+          headers: { 'content-type': 'application/vnd.recordare.musicxml+xml' },
+          body: readFileSync(file),
+        },
+      );
+      const body = (await res.json()) as Project & { error?: string };
+      if (!res.ok) throw new Error(body.error ?? `${res.status}`);
+      console.log(
+        `Imported "${body.title}" [${body.id}]: ${body.tracks.length} part${body.tracks.length === 1 ? '' : 's'}`,
+      );
+      return;
+    }
+
+    case 'export-score': {
+      const id = await songId();
+      const res = await fetch(`${BASE}/api/projects/${id}/musicxml`);
+      if (!res.ok) throw new Error(await res.text());
+      const out = words[0] ?? `${id}.musicxml`;
+      writeFileSync(out, await res.text());
+      console.log(`Wrote ${out}`);
       return;
     }
 

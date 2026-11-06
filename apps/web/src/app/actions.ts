@@ -248,12 +248,25 @@ export async function createProject(title = 'Untitled'): Promise<void> {
 
 export async function importMidiFile(file: File): Promise<void> {
   try {
-    load(await api.importMidi(file));
+    // a score (MusicXML, .mxl) or a MIDI file, by its name
+    const score = /\.(musicxml|xml|mxl)$/i.test(file.name);
+    load(await (score ? api.importScore(file) : api.importMidi(file)));
+    if (score) store.set({ editor: 'piano', noteView: 'score', scoreAll: true });
     store.set({ dialog: null });
     toast(`Imported ${file.name}`);
   } catch (err) {
     toast(err instanceof Error ? err.message : String(err), 'error');
   }
+}
+
+export function exportScore(): void {
+  const p = store.get().project;
+  if (!p) return;
+  void saveNow().then(() => {
+    const a = document.createElement('a');
+    a.href = `/api/projects/${p.id}/musicxml`;
+    a.click();
+  });
 }
 
 export function exportMidi(): void {

@@ -7,6 +7,7 @@ import {
   enableMidi,
   ensureAudio,
   exportMidi,
+  exportScore,
   importMidiFile,
   renderInCreation,
   sendToCreation,
@@ -113,16 +114,31 @@ function ProjectsDialog() {
           <input
             ref={file}
             type="file"
-            accept=".mid,.midi,audio/midi"
+            accept=".mid,.midi,audio/midi,.musicxml,.xml,.mxl"
             hidden
             onChange={(e) => e.target.files?.[0] && void importMidiFile(e.target.files[0])}
           />
-          <button type="button" className="btn" onClick={() => file.current?.click()}>
-            <Upload /> Import MIDI file
+          <button
+            type="button"
+            className="btn"
+            title="A MIDI file, or a score from MuseScore, Sibelius, Finale or Dorico (MusicXML, .mxl)"
+            onClick={() => file.current?.click()}
+          >
+            <Upload /> Import MIDI or MusicXML
           </button>
           {current && (
             <button type="button" className="btn" onClick={exportMidi}>
               <Download /> Export MIDI
+            </button>
+          )}
+          {current && (
+            <button
+              type="button"
+              className="btn"
+              title="The score, for MuseScore, Sibelius, Finale or Dorico"
+              onClick={exportScore}
+            >
+              <Download /> Export MusicXML
             </button>
           )}
           {current && (

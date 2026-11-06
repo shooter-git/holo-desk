@@ -71,13 +71,15 @@ export interface ShowOptions {
   /** Bars by index, [from, to). */
   from?: number;
   to?: number;
+  /** Only these parts (by index); they keep their numbers. */
+  parts?: number[];
 }
 
 export function scoreText(doc: ScoreDoc, opts: ShowOptions = {}): string {
   const from = Math.max(0, opts.from ?? 0);
   const to = Math.min(doc.bars.length, opts.to ?? doc.bars.length);
   const lines = [`"${doc.title}"`, partsLine(doc)];
-  for (let b = from; b < to; b++) lines.push(...barText(doc, doc.bars[b] as Bar, b === from));
+  for (let b = from; b < to; b++) lines.push(...barText(doc, doc.bars[b] as Bar, b === from, opts.parts));
   return lines.join('\n');
 }
 
@@ -126,9 +128,10 @@ function header(doc: ScoreDoc, bar: Bar, first: boolean): string {
   return bits.join('  ');
 }
 
-function barText(doc: ScoreDoc, bar: Bar, first: boolean): string[] {
+function barText(doc: ScoreDoc, bar: Bar, first: boolean, only?: number[]): string[] {
   const out = [header(doc, bar, first)];
   doc.parts.forEach((part, pi) => {
+    if (only && !only.includes(pi)) return;
     for (const staff of part.staves) {
       const sb = staff.bars[bar.index];
       if (!sb) continue;

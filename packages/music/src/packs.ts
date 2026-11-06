@@ -119,7 +119,8 @@ export function formatChecksums(files: Record<string, string>): string {
 /** The pinned libraries as one file: one library to a line, so a new engine's changes read well. */
 export function formatPinnedPacks(packs: PinnedPack[]): string {
   const sorted = [...packs].sort((a, b) => a.id.localeCompare(b.id));
-  return `{"format":"holo-packs","version":1,"packs":[\n${sorted.map((p) => JSON.stringify(p)).join(',\n')}\n]}\n`;
+  const lines = sorted.map((p) => `\n${JSON.stringify(p)}`).join(',');
+  return `{"format":"holo-packs","version":1,"packs":[${lines}\n]}\n`;
 }
 
 export function parsePinnedPacks(text: string): PinnedPacks {

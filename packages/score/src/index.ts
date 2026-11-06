@@ -1,3 +1,5 @@
+export * from './bake.ts';
+export * from './check.ts';
 export * from './instruments.ts';
 export * from './mei.ts';
 export * from './meter.ts';
@@ -7,3 +9,4 @@ export * from './rhythm.ts';
 export * from './spell.ts';
 export * from './text.ts';
 export * from './voices.ts';
+export * from './write.ts';

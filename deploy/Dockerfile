@@ -41,6 +41,7 @@ COPY --from=deps /app/apps/server/node_modules ./apps/server/node_modules
 COPY --from=deps /app/packages/engine/node_modules ./packages/engine/node_modules
 COPY --from=deps /app/packages/music/node_modules ./packages/music/node_modules
 COPY --from=deps /app/packages/cli/node_modules ./packages/cli/node_modules
+COPY --from=deps /app/packages/score/node_modules ./packages/score/node_modules
 COPY package.json pnpm-workspace.yaml ./
 COPY apps/server ./apps/server
 COPY packages ./packages

@@ -1,6 +1,6 @@
 /** The studio's frame: the desktop layout, the tablet's, and the phone's (portrait and landscape). */
 import { Library as LibraryIcon, Music2, Piano, Redo2, Rows3, Settings, SlidersVertical, Undo2 } from 'lucide-react';
-import { useEffect, useRef } from 'react';
+import { lazy, Suspense, useEffect, useRef } from 'react';
 import { ensureAudio, redo, resolveConflict, undo } from '../app/actions.ts';
 import { isPhone, type Layout, useLayout } from '../app/layout.ts';
 import { type MobileTab, store, useApp } from '../app/store.ts';
@@ -21,6 +21,39 @@ function useAudioSelected(): boolean {
   return useApp((s) => s.project?.tracks.find((t) => t.id === s.selectedTrack)?.kind === 'audio');
 }
 
+// the Score (and its engraver) loads the first time it's shown
+const Score = lazy(() => import('../score/Score.tsx').then((m) => ({ default: m.Score })));
+const ScoreBar = lazy(() => import('../score/Score.tsx').then((m) => ({ default: m.ScoreBar })));
+
+/** Whether the notes editor shows the Score (an audio track always has its Audio Editor). */
+function useScoreShown(): boolean {
+  const audio = useAudioSelected();
+  return useApp((s) => s.noteView === 'score') && !audio;
+}
+
+/** Piano Roll or Score, for an instrument track's notes. */
+function NoteViewSwitch() {
+  const view = useApp((s) => s.noteView);
+  return (
+    <div className="seg">
+      <button
+        type="button"
+        className={`btn${view === 'roll' ? ' on' : ''}`}
+        onClick={() => store.set({ noteView: 'roll' })}
+      >
+        Piano Roll
+      </button>
+      <button
+        type="button"
+        className={`btn${view === 'score' ? ' on' : ''}`}
+        onClick={() => store.set({ noteView: 'score' })}
+      >
+        Score
+      </button>
+    </div>
+  );
+}
+
 /** The editor never takes more than the window leaves for the tracks (a remembered height may be from a taller one). */
 function clampEditorHeight(h: number): number {
   return Math.max(140, Math.min(window.innerHeight - 180, h));
@@ -30,8 +63,9 @@ function EditorPane() {
   const editor = useApp((s) => s.editor);
   const height = clampEditorHeight(useApp((s) => s.editorHeight));
   const audio = useAudioSelected();
+  const score = useScoreShown();
   if (!editor) return null;
-  const editorName = audio ? 'Audio Editor' : 'Piano Roll';
+  const editorName = audio ? 'Audio Editor' : score ? 'Score' : 'Piano Roll';
   return (
     <section className="editor-pane" style={{ height }} aria-label={editor === 'piano' ? editorName : 'Mixer'}>
       <div
@@ -66,6 +100,10 @@ function EditorPane() {
         {editor === 'piano' ? (
           audio ? (
             <AudioEditorBar />
+          ) : score ? (
+            <Suspense fallback={<span className="title">Score</span>}>
+              <ScoreBar />
+            </Suspense>
           ) : (
             <PianoRollBar />
           )
@@ -78,11 +116,20 @@ function EditorPane() {
         <div className="seg">
           <button
             type="button"
-            className={`btn${editor === 'piano' ? ' on' : ''}`}
-            onClick={() => store.set({ editor: 'piano' })}
+            className={`btn${editor === 'piano' && !score ? ' on' : ''}`}
+            onClick={() => store.set({ editor: 'piano', noteView: 'roll' })}
           >
-            {editorName}
+            {audio ? 'Audio Editor' : 'Piano Roll'}
           </button>
+          {!audio && (
+            <button
+              type="button"
+              className={`btn${editor === 'piano' && score ? ' on' : ''}`}
+              onClick={() => store.set({ editor: 'piano', noteView: 'score' })}
+            >
+              Score
+            </button>
+          )}
           <button
             type="button"
             className={`btn${editor === 'mixer' ? ' on' : ''}`}
@@ -92,7 +139,19 @@ function EditorPane() {
           </button>
         </div>
       </div>
-      {editor === 'piano' ? audio ? <AudioEditor /> : <PianoRoll /> : <Mixer />}
+      {editor === 'piano' ? (
+        audio ? (
+          <AudioEditor />
+        ) : score ? (
+          <Suspense fallback={<div className="score" />}>
+            <Score />
+          </Suspense>
+        ) : (
+          <PianoRoll />
+        )
+      ) : (
+        <Mixer />
+      )}
     </section>
   );
 }
@@ -199,6 +258,7 @@ const TABS: [MobileTab, string, typeof Rows3][] = [
 function TabBar() {
   const tab = useApp((s) => s.mobileTab);
   const audio = useAudioSelected();
+  const score = useScoreShown();
   return (
     <nav className="tabbar" aria-label="Views">
       {TABS.map(([id, label, Icon]) => (
@@ -210,7 +270,7 @@ function TabBar() {
           aria-current={tab === id}
         >
           <Icon />
-          {id === 'editor' && audio ? 'Editor' : label}
+          {id === 'editor' && audio ? 'Editor' : id === 'editor' && score ? 'Score' : label}
         </button>
       ))}
     </nav>
@@ -220,11 +280,31 @@ function TabBar() {
 function PhoneView() {
   const tab = useApp((s) => s.mobileTab);
   const audio = useAudioSelected();
+  const score = useScoreShown();
   if (tab === 'editor') {
     return (
       <div className="phone-view editor">
-        <div className="pane-bar">{audio ? <AudioEditorBar /> : <PianoRollBar />}</div>
-        {audio ? <AudioEditor /> : <PianoRoll />}
+        <div className="pane-bar">
+          {audio ? (
+            <AudioEditorBar />
+          ) : score ? (
+            <Suspense fallback={null}>
+              <ScoreBar />
+            </Suspense>
+          ) : (
+            <PianoRollBar />
+          )}
+          {!audio && <NoteViewSwitch />}
+        </div>
+        {audio ? (
+          <AudioEditor />
+        ) : score ? (
+          <Suspense fallback={<div className="score" />}>
+            <Score />
+          </Suspense>
+        ) : (
+          <PianoRoll />
+        )}
       </div>
     );
   }

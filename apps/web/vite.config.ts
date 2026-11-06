@@ -20,6 +20,9 @@ const isolation = {
   'Cross-Origin-Resource-Policy': 'same-origin',
 };
 
+/** Files cached when first used rather than when a version installs. */
+const LAZY = /score\.worker/;
+
 /** Writes sw.js with this build's files, so the installed app opens offline. */
 function serviceWorker(): Plugin {
   let outDir = 'dist';
@@ -42,9 +45,16 @@ function serviceWorker(): Plugin {
         // for a year by their hashed names, so a fresh version needn't fetch the other eleven
         .filter((f) => !f.endsWith('.map') && !f.endsWith('.woff2') && f !== 'sw.js')
         .sort();
+      // the score's engraver is several megabytes: kept the first time the Score is shown, not
+      // fetched by every device (a phone's Remote) when a version installs
+      const lazy = shell.filter((f) => LAZY.test(f));
+      const eager = shell.filter((f) => !LAZY.test(f));
       const version = createHash('sha256').update(shell.join('\n')).digest('hex').slice(0, 12);
       const template = readFileSync(resolve(here, 'src/sw-template.js'), 'utf8');
-      writeFileSync(resolve(outDir, 'sw.js'), template.replace('/* BUILD */ null', JSON.stringify({ version, shell })));
+      writeFileSync(
+        resolve(outDir, 'sw.js'),
+        template.replace('/* BUILD */ null', JSON.stringify({ version, shell: eager, lazy })),
+      );
     },
   };
 }

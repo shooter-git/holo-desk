@@ -3645,3 +3645,68 @@ html[data-layout="phone-landscape"] .toasts {
 .engine-stale a {
   color: var(--warn);
 }
+
+/* ---- the Score: Verovio's engraving in the studio's colours, with the playhead over it ---- */
+.score {
+  position: relative;
+  min-height: 0;
+  overflow: auto;
+  background: var(--bg-1);
+  overscroll-behavior: contain;
+}
+
+.score.empty {
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  color: var(--text-3);
+  text-align: center;
+}
+
+.score-sheet {
+  position: relative;
+  width: max-content;
+  min-width: 100%;
+}
+
+.score-page svg {
+  display: block;
+  color: var(--text);
+  fill: currentColor;
+}
+
+.score-page g.note,
+.score-page g.chord {
+  cursor: pointer;
+}
+
+.score-page g.note.sel,
+.score-page g.chord.sel {
+  color: var(--accent);
+  fill: var(--accent);
+}
+
+.score-cursor {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 2px;
+  border-radius: 1px;
+  background: var(--play);
+  box-shadow: 0 0 6px color-mix(in srgb, var(--play) 60%, transparent);
+  pointer-events: none;
+  will-change: transform;
+}
+
+.score-note {
+  position: absolute;
+  top: 10px;
+  left: 14px;
+  margin: 0;
+  color: var(--text-3);
+  font-size: var(--fs);
+}
+
+.score-note.bad {
+  color: var(--danger);
+}

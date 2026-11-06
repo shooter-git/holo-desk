@@ -9,7 +9,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { locate, togglePlay } from '../../app/actions.ts';
 import { store, toast, useApp } from '../../app/store.ts';
 import { renderEach } from '../verovio.ts';
-import { aiStatus, getScan, setSystem, startAi, stopAi } from './client.ts';
+import { aiStatus, compareEngines, getScan, omrStatus, setSystem, startAi, stopAi } from './client.ts';
 import { NewScan } from './NewScan.tsx';
 
 export default function ScanWindow() {
@@ -61,6 +61,8 @@ function Review({ id }: { id: string }) {
   const job = useApp((s) => (s.aiJob?.scan === id ? s.aiJob : null));
   const [scan, setScan] = useState<Scan | null>(null);
   const [ai, setAi] = useState<{ available: boolean; reason?: string } | null>(null);
+  const [engines, setEngines] = useState<string[]>([]);
+  const [comparing, setComparing] = useState(false);
   const [drawn, setDrawn] = useState<string[]>([]);
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: read again whenever the host says it changed
@@ -68,7 +70,13 @@ function Review({ id }: { id: string }) {
     void getScan(id).then(setScan, (e: Error) => toast(e.message, 'error'));
   }, [id, tick]);
   useEffect(() => {
-    const check = () => void aiStatus().then(setAi, () => setAi(null));
+    const check = () => {
+      void aiStatus().then(setAi, () => setAi(null));
+      void omrStatus().then(
+        (o) => setEngines(o.available ? o.engines : []),
+        () => setEngines([]),
+      );
+    };
     check();
     const t = window.setInterval(check, 15_000);
     return () => window.clearInterval(t);
@@ -163,6 +171,31 @@ function Review({ id }: { id: string }) {
             <button type="button" className="btn" disabled={!ai?.available || !flagged} onClick={() => run('fix')}>
               Fix flagged
             </button>
+            {engines.length > 0 && (
+              <button
+                type="button"
+                className="btn"
+                disabled={comparing || !counts.read}
+                title={`Read each page with ${engines.join(' and ')} too, and flag the bars they read differently`}
+                onClick={() => {
+                  setComparing(true);
+                  void compareEngines(scan.id)
+                    .then((r) =>
+                      toast(
+                        r.flagged
+                          ? `The engines read ${r.flagged} bar${r.flagged === 1 ? '' : 's'} differently: see the flags`
+                          : 'The engines agree with every bar written',
+                        'info',
+                        8000,
+                      ),
+                    )
+                    .catch((e: Error) => toast(e.message, 'error'))
+                    .finally(() => setComparing(false));
+                }}
+              >
+                {comparing ? 'The engines are reading…' : 'Compare with the engines'}
+              </button>
+            )}
           </>
         )}
         <button type="button" className="btn ghost icon" title="Close" onClick={close}>

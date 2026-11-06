@@ -45,3 +45,9 @@ The studio's fonts are [Inter](https://rsms.me/inter/) and [JetBrains Mono](http
   (the score worker), so it can be swapped for another build of Verovio. HO[LO] writes the score it
   draws as MEI (`packages/score/src/mei.ts`); Verovio's source is at
   [github.com/rism-digital/verovio](https://github.com/rism-digital/verovio).
+- Scanned sheet music can also be read by [Audiveris](https://github.com/Audiveris/audiveris)
+  (AGPL-3.0, © Hervé Bitteur and Audiveris's contributors) and [homr](https://github.com/liebharc/homr)
+  (AGPL-3.0, © Christian Liebhardt and homr's contributors), in an optional container
+  (`deploy/omr`, `pnpm omr on`). Both are built from their published sources at pinned versions, run
+  unmodified as separate programs, and only handed a page to read; `deploy/omr/server.py`, which
+  calls them, is part of HO[LO] Desk (MIT).

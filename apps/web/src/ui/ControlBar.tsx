@@ -589,28 +589,6 @@ export function ControlBar() {
         >
           <ListMusic />
         </button>
-        <div className="seg">
-          <button
-            type="button"
-            className={`btn icon${library ? ' on' : ''}`}
-            title="Library (Y)"
-            aria-label="Library (Y)"
-            aria-pressed={library}
-            onClick={() => store.set({ library: !library })}
-          >
-            <Library />
-          </button>
-          <button
-            type="button"
-            className={`btn icon${inspector ? ' on' : ''}`}
-            title="Inspector (I)"
-            aria-label="Inspector (I)"
-            aria-pressed={inspector}
-            onClick={() => store.set({ inspector: !inspector })}
-          >
-            <PanelLeft />
-          </button>
-        </div>
         {touch && (
           <div className="seg cb-undo">
             <button
@@ -653,6 +631,29 @@ export function ControlBar() {
         )}
       </div>
       <div className="right">
+        {/* the panels they open sit at the side (the Library at the right) */}
+        <div className="seg">
+          <button
+            type="button"
+            className={`btn icon${library ? ' on' : ''}`}
+            title="Library (Y)"
+            aria-label="Library (Y)"
+            aria-pressed={library}
+            onClick={() => store.set({ library: !library })}
+          >
+            <Library />
+          </button>
+          <button
+            type="button"
+            className={`btn icon${inspector ? ' on' : ''}`}
+            title="Inspector (I)"
+            aria-label="Inspector (I)"
+            aria-pressed={inspector}
+            onClick={() => store.set({ inspector: !inspector })}
+          >
+            <PanelLeft />
+          </button>
+        </div>
         <div className="seg">
           <button
             type="button"

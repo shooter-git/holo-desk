@@ -1,5 +1,6 @@
 export * from './bake.ts';
 export * from './check.ts';
+export * from './edit.ts';
 export * from './instruments.ts';
 export * from './mei.ts';
 export * from './meter.ts';

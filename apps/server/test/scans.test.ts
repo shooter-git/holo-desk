@@ -104,6 +104,19 @@ describe('scans', () => {
     expect(text.statusCode).toBeGreaterThanOrEqual(400);
   });
 
+  it('says the AI isn’t there without a runner, and refuses its jobs', async () => {
+    expect((await app.inject({ method: 'GET', url: '/api/ai' })).json()).toEqual({
+      available: false,
+      reason: 'no-runner',
+    });
+    const scan = (await app.inject({ method: 'POST', url: '/api/scans', payload: { project } })).json() as Scan;
+    const read = await app.inject({ method: 'POST', url: `/api/scans/${scan.id}/ai`, payload: { task: 'read' } });
+    expect(read.statusCode).toBe(409);
+    expect(read.json()).toMatchObject({ reason: 'no-runner' });
+    const odd = await app.inject({ method: 'POST', url: `/api/scans/${scan.id}/ai`, payload: { task: 'rm -rf' } });
+    expect(odd.statusCode).toBe(400);
+  });
+
   it('goes when its song does', async () => {
     const scan = (await app.inject({ method: 'POST', url: '/api/scans', payload: { project } })).json() as Scan;
     expect(existsSync(join(work, 'data', 'scans', scan.id))).toBe(true);

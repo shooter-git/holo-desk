@@ -23,6 +23,7 @@ import {
 import { hostname, tmpdir } from 'node:os';
 import { basename, dirname, join, resolve, sep } from 'node:path';
 import { newAudioTrack, newRegion, type Op, type Project, secondsToTick } from '@holo/session';
+import { type AiJob, type Claude, findClaude, runAiJob, validJob } from './ai.ts';
 
 interface RenderSpec {
   command: string[];
@@ -85,8 +86,12 @@ function outputFile(path: string): string | null {
 
 export async function runner(base: string, creationsDir: string): Promise<void> {
   const name = `runner on ${hostname()}`;
-  const queue: Job[] = [];
+  const queue: (Job | (AiJob & { kind: 'ai' }))[] = [];
   let busy = false;
+  // the AI buttons: your own Claude Code, if it's here (looked for again on each connection)
+  const repo = resolve(import.meta.dirname, '../../..');
+  let claude: Claude | null = null;
+  const running = new Map<string, AbortController>();
   let ws: WebSocket | null = null;
   const send = (msg: unknown) => {
     if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify(msg));
@@ -228,17 +233,46 @@ export async function runner(base: string, creationsDir: string): Promise<void> 
     }
   }
 
+  async function runAi(job: AiJob): Promise<void> {
+    const say = (line: string) => {
+      console.log(`[AI ${job.task} ${job.scan}] ${line}`);
+      send({ type: 'job-progress', id: job.id, line });
+    };
+    if (!claude) throw new Error('Claude Code isn’t installed here: install it and sign in once (run `claude`)');
+    const controller = new AbortController();
+    running.set(job.id, controller);
+    try {
+      say(
+        job.task === 'read'
+          ? 'Starting to read the scan'
+          : job.task === 'check'
+            ? 'Starting to check'
+            : 'Starting to fix',
+      );
+      const summary = await runAiJob(job, { claude, repo, base, say, signal: controller.signal });
+      send({ type: 'job-done', id: job.id, summary });
+    } finally {
+      running.delete(job.id);
+    }
+  }
+
   const next = async () => {
     if (busy) return;
     const job = queue.shift();
     if (!job) return;
     busy = true;
     try {
-      await run(job);
+      if ('kind' in job) await runAi(job);
+      else await run(job);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      console.error(`[${job.piece}] failed: ${message}`);
-      send({ type: 'render-failed', id: job.id, error: message });
+      if ('kind' in job) {
+        console.error(`[AI ${job.task}] failed: ${message}`);
+        send({ type: 'job-failed', id: job.id, error: message });
+      } else {
+        console.error(`[${job.piece}] failed: ${message}`);
+        send({ type: 'render-failed', id: job.id, error: message });
+      }
     } finally {
       busy = false;
       void next();
@@ -249,12 +283,43 @@ export async function runner(base: string, creationsDir: string): Promise<void> 
     const socket = new WebSocket(`${base.replace(/^http/, 'ws')}/api/live`);
     ws = socket;
     socket.onopen = () => {
-      socket.send(JSON.stringify({ type: 'hello', role: 'runner', name }));
+      claude = findClaude();
+      const caps = {
+        render: true,
+        ai: {
+          claude: claude?.path ?? null,
+          version: claude?.version ?? null,
+          skill: existsSync(join(repo, 'skills', 'holo')),
+        },
+      };
+      socket.send(JSON.stringify({ type: 'hello', role: 'runner', name, caps }));
       console.log(`Creation runner connected to ${base} (creations in ${creationsDir}). Waiting for renders…`);
+      console.log(
+        claude
+          ? `The AI buttons use Claude Code ${claude.version} (${claude.path}).`
+          : 'Claude Code isn’t installed here: the AI buttons wait for it (install it, sign in once, and restart the runner).',
+      );
     };
     socket.onmessage = (e) => {
       try {
         const msg = JSON.parse(String(e.data)) as Record<string, unknown>;
+        if (msg.type === 'ai') {
+          const job = { id: msg.id, task: msg.task, scan: msg.scan, project: msg.project } as Partial<AiJob>;
+          // only a job HO[LO] could have made: a known task, ids of the right shape
+          if (!validJob(job)) return;
+          queue.push({ ...job, kind: 'ai' });
+          void next();
+          return;
+        }
+        if (msg.type === 'ai-cancel') {
+          running.get(String(msg.id))?.abort();
+          const waiting = queue.findIndex((j) => j.id === msg.id);
+          if (waiting >= 0) {
+            queue.splice(waiting, 1);
+            send({ type: 'job-failed', id: String(msg.id), error: 'Stopped' });
+          }
+          return;
+        }
         if (msg.type !== 'render') return;
         queue.push({
           id: String(msg.id),

@@ -6,8 +6,6 @@
  *   pnpm engine:build --release              the download for this computer: dist/holo-engine-<os>-<arch>[.exe]
  *   pnpm engine:build --release win32-x64    …for another computer (Windows and Linux build anywhere with Zig;
  *                                            macOS builds on a Mac, where Apple's frameworks are)
- *   pnpm engine:build --fetch win32-x64      only fetch what that build downloads (HO[LO]'s Docker image does
- *                                            this in a layer of its own, then builds the Windows and Linux ones)
  *
  * The native piece is one C file (native/holo_native.c) with miniaudio (fetched once, the release
  * pinned below and checked), compiled by Zig (`zig cc`, which cross-compiles with nothing else
@@ -49,8 +47,6 @@ async function miniaudio() {
 
 const args = process.argv.slice(2);
 const release = args.includes('--release');
-/** Only fetch what a build downloads (miniaudio, each target's Node), into the cache: a Docker layer of its own. */
-const fetchOnly = args.includes('--fetch');
 const targets = args.filter((a) => !a.startsWith('--'));
 if (!targets.length) targets.push(host);
 
@@ -223,10 +219,6 @@ async function single(target, native) {
 }
 
 const header = await miniaudio();
-if (fetchOnly) {
-  for (const t of targets) if (!t.startsWith('darwin')) await nodeBinary(t);
-  process.exit(0);
-}
 const natives = new Map(targets.map((t) => [t, buildNative(t, header)]));
 if (release) {
   mkdirSync(dist, { recursive: true });

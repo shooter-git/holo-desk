@@ -8,7 +8,7 @@
  */
 import { clefAt, keyAlters, notate, type ScoreDoc, staffPlace, toMEI, writtenKeyAt } from '@holo/score';
 import type { Note, Project } from '@holo/session';
-import { PenLine, ScanLine, ZoomIn, ZoomOut } from 'lucide-react';
+import { PenLine, Printer, ScanLine, ZoomIn, ZoomOut } from 'lucide-react';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { apply, ensureAudio, locate } from '../app/actions.ts';
 import { setKeyScope } from '../app/keys.ts';
@@ -45,6 +45,9 @@ export function ScoreBar() {
   const zoom = useApp((s) => s.scoreZoom);
   const write = useApp((s) => s.scoreWrite);
   const trackName = useApp((s) => s.project?.tracks.find((t) => t.id === s.selectedTrack)?.name ?? '');
+  const selected = useApp((s) =>
+    s.project?.tracks.some((t) => t.id === s.selectedTrack && t.kind === 'instrument') ? s.selectedTrack : null,
+  );
   const phone = isPhone(useLayout());
   const concert = useApp((s) => !!s.project?.score?.concert);
   // (only a song with a transposing part has a choice to make)
@@ -90,6 +93,15 @@ export function ScoreBar() {
       >
         <PenLine />
         {!phone && 'Write'}
+      </button>
+      <button
+        type="button"
+        className="btn"
+        title="Print the score or its parts, or save them as a PDF"
+        onClick={() => store.set({ printView: { what: all ? 'score' : (selected ?? 'score') } })}
+      >
+        <Printer />
+        {!phone && 'Print'}
       </button>
       <button
         type="button"

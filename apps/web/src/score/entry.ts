@@ -369,6 +369,23 @@ export class Entry {
     if (c) this.commit(setMeter(c.project, this.barStart(c.doc), num, den), `Score: ${num}/${den}`);
   }
 
+  /** A new system or page from the caret's bar on (null: wherever the layout puts them). */
+  breakHere(kind: 'system' | 'page' | null): void {
+    const c = this.ctx();
+    if (!c) return;
+    const tick = this.barStart(c.doc);
+    const others = (c.project.score?.breaks ?? []).filter(([t]) => t !== tick);
+    const breaks: [number, 'system' | 'page'][] = kind
+      ? [...others, [tick, kind] as [number, 'system' | 'page']].sort((a, b) => a[0] - b[0])
+      : others;
+    const { breaks: _, ...rest } = c.project.score ?? {};
+    const score = breaks.length ? { ...rest, breaks } : rest;
+    this.commit(
+      [{ op: 'setProject', patch: { score: Object.keys(score).length ? score : null } }],
+      kind ? `Score: new ${kind} here` : 'Score: no break here',
+    );
+  }
+
   /** A repeat sign, an ending or a jump in the caret's bar (null: none there any more). */
   form(kind: FormKind | null, label: string): void {
     const c = this.ctx();

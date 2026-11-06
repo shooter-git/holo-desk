@@ -3675,6 +3675,16 @@ html[data-layout="phone-landscape"] .toasts {
   fill: currentColor;
 }
 
+/* (the engraver's part names are a "label", as the studio's captions are: they keep its lettering) */
+.score-page svg .label,
+.print-svg svg .label {
+  color: inherit;
+  font-size: inherit;
+  font-weight: inherit;
+  letter-spacing: normal;
+  text-transform: none;
+}
+
 .score-page g.note,
 .score-page g.chord {
   cursor: pointer;
@@ -4073,4 +4083,90 @@ footer.scan-bar {
 
 .remote-hint.bad {
   color: var(--danger);
+}
+
+/* Print: the score's pages over the studio, each a sheet of paper; printed, only the sheets */
+.print-window {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  background: var(--bg-1);
+  padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+}
+
+.print-window .scan-bar .input {
+  width: auto;
+}
+
+.print-sheets {
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 18px;
+  padding: 18px 16px 40px;
+}
+
+.print-sheet {
+  position: relative;
+  width: min(100%, 860px);
+  flex: none;
+  background: #fff;
+  color: #000;
+  box-shadow: 0 2px 14px rgb(0 0 0 / 0.45);
+}
+
+.print-svg svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.print-number {
+  position: absolute;
+  bottom: 3%;
+  left: 0;
+  right: 0;
+  text-align: center;
+  font: 11px/1 Georgia, "Times New Roman", serif;
+}
+
+.print-error {
+  color: var(--danger);
+}
+
+@media print {
+  body > :not(.print-window) {
+    display: none !important;
+  }
+
+  .print-window {
+    position: static;
+    display: block;
+    padding: 0;
+    background: #fff;
+  }
+
+  .print-window > header {
+    display: none;
+  }
+
+  .print-sheets {
+    display: block;
+    overflow: visible;
+    padding: 0;
+  }
+
+  .print-sheet {
+    width: 100%;
+    box-shadow: none;
+    break-after: page;
+    break-inside: avoid;
+  }
+
+  .print-sheet:last-child {
+    break-after: auto;
+  }
 }

@@ -333,3 +333,27 @@ describe('tablature', () => {
     }
   });
 });
+
+describe('pages', () => {
+  it('starts a new system where asked, and counts a part’s bars of rest in one', async () => {
+    const bars = Array.from({ length: 12 }, (_, b) => (b >= 3 && b < 9 ? 'r:4' : 'C5:1 D5:1 E5:1 F5:1'));
+    const p = one('Flute', parseNotation(bars.join(' | '), { unit: q }), (p) => {
+      const r = p.tracks[0]?.regions[0];
+      if (r) r.length = 12 * 4 * q;
+      p.score = { composer: 'Someone', breaks: [[2 * 4 * q, 'system']] };
+    });
+    const doc = notate(p);
+    const mei = toMEI(doc, { credits: true, multiRest: true, heading: 'Flute' });
+    // the system break comes before bar 3, the bar it starts with
+    expect(mei.indexOf('<sb/>')).toBeLessThan(mei.indexOf('n="3"'));
+    expect(mei.indexOf('<sb/>')).toBeGreaterThan(mei.indexOf('n="2"'));
+    expect(mei).toContain('<multiRest num="6"/>');
+    expect(mei).not.toContain('n="5"');
+    expect(mei).toContain('<composer>Someone</composer>');
+    const tk = new VerovioToolkit(await createVerovioModule());
+    tk.setOptions({ pageWidth: 2100, pageHeight: 2970, breaks: 'smart', breaksSmartSb: 0, header: 'auto' });
+    expect(tk.loadData(mei)).toBeTruthy();
+    tk.renderToSVG(1);
+    expect(tk.getLog()).toBe('');
+  });
+});

@@ -25,6 +25,18 @@ function useAudioSelected(): boolean {
 const Score = lazy(() => import('../score/Score.tsx').then((m) => ({ default: m.Score })));
 const ScoreBar = lazy(() => import('../score/Score.tsx').then((m) => ({ default: m.ScoreBar })));
 const ScanWindow = lazy(() => import('../score/scan/ScanWindow.tsx'));
+const PrintWindow = lazy(() => import('../score/Print.tsx'));
+
+/** Printing the score: its pages, over the studio, while it's open. */
+function Printing() {
+  const open = useApp((s) => s.printView !== null);
+  if (!open) return null;
+  return (
+    <Suspense fallback={null}>
+      <PrintWindow />
+    </Suspense>
+  );
+}
 
 /** Scanning sheet music: a window over the studio while it's open. */
 function Scanning() {
@@ -519,6 +531,7 @@ export function App() {
       <StageWindow />
       <Dialogs />
       <Scanning />
+      <Printing />
       <MenuHost />
       <Toasts />
       <BounceStatus />

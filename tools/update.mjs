@@ -105,6 +105,10 @@ async function tick() {
 }
 
 const units = join(process.env.XDG_CONFIG_HOME ?? join(homedir(), '.config'), 'systemd/user');
+/** A path as one argument of a unit's ExecStart (a folder like "VS Code" has a space in it). */
+const arg = (p) => `"${p.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/%/g, '%%')}"`;
+/** A path as a unit's WorkingDirectory: the whole line is the path; only its % are special. */
+const dir = (p) => p.replace(/%/g, '%%');
 const systemctl = (...a) => spawnSync('systemctl', ['--user', ...a], { stdio: 'inherit' }).status === 0;
 
 function autoupdate(what) {
@@ -114,7 +118,7 @@ function autoupdate(what) {
     mkdirSync(units, { recursive: true });
     writeFileSync(
       join(units, 'holo-update.service'),
-      `[Unit]\nDescription=HO[LO] Desk: update to the newest published image\n\n[Service]\nType=oneshot\nWorkingDirectory=${root}\nExecStart=${process.execPath} ${join(root, 'tools/update.mjs')} tick\n`,
+      `[Unit]\nDescription=HO[LO] Desk: update to the newest published image\n\n[Service]\nType=oneshot\nWorkingDirectory=${dir(root)}\nExecStart=${arg(process.execPath)} ${arg(join(root, 'tools/update.mjs'))} tick\n`,
     );
     writeFileSync(
       join(units, 'holo-update.timer'),

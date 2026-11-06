@@ -24,6 +24,7 @@ import {
   Rewind,
   Rows3,
   Save,
+  ScanLine,
   SkipBack,
   SlidersVertical,
   Square,
@@ -31,8 +32,10 @@ import {
   WifiOff,
 } from 'lucide-react';
 import {
+  lazy,
   type KeyboardEvent as ReactKeyboardEvent,
   type PointerEvent as ReactPointerEvent,
+  Suspense,
   useEffect,
   useRef,
   useState,
@@ -53,14 +56,18 @@ import { dbToFader, Fader, faderToDb, formatDb, Wordmark } from './controls.tsx'
 import { useFrame } from './frame.ts';
 import { PlayPad } from './PlayPad.tsx';
 
-type Tab = 'tracks' | 'mixer' | 'play' | 'markers';
+type Tab = 'tracks' | 'mixer' | 'play' | 'markers' | 'scan';
 
 const TABS: [Tab, string, typeof Rows3][] = [
   ['tracks', 'Tracks', Rows3],
   ['mixer', 'Mixer', SlidersVertical],
   ['play', 'Play', Music2],
   ['markers', 'Markers', Flag],
+  ['scan', 'Scan', ScanLine],
 ];
+
+// scanning sheet music with the phone's camera: loaded when the tab is opened
+const NewScan = lazy(() => import('../score/scan/NewScan.tsx').then((m) => ({ default: m.NewScan })));
 
 const DEFAULT_TEMPO: TempoPoint[] = [{ tick: 0, bpm: 120 }];
 const DEFAULT_METER: MeterPoint[] = [{ tick: 0, num: 4, den: 4 }];
@@ -169,6 +176,7 @@ export function Remote() {
             {tab === 'mixer' && <MixerTab />}
             {tab === 'play' && <PlayTab />}
             {tab === 'markers' && <MarkersTab />}
+            {tab === 'scan' && <ScanTab onDone={() => pick('tracks')} />}
           </main>
         </>
       ) : (
@@ -723,6 +731,39 @@ function PlayTab() {
         middleC={s?.middleC}
         instrument={(armed[0] ?? selected)?.instrument}
       />
+    </div>
+  );
+}
+
+/** Photograph sheet music here; it goes to the song open in the studio, to be read there. */
+function ScanTab({ onDone }: { onDone: () => void }) {
+  const s = useRemote((r) => activeStudio(r)?.state);
+  const studio = useRemote((r) => activeStudio(r)?.name);
+  const [sent, setSent] = useState<string | null>(null);
+  const [problem, setProblem] = useState<string | null>(null);
+  if (!s?.project) return <div className="remote-hint">Open a song in the studio to scan music into it.</div>;
+  return (
+    <div className="remote-scan">
+      {sent && (
+        <div className="remote-hint">
+          Sent “{sent}” to the studio on {studio}: review it and read it in there.
+        </div>
+      )}
+      {problem && <div className="remote-hint bad">{problem}</div>}
+      <div className="scan-window inline">
+        <Suspense fallback={<div className="remote-hint">Loading…</div>}>
+          <NewScan
+            project={{ id: s.project, title: s.title ?? 'the song' }}
+            track={null}
+            notify={setProblem}
+            onClose={onDone}
+            onSaved={(scan) => {
+              setSent(scan.title);
+              setProblem(null);
+            }}
+          />
+        </Suspense>
+      </div>
     </div>
   );
 }

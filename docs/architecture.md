@@ -190,4 +190,46 @@ A pack is a folder with `holo-pack.json`: every sample's key and velocity range,
 pitch, its levelling gain, its start, end and loop. The studio fetches an instrument's files when a
 track uses it, decodes them at the device's sample rate, trims them to their measured start and end,
 and hands them to the audio thread (transferred, not copied). Files are kept in the browser's cache
-storage, so the next load needs no network.
+storage, so the next load needs no network. Zones that play the same stretch of one file (a drum on two
+pads) share one copy.
+
+Packs HO[LO] ships maps for (`packs/manifests`, with every file's checksum in `packs/checksums`) are
+installed from the Library (**More packs → Install**) or `pnpm packs install`, from their pinned source:
+a git commit, notes cut from published downloads, an archive, or files *made* from a library's
+recordings (the `mix` source: a drum hit's microphones mixed at fixed gains, a note trimmed and faded,
+all in plain arithmetic, so the same downloads make the same bytes anywhere). The recipes that write
+those maps are in `tools/packs/`: they measure every layer's loudness and set it where one velocity
+curve meets it, so an instrument gets louder smoothly the harder it's played.
+
+What a pack can ask of the sampler besides its zones, each only where it does (so other packs play as
+they always have): choke groups (the closed hi-hat silences the open one), how often one key may sound
+at once, release samples in parts with a decay of their own (a piano's dampers and hammers, quieter the
+longer a note was held), the sustain pedal's own sound, keys without dampers, a zone's own release time,
+and tails faded as they load.
+
+## Synths
+
+Besides the samplers, the engine's own synths (`packages/engine/src/synth.ts`, `analog.ts`,
+`ethereal.ts`): the presets a new track starts from, and two with knobs of their own (`SYNTH_MACROS`,
+in an instrument window, or `holo synth`). **Fat Mono / Fat Poly**: three drifting oscillators into a
+transistor-ladder low-pass solved with no delay in its feedback; the mono one plays the last key held
+and glides when played legato. **Ethereal Pad / Keys**: a stereo supersaw with shimmering partials in a
+hall of its own with an octave-up shimmer; it counts as sounding until its tail is quiet. A knob turned
+while it plays updates the instrument where it is (it isn't made again), so no note is cut.
+
+## HO[LO] Engine and the studio
+
+HO[LO] Engine carries its own copy of the engine. Its hello says which (the fingerprint of
+`packages/engine/src` and `packages/session/src`); when it differs from the studio's own, the studio
+says so and links the matching build: CI builds Windows, macOS and Linux Engines whenever the engine
+changes on `main`, as a pre-release named `engine-<fingerprint>` (`GET /api/engine?engine=…` finds it,
+or a build of the host's own checkout first).
+
+## Deployment
+
+CI publishes the studio and its server as one image on every change to `main` and each release:
+`ghcr.io/shooter-git/holo-desk:main`, `:stable` and the version, `:sha-<commit>`, for amd64 and arm64,
+each with a signed record of what built it. A host follows a channel (`pnpm run update`), and
+`pnpm run autoupdate on` keeps it current: a timer pulls every 15 minutes, starts a new image only when
+there is one, and waits while a studio is playing or recording. An open studio asks for a reload when
+its host has been updated. `pnpm run up` builds from a checkout instead, and the timer waits.

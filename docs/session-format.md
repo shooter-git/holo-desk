@@ -32,7 +32,9 @@ in what's missing.
 {
   "id": "trk_…", "name": "Double bass (jazz)", "color": "#b07bd9", "kind": "instrument",
   "instrument": { "type": "sampler", "pack": "meatbass", "name": "upright" },
-                // or { "type": "synth", "preset": "Warm Pad", "params": {…} }, a Performance or Glass
+                // or { "type": "synth", "preset": "Warm Pad", "params": {…} } ("Fat Mono", "Fat Poly",
+                // "Ethereal Pad" and "Ethereal Keys" take their knobs there: { "cutoff": 450, … },
+                // see SYNTH_MACROS in packages/session), a Performance or Glass
                 // instrument (below), or { "type": "none" }
   "articulations": [{ "id": "pizz", "name": "Pizzicato", "instrument": { … } }],
   "input": { "port": "*", "channel": 0 },        // live MIDI: a port name or "*", channel 1-16 or 0 for all

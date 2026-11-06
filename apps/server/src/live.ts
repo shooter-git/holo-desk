@@ -55,9 +55,31 @@ export interface RenderJob {
   error: string | null;
 }
 
+/** An AI job: the runner's Claude Code reading a scan into a song, checking it, or fixing what was flagged. */
+export interface AiJob {
+  id: string;
+  task: 'read' | 'check' | 'fix';
+  scan: string;
+  project: string;
+  state: 'waiting' | 'running' | 'done' | 'failed';
+  started: number;
+  finished: number | null;
+  /** What it's doing, its last few steps. */
+  lines: string[];
+  summary: string | null;
+  error: string | null;
+}
+
+/** What a runner can do: renders, and the AI buttons (when Claude Code is on its computer). */
+export interface RunnerCaps {
+  render: boolean;
+  ai: { claude: string | null; version: string | null; skill: boolean } | null;
+}
+
 interface Client {
   ws: WebSocket;
   role: 'editor' | 'remote' | 'agent' | 'runner';
+  caps?: RunnerCaps;
   name: string;
   state: EditorState | null;
   /** The song this studio was last brought up to date about (on joining, or opening another). */
@@ -83,6 +105,7 @@ export class Live {
   private listeners = new Set<Listener>();
   private counter = 0;
   readonly renders = new Map<string, RenderJob>();
+  readonly aiJobs = new Map<string, AiJob>();
   /**
    * What a studio missed while it wasn't connected (a newer save of its song): asked when it joins or
    * opens another song, so a dropped connection never leaves it showing an old version.
@@ -116,6 +139,7 @@ export class Live {
             ? (msg.role as Client['role'])
             : 'remote';
         client.name = typeof msg.name === 'string' ? msg.name.slice(0, 80) : client.role;
+        if (client.role === 'runner') client.caps = runnerCaps(msg.caps);
         this.broadcastPeers();
         // a remote arriving sees every open studio at once
         if (client.role === 'remote') {
@@ -204,6 +228,24 @@ export class Live {
           if (msg.type === 'render-failed') job.error = String(msg.error ?? 'The render failed');
         }
         this.tell({ type: 'render-status', job }, job.project);
+        break;
+      }
+      case 'job-progress':
+      case 'job-done':
+      case 'job-failed': {
+        if (client.role !== 'runner') break;
+        const job = this.aiJobs.get(String(msg.id));
+        if (!job) break;
+        if (msg.type === 'job-progress') {
+          job.state = 'running';
+          job.lines = [...job.lines, String(msg.line ?? '').slice(0, 200)].slice(-12);
+        } else {
+          job.state = msg.type === 'job-done' ? 'done' : 'failed';
+          job.finished = Date.now();
+          if (msg.type === 'job-done') job.summary = String(msg.summary ?? '').slice(0, 500);
+          else job.error = String(msg.error ?? 'The AI stopped').slice(0, 500);
+        }
+        this.tell({ type: 'ai-status', job }, job.project);
         break;
       }
       case 'played':
@@ -309,6 +351,38 @@ export class Live {
     for (const c of this.clients) if (c.role === 'editor') this.send(c, { type: 'midi', port, data, sent: Date.now() });
   }
 
+  /** Whether the AI buttons can work, and if not, what's missing. */
+  aiStatus(): { available: boolean; reason?: 'no-runner' | 'no-claude' | 'no-skill'; version?: string } {
+    const runners = [...this.clients].filter((c) => c.role === 'runner');
+    if (!runners.length) return { available: false, reason: 'no-runner' };
+    const able = runners.find((c) => c.caps?.ai?.claude && c.caps.ai.skill);
+    if (able) return { available: true, ...(able.caps?.ai?.version ? { version: able.caps.ai.version } : {}) };
+    return { available: false, reason: runners.some((c) => c.caps?.ai?.claude) ? 'no-skill' : 'no-claude' };
+  }
+
+  /** Hand an AI job to a runner that has Claude Code; the studio hears how it goes. */
+  ai(job: AiJob): boolean {
+    const runner = [...this.clients].find((c) => c.role === 'runner' && c.caps?.ai?.claude && c.caps.ai.skill);
+    if (!runner) return false;
+    this.aiJobs.set(job.id, job);
+    for (const id of [...this.aiJobs.keys()].slice(0, -20)) this.aiJobs.delete(id);
+    this.send(runner, { type: 'ai', id: job.id, task: job.task, scan: job.scan, project: job.project });
+    this.tell({ type: 'ai-status', job }, job.project);
+    return true;
+  }
+
+  /** Stop an AI job. */
+  aiCancel(id: string): boolean {
+    const job = this.aiJobs.get(id);
+    if (!job || job.state === 'done' || job.state === 'failed') return false;
+    for (const c of this.clients) if (c.role === 'runner') this.send(c, { type: 'ai-cancel', id });
+    return true;
+  }
+
+  aiJobsFor(project: string): AiJob[] {
+    return [...this.aiJobs.values()].filter((j) => j.project === project);
+  }
+
   /** Whether a creation runner is connected (only it can run a creation's renderer). */
   runner(): boolean {
     return [...this.clients].some((c) => c.role === 'runner');
@@ -335,4 +409,20 @@ export class Live {
     this.listeners.delete(l);
     return l.notes;
   }
+}
+
+/** A runner's word on what it can do, checked. */
+function runnerCaps(v: unknown): RunnerCaps {
+  const caps = (typeof v === 'object' && v !== null ? v : {}) as Record<string, unknown>;
+  const ai = (typeof caps.ai === 'object' && caps.ai !== null ? caps.ai : null) as Record<string, unknown> | null;
+  return {
+    render: caps.render !== false,
+    ai: ai
+      ? {
+          claude: typeof ai.claude === 'string' ? ai.claude.slice(0, 300) : null,
+          version: typeof ai.version === 'string' ? ai.version.slice(0, 80) : null,
+          skill: ai.skill === true,
+        }
+      : null,
+  };
 }

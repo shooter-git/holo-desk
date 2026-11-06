@@ -34,7 +34,10 @@ export interface ScanOptions {
   changed: (scan: Scan) => void;
 }
 
-export function scanRoutes(app: FastifyInstance, opts: ScanOptions): { removeFor: (project: string) => void } {
+export function scanRoutes(
+  app: FastifyInstance,
+  opts: ScanOptions,
+): { get: (id: string) => Scan | null; removeFor: (project: string) => void } {
   const root = join(opts.dataDir, 'scans');
   const dir = (id: string) => join(root, id);
   const read = (id: string): Scan | null => {
@@ -182,6 +185,7 @@ export function scanRoutes(app: FastifyInstance, opts: ScanOptions): { removeFor
   });
 
   return {
+    get: read,
     // a song's scans go with it
     removeFor: (project: string) => {
       for (const s of all()) if (s.project === project) rmSync(dir(s.id), { recursive: true, force: true });

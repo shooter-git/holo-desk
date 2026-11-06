@@ -197,19 +197,26 @@ function address(part: Part, pi: number, staff: Staff, voice: number, many: bool
 const DYN_FIRST = (c: Control, e: ScoreEvent) => 'tick' in c && c.tick === e.tick;
 
 function marksBefore(marks: Control[], e: ScoreEvent, voiceOne: boolean): string[] {
-  const out: string[] = [];
+  // a fixed order, whatever order the marks were made in: a hairpin's end, the dynamic, words, a
+  // hairpin's start, an octave line, a slur
+  const ends: string[] = [];
+  const dyns: string[] = [];
+  const words: string[] = [];
+  const pins: string[] = [];
+  const lines: string[] = [];
   const ids = e.kind === 'chord' ? [e.id, ...e.heads.map((h) => h.id)] : [e.id];
   for (const c of marks) {
-    if (voiceOne && c.kind === 'dyn' && DYN_FIRST(c, e)) out.push(c.value);
-    if (voiceOne && c.kind === 'hairpin' && c.tick === e.tick) out.push(c.form === 'cres' ? '<' : '>');
-    if (voiceOne && c.kind === 'hairpin' && c.end === e.tick) out.push('!');
+    if (voiceOne && c.kind === 'hairpin' && c.end === e.tick) ends.push('!');
+    if (voiceOne && c.kind === 'dyn' && DYN_FIRST(c, e)) dyns.push(c.value);
     if (voiceOne && c.kind === 'words' && c.tick === e.tick)
-      out.push(c.place === 'above' ? `"${c.text}"` : `_"${c.text}"`);
-    if (c.kind === 'slur' && ids.includes(c.start)) out.push('(');
-    if (c.kind === 'octave' && ids.includes(c.start))
-      out.push(`${c.dis}${c.place === 'above' ? (c.dis === 8 ? 'va' : 'ma') : c.dis === 8 ? 'vb' : 'mb'}`);
+      words.push(c.place === 'above' ? `"${c.text}"` : `_"${c.text}"`);
+    if (voiceOne && c.kind === 'hairpin' && c.tick === e.tick) pins.push(c.form === 'cres' ? '<' : '>');
+    if (c.kind === 'octave' && ids.includes(c.start)) {
+      lines.push(`${c.dis}${c.place === 'above' ? (c.dis === 8 ? 'va' : 'ma') : c.dis === 8 ? 'vb' : 'mb'}`);
+    }
+    if (c.kind === 'slur' && ids.includes(c.start)) lines.push('(');
   }
-  return out;
+  return [...ends, ...dyns, ...words.sort(), ...pins, ...lines];
 }
 
 function marksAfter(marks: Control[], e: ScoreEvent): string[] {

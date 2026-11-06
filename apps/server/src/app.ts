@@ -20,6 +20,7 @@ import {
   studioEngine,
   syncPinnedPacks,
 } from '@holo/music';
+import { notate, readMusicXml, scoreFileText, toMusicXml } from '@holo/score';
 import {
   applyOps,
   describeNotes,
@@ -296,6 +297,36 @@ export async function buildApp(config: Config): Promise<{ app: FastifyInstance; 
       .type('audio/midi')
       .header('content-disposition', `attachment; filename="${name}.mid"`)
       .send(Buffer.from(writeMidi(project)));
+  });
+
+  // ---- scores: MusicXML (and compressed .mxl) in, MusicXML out ----
+
+  app.addContentTypeParser(
+    ['application/vnd.recordare.musicxml+xml', 'application/vnd.recordare.musicxml', 'application/xml', 'text/xml'],
+    { parseAs: 'buffer', bodyLimit: 64 * 1024 * 1024 },
+    (_r, body, done) => done(null, body),
+  );
+
+  app.post<{ Querystring: { title?: string } }>('/api/import/score', async (req, reply) => {
+    const body = req.body as Buffer;
+    try {
+      const text = await scoreFileText(new Uint8Array(body));
+      const { project } = readMusicXml(text, (req.query.title ?? 'Imported').slice(0, 120));
+      const saved = store.save(parseProject(project), null, 'import');
+      return reply.code(201).send(saved);
+    } catch (err) {
+      return reply.code(400).send({ error: err instanceof Error ? err.message : 'Not a score HO[LO] can read' });
+    }
+  });
+
+  app.get<{ Params: { id: string } }>('/api/projects/:id/musicxml', async (req, reply) => {
+    const project = store.get(req.params.id);
+    if (!project) return reply.code(404).send({ error: 'No such project' });
+    const name = project.title.replace(/[^\w\- ]+/g, '').trim() || 'score';
+    return reply
+      .type('application/vnd.recordare.musicxml+xml')
+      .header('content-disposition', `attachment; filename="${name}.musicxml"`)
+      .send(toMusicXml(notate(project)));
   });
 
   // ---- sample packs ----

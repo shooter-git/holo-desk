@@ -3,6 +3,7 @@
  * format 0 or 1 file in (format 0 is split by channel).
  */
 import { newChannel, newId, newProject, newRegion, TRACK_COLORS } from './defaults.ts';
+import { keysOf, keyText } from './keysig.ts';
 import { type CCPoint, type MeterPoint, type Note, PPQ, type Project, type TempoPoint, type Track } from './types.ts';
 
 // ---- writing ----
@@ -57,6 +58,10 @@ export function writeMidi(project: Project): Uint8Array {
     conductor.push({ tick: m.tick, order: 1, bytes: meta(0x58, [m.num, Math.log2(m.den), 24, 8]) });
   }
   for (const m of project.markers) conductor.push({ tick: m.tick, order: 2, bytes: meta(0x06, text(m.name)) });
+  // key signatures: sharps (+) or flats (−), and minor or not
+  for (const k of keysOf(project)) {
+    conductor.push({ tick: k.tick, order: 1, bytes: meta(0x59, [k.fifths & 0xff, k.mode === 'minor' ? 1 : 0]) });
+  }
 
   const tracks = project.tracks.map((track, index) => {
     const ch = channelFor(index);
@@ -68,6 +73,9 @@ export function writeMidi(project: Project): Uint8Array {
         const v = Math.max(1, Math.min(127, Math.round(n.v)));
         const on = region.start + n.t;
         events.push({ tick: on, order: 2, bytes: [0x90 | ch, p, v] });
+        // a lyric syllable goes with its note (the first verse)
+        const syllable = n.n?.ly?.[0];
+        if (syllable) events.push({ tick: on, order: 1, bytes: meta(0x05, text(syllable.replace(/_$/, ''))) });
         events.push({ tick: on + Math.max(1, n.d), order: 1, bytes: [0x80 | ch, p, 0] });
       }
       for (const [lane, points] of Object.entries(region.cc)) {
@@ -101,11 +109,15 @@ export interface MidiTrack {
   channel: number;
   notes: Note[];
   cc: Record<string, CCPoint[]>;
+  /** Lyric syllables, at their ticks. */
+  lyrics?: [number, string][];
 }
 
 export interface MidiFile {
   tempo: TempoPoint[];
   meter: MeterPoint[];
+  /** Key signatures: sharps (+) or flats (−), minor or major. */
+  keys?: { tick: number; fifths: number; minor: boolean }[];
   markers: { tick: number; name: string }[];
   tracks: MidiTrack[];
   title: string;
@@ -122,6 +134,7 @@ export function readMidi(data: Uint8Array): MidiFile {
   const tempo: TempoPoint[] = [];
   const meter: MeterPoint[] = [];
   const markers: { tick: number; name: string }[] = [];
+  const keys: { tick: number; fifths: number; minor: boolean }[] = [];
   const tracks: MidiTrack[] = [];
   let title = '';
   let pos = 8 + view.getUint32(4);
@@ -136,6 +149,7 @@ export function readMidi(data: Uint8Array): MidiFile {
     pos = end;
     if (!isTrack) continue;
     const byChannel = new Map<number, MidiTrack>();
+    const lyrics: [number, string][] = [];
     let name = '';
     const forChannel = (ch: number) => {
       let t = byChannel.get(ch);
@@ -176,6 +190,15 @@ export function readMidi(data: Uint8Array): MidiFile {
           tempo.push({ tick: at, bpm: Math.round((60_000_000 / us) * 1000) / 1000 });
         } else if (type === 0x58 && len >= 2) {
           meter.push({ tick: at, num: body[0] ?? 4, den: 2 ** (body[1] ?? 2) });
+        } else if (type === 0x59 && len >= 2) {
+          const sf = body[0] ?? 0;
+          keys.push({ tick: at, fifths: sf > 127 ? sf - 256 : sf, minor: body[1] === 1 });
+        } else if (type === 0x05) {
+          const syl = decoder
+            .decode(body)
+            .replace(/[\r\n/\\]+$/, '')
+            .trim();
+          if (syl) lyrics.push([at, syl]);
         } else if (type === 0x06 || type === 0x01) {
           if (type === 0x06) markers.push({ tick: at, name: decoder.decode(body) });
         } else if (type === 0x2f) break;
@@ -225,6 +248,9 @@ export function readMidi(data: Uint8Array): MidiFile {
     for (const part of parts) {
       part.name =
         name && parts.length === 1 ? name : name ? `${name} (ch ${part.channel + 1})` : `Channel ${part.channel + 1}`;
+      // the track's lyrics go with the part that has notes where they fall
+      const own = lyrics.filter(([t]) => part.notes.some((n) => n.t === t));
+      if (own.length) part.lyrics = own;
       tracks.push(part);
     }
     trackIndex++;
@@ -233,7 +259,14 @@ export function readMidi(data: Uint8Array): MidiFile {
   meter.sort((a, b) => a.tick - b.tick);
   if (!tempo.length || (tempo[0] as TempoPoint).tick > 0) tempo.unshift({ tick: 0, bpm: 120 });
   if (!meter.length || (meter[0] as MeterPoint).tick > 0) meter.unshift({ tick: 0, num: 4, den: 4 });
-  return { tempo, meter, markers, tracks, title };
+  return {
+    tempo,
+    meter,
+    markers,
+    tracks,
+    title,
+    ...(keys.length ? { keys: keys.sort((a, b) => a.tick - b.tick) } : {}),
+  };
 }
 
 /** A new session from a MIDI file: one track per MIDI track, its notes in one region. */
@@ -243,6 +276,15 @@ export function projectFromMidi(file: MidiFile, title: string): Project {
   project.tempo = file.tempo;
   project.meter = file.meter;
   project.markers = file.markers.map((m) => ({ id: newId('mrk'), tick: m.tick, name: m.name }));
+  if (file.keys?.length) {
+    project.keys = file.keys.map((k) => ({
+      tick: k.tick,
+      fifths: Math.max(-7, Math.min(7, k.fifths)),
+      mode: k.minor ? 'minor' : 'major',
+    }));
+    const first = project.keys[0];
+    project.key = first && first.tick === 0 ? keyText(first) : null;
+  }
   const bar = PPQ * 4;
   project.tracks = file.tracks.map((mt, i): Track => {
     const lastTick = Math.max(
@@ -254,6 +296,11 @@ export function projectFromMidi(file: MidiFile, title: string): Project {
     const start = Math.floor(firstTick / bar) * bar;
     const region = newRegion(start, Math.max(bar, Math.ceil((lastTick - start) / bar) * bar), mt.name);
     region.notes = mt.notes.map((n) => ({ ...n, t: n.t - start }));
+    // a lyric on the top note starting where it falls
+    for (const [t, syl] of mt.lyrics ?? []) {
+      const at = region.notes.filter((n) => n.t === t - start).sort((a, b) => b.p - a.p)[0];
+      if (at) at.n = { ...at.n, ly: [syl] };
+    }
     region.cc = Object.fromEntries(
       Object.entries(mt.cc).map(([k, pts]) => [k, pts.map(([t, v]): CCPoint => [t - start, v])]),
     );

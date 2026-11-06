@@ -14,7 +14,10 @@ import {
   parseNotation,
   parsePosition,
   parseProject,
+  projectFromMidi,
+  readMidi,
   tickToBarBeat,
+  writeMidi,
 } from '../src/index.ts';
 
 const BAR = PPQ * 4;
@@ -227,5 +230,28 @@ describe('spelling in the text notation', () => {
   it('keeps sharps and flats as written', () => {
     const notes = parseNotation('Bb4:1 A#4:1 C4:1 E#4:1 (Db5 F5):1', { unit: PPQ });
     expect(notes.map((n) => n.n?.sp ?? null)).toEqual([[6, -1, 70], [5, 1, 70], null, [2, 1, 65], [1, -1, 73], null]);
+  });
+});
+
+describe('MIDI files and the score', () => {
+  it('keep key changes and lyrics', () => {
+    const p = newProject('Song');
+    const t = p.tracks[0];
+    if (!t) throw new Error('no track');
+    const r = newRegion(0, BAR * 2);
+    r.notes = [
+      { t: 0, d: PPQ, p: 62, v: 80, n: { ly: ['Hal-'] } },
+      { t: PPQ, d: PPQ, p: 64, v: 80, n: { ly: ['le'] } },
+    ];
+    t.regions = [r];
+    p.keys = [
+      { tick: 0, fifths: -1, mode: 'minor' },
+      { tick: BAR, fifths: 2, mode: 'major' },
+    ];
+    p.key = 'D minor';
+    const back = projectFromMidi(readMidi(writeMidi(p)), 'Song');
+    expect(back.keys).toEqual(p.keys);
+    expect(back.key).toBe('D minor');
+    expect(back.tracks[0]?.regions[0]?.notes.map((n) => n.n?.ly?.[0])).toEqual(['Hal-', 'le']);
   });
 });

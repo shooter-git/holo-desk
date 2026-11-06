@@ -8,7 +8,7 @@
  */
 import { clefAt, keyAlters, notate, type ScoreDoc, staffPlace, toMEI, writtenKeyAt } from '@holo/score';
 import type { Note, Project } from '@holo/session';
-import { PenLine, ZoomIn, ZoomOut } from 'lucide-react';
+import { PenLine, ScanLine, ZoomIn, ZoomOut } from 'lucide-react';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { ensureAudio, locate } from '../app/actions.ts';
 import { setKeyScope } from '../app/keys.ts';
@@ -87,6 +87,15 @@ export function ScoreBar() {
       >
         <PenLine />
         {!phone && 'Write'}
+      </button>
+      <button
+        type="button"
+        className="btn"
+        title="Scan sheet music: photos or PDFs read into this song"
+        onClick={() => store.set({ scanView: { id: null } })}
+      >
+        <ScanLine />
+        {!phone && 'Scan'}
       </button>
       <span className="grow" />
       <button type="button" className="btn ghost icon" title="Smaller" onClick={() => zoomBy(0.85)}>

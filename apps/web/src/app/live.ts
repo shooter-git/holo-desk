@@ -32,7 +32,7 @@ import {
   updateChannel,
   updateTrack,
 } from './actions.ts';
-import { store, toast } from './store.ts';
+import { type AiJobStatus, store, toast } from './store.ts';
 
 let socket: WebSocket | null = null;
 let retry = 1000;
@@ -250,6 +250,17 @@ async function onMessage(msg: Record<string, unknown>): Promise<void> {
     case 'command':
       await command(msg);
       return;
+    case 'scan':
+      store.set({ scanTick: store.get().scanTick + 1 });
+      return;
+    case 'ai-status': {
+      const job = msg.job as AiJobStatus;
+      const was = store.get().aiJob;
+      store.set({ aiJob: job });
+      if (job.state === 'done' && was?.state !== 'done') toast(`AI: ${job.summary || 'done'}`, 'ai', 8000);
+      if (job.state === 'failed' && was?.state !== 'failed') toast(`The AI stopped: ${job.error ?? ''}`, 'error', 8000);
+      return;
+    }
     case 'render-status': {
       // a creation rendering this song on the host (its result arrives as operations, an undo step)
       const job = msg.job as RenderStatus;

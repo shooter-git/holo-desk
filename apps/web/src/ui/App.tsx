@@ -24,6 +24,18 @@ function useAudioSelected(): boolean {
 // the Score (and its engraver) loads the first time it's shown
 const Score = lazy(() => import('../score/Score.tsx').then((m) => ({ default: m.Score })));
 const ScoreBar = lazy(() => import('../score/Score.tsx').then((m) => ({ default: m.ScoreBar })));
+const ScanWindow = lazy(() => import('../score/scan/ScanWindow.tsx'));
+
+/** Scanning sheet music: a window over the studio while it's open. */
+function Scanning() {
+  const open = useApp((s) => s.scanView !== null);
+  if (!open) return null;
+  return (
+    <Suspense fallback={null}>
+      <ScanWindow />
+    </Suspense>
+  );
+}
 
 /** Whether the notes editor shows the Score (an audio track always has its Audio Editor). */
 function useScoreShown(): boolean {
@@ -506,6 +518,7 @@ export function App() {
       <SynthWindow />
       <StageWindow />
       <Dialogs />
+      <Scanning />
       <MenuHost />
       <Toasts />
       <BounceStatus />

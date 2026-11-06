@@ -197,7 +197,9 @@ export function binarize(img: Gray, radius = 12, k = 0.2): Uint8Array {
       const mean = boxSum(sum, w, x0, y0, x1, y1) / n;
       const variance = Math.max(0, boxSum(sq, w, x0, y0, x1, y1) / n - mean * mean);
       const t = mean * (1 + k * (Math.sqrt(variance) / 128 - 1));
-      out[y * w + x] = (data[y * w + x] as number) < Math.min(t, 200) ? 1 : 0;
+      // faint lines (a thin line in a small photo comes out light grey) still count; paper, flattened
+      // to near white, doesn't
+      out[y * w + x] = (data[y * w + x] as number) < Math.min(t, 232) ? 1 : 0;
     }
   }
   return out;
@@ -247,4 +249,152 @@ export function crop(img: Gray, x: number, y: number, w: number, h: number): Gra
   const out = new Uint8Array(cw * ch);
   for (let r = 0; r < ch; r++) out.set(img.data.subarray((y + r) * img.w + x, (y + r) * img.w + x + cw), r * cw);
   return { w: cw, h: ch, data: out };
+}
+
+/** The gray level that best splits an image in two (Otsu's). */
+export function otsu(img: Gray): number {
+  const hist = new Float64Array(256);
+  for (const v of img.data) hist[v] = (hist[v] as number) + 1;
+  const total = img.data.length;
+  let sum = 0;
+  for (let i = 0; i < 256; i++) sum += i * (hist[i] as number);
+  let back = 0;
+  let backSum = 0;
+  let best = 0;
+  let level = 128;
+  for (let t = 0; t < 256; t++) {
+    back += hist[t] as number;
+    if (!back) continue;
+    const fore = total - back;
+    if (!fore) break;
+    backSum += t * (hist[t] as number);
+    const between = back * fore * (backSum / back - (sum - backSum) / fore) ** 2;
+    if (between > best) {
+      best = between;
+      level = t;
+    }
+  }
+  return level;
+}
+
+/**
+ * Where the page is in a photo: the largest bright region (paper against a table or a lap), its four
+ * corners where it reaches furthest toward each corner of the photo. Null when no region stands out.
+ */
+export function findPage(img: Gray): [Point, Point, Point, Point] | null {
+  const { w, h, data } = img;
+  // what the page lies on shows at the photo's edges: the page is anything clearly brighter than
+  // that, even in a shadow (a plain threshold between the two would cut the shadowed paper away)
+  const ring: number[] = [];
+  const m = Math.max(2, Math.round(Math.min(w, h) * 0.02));
+  for (let y = 0; y < h; y += 2) {
+    for (let x = 0; x < w; x += 2) if (x < m || y < m || x >= w - m || y >= h - m) ring.push(data[y * w + x] as number);
+  }
+  ring.sort((a, b) => a - b);
+  const table = ring[Math.floor(ring.length / 2)] ?? 0;
+  const split = otsu(img);
+  let paper = 0;
+  let n = 0;
+  for (const v of data) {
+    if (v > split) {
+      paper += v;
+      n++;
+    }
+  }
+  paper = n ? paper / n : 255;
+  const level = paper - table > 30 ? table + Math.max(10, (paper - table) * 0.15) : split;
+  const bright = new Uint8Array(w * h);
+  for (let i = 0; i < data.length; i++) bright[i] = (data[i] as number) > level ? 1 : 0;
+  // the largest bright region (4-connected)
+  const label = new Int32Array(w * h);
+  let best = 0;
+  let bestSize = 0;
+  let next = 1;
+  const stack: number[] = [];
+  for (let i = 0; i < bright.length; i++) {
+    if (!bright[i] || label[i]) continue;
+    let size = 0;
+    stack.push(i);
+    label[i] = next;
+    while (stack.length) {
+      const k = stack.pop() as number;
+      size++;
+      const x = k % w;
+      const y = (k - x) / w;
+      for (const n of [x > 0 ? k - 1 : -1, x < w - 1 ? k + 1 : -1, y > 0 ? k - w : -1, y < h - 1 ? k + w : -1]) {
+        if (n >= 0 && bright[n] && !label[n]) {
+          label[n] = next;
+          stack.push(n);
+        }
+      }
+    }
+    if (size > bestSize) {
+      bestSize = size;
+      best = next;
+    }
+    next++;
+  }
+  if (bestSize < w * h * 0.15) return null;
+  let tl: Point = [0, 0];
+  let tr: Point = [w, 0];
+  let br: Point = [w, h];
+  let bl: Point = [0, h];
+  let [a, b, c, d] = [Infinity, -Infinity, -Infinity, Infinity];
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      if (label[y * w + x] !== best) continue;
+      if (x + y < a) [a, tl] = [x + y, [x, y]];
+      if (x - y > b) [b, tr] = [x - y, [x, y]];
+      if (x + y > c) [c, br] = [x + y, [x, y]];
+      if (y - x > -d) [d, bl] = [-(y - x), [x, y]];
+    }
+  }
+  return [tl, tr, br, bl];
+}
+
+/**
+ * How far a page's lines slope, in radians: the small angle at which its ink's rows line up best
+ * (a page photographed a little crooked, or straightened from corners set a little off).
+ */
+export function skewAngle(ink: Uint8Array, w: number, h: number): number {
+  const points: [number, number][] = [];
+  const x0 = Math.floor(w * 0.1);
+  const x1 = Math.floor(w * 0.9);
+  const step = Math.max(1, Math.floor((x1 - x0) / 400));
+  for (let y = 0; y < h; y++) for (let x = x0; x < x1; x += step) if (ink[y * w + x]) points.push([x - w / 2, y]);
+  if (points.length < 100) return 0;
+  let best = 0;
+  let bestScore = -1;
+  const hist = new Float64Array(h + 200);
+  for (let deg = -3; deg <= 3.0001; deg += 0.1) {
+    const t = Math.tan((deg * Math.PI) / 180);
+    hist.fill(0);
+    for (const [x, y] of points) {
+      const r = Math.round(y - x * t) + 100;
+      if (r >= 0 && r < hist.length) hist[r] = (hist[r] as number) + 1;
+    }
+    let score = 0;
+    for (const v of hist) score += v * v;
+    if (score > bestScore) {
+      bestScore = score;
+      best = deg;
+    }
+  }
+  return (best * Math.PI) / 180;
+}
+
+/** A page made level: each column moved up or down by its slope (a shear, near enough for a few degrees). */
+export function level(img: Gray, angle: number): Gray {
+  if (Math.abs(angle) < 0.0005) return img;
+  const { w, h, data } = img;
+  const t = Math.tan(angle);
+  const out = new Uint8Array(w * h).fill(255);
+  for (let x = 0; x < w; x++) {
+    const dy = Math.round((x - w / 2) * t);
+    for (let y = 0; y < h; y++) {
+      const sy = y + dy;
+      if (sy >= 0 && sy < h) out[y * w + x] = data[sy * w + x] as number;
+    }
+  }
+  return { w, h, data: out };
 }

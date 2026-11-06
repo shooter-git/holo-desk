@@ -21,7 +21,7 @@ const isolation = {
 };
 
 /** Files cached when first used rather than when a version installs. */
-const LAZY = /score\.worker/;
+const LAZY = /score\.worker|pdf/;
 
 /** Writes sw.js with this build's files, so the installed app opens offline. */
 function serviceWorker(): Plugin {
@@ -45,7 +45,7 @@ function serviceWorker(): Plugin {
         // for a year by their hashed names, so a fresh version needn't fetch the other eleven
         .filter((f) => !f.endsWith('.map') && !f.endsWith('.woff2') && f !== 'sw.js')
         .sort();
-      // the score's engraver is several megabytes: kept the first time the Score is shown, not
+      // the score's engraver and the PDF reader are megabytes: kept the first time they're used, not
       // fetched by every device (a phone's Remote) when a version installs
       const lazy = shell.filter((f) => LAZY.test(f));
       const eager = shell.filter((f) => !LAZY.test(f));

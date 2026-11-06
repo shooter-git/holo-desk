@@ -75,12 +75,17 @@ function lineRows(ink: Uint8Array, w: number, h: number, thickness: number): num
   const x0 = Math.floor(w * 0.2);
   const x1 = Math.floor(w * 0.8);
   const span = x1 - x0;
-  const rows: boolean[] = [];
+  // a row with its neighbours: a thin, faint line a little off level wanders over a few rows (staves
+  // need five evenly spaced lines, so a little generosity here finds no false ones)
+  const counts: number[] = [];
   for (let y = 0; y < h; y++) {
     let n = 0;
-    for (let x = x0; x < x1; x++) n += ink[y * w + x] as number;
-    rows.push(n > span * 0.45);
+    for (let x = x0; x < x1; x++) {
+      n += ink[y * w + x] || (y > 0 && ink[(y - 1) * w + x]) || (y + 1 < h && ink[(y + 1) * w + x]) ? 1 : 0;
+    }
+    counts.push(n);
   }
+  const rows = counts.map((n) => n > span * 0.4);
   const lines: number[] = [];
   for (let y = 0; y < h; ) {
     if (!rows[y]) {
@@ -89,24 +94,46 @@ function lineRows(ink: Uint8Array, w: number, h: number, thickness: number): num
     }
     let end = y;
     while (end + 1 < h && rows[end + 1]) end++;
-    if (end - y + 1 <= thickness * 3 + 2) lines.push((y + end) / 2);
+    if (end - y + 1 <= thickness * 3 + 4) lines.push((y + end) / 2);
     y = end + 1;
   }
   return lines;
 }
 
-/** Five lines evenly spaced make a staff. */
+/**
+ * Five lines evenly spaced make a staff. A faint line a photo lost leaves four, one gap twice the
+ * others: that's a staff too, its missing line put back.
+ */
 function staves(lines: number[], spacing: number): number[][] {
   const out: number[][] = [];
-  for (let i = 0; i + 4 < lines.length; ) {
+  const near = (g: number, want: number) => Math.abs(g - want) <= Math.max(2, want * 0.25);
+  for (let i = 0; i + 3 < lines.length; ) {
     const five = lines.slice(i, i + 5);
-    const gaps = five.slice(1).map((y, k) => y - (five[k] as number));
-    const mean = gaps.reduce((a, b) => a + b, 0) / 4;
-    const even = gaps.every((g) => Math.abs(g - mean) <= Math.max(2, mean * 0.25));
-    if (even && Math.abs(mean - spacing) <= spacing * 0.35) {
-      out.push(five);
-      i += 5;
-    } else i++;
+    if (five.length === 5) {
+      const gaps = five.slice(1).map((y, k) => y - (five[k] as number));
+      const mean = gaps.reduce((a, b) => a + b, 0) / 4;
+      if (gaps.every((g) => near(g, mean)) && Math.abs(mean - spacing) <= spacing * 0.35) {
+        out.push(five);
+        i += 5;
+        continue;
+      }
+    }
+    const four = lines.slice(i, i + 4);
+    const gaps = four.slice(1).map((y, k) => y - (four[k] as number));
+    const span = ((four[3] as number) - (four[0] as number)) / 4;
+    const double = gaps.findIndex((g) => near(g, span * 2));
+    if (
+      Math.abs(span - spacing) <= spacing * 0.35 &&
+      double >= 0 &&
+      gaps.every((g, k) => k === double || near(g, span))
+    ) {
+      const staff = four.slice();
+      staff.splice(double + 1, 0, ((four[double] as number) + (four[double + 1] as number)) / 2);
+      out.push(staff);
+      i += 4;
+      continue;
+    }
+    i++;
   }
   return out;
 }

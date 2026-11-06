@@ -7,51 +7,80 @@ import ScoreWorker from './score.worker.ts?worker';
 
 const IDLE_MS = 60_000;
 
-let worker: Worker | null = null;
-let idle = 0;
+/** One engraver for each place that draws (the Score, the scan review): neither skips the other's. */
+interface Channel {
+  worker: Worker | null;
+  idle: number;
+  waiting: Map<number, { resolve: (svg: string[] | null) => void; reject: (e: Error) => void }>;
+}
+const channels = new Map<string, Channel>();
 let nextId = 1;
-const waiting = new Map<number, { resolve: (svg: string[] | null) => void; reject: (e: Error) => void }>();
 
-function start(): Worker {
-  if (worker) return worker;
+function channelOf(name: string): Channel {
+  let c = channels.get(name);
+  if (!c) {
+    c = { worker: null, idle: 0, waiting: new Map() };
+    channels.set(name, c);
+  }
+  return c;
+}
+
+function start(c: Channel): Worker {
+  if (c.worker) return c.worker;
   const w = new ScoreWorker();
   w.onmessage = (e: MessageEvent<RenderReply>) => {
     const r = e.data;
-    const p = waiting.get(r.id);
+    const p = c.waiting.get(r.id);
     if (!p) return;
-    waiting.delete(r.id);
+    c.waiting.delete(r.id);
     if ('error' in r) p.reject(new Error(r.error));
     else if ('skipped' in r) p.resolve(null);
     else p.resolve(r.svg);
-    if (!waiting.size) {
-      clearTimeout(idle);
-      idle = window.setTimeout(stopWorker, IDLE_MS);
+    if (!c.waiting.size) {
+      clearTimeout(c.idle);
+      c.idle = window.setTimeout(() => stopWorker(c), IDLE_MS);
     }
   };
   w.onerror = (e) => {
-    for (const p of waiting.values()) p.reject(new Error(e.message || 'The score could not be drawn'));
-    waiting.clear();
-    stopWorker();
+    for (const p of c.waiting.values()) p.reject(new Error(e.message || 'The score could not be drawn'));
+    c.waiting.clear();
+    stopWorker(c);
   };
-  worker = w;
+  c.worker = w;
   return w;
 }
 
-function stopWorker(): void {
-  worker?.terminate();
-  worker = null;
+function stopWorker(c: Channel): void {
+  c.worker?.terminate();
+  c.worker = null;
 }
 
 /**
  * Draw a score: its pages as SVG, or null when a newer drawing took its place before it was drawn.
  */
-export function renderScore(mei: string, options: Record<string, unknown>, allPages = false): Promise<string[] | null> {
-  clearTimeout(idle);
-  const w = start();
+export function renderScore(
+  mei: string,
+  options: Record<string, unknown>,
+  allPages = false,
+  channel = 'score',
+): Promise<string[] | null> {
+  const c = channelOf(channel);
+  clearTimeout(c.idle);
+  const w = start(c);
   const id = nextId++;
   const req: RenderRequest = { id, mei, options, allPages };
   return new Promise((resolve, reject) => {
-    waiting.set(id, { resolve, reject });
+    c.waiting.set(id, { resolve, reject });
     w.postMessage(req);
   });
+}
+
+/** Several small scores drawn in turn on one channel (none skipped): the review's systems. */
+export async function renderEach(meis: string[], options: Record<string, unknown>, channel: string): Promise<string[]> {
+  const out: string[] = [];
+  for (const mei of meis) {
+    const pages = await renderScore(mei, options, false, channel);
+    out.push(pages?.[0] ?? '');
+  }
+  return out;
 }

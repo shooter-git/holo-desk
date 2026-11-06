@@ -1,5 +1,7 @@
-# HO[LO] Desk in Docker. Run from the repository's root (pnpm up / pnpm down do):
-#   docker compose --project-directory . -f deploy/compose.yml --env-file .env up -d --build
+# HO[LO] Desk in Docker. Run from the repository's root. Two ways to run it:
+#   pnpm run update   the image CI publishes (ghcr.io/shooter-git/holo-desk, HOLO_CHANNEL main or stable),
+#                     pulled and started; `pnpm run autoupdate on` keeps it up to date by itself
+#   pnpm run up       built from this checkout (holo-desk:local): your own changes, auto-update paused
 # Paths below are relative to the repository's root. Settings come from .env (see .env.example).
 name: holo
 
@@ -8,7 +10,8 @@ services:
     build:
       context: .
       dockerfile: deploy/Dockerfile
-    image: holo-desk:local
+    # holo-desk:local when built from this checkout; tools/update.mjs sets the published image
+    image: ${HOLO_IMAGE:-holo-desk:local}
     restart: unless-stopped
     # writes files as you, so sessions it sends into your creations stay yours
     user: "${HOLO_UID:-1000}:${HOLO_GID:-1000}"

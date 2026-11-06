@@ -92,11 +92,28 @@ export async function buildApp(config: Config): Promise<{ app: FastifyInstance; 
 
   // ---- health and settings ----
 
-  app.get('/api/health', async () => ({
-    ok: true,
-    version: '0.2.1',
-    engine: { ...studio, label: engineLabel(studio) },
-  }));
+  /** Which studio this server hands out: a hash of its page (whose scripts are named by their contents). */
+  const build = (() => {
+    try {
+      return createHash('sha256')
+        .update(readFileSync(join(config.webDir, 'index.html')))
+        .digest('hex')
+        .slice(0, 16);
+    } catch {
+      return null;
+    }
+  })();
+  app.get('/api/health', async () => {
+    const editor = live.state().state;
+    return {
+      ok: true,
+      version: '0.2.1',
+      build,
+      // a studio playing or recording: an update waits for it (tools/update.mjs)
+      busy: editor?.playing === true || editor?.recording === true,
+      engine: { ...studio, label: engineLabel(studio) },
+    };
+  });
 
   app.get('/api/settings', async () => ({ middleC: store.setting('middleC') ?? 'C3' }));
   app.put<{ Body: { middleC?: string } }>('/api/settings', async (req) => {

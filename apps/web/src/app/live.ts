@@ -450,6 +450,29 @@ if (typeof window !== 'undefined') {
 
 let enabled = false;
 
+/**
+ * The studio the server handed out when this page loaded. A host that updates itself (tools/update.mjs)
+ * comes back with another: this page's code would then talk to a newer server, so it asks for a reload.
+ */
+let loadedBuild: string | null | undefined;
+let updateSaid = false;
+async function checkBuild(): Promise<void> {
+  try {
+    const { build } = (await (await fetch('/api/health', { cache: 'no-store' })).json()) as { build?: string | null };
+    if (loadedBuild === undefined) loadedBuild = build ?? null;
+    else if (build && loadedBuild && build !== loadedBuild && !updateSaid) {
+      updateSaid = true;
+      toast(
+        'HO[LO] was updated on its host: reload this page (your song is saved) to use the new version.',
+        'info',
+        60_000,
+      );
+    }
+  } catch {
+    // the host is away: asked again when it's back
+  }
+}
+
 export function connectLive(): void {
   enabled = true;
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
@@ -459,6 +482,7 @@ export function connectLive(): void {
     retry = 1000;
     lastSent = '';
     store.set({ connection: 'online' });
+    void checkBuild();
     send({ type: 'hello', role: 'editor', name: device() });
     report();
   };

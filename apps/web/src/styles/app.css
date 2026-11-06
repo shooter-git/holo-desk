@@ -4130,7 +4130,9 @@ footer.scan-bar {
   left: 0;
   right: 0;
   text-align: center;
-  font: 11px/1 Georgia, "Times New Roman", serif;
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: 11px;
+  line-height: 1;
 }
 
 .print-error {
@@ -4138,8 +4140,14 @@ footer.scan-bar {
 }
 
 @media print {
+  /* (the studio itself, and anything else on the page: the id outranks the studio's own #root) */
+  #root,
   body > :not(.print-window) {
-    display: none !important;
+    display: none;
+  }
+
+  body {
+    background: #fff;
   }
 
   .print-window {

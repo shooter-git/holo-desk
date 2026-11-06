@@ -39,6 +39,8 @@ export interface PackInstrument {
   oneShot: boolean;
   velocityRange: number;
   zones: Zone[];
+  /** A kit's pads, every piece once, in rows of four: the key each plays and what sounds there. */
+  pads?: { key: number; name: string }[];
   size?: number;
 }
 

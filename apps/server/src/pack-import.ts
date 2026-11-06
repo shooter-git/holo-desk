@@ -266,6 +266,7 @@ export function instrumentFromFolder(dir: string, files: string[]): PackInstrume
   const parsed = files.map((f) => ({ file: f, ...parseName(f), info: audioInfo(f) }));
   const pitched = parsed.filter((p) => p.note !== null).length >= Math.max(2, parsed.length * 0.6);
   const zones: Zone[] = [];
+  let pads: { key: number; name: string }[] | null = null;
   if (pitched) {
     const layers = [...new Set(parsed.map((p) => p.layer))].sort((a, b) => a - b);
     const vel = (l: number) => {
@@ -303,6 +304,7 @@ export function instrumentFromFolder(dir: string, files: string[]): PackInstrume
     // a kit: each sound on the General MIDI key its name suggests, the rest from C1 up
     const used = new Set<number>();
     let next = 36;
+    pads = [];
     for (const p of parsed.sort((a, b) => a.file.localeCompare(b.file))) {
       const stem = basename(p.file, extname(p.file));
       let key = GM_WORDS.find(([re, k]) => re.test(stem) && !used.has(k))?.[1];
@@ -311,6 +313,7 @@ export function instrumentFromFolder(dir: string, files: string[]): PackInstrume
         if (!used.has(key)) break;
       }
       used.add(key);
+      pads.push({ key, name: stem.replace(/[_-]+/g, ' ').replace(/\s+/g, ' ').trim() || p.file });
       zones.push({
         file: p.file,
         root: key,
@@ -338,6 +341,8 @@ export function instrumentFromFolder(dir: string, files: string[]): PackInstrume
     attack: 0.002,
     oneShot: !pitched,
     velocityRange: zones.some((z) => z.lovel > 1) ? 12 : 20,
+    // a kit's pads named by its files, the highest keys (the cymbals, on General MIDI's) on top
+    ...(pads ? { pads: pads.sort((a, b) => b.key - a.key) } : {}),
     zones,
   };
 }

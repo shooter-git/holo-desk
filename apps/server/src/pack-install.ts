@@ -205,6 +205,25 @@ export function refreshPack(packsDir: string, m: Manifest): boolean {
 }
 
 /**
+ * The installed packs whose shipped map changed while their samples didn't (the same pinned source,
+ * and every file the new map plays is there), brought up to date: a new HO[LO] brings its packs'
+ * fixes (a kit's pad names, say) without a download. A pack whose samples changed is left as it is,
+ * for a reinstall. Returns the packs' names.
+ */
+export function refreshMaps(packsDir: string): string[] {
+  const done: string[] = [];
+  for (const m of availablePacks()) {
+    const have = installedPack(packsDir, m.id);
+    if (!have || JSON.stringify(have) === JSON.stringify(m)) continue;
+    if (JSON.stringify(have.source) !== JSON.stringify(m.source)) continue;
+    if (presentFiles(packsDir, m) !== packFiles(m).length) continue;
+    refreshPack(packsDir, m);
+    done.push(m.name);
+  }
+  return done;
+}
+
+/**
  * One install at a time, for the studio: what it's doing and how far it has got, for the Library to
  * show while the samples come in.
  */

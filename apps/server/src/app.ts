@@ -36,7 +36,7 @@ import { Store } from './db.ts';
 import { Live, type RenderJob } from './live.ts';
 import { NetworkMidi } from './network-midi.ts';
 import { audioInfo, extractZip, importFolder, saveStream } from './pack-import.ts';
-import { availablePacks, Installer, installedPack } from './pack-install.ts';
+import { availablePacks, Installer, installedPack, refreshMaps } from './pack-install.ts';
 import { Packs } from './packs.ts';
 
 const ISOLATION = {
@@ -55,6 +55,8 @@ export interface Services {
 export async function buildApp(config: Config): Promise<{ app: FastifyInstance; services: Services }> {
   const app = Fastify({ logger: { level: process.env.HOLO_LOG ?? 'warn' }, bodyLimit: 64 * 1024 * 1024 });
   const store = new Store(config.dataDir);
+  // the packs whose shipped map changed (their samples didn't) play by the new one
+  for (const name of refreshMaps(join(config.dataDir, 'packs'))) console.log(`${name}: its map is brought up to date`);
   const packs = new Packs(join(config.dataDir, 'packs'));
   const live = new Live();
   live.latestRevision = (id) => store.get(id)?.revision ?? null;

@@ -70,6 +70,13 @@ describe('pack import', () => {
       'My Kit/Snare.wav': 38,
       'My Kit/Closed Hat.wav': 42,
     });
+    // its pads are named by its files, the highest keys on top
+    expect(kit?.pads).toEqual([
+      { key: 42, name: 'Closed Hat' },
+      { key: 38, name: 'Snare' },
+      { key: 37, name: 'Thing' },
+      { key: 36, name: 'Kick' },
+    ]);
   });
 
   it('refuses a ZIP entry that points outside its folder', () => {

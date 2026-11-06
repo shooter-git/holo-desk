@@ -78,6 +78,7 @@ function songShape(p: Project | null): { markers: unknown[]; tracks: unknown[] }
       color: t.color,
       kind: t.kind,
       sub: t.kind === 'audio' ? inputLabel(t) : instrumentLabel(t.instrument),
+      instrument: t.instrument,
       armed: t.armed,
       mute: t.channel.mute,
       solo: t.channel.solo,

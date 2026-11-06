@@ -14,6 +14,8 @@ export interface MeiOptions {
   to?: number;
   /** Write the title and credits (for pages and print). */
   credits?: boolean;
+  /** Write the parts' names beside their staves (the default), or leave them out (narrow screens). */
+  labels?: boolean;
 }
 
 const esc = (s: string): string =>
@@ -102,12 +104,14 @@ export function toMEI(doc: ScoreDoc, opts: MeiOptions = {}): string {
   // the score's setup where the window starts
   out.push(`<scoreDef${attrs({ 'meter.count': first.meter.num, 'meter.unit': first.meter.den })}>`);
   out.push('<staffGrp>');
+  const named = opts.labels !== false;
   for (const part of doc.parts) {
-    const defs = part.staves.map((s) => staffDef(s, part, first));
+    const defs = part.staves.map((s) => staffDef(s, part, first, named));
     if (part.staves.length > 1) {
-      out.push(
-        `<staffGrp${attrs({ symbol: 'brace', 'bar.thru': 'true' })}><label>${esc(part.name)}</label>${part.abbr ? `<labelAbbr>${esc(part.abbr)}</labelAbbr>` : ''}${defs.join('')}</staffGrp>`,
-      );
+      const label = named
+        ? `<label>${esc(part.name)}</label>${part.abbr ? `<labelAbbr>${esc(part.abbr)}</labelAbbr>` : ''}`
+        : '';
+      out.push(`<staffGrp${attrs({ symbol: 'brace', 'bar.thru': 'true' })}>${label}${defs.join('')}</staffGrp>`);
     } else out.push(defs.join(''));
   }
   out.push('</staffGrp></scoreDef>');
@@ -149,7 +153,7 @@ export function toMEI(doc: ScoreDoc, opts: MeiOptions = {}): string {
   return out.join('\n');
 }
 
-function staffDef(staff: Staff, part: Part, bar: Bar): string {
+function staffDef(staff: Staff, part: Part, bar: Bar, named: boolean): string {
   const clef = clefAt(staff.clefs, bar.start);
   const a: Record<string, string | number | undefined> = {
     n: staff.n,
@@ -158,7 +162,7 @@ function staffDef(staff: Staff, part: Part, bar: Bar): string {
     ...clefAttrs(clef),
   };
   const label =
-    part.staves.length === 1
+    named && part.staves.length === 1
       ? `<label>${esc(part.name)}</label>${part.abbr ? `<labelAbbr>${esc(part.abbr)}</labelAbbr>` : ''}`
       : '';
   return `<staffDef${attrs(a)}>${label}</staffDef>`;

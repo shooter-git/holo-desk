@@ -40,3 +40,8 @@ The studio's fonts are [Inter](https://rsms.me/inter/) and [JetBrains Mono](http
   finish follow [Hallowed Lanterns](https://github.com/shooter-git/hallowed-lanterns)' audio code, by
   the same author. The finish's true-peak interpolator is the one SciPy's `resample_poly` designs
   (BSD-3-Clause, © SciPy Developers).
+- Scores are engraved by [Verovio](https://www.verovio.org) (LGPL-3.0, © RISM Digital Center and
+  Verovio's contributors), used unmodified as the npm package `verovio` and loaded as its own file
+  (the score worker), so it can be swapped for another build of Verovio. HO[LO] writes the score it
+  draws as MEI (`packages/score/src/mei.ts`); Verovio's source is at
+  [github.com/rism-digital/verovio](https://github.com/rism-digital/verovio).

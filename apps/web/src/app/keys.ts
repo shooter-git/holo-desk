@@ -45,6 +45,7 @@ export const KEY_COMMANDS: KeyCommand[] = [
   { keys: 'X', what: 'Mixer', group: 'Windows' },
   { keys: 'A', what: 'Automation lanes', group: 'Windows' },
   { keys: 'P', what: 'Piano Roll', group: 'Windows' },
+  { keys: 'N', what: 'Score', group: 'Windows' },
   { keys: 'Ctrl Shift F', what: 'Full screen', group: 'Windows' },
   { keys: 'I', what: 'Inspector', group: 'Windows' },
   { keys: 'Y', what: 'Library', group: 'Windows' },
@@ -193,8 +194,13 @@ function onKeyDown(e: KeyboardEvent): void {
   else if (key === '.') moveBars(1);
   else if (key === 'a') store.set({ automationView: !s.automationView });
   else if (key === 'x') store.set({ editor: s.editor === 'mixer' ? null : 'mixer', mobileTab: 'mixer' });
-  else if (key === 'p') store.set({ editor: s.editor === 'piano' ? null : 'piano', mobileTab: 'editor' });
-  else if (key === 'i') store.set({ inspector: !s.inspector });
+  else if (key === 'p') {
+    const open = s.editor === 'piano' && s.noteView === 'roll';
+    store.set({ editor: open ? null : 'piano', noteView: 'roll', mobileTab: 'editor' });
+  } else if (key === 'n') {
+    const open = s.editor === 'piano' && s.noteView === 'score';
+    store.set({ editor: open ? null : 'piano', noteView: 'score', mobileTab: 'editor' });
+  } else if (key === 'i') store.set({ inspector: !s.inspector });
   else if (key === 'y') store.set({ library: !s.library });
   else if (key === '?') store.set({ dialog: s.dialog === 'shortcuts' ? null : 'shortcuts' });
   else if (key === 'q') quantizeSelection();

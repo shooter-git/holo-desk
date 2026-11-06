@@ -8,12 +8,13 @@ import { useEffect, useId, useRef, useState } from 'react';
 import { isPhone, useLayout } from '../app/layout.ts';
 import { SHOW_DEFAULTS, type ShowKey, store, useApp } from '../app/store.ts';
 
-type Pane = 'library' | 'inspector' | 'editor' | 'mixer' | 'automation';
+type Pane = 'library' | 'inspector' | 'editor' | 'score' | 'mixer' | 'automation';
 
 const PANES: [Pane, string, string][] = [
   ['library', 'Library', 'Y'],
   ['inspector', 'Inspector', 'I'],
   ['editor', 'Piano Roll / Audio Editor', 'P'],
+  ['score', 'Score', 'N'],
   ['mixer', 'Mixer', 'X'],
   ['automation', 'Automation lanes', 'A'],
 ];
@@ -63,7 +64,8 @@ const GROUPS: [string, [ShowKey, string][]][] = [
 function paneOn(s: ReturnType<typeof store.get>, pane: Pane): boolean {
   if (pane === 'library') return s.library;
   if (pane === 'inspector') return s.inspector;
-  if (pane === 'editor') return s.editor === 'piano';
+  if (pane === 'editor') return s.editor === 'piano' && s.noteView === 'roll';
+  if (pane === 'score') return s.editor === 'piano' && s.noteView === 'score';
   if (pane === 'mixer') return s.editor === 'mixer';
   return s.automationView;
 }
@@ -72,8 +74,10 @@ function togglePane(pane: Pane): void {
   const s = store.get();
   if (pane === 'library') store.set({ library: !s.library });
   else if (pane === 'inspector') store.set({ inspector: !s.inspector });
-  else if (pane === 'editor') store.set({ editor: s.editor === 'piano' ? null : 'piano' });
-  else if (pane === 'mixer') store.set({ editor: s.editor === 'mixer' ? null : 'mixer' });
+  else if (pane === 'editor' || pane === 'score') {
+    const view = pane === 'score' ? 'score' : 'roll';
+    store.set({ editor: s.editor === 'piano' && s.noteView === view ? null : 'piano', noteView: view });
+  } else if (pane === 'mixer') store.set({ editor: s.editor === 'mixer' ? null : 'mixer' });
   else store.set({ automationView: !s.automationView });
 }
 

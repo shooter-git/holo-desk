@@ -729,8 +729,10 @@ export function LibraryPanel({ overlay = false, full = false }: { overlay?: bool
       </div>
       <div className="muted library-hint">
         {track ? (
+          // what a click does: the selected track's instrument is replaced
           <>
-            For <b>{track.name}</b>: click to load.
+            Click an instrument to put it on <b>{track.name}</b>
+            {track.instrument.type === 'none' ? '.' : `, in place of ${instrumentLabel(track.instrument)}.`}
           </>
         ) : (
           'Click an instrument to make a new track with it.'

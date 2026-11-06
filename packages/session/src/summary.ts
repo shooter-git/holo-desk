@@ -2,9 +2,10 @@
  * Sessions as text a person or the AI can read: an overview, and a track's notes bar by bar.
  */
 import { automationTargets } from './automation.ts';
+import { keyText } from './keysig.ts';
 import { type MiddleC, noteName } from './notation.ts';
 import { pluginDef } from './plugins.ts';
-import { formatBarBeat, meterAt, tickToBarBeat, tickToSeconds } from './time.ts';
+import { formatBarBeat, meterAt, ticksPerBeat, tickToBarBeat, tickToSeconds } from './time.ts';
 import type { Instrument, Note, Project, Track } from './types.ts';
 import { projectEnd } from './validate.ts';
 
@@ -33,6 +34,27 @@ export function describeProject(project: Project): string {
     `  cycle ${project.cycle.on ? 'on' : 'off'}: ${formatBarBeat(project.meter, project.cycle.start)} to ${formatBarBeat(project.meter, project.cycle.end)}`,
   ];
   if (m?.groups) lines.push(`  felt as ${m.groups.join('+')}`);
+  if (m?.pickup) lines.push(`  starts with a pickup of ${+(m.pickup / ticksPerBeat(m)).toFixed(3)} beat(s): bar 0`);
+  const changes = (project.keys ?? []).filter((k) => k.tick > 0);
+  if (changes.length) {
+    lines.push(
+      `  key changes: ${changes.map((k) => `${keyText(k)} at ${formatBarBeat(project.meter, k.tick)}`).join('; ')}`,
+    );
+  }
+  if (project.form?.length) {
+    lines.push(
+      `  form: ${project.form
+        .map((f) => {
+          const at = formatBarBeat(project.meter, f.tick);
+          if (f.k === 'end') return `repeat end${f.times && f.times !== 2 ? ` (×${f.times})` : ''} at ${at}`;
+          if (f.k === 'ending') return `ending ${(f.passes ?? [1]).join(',')} at ${at}`;
+          if (f.k === 'dc' || f.k === 'ds')
+            return `${f.k === 'dc' ? 'D.C.' : 'D.S.'}${f.al ? ` al ${f.al === 'fine' ? 'Fine' : 'Coda'}` : ''} at ${at}`;
+          return `${{ start: 'repeat start', segno: 'segno', coda: 'coda', toCoda: 'to coda', fine: 'Fine' }[f.k]} at ${at}`;
+        })
+        .join('; ')}`,
+    );
+  }
   if (project.loop) {
     lines.push(
       `  a loop: ${formatBarBeat(project.meter, project.loop.start)} to ${formatBarBeat(project.meter, project.loop.end)}` +

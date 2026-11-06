@@ -50,6 +50,65 @@ export interface Project {
   performance?: { kernelCuts?: Record<string, number> };
   /** The song is a loop (a game's music, a menu's): rendered as it plays forever, one turn and a tail. */
   loop?: Loop;
+  /**
+   * Key signatures through the song, sorted by tick. The first, at tick 0, is the song's `key` (the
+   * two are kept the same); no points means no key signature.
+   */
+  keys?: KeyPoint[];
+  /** Repeats and jumps, as written: the timeline holds the music once, playback follows these. */
+  form?: FormMark[];
+  /** How the song is written out as a score: credits, layout, and how the parts are grouped. */
+  score?: ScoreSettings;
+}
+
+/** A key signature from a tick on: sharps (+) or flats (−), and the mode its tonic names. */
+export interface KeyPoint {
+  tick: number;
+  /** −7 (seven flats) … 7 (seven sharps). */
+  fifths: number;
+  mode: KeyMode;
+}
+
+export type KeyMode = 'major' | 'minor' | 'dorian' | 'phrygian' | 'lydian' | 'mixolydian' | 'locrian';
+
+/**
+ * A repeat sign, ending or jump, at a tick (usually a bar line; one inside a bar splits it into two
+ * partial bars on the score, as a repeat after a pickup does).
+ */
+export interface FormMark {
+  tick: number;
+  /**
+   * `start` and `end`: a repeated passage. `ending`: a first or second ending (a volta) from here to
+   * `e`. `segno`, `coda`: places a jump goes to. `toCoda`: after a jump, go on at the coda.
+   * `fine`: after a jump, stop here. `dc`, `ds`: jump to the start (da capo) or the segno (dal segno).
+   */
+  k: 'start' | 'end' | 'ending' | 'segno' | 'coda' | 'toCoda' | 'fine' | 'dc' | 'ds';
+  /** `end`: how many times the passage plays in all (2 when unset). */
+  times?: number;
+  /** `ending`: where it ends, and the passes that take it ([1], [2], [1, 2]…). */
+  e?: number;
+  passes?: number[];
+  /** `dc`, `ds`: al Fine or al Coda (unset plays on to the end after the jump). */
+  al?: 'fine' | 'coda';
+  /** `dc`, `ds`: play the repeats again after the jump (most scores don't). */
+  repeats?: boolean;
+}
+
+/** The score's credits and layout. */
+export interface ScoreSettings {
+  subtitle?: string;
+  composer?: string;
+  lyricist?: string;
+  arranger?: string;
+  copyright?: string;
+  /** Parts joined on the left: [first track id, last track id, how]. */
+  groups?: [string, string, 'bracket' | 'brace' | 'line'][];
+  /** Where a new system or page starts (ticks), when not left to the layout. */
+  breaks?: [number, 'system' | 'page'][];
+  /** Paper and size: `staff` is the staff height in millimetres (7 is usual). */
+  page?: { size?: 'letter' | 'a4' | 'a3' | 'tabloid'; landscape?: boolean; staff?: number };
+  /** Show transposing instruments at sounding pitch (a concert score). */
+  concert?: boolean;
 }
 
 /**
@@ -92,6 +151,15 @@ export interface TempoPoint {
   tick: number;
   /** Quarter notes per minute. */
   bpm: number;
+  /** What the score says here: "Allegro", "rit.", "a tempo". */
+  text?: string;
+  /** Show the metronome mark (♩ = 120) on the score. */
+  mm?: boolean;
+  /** A gradual change (rit., accel.) from here until this tick, arriving at `to` bpm. */
+  ramp?: number;
+  to?: number;
+  /** Made by the score from a ramp or a fermata, and made again when that changes; never drawn. */
+  gen?: boolean;
 }
 
 export interface MeterPoint {
@@ -100,6 +168,11 @@ export interface MeterPoint {
   den: number;
   /** How the bar groups, in eighth notes: [3, 3, 2] is a 4/4 felt as 3+3+2. */
   groups?: number[];
+  /**
+   * On the first point only: the song starts with a pickup (an upbeat). The first bar is a full bar
+   * on the timeline, but only its last `pickup` ticks are written on the score, and it is bar 0.
+   */
+  pickup?: number;
 }
 
 export interface Marker {
@@ -192,6 +265,37 @@ export interface Track {
   origin?: TrackOrigin;
   /** Audio tracks: what they record from. */
   audioInput?: AudioInput;
+  /** How the track is written on the score. */
+  score?: TrackScore;
+}
+
+/** A track as a part on the score. Everything is optional: the score works out what isn't set. */
+export interface TrackScore {
+  /** Name on the score, when not the track's own; and the short name on later systems ("Vln. I"). */
+  name?: string;
+  abbr?: string;
+  /** How many staves: 1, 2 (a grand staff) or 3. */
+  staves?: number;
+  /** On a grand staff: the lowest pitch drawn on the upper staff when the score places notes itself. */
+  split?: number;
+  /**
+   * Clefs: [tick, staff (1…), clef], the first of each staff at tick 0. Clefs: "G", "F", "C3"
+   * (alto), "C4" (tenor), "G8vb" (tenor voice, guitar), "G8va", "F8vb", "perc", "tab".
+   */
+  clefs?: [number, number, string][];
+  /**
+   * A transposing instrument: its part is written this many semitones and letter steps above how it
+   * sounds (a B♭ clarinet [2, 1], a horn in F [7, 4], a guitar [12, 7]).
+   */
+  tr?: [number, number];
+  /** A drum staff: pitch → [place on the staff (0 the middle line, 1 the space above…), notehead]. */
+  drums?: Record<string, [number, string]>;
+  /** Tablature: the open strings' pitches, highest string first; the capo's fret; tab alone. */
+  tab?: { tuning: number[]; capo?: number; only?: boolean };
+  /** The grid music played in is shown on, in ticks (unset: worked out bar by bar). */
+  grid?: number;
+  /** Left out of the full score (still printed as a part). */
+  hidden?: boolean;
 }
 
 export interface AudioInput {
@@ -231,7 +335,29 @@ export interface Region {
   cc: Record<string, CCPoint[]>;
   /** On an audio track: the recording this region plays. */
   audio?: AudioClip;
+  /** Score markings over its notes (dynamics, hairpins, slurs, text…), sorted by tick. */
+  marks?: Mark[];
 }
+
+/** A marking on the score that isn't one note's: ticks from the region's start, like its notes. */
+export interface Mark {
+  t: number;
+  k: MarkKind;
+  /** Where a line ends (hairpins, slurs, octave lines, glissandos), ticks from the region's start. */
+  e?: number;
+  /** The staff (1…) and voice (1–4) it belongs to. */
+  st?: number;
+  vo?: number;
+  /** The dynamic ("mf", "sfz"), the words ("pizz.", "dolce"), the octave shift (8, 15, −8). */
+  v?: string | number;
+}
+
+/**
+ * `dyn` a dynamic; `cresc` and `dim` hairpins; `slur`; `text` technique words above the staff
+ * ("pizz.", "con sord."); `expr` expression words below it ("dolce"); `oct` an 8va or 8vb line;
+ * `breath`, `caesura`; `gliss` a glissando from the note here to the note at `e`.
+ */
+export type MarkKind = 'dyn' | 'cresc' | 'dim' | 'slur' | 'text' | 'expr' | 'oct' | 'breath' | 'caesura' | 'gliss';
 
 export interface AudioClip {
   /** An id in the project's files. */
@@ -260,6 +386,44 @@ export interface Note {
   art?: string;
   /** Extras a creation attached (bends, vibrato…); kept as they are. */
   x?: Record<string, unknown>;
+  /** How it's written on the score. */
+  n?: NoteNotation;
+}
+
+/**
+ * How a note is written: hints the score keeps. The note's own time, length, pitch and velocity are
+ * what plays (and what the piano roll shows); a hint that depends on one of them carries the value it
+ * was made for, and once the note changes (dragged in the piano roll, say) the score works that hint
+ * out afresh instead.
+ */
+export interface NoteNotation {
+  /** Spelling: [letter 0–6 (C D E F G A B), accidental in semitones (−2…2), the pitch it spells]. */
+  sp?: [number, number, number];
+  /** [written length, the length it sounds]: e.g. a staccato quarter [960, 480]. */
+  w?: [number, number];
+  /** Voice 1–4 on its staff, and the staff (1…) it's on. */
+  vo?: number;
+  st?: number;
+  /**
+   * Articulations and ornaments: "stacc", "staccis", "ten", "acc", "marc", "ferm", "tr", "mord",
+   * "pmord", "turn", "trem1"…"trem4", "arp", "up", "down" (bowings), "open", "stop", "harm", "snap".
+   */
+  a?: string[];
+  /** A grace note before the beat: "a" acciaccatura (slashed), "p" appoggiatura. */
+  g?: 'a' | 'p';
+  /** The velocity the dynamics last gave it; they set it again only while it's still this. */
+  dv?: number;
+  /** Lyric syllables, one per verse; "-" at the end joins to the next syllable, "_" holds the word. */
+  ly?: string[];
+  /** Tablature: [string (1 is the highest), the pitch it was placed for]. */
+  tb?: [number, number];
+  /** A tuplet the timing alone doesn't say: [notes, in the time of] (5:4, 7:8…). */
+  tu?: [number, number];
+  /** Notehead: "x", "diamond", "slash", "triangle", "circle-x", "square". */
+  hd?: string;
+  stem?: 'up' | 'down';
+  /** Fingering. */
+  fi?: string;
 }
 
 /** [tick from the region's start, value]: 0–127, pitch bend −8192..8191. */

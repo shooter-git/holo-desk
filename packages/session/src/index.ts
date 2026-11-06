@@ -2,6 +2,7 @@ export * from './automation.ts';
 export * from './defaults.ts';
 export * from './format.ts';
 export * from './instruments.ts';
+export * from './keysig.ts';
 export * from './midi-file.ts';
 export * from './notation.ts';
 export * from './ops.ts';

@@ -3,20 +3,30 @@
  * fill in anything an older or a hand-written session left out, so the rest of the code can trust it.
  */
 import { newChannel, TRACK_COLORS } from './defaults.ts';
+import { KEY_MODES, textForKeys } from './keysig.ts';
 import {
   type Bus,
   type Channel,
+  type FormMark,
+  type KeyMode,
+  type KeyPoint,
+  type Mark,
+  type MarkKind,
   type Note,
+  type NoteNotation,
   type PerformancePlay,
   type Plugin,
   PPQ,
   type Project,
   type Region,
+  type ScoreSettings,
   SESSION_FORMAT,
   SESSION_VERSION,
   type Seat,
   type Stage,
+  type TempoPoint,
   type Track,
+  type TrackScore,
 } from './types.ts';
 
 export class SessionError extends Error {}
@@ -117,6 +127,212 @@ function stage(v: Record<string, unknown>, where: string): Stage {
   };
 }
 
+// ---- score hints: optional, so one that doesn't make sense is left out rather than refused ----
+
+const finite = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
+const int = (v: unknown, lo: number, hi: number): number | undefined =>
+  typeof v === 'number' && Number.isInteger(v) && v >= lo && v <= hi ? v : undefined;
+const word = (v: unknown, max = 24): string | undefined =>
+  typeof v === 'string' && v.length <= max && /^[a-z][a-z0-9-]*$/i.test(v) ? v : undefined;
+const text = (v: unknown, max: number): string | undefined => (typeof v === 'string' ? v.slice(0, max) : undefined);
+const pair = (v: unknown): v is [unknown, unknown] => Array.isArray(v) && v.length === 2;
+
+function notation(v: unknown): NoteNotation | undefined {
+  if (!isObj(v)) return undefined;
+  const n: NoteNotation = {};
+  if (Array.isArray(v.sp) && v.sp.length === 3) {
+    const step = int(v.sp[0], 0, 6);
+    const alter = int(v.sp[1], -3, 3);
+    if (step !== undefined && alter !== undefined && finite(v.sp[2])) n.sp = [step, alter, v.sp[2]];
+  }
+  if (pair(v.w) && finite(v.w[0]) && finite(v.w[1]) && v.w[0] > 0 && v.w[1] > 0) n.w = [v.w[0], v.w[1]];
+  const vo = int(v.vo, 1, 4);
+  if (vo) n.vo = vo;
+  const st = int(v.st, 1, 4);
+  if (st) n.st = st;
+  if (Array.isArray(v.a)) {
+    const a = v.a.map((x) => word(x)).filter((x): x is string => !!x);
+    if (a.length) n.a = a.slice(0, 12);
+  }
+  if (v.g === 'a' || v.g === 'p') n.g = v.g;
+  const dv = int(v.dv, 1, 127);
+  if (dv) n.dv = dv;
+  if (Array.isArray(v.ly) && v.ly.some((x) => typeof x === 'string' && x)) {
+    n.ly = v.ly.slice(0, 12).map((x) => (typeof x === 'string' ? x.slice(0, 64) : ''));
+  }
+  if (pair(v.tb) && int(v.tb[0], 1, 12) && finite(v.tb[1])) n.tb = [v.tb[0] as number, v.tb[1]];
+  if (pair(v.tu) && int(v.tu[0], 2, 64) && int(v.tu[1], 1, 64)) n.tu = [v.tu[0] as number, v.tu[1] as number];
+  const hd = word(v.hd, 16);
+  if (hd) n.hd = hd;
+  if (v.stem === 'up' || v.stem === 'down') n.stem = v.stem;
+  const fi = text(v.fi, 16);
+  if (fi) n.fi = fi;
+  return Object.keys(n).length ? n : undefined;
+}
+
+const MARK_KINDS = new Set<MarkKind>([
+  'dyn',
+  'cresc',
+  'dim',
+  'slur',
+  'text',
+  'expr',
+  'oct',
+  'breath',
+  'caesura',
+  'gliss',
+]);
+
+function mark(v: unknown): Mark | null {
+  if (!isObj(v) || !finite(v.t) || !MARK_KINDS.has(v.k as MarkKind)) return null;
+  const m: Mark = { t: v.t, k: v.k as MarkKind };
+  if (finite(v.e) && v.e >= v.t) m.e = v.e;
+  const st = int(v.st, 1, 4);
+  if (st) m.st = st;
+  const vo = int(v.vo, 1, 4);
+  if (vo) m.vo = vo;
+  if (typeof v.v === 'string') m.v = v.v.slice(0, 80);
+  else if (finite(v.v)) m.v = v.v;
+  return m;
+}
+
+const CLEFS = new Set(['G', 'F', 'C1', 'C2', 'C3', 'C4', 'C5', 'G8vb', 'G8va', 'G15ma', 'F8vb', 'F8va', 'perc', 'tab']);
+
+function trackScore(v: unknown): TrackScore | undefined {
+  if (!isObj(v)) return undefined;
+  const s: TrackScore = {};
+  const name = text(v.name, 80);
+  if (name) s.name = name;
+  const abbr = text(v.abbr, 24);
+  if (abbr) s.abbr = abbr;
+  const staves = int(v.staves, 1, 4);
+  if (staves) s.staves = staves;
+  if (finite(v.split)) s.split = Math.max(0, Math.min(127, Math.round(v.split)));
+  if (Array.isArray(v.clefs)) {
+    const clefs = v.clefs
+      .filter((c): c is [number, number, string] => {
+        if (!Array.isArray(c) || c.length !== 3) return false;
+        return finite(c[0]) && c[0] >= 0 && !!int(c[1], 1, 4) && CLEFS.has(c[2] as string);
+      })
+      .map((c): [number, number, string] => [c[0], c[1], c[2]])
+      .sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+    if (clefs.length) s.clefs = clefs;
+  }
+  if (pair(v.tr) && int(v.tr[0], -48, 48) !== undefined && int(v.tr[1], -28, 28) !== undefined) {
+    s.tr = [v.tr[0] as number, v.tr[1] as number];
+  }
+  if (isObj(v.drums)) {
+    const drums: Record<string, [number, string]> = {};
+    for (const [pitch, place] of Object.entries(v.drums)) {
+      if (!/^\d{1,3}$/.test(pitch) || !pair(place)) continue;
+      const line = int(place[0], -16, 16);
+      const head = word(place[1], 16);
+      if (line !== undefined && head) drums[pitch] = [line, head];
+    }
+    if (Object.keys(drums).length) s.drums = drums;
+  }
+  if (isObj(v.tab) && Array.isArray(v.tab.tuning)) {
+    const tuning = v.tab.tuning.filter((p): p is number => !!int(p, 0, 127)).slice(0, 12);
+    if (tuning.length) {
+      s.tab = { tuning };
+      const capo = int(v.tab.capo, 1, 24);
+      if (capo) s.tab.capo = capo;
+      if (v.tab.only === true) s.tab.only = true;
+    }
+  }
+  if (finite(v.grid) && v.grid > 0) s.grid = v.grid;
+  if (v.hidden === true) s.hidden = true;
+  return Object.keys(s).length ? s : undefined;
+}
+
+function keyPoints(v: unknown): KeyPoint[] | undefined {
+  if (!Array.isArray(v)) return undefined;
+  return v
+    .filter((k): k is Record<string, unknown> => isObj(k) && finite(k.tick) && k.tick >= 0)
+    .filter((k) => int(k.fifths, -7, 7) !== undefined && KEY_MODES.includes(k.mode as KeyMode))
+    .map((k) => ({ tick: k.tick as number, fifths: k.fifths as number, mode: k.mode as KeyMode }))
+    .sort((a, b) => a.tick - b.tick);
+}
+
+const FORM_KINDS = new Set<FormMark['k']>(['start', 'end', 'ending', 'segno', 'coda', 'toCoda', 'fine', 'dc', 'ds']);
+
+function formMarks(v: unknown): FormMark[] | undefined {
+  if (!Array.isArray(v)) return undefined;
+  const out: FormMark[] = [];
+  for (const f of v) {
+    if (!isObj(f) || !finite(f.tick) || f.tick < 0 || !FORM_KINDS.has(f.k as FormMark['k'])) continue;
+    const m: FormMark = { tick: f.tick, k: f.k as FormMark['k'] };
+    const times = int(f.times, 2, 99);
+    if (m.k === 'end' && times) m.times = times;
+    if (m.k === 'ending') {
+      if (!finite(f.e) || f.e <= f.tick) continue;
+      m.e = f.e;
+      const passes = Array.isArray(f.passes) ? f.passes.filter((p): p is number => !!int(p, 1, 99)) : [];
+      m.passes = passes.length ? [...new Set(passes)].sort((a, b) => a - b) : [1];
+    }
+    if ((m.k === 'dc' || m.k === 'ds') && (f.al === 'fine' || f.al === 'coda')) m.al = f.al;
+    if ((m.k === 'dc' || m.k === 'ds') && f.repeats === true) m.repeats = true;
+    out.push(m);
+  }
+  return out.sort((a, b) => a.tick - b.tick);
+}
+
+const PAGE_SIZES = new Set(['letter', 'a4', 'a3', 'tabloid']);
+
+function scoreSettings(v: unknown): ScoreSettings | undefined {
+  if (!isObj(v)) return undefined;
+  const s: ScoreSettings = {};
+  for (const k of ['subtitle', 'composer', 'lyricist', 'arranger', 'copyright'] as const) {
+    const t = text(v[k], 200);
+    if (t) s[k] = t;
+  }
+  if (Array.isArray(v.groups)) {
+    const groups = v.groups.filter(
+      (g): g is [string, string, 'bracket' | 'brace' | 'line'] =>
+        Array.isArray(g) &&
+        g.length === 3 &&
+        typeof g[0] === 'string' &&
+        typeof g[1] === 'string' &&
+        (g[2] === 'bracket' || g[2] === 'brace' || g[2] === 'line'),
+    );
+    if (groups.length) s.groups = groups.map((g) => [g[0], g[1], g[2]]);
+  }
+  if (Array.isArray(v.breaks)) {
+    const breaks = v.breaks
+      .filter(
+        (b): b is [number, 'system' | 'page'] =>
+          pair(b) && finite(b[0]) && b[0] >= 0 && (b[1] === 'system' || b[1] === 'page'),
+      )
+      .map((b): [number, 'system' | 'page'] => [b[0], b[1]])
+      .sort((a, b) => a[0] - b[0]);
+    if (breaks.length) s.breaks = breaks;
+  }
+  if (isObj(v.page)) {
+    const page: NonNullable<ScoreSettings['page']> = {};
+    if (PAGE_SIZES.has(v.page.size as string)) page.size = v.page.size as NonNullable<typeof page.size>;
+    if (v.page.landscape === true) page.landscape = true;
+    if (finite(v.page.staff)) page.staff = Math.max(3, Math.min(15, v.page.staff));
+    if (Object.keys(page).length) s.page = page;
+  }
+  if (v.concert === true) s.concert = true;
+  return Object.keys(s).length ? s : undefined;
+}
+
+function tempoPoint(t: unknown, i: number): TempoPoint {
+  if (!isObj(t)) throw new SessionError(`tempo[${i}] must be an object`);
+  const tick = num(t.tick, `tempo[${i}].tick`);
+  const point: TempoPoint = { tick, bpm: Math.max(5, Math.min(999, num(t.bpm, `tempo[${i}].bpm`))) };
+  const words = text(t.text, 60);
+  if (words) point.text = words;
+  if (t.mm === true) point.mm = true;
+  if (finite(t.ramp) && t.ramp > tick) {
+    point.ramp = t.ramp;
+    point.to = Math.max(5, Math.min(999, finite(t.to) ? t.to : point.bpm));
+  }
+  if (t.gen === true) point.gen = true;
+  return point;
+}
+
 function note(v: unknown, where: string): Note {
   if (!isObj(v)) throw new SessionError(`${where} must be an object`);
   const n: Note = {
@@ -127,6 +343,8 @@ function note(v: unknown, where: string): Note {
   };
   if (typeof v.art === 'string') n.art = v.art;
   if (isObj(v.x)) n.x = v.x;
+  const hints = notation(v.n);
+  if (hints) n.n = hints;
   return n;
 }
 
@@ -162,6 +380,10 @@ function region(v: unknown, where: string): Region {
       fadeOut: Math.max(0, num(a.fadeOut, `${where}.audio.fadeOut`, 0)),
       stretch: Math.max(0.25, Math.min(4, num(a.stretch, `${where}.audio.stretch`, 1))),
     };
+  }
+  if (Array.isArray(v.marks)) {
+    const marks = v.marks.map(mark).filter((m): m is Mark => m !== null);
+    if (marks.length) r.marks = marks.sort((a, b) => a.t - b.t);
   }
   return r;
 }
@@ -267,6 +489,8 @@ function track(v: unknown, i: number): Track {
     if (v.origin.locked === true) t.origin.locked = true;
     if (isObj(v.origin.extra)) t.origin.extra = v.origin.extra;
   }
+  const score = trackScore(v.score);
+  if (score) t.score = score;
   return t;
 }
 
@@ -280,10 +504,7 @@ export function parseProject(value: unknown): Project {
     throw new SessionError(`This session is version ${version}; this studio reads up to ${SESSION_VERSION}`);
   }
   const now = new Date().toISOString();
-  const tempo = arr(value.tempo, 'tempo').map((t, i) => {
-    if (!isObj(t)) throw new SessionError(`tempo[${i}] must be an object`);
-    return { tick: num(t.tick, `tempo[${i}].tick`), bpm: Math.max(5, Math.min(999, num(t.bpm, `tempo[${i}].bpm`))) };
-  });
+  const tempo = arr(value.tempo, 'tempo').map(tempoPoint);
   const meter = arr(value.meter, 'meter').map((m, i) => {
     if (!isObj(m)) throw new SessionError(`meter[${i}] must be an object`);
     const point: Project['meter'][number] = {
@@ -292,8 +513,14 @@ export function parseProject(value: unknown): Project {
       den: num(m.den, `meter[${i}].den`),
     };
     if (Array.isArray(m.groups)) point.groups = m.groups.map((g) => num(g, 'meter group'));
+    const bar = (point.num * PPQ * 4) / point.den;
+    if (point.tick === 0 && finite(m.pickup) && m.pickup > 0 && m.pickup < bar) point.pickup = m.pickup;
     return point;
   });
+  const keys = keyPoints(value.keys);
+  const form = formMarks(value.form);
+  const score = scoreSettings(value.score);
+  const keyText = typeof value.key === 'string' ? value.key : null;
   if (!tempo.length) tempo.push({ tick: 0, bpm: 120 });
   if (!meter.length) meter.push({ tick: 0, num: 4, den: 4 });
   const cycle = isObj(value.cycle) ? value.cycle : {};
@@ -316,7 +543,11 @@ export function parseProject(value: unknown): Project {
     modified: str(value.modified, 'modified', now),
     tempo,
     meter,
-    key: typeof value.key === 'string' ? value.key : null,
+    // the key points win over the text, which is kept when it still names the first of them
+    key: keys ? textForKeys(keys, keyText) : keyText,
+    ...(keys ? { keys } : {}),
+    ...(form?.length ? { form } : {}),
+    ...(score ? { score } : {}),
     markers: arr(value.markers, 'markers').map((m, i) => {
       if (!isObj(m)) throw new SessionError(`markers[${i}] must be an object`);
       return {

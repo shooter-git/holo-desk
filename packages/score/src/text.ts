@@ -135,12 +135,17 @@ function barText(doc: ScoreDoc, bar: Bar, first: boolean, only?: number[]): stri
     for (const staff of part.staves) {
       const sb = staff.bars[bar.index];
       if (!sb) continue;
-      const clefs = staff.clefs.filter(
-        ([t]) => (t > bar.start || (first && t <= bar.start)) && t < bar.start + bar.length,
-      );
-      if (first || clefs.some(([t]) => t > bar.start)) {
-        const clef = clefs.at(-1)?.[1] ?? staff.clefs.filter(([t]) => t <= bar.start).at(-1)?.[1];
-        if (clef && (first || clefs.length)) out.push(`  clef ${partId(pi)} s${staff.local} ${clef}`);
+      // the clef in force at the first bar shown, then each change (on a later beat: @beat)
+      if (first) {
+        const clef = staff.clefs.filter(([t]) => t <= bar.start).at(-1)?.[1] ?? staff.clefs[0]?.[1];
+        if (clef) out.push(`  clef ${partId(pi)} s${staff.local} ${clef}`);
+      }
+      for (const [t, clef] of staff.clefs.slice(1)) {
+        if (t < bar.start || t >= bar.start + bar.length || (first && t === bar.start)) continue;
+        const beat = 1 + (t - bar.start) / ((PPQ * 4) / bar.meter.den);
+        out.push(
+          `  clef ${partId(pi)} s${staff.local} ${clef}${beat !== 1 ? `@${Math.round(beat * 1000) / 1000}` : ''}`,
+        );
       }
       const marks = doc.bars.flatMap((x) => x.controls).filter((c) => c.staff === staff.n);
       for (const voice of sb.voices) {

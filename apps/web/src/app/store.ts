@@ -46,6 +46,8 @@ export interface AppState {
   scoreAll: boolean;
   /** The Score's size, as a percentage. */
   scoreZoom: number;
+  /** Writing in the Score: keys and clicks enter notes. */
+  scoreWrite: boolean;
   editorHeight: number;
   inspector: boolean;
   library: boolean;
@@ -156,6 +158,7 @@ const initial: AppState = {
   noteView: 'roll',
   scoreAll: false,
   scoreZoom: 45,
+  scoreWrite: false,
   // the editor takes a good share of the window to start with; a remembered height stands over this
   editorHeight:
     typeof window === 'undefined' ? 300 : Math.max(260, Math.min(520, Math.round(window.innerHeight * 0.42))),

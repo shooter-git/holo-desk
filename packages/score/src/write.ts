@@ -27,6 +27,7 @@ import {
   ticksPerBar,
 } from '@holo/session';
 import { gateFor, isDynamic, levelAt, slurredAt, staffMarks, velocityFor } from './bake.ts';
+import { setClef } from './edit.ts';
 import { GM_DRUM_STAFF } from './instruments.ts';
 import type { Bar, Part, ScoreDoc } from './model.ts';
 import { clefAt, notate } from './notate.ts';
@@ -344,6 +345,21 @@ export function writeScoreText(project: Project, text: string): WriteResult {
 
   for (const { block, span, plans, chords } of planned) {
     const end = span.start + span.length;
+    // clef changes the bar names, where they change anything
+    for (const line of block.lines.filter((l) => /^clef\s/i.test(l))) {
+      const m = /^clef\s+(P\d+(?:\s+s\d+)?)\s+(\S+?)(?:@(\d+(?:\.\d+)?))?$/i.exec(line);
+      const address = m ? readAddress(m[1] as string) : null;
+      const part = address ? doc.parts[address.part] : undefined;
+      const staff = part?.staves[(address?.staff ?? 1) - 1];
+      if (!m || !address || !part || !staff) {
+        errors.push(`bar ${block.number}: "${line}" isn't a clef line (clef P1 s2 F)`);
+        continue;
+      }
+      const unit = (PPQ * 4) / meterAt(work.meter, span.start).den;
+      const at = Math.round(span.start + (Number(m[3] ?? 1) - 1) * unit);
+      if (clefAt(staff.clefs, at) !== m[2])
+        apply(setClef(work, notate(work), part.track, address.staff, at, m[2] as string));
+    }
     for (const plan of plans) apply(placeLine(work, doc, plan, span));
     if (chords) {
       const unit = (PPQ * 4) / meterAt(work.meter, span.start).den;

@@ -56,7 +56,8 @@ export function spellInKey(pitch: number, fifths: number, mode: KeyMode, directi
   const best = options[0];
   if (!best) return spellAs(pitch, 0);
   const next = options[1];
-  if (next && direction !== 0 && next.dist <= best.dist + 2 && Math.abs(next.s.alter) <= 1) {
+  // only between a sharp and a flat: a natural is never respelled as E♯ or C♭ for the line's sake
+  if (next && direction !== 0 && next.dist <= best.dist + 2 && best.s.alter !== 0 && Math.abs(next.s.alter) === 1) {
     const sharper = fifthsPos(next.s) > fifthsPos(best.s);
     if ((direction > 0 && sharper) || (direction < 0 && !sharper)) return next.s;
   }

@@ -46,6 +46,13 @@ export const KEY_COMMANDS: KeyCommand[] = [
   { keys: 'A', what: 'Automation lanes', group: 'Windows' },
   { keys: 'P', what: 'Piano Roll', group: 'Windows' },
   { keys: 'N', what: 'Score', group: 'Windows' },
+  { keys: 'Shift N', what: 'Write in the Score (Esc stops)', group: 'Score' },
+  { keys: 'A … G', what: 'A note, in the key, near the last (Shift: add to the chord)', group: 'Score' },
+  { keys: '1 … 7', what: 'Note value: 5 a quarter, 4 an eighth, 6 a half…', group: 'Score' },
+  { keys: '. / ; / 0', what: 'Dotted / triplet / a rest', group: 'Score' },
+  { keys: 'T / S / J', what: 'Tie on / slur the selection / respell', group: 'Score' },
+  { keys: '← / →', what: 'Move the caret', group: 'Score' },
+  { keys: 'Alt 1 / Alt 2', what: 'Voice 1 / 2', group: 'Score' },
   { keys: 'Ctrl Shift F', what: 'Full screen', group: 'Windows' },
   { keys: 'I', what: 'Inspector', group: 'Windows' },
   { keys: 'Y', what: 'Library', group: 'Windows' },
@@ -151,6 +158,15 @@ function keyboardFocusedButton(target: EventTarget | null): boolean {
   }
 }
 
+/** A view that takes keys first while it's active (the Score while writing): true when the key was its. */
+export type KeyScope = (e: KeyboardEvent) => boolean;
+let scope: KeyScope | null = null;
+
+/** Give keys to a view first (null to take them back). */
+export function setKeyScope(fn: KeyScope | null): void {
+  scope = fn;
+}
+
 function selectedTrackId(): string | null {
   return store.get().selectedTrack;
 }
@@ -165,6 +181,10 @@ function onKeyDown(e: KeyboardEvent): void {
   if (inPopup(e.target) || s.dialog) {
     if (key !== 'Escape' && key !== '?' && !(ctrl && (key === 'z' || key === 'y'))) return;
   } else if ((key === 'Enter' || e.code === 'Space') && keyboardFocusedButton(e.target)) return;
+  if (scope && !inPopup(e.target) && !s.dialog && scope(e)) {
+    e.preventDefault();
+    return;
+  }
   if (typingKey(e, true)) {
     e.preventDefault();
     return;
@@ -197,6 +217,9 @@ function onKeyDown(e: KeyboardEvent): void {
   else if (key === 'p') {
     const open = s.editor === 'piano' && s.noteView === 'roll';
     store.set({ editor: open ? null : 'piano', noteView: 'roll', mobileTab: 'editor' });
+  } else if (key === 'n' && e.shiftKey) {
+    // write in the Score
+    store.set({ editor: 'piano', noteView: 'score', scoreWrite: true, mobileTab: 'editor' });
   } else if (key === 'n') {
     const open = s.editor === 'piano' && s.noteView === 'score';
     store.set({ editor: open ? null : 'piano', noteView: 'score', mobileTab: 'editor' });

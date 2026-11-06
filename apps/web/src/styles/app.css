@@ -3710,3 +3710,60 @@ html[data-layout="phone-landscape"] .toasts {
 .score-note.bad {
   color: var(--danger);
 }
+
+/* writing in the Score: the tools pinned above the music, and the caret where the next note goes */
+.score-palette {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--line);
+  background: color-mix(in srgb, var(--bg-2) 94%, transparent);
+  backdrop-filter: blur(6px);
+}
+
+.score-palette .glyph {
+  min-width: 12px;
+  font-size: 15px;
+  font-weight: 700;
+  line-height: 1;
+  text-align: center;
+}
+
+.score-palette .dyn {
+  font-family: Georgia, "Times New Roman", serif;
+  font-style: italic;
+  font-weight: 700;
+}
+
+.score.writing .score-page {
+  cursor: crosshair;
+}
+
+.score-caret {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 3px;
+  border-radius: 2px;
+  background: var(--accent);
+  box-shadow: 0 0 8px var(--accent-glow);
+  pointer-events: none;
+  animation: score-caret 1.1s steps(2, jump-none) infinite;
+}
+
+@keyframes score-caret {
+  50% {
+    opacity: 0.35;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .score-caret {
+    animation: none;
+  }
+}

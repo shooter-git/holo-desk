@@ -14,6 +14,8 @@ export interface PlacedBar {
   bottom: number;
   /** [tick, x] through the bar: its start, every note and rest, its end. */
   points: [number, number][];
+  /** Each staff's top and bottom line, by its number in the score. */
+  staves: { n: number; top: number; bottom: number }[];
 }
 
 export interface ScoreIndex {
@@ -57,6 +59,16 @@ export function buildIndex(page: HTMLElement, doc: ScoreDoc): ScoreIndex {
       top = rel((staves[0] as SVGGElement).getBoundingClientRect()).top;
       bottom = rel((staves[staves.length - 1] as SVGGElement).getBoundingClientRect()).bottom;
     }
+    // the staff lines themselves (a staff's box also holds its notes and ledger lines)
+    const lines = [...staves].map((st, k) => {
+      const paths = [...st.querySelectorAll<SVGPathElement>(':scope > path')];
+      const ys = paths.map((p) => {
+        const r = rel(p.getBoundingClientRect());
+        return (r.top + r.bottom) / 2;
+      });
+      const box = rel(st.getBoundingClientRect());
+      return { n: k + 1, top: ys.length ? Math.min(...ys) : box.top, bottom: ys.length ? Math.max(...ys) : box.bottom };
+    });
     const xs = new Map<number, number>();
     for (const { tick, id } of events.get(bar.index) ?? []) {
       const node = page.querySelector<SVGGElement>(`[id="${id}"]`);
@@ -76,6 +88,7 @@ export function buildIndex(page: HTMLElement, doc: ScoreDoc): ScoreIndex {
       top,
       bottom,
       points: [[bar.start, first], ...inner, [end, box.right]],
+      staves: lines,
     });
   }
   return { bars };

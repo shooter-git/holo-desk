@@ -1,0 +1,20 @@
+{
+  "name": "@holo/score",
+  "private": true,
+  "version": "0.3.2",
+  "license": "MIT",
+  "type": "module",
+  "description": "HO[LO]'s scores: a song's notes laid out as notation (bars, voices, rhythms, spellings), drawn through MEI, and written as text the AI reads and writes.",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p ."
+  },
+  "dependencies": {
+    "@holo/session": "workspace:*"
+  },
+  "devDependencies": {
+    "verovio": "6.4.1"
+  }
+}

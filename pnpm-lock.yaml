@@ -142,6 +142,16 @@ importers:
         specifier: 1.3.0
         version: 1.3.0
 
+  packages/score:
+    dependencies:
+      '@holo/session':
+        specifier: workspace:*
+        version: link:../session
+    devDependencies:
+      verovio:
+        specifier: 6.4.1
+        version: 6.4.1
+
   packages/session: {}
 
 packages:
@@ -1100,6 +1110,10 @@ packages:
   util-deprecate@1.0.2:
     resolution: {integrity: sha512-EPD5q1uXyFxJpCrLnCc1nHnq3gOa6DZBocAIiI2TaSCA7VCJ1UJDMagCzIkXNsUYfD1daK//LTEQ8xiIbrHtcw==}
 
+  verovio@6.4.1:
+    resolution: {integrity: sha512-+5exuA63AC0FHFo0L/4BlcF6EpEOWIp81pwz/afMupxss/tsrdVLxX8Pqh9QFzUOXcB4mP9Box4xc+hrkKN+LA==}
+    engines: {node: '>= 14.18.0'}
+
   vite@8.3.6:
     resolution: {integrity: sha512-UI7dK29NnS54Fk+mmo7o+jI6U8Fp7hDl+X5Q1k45WH+d4dSlbLVUETGQ+hfkNgvLQGyoElPj837nZyv4MBc0VA==}
     engines: {node: ^20.19.0 || >=22.12.0}
@@ -1989,6 +2003,8 @@ snapshots:
   undici-types@6.21.0: {}
 
   util-deprecate@1.0.2: {}
+
+  verovio@6.4.1: {}
 
   vite@8.3.6(@types/node@22.20.5):
     dependencies:

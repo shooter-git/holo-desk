@@ -49,6 +49,7 @@ export interface Bar {
   jumps: { k: 'segno' | 'coda' | 'toCoda' | 'fine' | 'dc' | 'ds'; text: string; at: number }[];
   tempos: TempoPoint[];
   chords: ChordMark[];
+  /** A new system or page starts with this bar. */
   break?: 'system' | 'page';
   /** Markings over the bar's notes, for every staff. */
   controls: Control[];

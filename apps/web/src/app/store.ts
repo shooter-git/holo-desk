@@ -64,6 +64,8 @@ export interface AppState {
   scoreWrite: boolean;
   /** The Scan window: a new scan being made (id null), or one being reviewed. */
   scanView: { id: string | null } | null;
+  /** The Print window: the full score ("score"), every part ("parts"), or one track's part. */
+  printView: { what: string } | null;
   /** Goes up when the host says a scan changed (the review reads it again). */
   scanTick: number;
   /** The AI's job on a scan, as the runner last told it. */
@@ -180,6 +182,7 @@ const initial: AppState = {
   scoreZoom: 45,
   scoreWrite: false,
   scanView: null,
+  printView: null,
   scanTick: 0,
   aiJob: null,
   // the editor takes a good share of the window to start with; a remembered height stands over this

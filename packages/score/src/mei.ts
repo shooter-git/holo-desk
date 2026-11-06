@@ -16,6 +16,10 @@ export interface MeiOptions {
   credits?: boolean;
   /** Write the parts' names beside their staves (the default), or leave them out (narrow screens). */
   labels?: boolean;
+  /** Bars of rest one after another drawn as one bar with their count (a part to play from). */
+  multiRest?: boolean;
+  /** Under the title (a part's name on its pages). */
+  heading?: string;
 }
 
 const esc = (s: string): string =>
@@ -89,11 +93,11 @@ export function toMEI(doc: ScoreDoc, opts: MeiOptions = {}): string {
   if (opts.credits !== false) {
     out.push(`<title>${esc(doc.title)}</title>`);
     if (doc.credits.subtitle) out.push(`<title type="subordinate">${esc(doc.credits.subtitle)}</title>`);
-    const resp: string[] = [];
-    if (doc.credits.composer) resp.push(`<persName role="composer">${esc(doc.credits.composer)}</persName>`);
-    if (doc.credits.lyricist) resp.push(`<persName role="lyricist">${esc(doc.credits.lyricist)}</persName>`);
-    if (doc.credits.arranger) resp.push(`<persName role="arranger">${esc(doc.credits.arranger)}</persName>`);
-    if (resp.length) out.push(`<respStmt>${resp.join('')}</respStmt>`);
+    if (opts.heading) out.push(`<title type="subordinate">${esc(opts.heading)}</title>`);
+    // (the page head Verovio draws reads these)
+    if (doc.credits.composer) out.push(`<composer>${esc(doc.credits.composer)}</composer>`);
+    if (doc.credits.lyricist) out.push(`<lyricist>${esc(doc.credits.lyricist)}</lyricist>`);
+    if (doc.credits.arranger) out.push(`<arranger>${esc(doc.credits.arranger)}</arranger>`);
   } else out.push('<title/>');
   out.push('</titleStmt><pubStmt/></fileDesc></meiHead>');
   out.push('<music><body><mdiv><score>');
@@ -122,6 +126,14 @@ export function toMEI(doc: ScoreDoc, opts: MeiOptions = {}): string {
   let endingLeft = 0;
   for (let b = from; b < to; b++) {
     const bar = doc.bars[b] as Bar;
+    // a new system or page starts with this bar
+    if (b > from && bar.break) out.push(bar.break === 'page' ? '<pb/>' : '<sb/>');
+    const rests = opts.multiRest ? restRun(doc, b, to) : 1;
+    if (rests > 1) {
+      out.push(multiRest(doc, bar, rests, (doc.bars[b + rests - 1] as Bar).right === 'final'));
+      b += rests - 1;
+      continue;
+    }
     // changes of meter and key between bars
     if (b > from && (bar.showMeter || bar.showKey)) {
       const meter = bar.showMeter ? { 'meter.count': bar.meter.num, 'meter.unit': bar.meter.den } : {};
@@ -149,12 +161,43 @@ export function toMEI(doc: ScoreDoc, opts: MeiOptions = {}): string {
         endingLeft = 0;
       }
     }
-    if (bar.break === 'page' && b < to - 1) out.push('<pb/>');
-    else if (bar.break === 'system' && b < to - 1) out.push('<sb/>');
   }
   out.push('</section>');
   out.push('</score></mdiv></body></music></mei>');
   return out.join('\n');
+}
+
+/** Whether a bar is only rests in every part, with nothing else written in it or at its lines. */
+function empty(doc: ScoreDoc, bar: Bar): boolean {
+  if (bar.showMeter || bar.showKey || bar.ending || bar.times) return false;
+  if (bar.left !== 'single' || (bar.right !== 'single' && bar.right !== 'final')) return false;
+  if (bar.tempos.length || bar.chords.length || bar.jumps.length || bar.controls.length) return false;
+  return doc.parts.every((p) =>
+    p.staves.every((s) => {
+      const voices = s.bars[bar.index]?.voices ?? [];
+      return voices.every((v) => v.events.every((e) => e.kind === 'rest' && e.full));
+    }),
+  );
+}
+
+/** How many bars of rest start at bar `b` (before `to`), when there are two or more; else 1. */
+function restRun(doc: ScoreDoc, b: number, to: number): number {
+  let n = 0;
+  while (b + n < to && empty(doc, doc.bars[b + n] as Bar)) {
+    // (a final bar line or a new system ends a run there)
+    const bar = doc.bars[b + n] as Bar;
+    n++;
+    if (bar.right === 'final' || doc.bars[b + n]?.break) break;
+  }
+  return n > 1 ? n : 1;
+}
+
+/** Bars of rest as one: their count over a long rest. */
+function multiRest(doc: ScoreDoc, bar: Bar, n: number, last: boolean): string {
+  const staves = doc.parts
+    .flatMap((p) => (p.tab ? [...p.staves, p.tab] : p.staves))
+    .map((s) => `<staff${attrs({ n: s.n })}><layer n="1"><multiRest${attrs({ num: n })}/></layer></staff>`);
+  return `<measure${attrs({ 'xml:id': `b${bar.index}`, n: bar.number, right: last ? 'end' : undefined })}>${staves.join('')}</measure>`;
 }
 
 const COURSE = ['c', 'c', 'd', 'd', 'e', 'f', 'f', 'g', 'g', 'a', 'a', 'b'];

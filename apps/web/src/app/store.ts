@@ -22,6 +22,8 @@ export interface Toast {
   id: number;
   text: string;
   kind: 'info' | 'error' | 'ai';
+  /** A button beside the words: what it says and does (the toast goes when it's pressed). */
+  action?: { label: string; run: () => void };
 }
 
 export interface AppState {
@@ -252,9 +254,9 @@ export function useApp<T>(selector: (s: AppState) => T): T {
 }
 
 let toastId = 0;
-export function toast(text: string, kind: Toast['kind'] = 'info', ms = 3500): void {
+export function toast(text: string, kind: Toast['kind'] = 'info', ms = 3500, action?: Toast['action']): void {
   const id = ++toastId;
-  store.set((s) => ({ toasts: [...s.toasts, { id, text, kind }] }));
+  store.set((s) => ({ toasts: [...s.toasts, { id, text, kind, ...(action ? { action } : {}) }] }));
   window.setTimeout(() => store.set((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) })), ms);
 }
 

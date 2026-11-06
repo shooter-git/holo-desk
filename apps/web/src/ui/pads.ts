@@ -48,6 +48,19 @@ export function padTrack(
   return s && hears(s) ? s : null;
 }
 
+/**
+ * Whether an instrument plays each key as a sound of its own (a kit, the Drum Synth, a single
+ * hit), not as a pitch: a MIDI effect that moves or adds notes then plays other drums.
+ */
+export function playsHits(instrument: Instrument | null | undefined, manifest: InstrumentMap | null): boolean {
+  if (instrument?.type === 'synth') return instrument.preset === 'Drum Synth';
+  if (!padManifestKey(instrument) || !manifest) return false;
+  return Boolean(manifest.pads?.length) || manifest.pitched === false;
+}
+
+/** The MIDI effects that change which notes play (not just how hard). */
+export const NOTE_EFFECTS = new Set(['arpeggiator', 'harmonizer', 'scale']);
+
 /** Whether pads for this instrument need its pack's map (and which). */
 export function padManifestKey(instrument: Instrument | null | undefined): string | null {
   if (instrument?.type === 'sampler' || instrument?.type === 'performance')

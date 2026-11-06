@@ -2513,6 +2513,19 @@ html[data-layout="phone-landscape"] .toasts {
   animation: rise 0.18s ease-out;
 }
 
+/* a toast with a button takes the pointer (the others let it through to what's beneath) */
+.toast.with-action {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border-radius: var(--radius-l);
+  pointer-events: auto;
+}
+
+.toast.with-action .btn {
+  flex: none;
+}
+
 .toast.error {
   border-color: var(--danger-line);
   color: #ffd2d6;

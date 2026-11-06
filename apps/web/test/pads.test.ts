@@ -3,7 +3,7 @@ import { join, resolve } from 'node:path';
 import { newProject, newTrack } from '@holo/session';
 import { describe, expect, it } from 'vitest';
 import type { InstrumentMap } from '../src/audio/pack-files.ts';
-import { GM_PADS, padsFor, padTrack } from '../src/ui/pads.ts';
+import { GM_PADS, padsFor, padTrack, playsHits } from '../src/ui/pads.ts';
 
 const MANIFESTS = resolve(import.meta.dirname, '../../../packs/manifests');
 const opts = { wide: false, octave: 3, middleC: 'C4' as const };
@@ -128,5 +128,19 @@ describe('the track the pads play', () => {
     expect(padTrack(p, drums.id, 'On-screen', 10)).toBeNull();
     drums.input = { port: 'My pads', channel: 0 };
     expect(padTrack(p, drums.id, 'On-screen', 10)).toBeNull();
+  });
+});
+
+describe('an instrument that plays each key as its own hit', () => {
+  it('is a kit, the Drum Synth or a single unpitched sound, not a pitched instrument', () => {
+    const map = (name: string) => shipped.find((m) => m.name === name) as InstrumentMap;
+    const sampler = (m: InstrumentMap) => ({ type: 'sampler' as const, pack: m.pack, name: m.name });
+    expect(shipped.filter((m) => m.pads?.length).every((m) => playsHits(sampler(m), m))).toBe(true);
+    expect(playsHits(sampler(map('bongo_hi')), map('bongo_hi'))).toBe(true);
+    expect(playsHits(sampler(map('grand')), map('grand'))).toBe(false);
+    expect(playsHits({ type: 'synth', preset: 'Drum Synth' }, null)).toBe(true);
+    expect(playsHits({ type: 'synth', preset: 'Fat Mono' }, null)).toBe(false);
+    // not known until its map comes
+    expect(playsHits(sampler(map('kit')), null)).toBe(false);
   });
 });

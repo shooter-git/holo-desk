@@ -27,10 +27,12 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # Windows and Linux build anywhere with Zig; macOS on a Mac, where Apple's frameworks are
+          # Windows and Linux build anywhere with Zig; macOS on a Mac, where Apple's frameworks are (an
+          # Apple silicon one, which builds the Intel download too). Pinned, and moved on when GitHub
+          # retires the image (macos-14 went in November 2026)
           - runner: ubuntu-24.04
             targets: win32-x64 linux-x64
-          - runner: macos-14
+          - runner: macos-15
             targets: darwin-arm64 darwin-x64
     runs-on: ${{ matrix.runner }}
     steps:

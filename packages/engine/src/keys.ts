@@ -54,7 +54,7 @@ const TAU = Math.PI * 2;
 const hz = (key: number) => 440 * 2 ** ((key - 69) / 12);
 
 /** A decaying sinusoid (a mode), as a two-pole resonator: one multiply-add a sample. */
-class Mode {
+export class Mode {
   private y1 = 0;
   private y2 = 0;
   private c = 0;

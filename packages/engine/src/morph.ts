@@ -46,12 +46,12 @@ function vowel(f: number, formants: number[], gains: number[]): number {
   return a;
 }
 
-const TABLES = new Map<string, Float32Array[]>();
-function tables(name: string): Float32Array[] {
-  let t = TABLES.get(name);
-  if (t) return t;
-  const amp = SPECTRA[name] ?? (SPECTRA.saw as (n: number) => number);
-  t = [];
+/**
+ * A spectrum (amplitude of harmonic n, from 1) as band-limited tables, one per octave: the first
+ * with up to 512 harmonics, each next half as many. Scaled so the fullest table peaks at 1.
+ */
+export function buildTables(amp: (n: number) => number): Float32Array[] {
+  const t: Float32Array[] = [];
   let scale = 0;
   for (let lv = 0; lv < LEVELS; lv++) {
     const top = Math.max(1, 512 >> lv);
@@ -72,6 +72,29 @@ function tables(name: string): Float32Array[] {
     out[N] = out[0] as number;
     t.push(out);
   }
+  return t;
+}
+
+/** Which of a spectrum's tables to read for a frequency: every harmonic it has below Nyquist. */
+export function tableLevel(freq: number, sr: number): number {
+  const top = (0.45 * sr) / freq;
+  let lv = 0;
+  while (lv < LEVELS - 1 && 512 >> lv > top) lv++;
+  return lv;
+}
+
+/** A table read at a phase (0..1), linearly interpolated. */
+export function readTable(t: Float32Array, phase: number): number {
+  const idx = phase * N;
+  const j = idx | 0;
+  return (t[j] as number) + ((t[j + 1] as number) - (t[j] as number)) * (idx - j);
+}
+
+const TABLES = new Map<string, Float32Array[]>();
+function tables(name: string): Float32Array[] {
+  let t = TABLES.get(name);
+  if (t) return t;
+  t = buildTables(SPECTRA[name] ?? (SPECTRA.saw as (n: number) => number));
   TABLES.set(name, t);
   return t;
 }

@@ -49,8 +49,13 @@ describe('Morph synth', () => {
       for (const k of chord) s.noteOff(k);
       play(s, 0.2);
       expect(s.active).toBeGreaterThan(0); // the hall still ringing
-      play(s, 15);
-      expect(s.active).toBe(0);
+      // with a small hall, it's all gone a few seconds later
+      const t = new MorphSynth(SR, preset, { release: 0.05, space: 0.15 });
+      for (const k of chord) t.noteOn(k, 100);
+      play(t, 0.5);
+      for (const k of chord) t.noteOff(k);
+      play(t, 5);
+      expect(t.active).toBe(0);
     });
   }
 

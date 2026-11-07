@@ -37,6 +37,27 @@ export const SYNTH_PRESETS = [
   'Drone Metal',
   'Drone Breath',
   'Drone Glass',
+  'Shakuhachi',
+  'Bansuri',
+  'Dizi',
+  'Celtic Pipes',
+  'Koto',
+  'Guzheng',
+  'Gayageum',
+  'Shamisen',
+  'Pipa',
+  'Sitar',
+  'Tanpura',
+  'Harmonium',
+  'Sheng',
+  'Glass Harmonica',
+  'Choir Ahh',
+  'Male Choir',
+  'Taiko',
+  'War Drums',
+  'Frame Drum',
+  'Opera Gongs',
+  'Anvil',
   'Drum Synth',
   'Analog Machine',
   'Punch Machine',
@@ -255,6 +276,104 @@ SYNTH_MACROS['Analog Machine'] = machine({ tune: 0, decay: 1, snap: 0.5, tone: 0
 SYNTH_MACROS['Punch Machine'] = machine({ tune: 0, decay: 1, snap: 0.6, tone: 0.6, drive: 0.3, width: 0.4 });
 SYNTH_MACROS['Lo-fi Machine'] = machine({ tune: -1, decay: 0.9, snap: 0.45, tone: 0.3, drive: 0.35, width: 0.3 });
 SYNTH_MACROS['Hand Machine'] = machine({ tune: 0, decay: 1, snap: 0.5, tone: 0.5, drive: 0, width: 0.7 });
+
+type Six<K extends string> = Record<K, number>;
+const knob = (id: string, name: string, min: number, max: number, d: number, more?: Partial<ParamDef>): ParamDef => ({
+  id,
+  name,
+  min,
+  max,
+  default: d,
+  ...more,
+});
+const seconds = { unit: 's', scale: 'log' } as const;
+
+const wind = (d: Six<'breath' | 'overblow' | 'vibrato' | 'attack' | 'release' | 'space'>): ParamDef[] => [
+  knob('breath', 'Breath', 0, 1, d.breath),
+  knob('overblow', 'Overblow', 0, 1, d.overblow),
+  knob('vibrato', 'Vibrato', 0, 1, d.vibrato),
+  knob('attack', 'Attack', 0.005, 2, d.attack, seconds),
+  knob('release', 'Release', 0.02, 4, d.release, seconds),
+  knob('space', 'Space', 0, 1, d.space),
+];
+SYNTH_MACROS.Shakuhachi = wind({ breath: 0.55, overblow: 0.1, vibrato: 0.35, attack: 0.12, release: 0.4, space: 0.5 });
+SYNTH_MACROS.Bansuri = wind({ breath: 0.3, overblow: 0.05, vibrato: 0.45, attack: 0.08, release: 0.3, space: 0.45 });
+SYNTH_MACROS.Dizi = wind({ breath: 0.25, overblow: 0.15, vibrato: 0.4, attack: 0.04, release: 0.2, space: 0.4 });
+SYNTH_MACROS['Celtic Pipes'] = wind({
+  breath: 0.1,
+  overblow: 0,
+  vibrato: 0.1,
+  attack: 0.03,
+  release: 0.15,
+  space: 0.35,
+});
+
+const plucked = (d: Six<'tone' | 'buzz' | 'vibrato' | 'decay' | 'body' | 'space'>): ParamDef[] => [
+  knob('tone', 'Tone', 0, 1, d.tone),
+  knob('buzz', 'Buzz', 0, 1, d.buzz),
+  knob('vibrato', 'Vibrato', 0, 1, d.vibrato),
+  knob('decay', 'Decay', 0.25, 3, d.decay, { unit: '×', scale: 'log' }),
+  knob('body', 'Body', 0, 1, d.body),
+  knob('space', 'Space', 0, 1, d.space),
+];
+SYNTH_MACROS.Koto = plucked({ tone: 0.55, buzz: 0, vibrato: 0.2, decay: 1, body: 0.5, space: 0.35 });
+SYNTH_MACROS.Guzheng = plucked({ tone: 0.65, buzz: 0, vibrato: 0.35, decay: 1, body: 0.5, space: 0.4 });
+SYNTH_MACROS.Gayageum = plucked({ tone: 0.45, buzz: 0, vibrato: 0.5, decay: 1, body: 0.55, space: 0.35 });
+SYNTH_MACROS.Shamisen = plucked({ tone: 0.7, buzz: 0.45, vibrato: 0.1, decay: 1, body: 0.6, space: 0.25 });
+SYNTH_MACROS.Pipa = plucked({ tone: 0.65, buzz: 0.1, vibrato: 0.2, decay: 1, body: 0.5, space: 0.3 });
+SYNTH_MACROS.Sitar = plucked({ tone: 0.7, buzz: 0.7, vibrato: 0.2, decay: 1, body: 0.4, space: 0.35 });
+SYNTH_MACROS.Tanpura = plucked({ tone: 0.6, buzz: 0.8, vibrato: 0, decay: 1, body: 0.4, space: 0.45 });
+
+const reed = (d: Six<'tone' | 'swell' | 'tremolo' | 'detune' | 'release' | 'space'>): ParamDef[] => [
+  knob('tone', 'Tone', 0, 1, d.tone),
+  knob('swell', 'Swell', 0.005, 3, d.swell, seconds),
+  knob('tremolo', 'Tremolo', 0, 1, d.tremolo),
+  knob('detune', 'Detune', 0, 1, d.detune),
+  knob('release', 'Release', 0.02, 6, d.release, seconds),
+  knob('space', 'Space', 0, 1, d.space),
+];
+SYNTH_MACROS.Harmonium = reed({ tone: 0.55, swell: 0.12, tremolo: 0.35, detune: 0.4, release: 0.2, space: 0.3 });
+SYNTH_MACROS.Sheng = reed({ tone: 0.7, swell: 0.06, tremolo: 0.3, detune: 0.1, release: 0.15, space: 0.35 });
+SYNTH_MACROS['Glass Harmonica'] = reed({
+  tone: 0.5,
+  swell: 0.35,
+  tremolo: 0.1,
+  detune: 0.5,
+  release: 2.5,
+  space: 0.55,
+});
+
+const choir = (d: Six<'vowel' | 'breath' | 'vibrato' | 'ensemble' | 'release' | 'space'>): ParamDef[] => [
+  knob('vowel', 'Vowel', 0, 1, d.vowel),
+  knob('breath', 'Breath', 0, 1, d.breath),
+  knob('vibrato', 'Vibrato', 0, 1, d.vibrato),
+  knob('ensemble', 'Ensemble', 0, 1, d.ensemble),
+  knob('release', 'Release', 0.05, 8, d.release, seconds),
+  knob('space', 'Space', 0, 1, d.space),
+];
+SYNTH_MACROS['Choir Ahh'] = choir({ vowel: 0.05, breath: 0.3, vibrato: 0.4, ensemble: 0.7, release: 1.5, space: 0.6 });
+SYNTH_MACROS['Male Choir'] = choir({
+  vowel: 0.45,
+  breath: 0.25,
+  vibrato: 0.3,
+  ensemble: 0.8,
+  release: 1.5,
+  space: 0.65,
+});
+
+const struck = (d: Six<'tune' | 'decay' | 'hardness' | 'tone' | 'ensemble' | 'space'>): ParamDef[] => [
+  knob('tune', 'Tune', -12, 12, d.tune, { unit: 'st' }),
+  knob('decay', 'Decay', 0.25, 3, d.decay, { unit: '×', scale: 'log' }),
+  knob('hardness', 'Hardness', 0, 1, d.hardness),
+  knob('tone', 'Tone', 0, 1, d.tone),
+  knob('ensemble', 'Ensemble', 0, 1, d.ensemble),
+  knob('space', 'Space', 0, 1, d.space),
+];
+SYNTH_MACROS.Taiko = struck({ tune: 0, decay: 1, hardness: 0.55, tone: 0.5, ensemble: 0, space: 0.4 });
+SYNTH_MACROS['War Drums'] = struck({ tune: 0, decay: 1, hardness: 0.45, tone: 0.4, ensemble: 0.7, space: 0.55 });
+SYNTH_MACROS['Frame Drum'] = struck({ tune: 0, decay: 1, hardness: 0.4, tone: 0.55, ensemble: 0, space: 0.35 });
+SYNTH_MACROS['Opera Gongs'] = struck({ tune: 0, decay: 1, hardness: 0.5, tone: 0.6, ensemble: 0, space: 0.4 });
+SYNTH_MACROS.Anvil = struck({ tune: 0, decay: 1, hardness: 0.8, tone: 0.75, ensemble: 0, space: 0.3 });
 
 /** What each synth with knobs is, for its window. */
 export const SYNTH_NOTES: Record<string, string> = {

@@ -38,9 +38,22 @@ export const SYNTH_PRESETS = [
   'Drone Breath',
   'Drone Glass',
   'Drum Synth',
+  'Analog Machine',
+  'Punch Machine',
+  'Lo-fi Machine',
+  'Hand Machine',
 ] as const;
 
 export type SynthPreset = (typeof SYNTH_PRESETS)[number];
+
+/** The synths that are drum kits: each key a sound of its own, laid out on the General MIDI drum keys. */
+export const DRUM_PRESETS: readonly string[] = [
+  'Drum Synth',
+  'Analog Machine',
+  'Punch Machine',
+  'Lo-fi Machine',
+  'Hand Machine',
+];
 
 /**
  * The synths with knobs of their own (shown in the instrument's window, stored as the instrument's
@@ -229,6 +242,19 @@ SYNTH_MACROS['Drone Field'] = drone({ tone: 0.4, motion: 0.4, density: 0, swell:
 SYNTH_MACROS['Drone Metal'] = drone({ tone: 0.55, motion: 0.5, density: 0.15, swell: 2, width: 0.7, space: 0.55 });
 SYNTH_MACROS['Drone Breath'] = drone({ tone: 0.45, motion: 0.55, density: 0, swell: 2.5, width: 0.5, space: 0.5 });
 SYNTH_MACROS['Drone Glass'] = drone({ tone: 0.6, motion: 0.5, density: 0.6, swell: 1.5, width: 0.8, space: 0.7 });
+
+const machine = (d: Record<'tune' | 'decay' | 'snap' | 'tone' | 'drive' | 'width', number>): ParamDef[] => [
+  { id: 'tune', name: 'Tune', min: -12, max: 12, default: d.tune, unit: 'st' },
+  { id: 'decay', name: 'Decay', min: 0.25, max: 3, default: d.decay, unit: '×', scale: 'log' },
+  { id: 'snap', name: 'Snap', min: 0, max: 1, default: d.snap },
+  { id: 'tone', name: 'Tone', min: 0, max: 1, default: d.tone },
+  { id: 'drive', name: 'Drive', min: 0, max: 1, default: d.drive },
+  { id: 'width', name: 'Width', min: 0, max: 1, default: d.width },
+];
+SYNTH_MACROS['Analog Machine'] = machine({ tune: 0, decay: 1, snap: 0.5, tone: 0.5, drive: 0.1, width: 0.5 });
+SYNTH_MACROS['Punch Machine'] = machine({ tune: 0, decay: 1, snap: 0.6, tone: 0.6, drive: 0.3, width: 0.4 });
+SYNTH_MACROS['Lo-fi Machine'] = machine({ tune: -1, decay: 0.9, snap: 0.45, tone: 0.3, drive: 0.35, width: 0.3 });
+SYNTH_MACROS['Hand Machine'] = machine({ tune: 0, decay: 1, snap: 0.5, tone: 0.5, drive: 0, width: 0.7 });
 
 /** What each synth with knobs is, for its window. */
 export const SYNTH_NOTES: Record<string, string> = {

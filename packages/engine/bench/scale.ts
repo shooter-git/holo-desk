@@ -21,6 +21,7 @@ import { cpus } from 'node:os';
 import { resolve } from 'node:path';
 import { Worker } from 'node:worker_threads';
 import {
+  DRUM_PRESETS,
   newBus,
   newPlugin,
   newProject,
@@ -88,7 +89,7 @@ const SIZES: Size[] = [
 ];
 
 const INSERTS = ['eq', 'compressor', 'peq', 'chorus', 'delay', 'saturator', 'width', 'softener'];
-const PRESETS = SYNTH_PRESETS.filter((p) => p !== 'Drum Synth');
+const PRESETS = SYNTH_PRESETS.filter((p) => !DRUM_PRESETS.includes(p));
 
 function arg(name: string): string | undefined {
   const i = process.argv.indexOf(`--${name}`);

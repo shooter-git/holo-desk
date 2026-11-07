@@ -9,6 +9,7 @@ export * from './ethereal.ts';
 export * from './fm.ts';
 export * from './glass.ts';
 export * from './keys.ts';
+export * from './machine.ts';
 export * from './master.ts';
 export * from './morph.ts';
 export * from './organ.ts';

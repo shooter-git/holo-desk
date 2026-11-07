@@ -18,6 +18,7 @@ import { createEffect, type Effect, type Host } from './fx.ts';
 import { GlassLineVoice, GlassVoice } from './glass.ts';
 import type { Instrument } from './instrument.ts';
 import { ElectricKeys, KEYS_PRESETS } from './keys.ts';
+import { DrumMachine, MACHINE_PRESETS } from './machine.ts';
 import { createMidiEffect, EventList, type MidiEffect, type MidiHost } from './midifx.ts';
 import { MORPH_PRESETS, MorphSynth } from './morph.ts';
 import { ORGAN_PRESETS, TonewheelOrgan } from './organ.ts';
@@ -1069,6 +1070,7 @@ export class EngineCore implements Host {
         if (FM_PRESETS.includes(spec.preset)) return new FmSynth(this.sr, spec.preset, spec.params);
         if (MORPH_PRESETS.includes(spec.preset)) return new MorphSynth(this.sr, spec.preset, spec.params);
         if (DRONE_PRESETS.includes(spec.preset)) return new DroneSynth(this.sr, spec.preset, spec.params);
+        if (MACHINE_PRESETS.includes(spec.preset)) return new DrumMachine(this.sr, spec.preset, spec.params);
         return new Synth(this.sr, spec.preset, spec.params);
       case 'drums':
         return new DrumSynth(this.sr);

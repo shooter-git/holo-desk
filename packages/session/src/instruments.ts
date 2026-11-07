@@ -28,6 +28,15 @@ export const SYNTH_PRESETS = [
   'FM Brass',
   'FM Pluck',
   'FM Pad',
+  'Morph Pad',
+  'Morph Lead',
+  'Morph Pluck',
+  'Morph Bass',
+  'Morph Choir',
+  'Drone Field',
+  'Drone Metal',
+  'Drone Breath',
+  'Drone Glass',
   'Drum Synth',
 ] as const;
 
@@ -172,6 +181,54 @@ SYNTH_MACROS['FM Bass'] = fm({ brightness: 1, ratio: 1, feedback: 0.35, attack: 
 SYNTH_MACROS['FM Brass'] = fm({ brightness: 1, ratio: 1, feedback: 0.25, attack: 0.06, decay: 1, release: 0.25 });
 SYNTH_MACROS['FM Pluck'] = fm({ brightness: 1, ratio: 2, feedback: 0.1, attack: 0.002, decay: 0.9, release: 0.25 });
 SYNTH_MACROS['FM Pad'] = fm({ brightness: 1, ratio: 2, feedback: 0, attack: 0.9, decay: 3, release: 2.5 });
+
+const morph = (d: Record<'morph' | 'brightness' | 'motion' | 'texture' | 'release' | 'space', number>): ParamDef[] => [
+  { id: 'morph', name: 'Morph', min: 0, max: 1, default: d.morph },
+  { id: 'brightness', name: 'Brightness', min: 200, max: 14000, default: d.brightness, unit: 'Hz', scale: 'log' },
+  { id: 'motion', name: 'Motion', min: 0, max: 1, default: d.motion },
+  { id: 'texture', name: 'Texture', min: 0, max: 1, default: d.texture },
+  { id: 'release', name: 'Release', min: 0.02, max: 10, default: d.release, unit: 's', scale: 'log' },
+  { id: 'space', name: 'Space', min: 0, max: 1, default: d.space },
+];
+SYNTH_MACROS['Morph Pad'] = morph({ morph: 0.35, brightness: 2400, motion: 0.5, texture: 0.2, release: 3, space: 0.5 });
+SYNTH_MACROS['Morph Lead'] = morph({
+  morph: 0.2,
+  brightness: 3800,
+  motion: 0.15,
+  texture: 0.05,
+  release: 0.25,
+  space: 0.2,
+});
+SYNTH_MACROS['Morph Pluck'] = morph({
+  morph: 0.3,
+  brightness: 1200,
+  motion: 0.1,
+  texture: 0.05,
+  release: 0.3,
+  space: 0.3,
+});
+SYNTH_MACROS['Morph Bass'] = morph({ morph: 0.3, brightness: 700, motion: 0.05, texture: 0, release: 0.12, space: 0 });
+SYNTH_MACROS['Morph Choir'] = morph({
+  morph: 0.2,
+  brightness: 5000,
+  motion: 0.4,
+  texture: 0.15,
+  release: 2.5,
+  space: 0.55,
+});
+
+const drone = (d: Record<'tone' | 'motion' | 'density' | 'swell' | 'width' | 'space', number>): ParamDef[] => [
+  { id: 'tone', name: 'Tone', min: 0, max: 1, default: d.tone },
+  { id: 'motion', name: 'Motion', min: 0, max: 1, default: d.motion },
+  { id: 'density', name: 'Density', min: 0, max: 1, default: d.density },
+  { id: 'swell', name: 'Swell', min: 0.05, max: 10, default: d.swell, unit: 's', scale: 'log' },
+  { id: 'width', name: 'Width', min: 0, max: 1, default: d.width },
+  { id: 'space', name: 'Space', min: 0, max: 1, default: d.space },
+];
+SYNTH_MACROS['Drone Field'] = drone({ tone: 0.4, motion: 0.4, density: 0, swell: 3, width: 0.6, space: 0.6 });
+SYNTH_MACROS['Drone Metal'] = drone({ tone: 0.55, motion: 0.5, density: 0.15, swell: 2, width: 0.7, space: 0.55 });
+SYNTH_MACROS['Drone Breath'] = drone({ tone: 0.45, motion: 0.55, density: 0, swell: 2.5, width: 0.5, space: 0.5 });
+SYNTH_MACROS['Drone Glass'] = drone({ tone: 0.6, motion: 0.5, density: 0.6, swell: 1.5, width: 0.8, space: 0.7 });
 
 /** What each synth with knobs is, for its window. */
 export const SYNTH_NOTES: Record<string, string> = {

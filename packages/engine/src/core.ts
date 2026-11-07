@@ -9,6 +9,7 @@
 import { AHEAD_BLOCK, type AheadEdge, AheadLink, aheadPlan } from './ahead.ts';
 import { FAT_PRESETS, FatSynth } from './analog.ts';
 import type { PreparedImpulse } from './convolver.ts';
+import { DRONE_PRESETS, DroneSynth } from './drone.ts';
 import { DrumSynth } from './drums.ts';
 import { Biquad, dbToGain, Smooth } from './dsp.ts';
 import { ETHEREAL_PRESETS, EtherealSynth } from './ethereal.ts';
@@ -18,6 +19,7 @@ import { GlassLineVoice, GlassVoice } from './glass.ts';
 import type { Instrument } from './instrument.ts';
 import { ElectricKeys, KEYS_PRESETS } from './keys.ts';
 import { createMidiEffect, EventList, type MidiEffect, type MidiHost } from './midifx.ts';
+import { MORPH_PRESETS, MorphSynth } from './morph.ts';
 import { ORGAN_PRESETS, TonewheelOrgan } from './organ.ts';
 import type { PartPlans } from './parts.ts';
 import { PlanVoice, prepareLengthened, type SampleData } from './performance.ts';
@@ -1065,6 +1067,8 @@ export class EngineCore implements Host {
         if (ORGAN_PRESETS.includes(spec.preset)) return new TonewheelOrgan(this.sr, spec.preset, spec.params);
         if (KEYS_PRESETS.includes(spec.preset)) return new ElectricKeys(this.sr, spec.preset, spec.params);
         if (FM_PRESETS.includes(spec.preset)) return new FmSynth(this.sr, spec.preset, spec.params);
+        if (MORPH_PRESETS.includes(spec.preset)) return new MorphSynth(this.sr, spec.preset, spec.params);
+        if (DRONE_PRESETS.includes(spec.preset)) return new DroneSynth(this.sr, spec.preset, spec.params);
         return new Synth(this.sr, spec.preset, spec.params);
       case 'drums':
         return new DrumSynth(this.sr);

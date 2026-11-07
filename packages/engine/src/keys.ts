@@ -452,6 +452,11 @@ export class ElectricKeys extends Instrument {
   }
 
   override render(l: Float32Array, r: Float32Array, start: number, end: number): void {
+    // nothing sounding and the tone filter settled: nothing to do
+    if (super.active === 0 && Math.abs(this.tone2L) + Math.abs(this.tone2R) < 1e-7) {
+      this.toneL = this.toneR = this.tone2L = this.tone2R = 0;
+      return;
+    }
     if (end > this.dryL.length) {
       this.dryL = new Float32Array(end);
       this.dryR = new Float32Array(end);

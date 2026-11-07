@@ -236,6 +236,8 @@ export class DroneSynth extends Instrument {
   }
 
   override render(l: Float32Array, r: Float32Array, start: number, end: number): void {
+    // nothing sounding and the hall quiet: nothing to do (and nothing left to decay into denormals)
+    if (this.active === 0) return;
     if (end > this.dryL.length) {
       this.dryL = new Float32Array(end);
       this.dryR = new Float32Array(end);

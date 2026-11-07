@@ -307,6 +307,8 @@ export class TonewheelOrgan extends Instrument {
   private hornLp = 0;
   private dcIn = 0;
   private dcOut = 0;
+  /** Samples since the last voice ended. */
+  private idle = 0;
 
   constructor(sr: number, preset: string, params?: Record<string, number>) {
     super(sr);
@@ -342,6 +344,14 @@ export class TonewheelOrgan extends Instrument {
   }
 
   override render(l: Float32Array, r: Float32Array, start: number, end: number): void {
+    // nothing sounding for longer than the scanner and rotor hold: nothing to do (the wheels turn on)
+    if (super.active === 0) {
+      this.idle += end - start;
+      if (this.idle > 4096) {
+        this.time += end - start;
+        return;
+      }
+    } else this.idle = 0;
     if (end > this.dry.length) this.dry = new Float32Array(end);
     const dry = this.dry;
     dry.fill(0, start, end);

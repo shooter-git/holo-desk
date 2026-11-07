@@ -400,6 +400,8 @@ export class MorphSynth extends Instrument {
   }
 
   override render(l: Float32Array, r: Float32Array, start: number, end: number): void {
+    // nothing sounding and the hall quiet: nothing to do (and nothing left to decay into denormals)
+    if (this.active === 0) return;
     const space = this.p.space;
     if (space <= 0 && this.tail <= 2e-5) {
       super.render(l, r, start, end);

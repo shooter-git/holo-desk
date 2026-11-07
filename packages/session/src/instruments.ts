@@ -19,6 +19,9 @@ export const SYNTH_PRESETS = [
   'Tonewheel Gospel',
   'Tonewheel Rock',
   'Tonewheel Ballad',
+  'Tine Piano',
+  'Reed Piano',
+  'Clav Keys',
   'Drum Synth',
 ] as const;
 
@@ -126,6 +129,18 @@ SYNTH_MACROS['Tonewheel Gospel'] = organ({ drawbars: 3, percussion: 0, click: 0.
 SYNTH_MACROS['Tonewheel Rock'] = organ({ drawbars: 0, percussion: 0, click: 0.7, vibrato: 0, rotor: 1, drive: 0.7 });
 SYNTH_MACROS['Tonewheel Ballad'] = organ({ drawbars: 5, percussion: 0, click: 0.3, vibrato: 5, rotor: 1, drive: 0.05 });
 
+const keys = (d: Record<'tone' | 'bark' | 'decay' | 'tremolo' | 'pickup' | 'stereo', number>): ParamDef[] => [
+  { id: 'tone', name: 'Tone', min: 0, max: 1, default: d.tone },
+  { id: 'bark', name: 'Bark', min: 0, max: 1, default: d.bark },
+  { id: 'decay', name: 'Decay', min: 0.2, max: 2, default: d.decay, unit: '×' },
+  { id: 'tremolo', name: 'Tremolo', min: 0, max: 1, default: d.tremolo },
+  { id: 'pickup', name: 'Pickup', min: 0, max: 1, default: d.pickup },
+  { id: 'stereo', name: 'Stereo', min: 0, max: 1, default: d.stereo },
+];
+SYNTH_MACROS['Tine Piano'] = keys({ tone: 0.55, bark: 0.35, decay: 1, tremolo: 0.3, pickup: 0.45, stereo: 0.4 });
+SYNTH_MACROS['Reed Piano'] = keys({ tone: 0.6, bark: 0.4, decay: 1, tremolo: 0.25, pickup: 0.5, stereo: 0.2 });
+SYNTH_MACROS['Clav Keys'] = keys({ tone: 0.75, bark: 0.3, decay: 1, tremolo: 0, pickup: 0.6, stereo: 0 });
+
 /** What each synth with knobs is, for its window. */
 export const SYNTH_NOTES: Record<string, string> = {
   'Fat Mono':
@@ -144,6 +159,12 @@ export const SYNTH_NOTES: Record<string, string> = {
     'The drawbar organ with the first three drawbars out and the preamp overdriven: growling chords and stabs. Drive is how hard it breaks up.',
   'Tonewheel Ballad':
     'A soft drawbar organ with a gentle chorus and a whisper of the top drawbar, for sustained chords under a ballad.',
+  'Tine Piano':
+    'A struck tine and tone bar read by a magnetic pickup: round and bell-like played softly, barking when hit hard (Bark is how much). Pickup moves it from mellow to hollow; Tremolo pans it between the sides.',
+  'Reed Piano':
+    'A struck steel reed read by an electrostatic pickup: sweet when soft, snarling when hard. Its tremolo swells the level, as the originals did.',
+  'Clav Keys':
+    'A string pinned by a hammer and read by pickups along it: bright, percussive and funky, with a yarn-damper thump when you let go. Pickup slides from the round neck sound to the thin bridge one.',
 };
 
 /** A synth's knob at its value in the instrument's params (its preset's default where it has none), kept in range. */

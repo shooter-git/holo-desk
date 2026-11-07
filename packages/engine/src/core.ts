@@ -15,6 +15,7 @@ import { ETHEREAL_PRESETS, EtherealSynth } from './ethereal.ts';
 import { createEffect, type Effect, type Host } from './fx.ts';
 import { GlassLineVoice, GlassVoice } from './glass.ts';
 import type { Instrument } from './instrument.ts';
+import { ElectricKeys, KEYS_PRESETS } from './keys.ts';
 import { createMidiEffect, EventList, type MidiEffect, type MidiHost } from './midifx.ts';
 import { ORGAN_PRESETS, TonewheelOrgan } from './organ.ts';
 import type { PartPlans } from './parts.ts';
@@ -1061,6 +1062,7 @@ export class EngineCore implements Host {
         if (FAT_PRESETS.includes(spec.preset)) return new FatSynth(this.sr, spec.preset, spec.params);
         if (ETHEREAL_PRESETS.includes(spec.preset)) return new EtherealSynth(this.sr, spec.preset, spec.params);
         if (ORGAN_PRESETS.includes(spec.preset)) return new TonewheelOrgan(this.sr, spec.preset, spec.params);
+        if (KEYS_PRESETS.includes(spec.preset)) return new ElectricKeys(this.sr, spec.preset, spec.params);
         return new Synth(this.sr, spec.preset, spec.params);
       case 'drums':
         return new DrumSynth(this.sr);

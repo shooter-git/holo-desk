@@ -8,6 +8,8 @@
 
 - **Write and edit.** Tracks and regions on a timeline. A Piano Roll with the keyboard down the left: drag notes to new pitches and times, stretch them, set velocities, and draw any controller (mod wheel, expression, sustain, pitch bend, aftertouch, any CC). Quantize, transpose, split, repeat, undo everything.
 - **Play it live.** USB MIDI keyboards and drum pads through Web MIDI, delivered to the audio engine through shared memory: a key you press sounds in the next 128-frame block. You can also play the computer keyboard (Musical Typing) or the touch keyboard and drum pads on a phone. Record with count-in, cycle and metronome. For the shortest time from key to ear, run [HO[LO] Engine](#play-it-in-a-few-milliseconds-holo-engine) on the computer you play on.
+- **Scores.** Any track as notation (press <kbd>N</kbd>): the score and the Piano Roll are the same notes, so an edit in either shows in both. Write by typing letters and note values, playing a MIDI keyboard, or clicking on a staff; add dynamics, articulations, slurs, lyrics, chord symbols, repeats and endings, D.C. and D.S. jumps, guitar tab and drum parts. Markings sound as they read, and playback follows the repeats. MusicXML goes in and out (MuseScore, Sibelius, Finale, Dorico), and the full score or each part prints, or saves as a PDF.
+- **Scan sheet music.** Photograph a page with your phone or open an image or a PDF: HO[LO] straightens it and finds the systems, then reads it into the song with your own signed-in Claude Code (no API key) and shows each line of the page above the bars it became, for a quick review. Optional open-source recognition engines (Audiveris and homr, `pnpm omr on`) read it a second time and flag the bars where the readings differ.
 - **Record and edit audio.** Audio tracks record a microphone or an instrument through an audio interface (lined up with what you heard, using this device's measured round trip), or take WAV, FLAC, MP3, Ogg and AIFF files dropped on the tracks. Trim from either edge, drag fades, set gain, normalize, and time-stretch without changing pitch (Alt-drag a region's end, as in Logic) in the tracks area or the Audio Editor.
 - **Mix and automate.** Channel strips with instruments, MIDI effects, audio effects, sends, buses, pan, faders and meters. Put a channel on a **Stage**: a near seat and a far seat, each with its own rooms and depth, and a Distance that moves it between them. Automation lanes (press <kbd>A</kbd>) draw how volume, pan, mute, sends, distance and any plugin parameter move through the song, in straight lines or smooth curves, sample-accurately.
 - **Bounce.** <kbd>Ctrl B</kbd> renders the song (or the cycle) to a 24-bit WAV with the same engine, faster than real time, and keeps a copy with the song. The stock plugins are Channel EQ, Parametric EQ (eight free bands), Compressor, Noise Gate, Transient Softener, Limiter, Space Designer (convolution with generated rooms, halls and cathedrals, or any impulse response), Shimmer, Space Reverb, Tape Delay, Chorus, Wow & Flutter, Stereo Width, Tape Warmth, Saturation, Arpeggiator, Harmonizer, Scale Quantizer and Velocity Processor. Plugins that look ahead (the limiter, Shimmer) are delay-compensated: everything else waits for them, so it all arrives together. A song can carry its **finish** (mastering to a loudness under a true-peak ceiling, with glue) and be marked a **loop**, so a game's music renders as it plays forever, its end ringing into its start.
@@ -145,6 +147,12 @@ Then ask Claude things like *"harmonize the melody in bars 9 to 16 with a counte
 or *"put a live harmonizer on my keys in A lydian, thirds and fifths"*. Each change appears in the
 open studio as one step you can undo. See [skills/holo/SKILL.md](skills/holo/SKILL.md).
 
+Claude reads and writes notation too (`holo score show`, `holo score write`), and the Scan window's
+**Read with AI**, **Check with AI** and **Fix flagged** buttons run your own Claude Code in the
+background through the runner (`pnpm runner`), sealed off so it can only read the page and write the
+score. Install the Claude Code CLI on that computer and sign in once (`claude`, then `/login`); the
+buttons say what's missing if anything is.
+
 ## Sample packs
 
 ```bash
@@ -198,7 +206,9 @@ become instruments, and a folder of one-shot hits becomes a drum kit on the Gene
 
 They follow Logic's (Ctrl in place of ⌘): Space play/stop, R record, C cycle, K metronome, X mixer,
 P Piano Roll, I Inspector, Y Library, Q quantize, Ctrl T split, Ctrl R repeat, Ctrl Z undo, Ctrl K
-Musical Typing, A automation, Ctrl B bounce. Press <kbd>?</kbd> in the studio for the whole list.
+Musical Typing, A automation, Ctrl B bounce. N shows the Score and Shift N writes in it: letters for
+notes, 1–7 for values (as in MuseScore), Shift L lyrics, Shift Q chord symbols. Press <kbd>?</kbd> in
+the studio for the whole list.
 
 ## Development
 
@@ -230,7 +240,9 @@ secret, an email address or a home-folder path.
 
 ## Privacy and security
 
-HO[LO] has no accounts and sends nothing anywhere. It binds to `127.0.0.1`, and only devices on your own
+HO[LO] has no accounts and sends nothing anywhere. The AI buttons run your own Claude Code, which sends
+what it reads (a scanned page, the score) to Anthropic as any Claude Code session does: only when you
+press one, and as you. It binds to `127.0.0.1`, and only devices on your own
 tailnet can reach it when you turn that on. HO[LO] Engine listens on `127.0.0.1:47830` only, and lets in
 a studio served from this computer, the local network or a tailnet (`--origin` names any other). Your songs and packs stay in `./data`. Read
 [SECURITY.md](SECURITY.md) before exposing it any other way.

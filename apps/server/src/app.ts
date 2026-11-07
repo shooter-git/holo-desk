@@ -3,7 +3,7 @@
  * bridge to your creations. It has no accounts and no passwords: it listens on this machine only,
  * and your own devices reach it through Tailscale.
  */
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
@@ -20,6 +20,7 @@ import {
   studioEngine,
   syncPinnedPacks,
 } from '@holo/music';
+import { notate, readMusicXml, scoreFileText, toMusicXml } from '@holo/score';
 import {
   applyOps,
   describeNotes,
@@ -43,6 +44,7 @@ import { Creations, sessionText } from './creations.ts';
 import { Store } from './db.ts';
 import { Live, type RenderJob } from './live.ts';
 import { NetworkMidi } from './network-midi.ts';
+import { omrRoutes } from './omr.ts';
 import { audioInfo, extractZip, importFolder, saveStream } from './pack-import.ts';
 import {
   availablePacks,
@@ -54,6 +56,7 @@ import {
   useDataDir,
 } from './pack-install.ts';
 import { Packs } from './packs.ts';
+import { scanRoutes } from './scans.ts';
 
 const ISOLATION = {
   'cross-origin-opener-policy': 'same-origin',
@@ -134,7 +137,7 @@ export async function buildApp(config: Config): Promise<{ app: FastifyInstance; 
     const editor = live.state().state;
     return {
       ok: true,
-      version: '0.4.1',
+      version: '0.5.0',
       build,
       // a studio playing or recording: an update waits for it (tools/update.mjs)
       busy: editor?.playing === true || editor?.recording === true,
@@ -177,10 +180,59 @@ export async function buildApp(config: Config): Promise<{ app: FastifyInstance; 
     },
   );
 
+  // sheet music on its way into songs: photographed or scanned pages, and their systems
+  const scans = scanRoutes(app, {
+    dataDir: config.dataDir,
+    projectExists: (id) => !!store.get(id),
+    changed: (scan) => live.tell({ type: 'scan', id: scan.id, project: scan.project }),
+  });
+
+  // the recognition engines, a second reader of scanned pages (when their container is running)
+  omrRoutes(app, {
+    url: config.omrUrl ?? null,
+    dataDir: config.dataDir,
+    scan: scans.get,
+    save: scans.save,
+    project: (id) => store.get(id),
+  });
+
+  // the AI buttons: your own Claude Code, through the runner on the host (HO[LO] holds no key)
+  app.get('/api/ai', async () => live.aiStatus());
+  app.get<{ Querystring: { project?: string } }>('/api/ai/jobs', async (req) =>
+    live.aiJobsFor(String(req.query.project ?? '')),
+  );
+  app.post<{ Params: { id: string }; Body: { task?: string } }>('/api/scans/:id/ai', async (req, reply) => {
+    const scan = scans.get(req.params.id);
+    if (!scan) return reply.code(404).send({ error: 'No such scan' });
+    const task = req.body?.task;
+    if (task !== 'read' && task !== 'check' && task !== 'fix')
+      return reply.code(400).send({ error: 'The task is read, check or fix' });
+    const status = live.aiStatus();
+    if (!status.available) return reply.code(409).send({ error: 'The AI isn’t available', reason: status.reason });
+    const job = {
+      id: `job_${randomBytes(6).toString('hex')}`,
+      task: task as 'read' | 'check' | 'fix',
+      scan: scan.id,
+      project: scan.project,
+      state: 'waiting' as const,
+      started: Date.now(),
+      finished: null,
+      lines: [],
+      summary: null,
+      error: null,
+    };
+    if (!live.ai(job)) return reply.code(409).send({ error: 'The AI isn’t available', reason: 'no-runner' });
+    return reply.code(202).send(job);
+  });
+  app.post<{ Params: { id: string } }>('/api/ai/jobs/:id/cancel', async (req, reply) =>
+    live.aiCancel(req.params.id) ? { ok: true } : reply.code(404).send({ error: 'No such job running' }),
+  );
+
   app.delete<{ Params: { id: string } }>('/api/projects/:id', async (req, reply) => {
     if (!store.remove(req.params.id)) return reply.code(404).send({ error: 'No such project' });
-    // its recordings go with it
+    // its recordings and its scans go with it
     rmSync(audioDir(req.params.id), { recursive: true, force: true });
+    scans.removeFor(req.params.id);
     return { ok: true };
   });
 
@@ -255,6 +307,36 @@ export async function buildApp(config: Config): Promise<{ app: FastifyInstance; 
       .type('audio/midi')
       .header('content-disposition', `attachment; filename="${name}.mid"`)
       .send(Buffer.from(writeMidi(project)));
+  });
+
+  // ---- scores: MusicXML (and compressed .mxl) in, MusicXML out ----
+
+  app.addContentTypeParser(
+    ['application/vnd.recordare.musicxml+xml', 'application/vnd.recordare.musicxml', 'application/xml', 'text/xml'],
+    { parseAs: 'buffer', bodyLimit: 64 * 1024 * 1024 },
+    (_r, body, done) => done(null, body),
+  );
+
+  app.post<{ Querystring: { title?: string } }>('/api/import/score', async (req, reply) => {
+    const body = req.body as Buffer;
+    try {
+      const text = await scoreFileText(new Uint8Array(body));
+      const { project } = readMusicXml(text, (req.query.title ?? 'Imported').slice(0, 120));
+      const saved = store.save(parseProject(project), null, 'import');
+      return reply.code(201).send(saved);
+    } catch (err) {
+      return reply.code(400).send({ error: err instanceof Error ? err.message : 'Not a score HO[LO] can read' });
+    }
+  });
+
+  app.get<{ Params: { id: string } }>('/api/projects/:id/musicxml', async (req, reply) => {
+    const project = store.get(req.params.id);
+    if (!project) return reply.code(404).send({ error: 'No such project' });
+    const name = project.title.replace(/[^\w\- ]+/g, '').trim() || 'score';
+    return reply
+      .type('application/vnd.recordare.musicxml+xml')
+      .header('content-disposition', `attachment; filename="${name}.musicxml"`)
+      .send(toMusicXml(notate(project)));
   });
 
   // ---- sample packs ----

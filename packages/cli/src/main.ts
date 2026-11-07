@@ -36,6 +36,8 @@ import {
   ticksPerBar,
   tickToSeconds,
 } from '@holo/session';
+import { scanCommand } from './scan.ts';
+import { scoreCommand } from './score.ts';
 
 const BASE = (process.env.HOLO_URL ?? `http://127.0.0.1:${process.env.HOLO_PORT ?? 47800}`).replace(/\/$/, '');
 const AUTHOR = process.env.HOLO_AUTHOR ?? 'AI';
@@ -230,11 +232,14 @@ Seeing
   holo songs                          every song
   holo show [--track T] [--from 9] [--to 17] [--names logic]
                                       the song, or a track's notes bar by bar
+  holo score show [--part P1] [--bars 5-8]   the song as a score, bar by bar (holo score help for more)
   holo instruments                    built-in presets and every sample-pack instrument
   holo plugins                        the stock plugins and their parameters
 
 Writing (positions are bar.beat.sixteenth: 14, 14.3, 14.3.2; notes as "D5:1 B5:2 (D4 F#4 A4):2 r:1")
   holo write --track T --at 14 [--unit 1/8] [--velocity 90] [--replace] "NOTES"
+  holo score write FILE|-|"bar 5 …"   bars of a score from text, as \`holo score show\` prints them
+  holo scan list | show SCAN | status   sheet music scanned in the studio, read a system at a time
   holo clear --track T --from 14 --to 18
   holo track add NAME --instrument synth:"Warm Pad"|pack/name
   holo track set T [--volume -6] [--pan -0.3] [--mute on|off] [--solo on|off] [--instrument …] [--arm on|off]
@@ -265,6 +270,7 @@ In the studio, live
 Files and creations
   holo bounce                         render the song (or the cycle) to a WAV, kept with the song on the host
   holo import-midi FILE.mid | holo export-midi [FILE.mid]
+  holo import-score FILE.musicxml|.mxl | holo export-score [FILE.musicxml]   scores, for and from notation programs
   holo audio FILE.wav|.flac [--track T] [--at 9] [--name N]   a recording or stem on an audio track
                                       (a new audio track unless --track names one)
   holo creations                      creations and their pieces
@@ -339,6 +345,14 @@ async function main(): Promise<void> {
         console.log(`${r.id}  ${r.title}${r.creation ? `  (${r.creation}/${r.piece})` : ''}  ${r.modified}`);
       return;
     }
+
+    case 'score':
+      await scoreCommand({ words, flag, song, ops, call });
+      return;
+
+    case 'scan':
+      await scanCommand({ words, flag, call, base: BASE, songId });
+      return;
 
     case 'show': {
       const id = await songId();
@@ -975,6 +989,35 @@ async function main(): Promise<void> {
       );
       const p = (await res.json()) as Project;
       console.log(`Imported "${p.title}" [${p.id}]`);
+      return;
+    }
+
+    case 'import-score': {
+      const file = resolve(words[0] ?? '');
+      if (!existsSync(file)) throw new Error('holo import-score FILE.musicxml|.mxl');
+      const res = await fetch(
+        `${BASE}/api/import/score?title=${encodeURIComponent(file.replace(/.*\//, '').replace(/\.(musicxml|xml|mxl)$/i, ''))}`,
+        {
+          method: 'POST',
+          headers: { 'content-type': 'application/vnd.recordare.musicxml+xml' },
+          body: readFileSync(file),
+        },
+      );
+      const body = (await res.json()) as Project & { error?: string };
+      if (!res.ok) throw new Error(body.error ?? `${res.status}`);
+      console.log(
+        `Imported "${body.title}" [${body.id}]: ${body.tracks.length} part${body.tracks.length === 1 ? '' : 's'}`,
+      );
+      return;
+    }
+
+    case 'export-score': {
+      const id = await songId();
+      const res = await fetch(`${BASE}/api/projects/${id}/musicxml`);
+      if (!res.ok) throw new Error(await res.text());
+      const out = words[0] ?? `${id}.musicxml`;
+      writeFileSync(out, await res.text());
+      console.log(`Wrote ${out}`);
       return;
     }
 

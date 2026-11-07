@@ -90,6 +90,12 @@ export const api = {
       body: file,
       headers: { 'content-type': 'audio/midi' },
     }),
+  importScore: (file: File) =>
+    call<Project>(`/api/import/score?title=${encodeURIComponent(file.name.replace(/\.(musicxml|xml|mxl)$/i, ''))}`, {
+      method: 'POST',
+      body: file,
+      headers: { 'content-type': 'application/vnd.recordare.musicxml+xml' },
+    }),
   creations: () => call<Creation[]>('/api/creations'),
   openPiece: (creation: string, piece: string, mode: 'new' | 'replace' = 'replace') =>
     call<Project>(`/api/creations/${creation}/pieces/${piece}/open`, {

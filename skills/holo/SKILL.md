@@ -67,6 +67,57 @@ voice (a harmony, a counter-melody) over writing into the user's own part, unles
 change it. Say what you did in musical terms ("a counter-melody in thirds above the theme, bars 9–16, on
 the oboe").
 
+## Scores: reading and writing notation
+
+The studio shows any track as a score (the editor's **Score** view, or `N`), and you can read and write
+music as notation too, bar by bar. Use it when the user thinks in notation, asks for a score, a part,
+lyrics, dynamics or articulations, or wants music written precisely (a hymn, a lead sheet, a string
+quartet). Parts are P1, P2… in track order; pitches are **as written on the page** (a B♭ clarinet a
+tone up, a guitar an octave up: `holo score parts` says which).
+
+```bash
+holo score parts                       # P1 Piano (2 staves), P2 Clarinet in B♭ (written a major 2nd above sounding)…
+holo score show --bars 1-8             # every part, bar by bar
+holo score show --part P2 --bars 9-12  # one part (it keeps its number)
+holo score check                       # out-of-range notes, slips, a bar missing between bars
+holo score write bars.txt              # bars from a file (or - for stdin, or the text itself)
+holo score part P2 --staves 2 --clefs G,F   # a part's staves, clefs, transposition (--transpose 2,1|none)
+holo score part P3 --tab on --tuning drop-d --capo 2   # tab under a fretted part (--tab only: tab alone; off)
+holo score meta --composer "…" --lyricist "…"
+holo score pickup 1                    # the song starts with a one-beat upbeat (bar 0)
+holo score unroll                      # write the repeats and jumps out as they play
+```
+
+A file of bars reads like this:
+
+```
+bar 9  key G major  tempo 88 "Andante"  |:
+  P1 s1: p ( g4:q a4:q b4:q. c5:e ) d5:w~
+  P1 s2: [g2 d3]:w
+  lyrics P1 s1 1: O come, all ye *
+  chords: G@1 D7@3
+bar 10  :|
+  P1 s1: d5:h r:h
+  P1 s2: [g2 d3]:h r:h
+```
+
+Values `w h q e s t x` (whole … 64th) with dots (`q.`); `[c4 e4 g4]:h` a chord; `r:q` a rest; `R` a
+whole-bar rest; `~` ties into the next note or bar; `3:2{e5:e f5:e g5:e}` a triplet; `+stacc +staccis
++ten +acc +marc +ferm +tr +mord +turn +arp +trem3` after the value; `+grace` (or `+appog`) for a grace
+note before the next. Before a note: a dynamic (`pp`…`ff`, `sfz`, `fp`), `<` or `>` to start a
+hairpin and `!` to end it, `(` and `)` around a slur, `"pizz."` above or `_"dolce"` below, `8va` …
+`loco`. A line per staff and voice: `P1:`, `P1 s2:`, `P1 s1 v2:`. Every line must fill its bar (rests
+included): a bar that doesn't is refused with the reason, and nothing in it is written. Each bar
+replaces what the staves and voices it names had there; the others keep theirs. Dynamics and
+articulations become how it plays (velocity, length), so the score sounds as it reads.
+
+Repeats are written once and played as marked: `|:` and `:|` (`:|x3`), `ending 1` / `ending 2`,
+`segno`, `coda`, `to coda`, `fine`, `D.C. al Fine`, `D.S. al Coda` in the bar headers. The timeline
+keeps the music as written; playback, bounces and renders follow the repeats and jumps, and trills,
+mordents, turns, tremolos and arpeggios play as the notes they stand for. Write a repeated passage
+once with its signs rather than copying it out; `holo score unroll` writes it out when a part should
+differ the second time.
+
 ## Live: what "real time" means here
 
 You think in seconds; music happens in milliseconds. So:

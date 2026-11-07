@@ -3,26 +3,40 @@
  * all operations, applied by this one function, so they behave the same wherever they're applied:
  * in the open studio (with an undo step) or on the server when no studio has the song open.
  */
+import { keysForText, textForKeys } from './keysig.ts';
 import type {
   AudioFile,
   Bus,
   CCPoint,
   Channel,
   Finish,
+  FormMark,
+  KeyPoint,
   Loop,
+  Mark,
   Note,
   Plugin,
   Project,
   Region,
+  ScoreSettings,
   Seat,
   Stage,
   Track,
 } from './types.ts';
 
-/** The song's settings to change; `finish: null` or `loop: null` takes them away. */
+/**
+ * The song's settings to change; `null` takes `finish`, `loop`, `keys`, `form` or `score` away.
+ * Changing `key` changes the first of `keys` to match, and changing `keys` changes `key`.
+ */
 export type ProjectPatch = Partial<
   Pick<Project, 'title' | 'key' | 'notes' | 'cycle' | 'tempo' | 'meter' | 'markers' | 'chords' | 'sampleRate'>
-> & { finish?: Finish | null; loop?: Loop | null };
+> & {
+  finish?: Finish | null;
+  loop?: Loop | null;
+  keys?: KeyPoint[] | null;
+  form?: FormMark[] | null;
+  score?: ScoreSettings | null;
+};
 export type TrackPatch = Partial<Omit<Track, 'id' | 'kind' | 'regions' | 'channel'>>;
 export type RegionPatch = Partial<Omit<Region, 'id' | 'notes' | 'cc'>>;
 /** A channel's settings to change; `stage: null` takes it off its stage. */
@@ -54,6 +68,13 @@ export type Op =
   | { op: 'moveRegion'; from: string; to: string; region: string; start?: number }
   | { op: 'setNotes'; track: string; region: string; notes: Note[] }
   | { op: 'addNotes'; track: string; region: string; notes: Note[] }
+  /**
+   * Replace only the notes that start in [from, to) (ticks from the region's start) with `notes`,
+   * leaving the rest of the region as it is: how bars are written while someone edits elsewhere.
+   */
+  | { op: 'setNotesIn'; track: string; region: string; from: number; to: number; notes: Note[] }
+  /** The same for the region's score marks. */
+  | { op: 'setMarksIn'; track: string; region: string; from: number; to: number; marks: Mark[] }
   | { op: 'setCC'; track: string; region: string; lane: string; points: CCPoint[] }
   /** `target` a track id, a bus id or "master"; no points removes the lane. */
   | {
@@ -128,12 +149,27 @@ function move<T>(list: T[], from: number, to: number): T[] {
 export function applyOp(project: Project, op: Op): Project {
   switch (op.op) {
     case 'setProject': {
-      const { finish, loop, ...rest } = op.patch;
+      const { finish, loop, keys, form, score, ...rest } = op.patch;
       const next: Project = { ...project, ...rest };
       if (finish === null) delete next.finish;
       else if (finish) next.finish = finish;
       if (loop === null) delete next.loop;
       else if (loop) next.loop = loop;
+      if (form === null || form?.length === 0) delete next.form;
+      else if (form) next.form = form.slice().sort((a, b) => a.tick - b.tick);
+      if (score === null) delete next.score;
+      else if (score) next.score = score;
+      // the key text and the key signatures say the same: whichever changed sets the other
+      if (keys !== undefined) {
+        const sorted = (keys ?? []).slice().sort((a, b) => a.tick - b.tick);
+        if (sorted.length) next.keys = sorted;
+        else delete next.keys;
+        next.key = textForKeys(sorted, rest.key !== undefined ? rest.key : project.key);
+      } else if (rest.key !== undefined && project.keys) {
+        const synced = keysForText(rest.key, project.keys);
+        if (synced.length) next.keys = synced;
+        else delete next.keys;
+      }
       return next;
     }
     case 'addTrack': {
@@ -244,6 +280,24 @@ export function applyOp(project: Project, op: Op): Project {
     case 'addNotes':
       return mapTrack(project, op.track, (t) =>
         mapRegion(t, op.region, (r) => ({ ...r, notes: [...r.notes, ...op.notes].sort(byStart) })),
+      );
+    case 'setNotesIn':
+      return mapTrack(project, op.track, (t) =>
+        mapRegion(t, op.region, (r) => ({
+          ...r,
+          notes: [...r.notes.filter((n) => n.t < op.from || n.t >= op.to), ...op.notes].sort(byStart),
+        })),
+      );
+    case 'setMarksIn':
+      return mapTrack(project, op.track, (t) =>
+        mapRegion(t, op.region, (r) => {
+          const marks = [...(r.marks ?? []).filter((m) => m.t < op.from || m.t >= op.to), ...op.marks].sort(
+            (a, b) => a.t - b.t,
+          );
+          const next: Region = { ...r, marks };
+          if (!marks.length) delete next.marks;
+          return next;
+        }),
       );
     case 'setCC':
       return mapTrack(project, op.track, (t) =>

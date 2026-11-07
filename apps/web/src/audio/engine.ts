@@ -49,7 +49,17 @@ import {
   toShared,
 } from '@holo/engine';
 import type { CompanionDevice } from '@holo/engine/companion';
-import { type Project, projectEnd, type Track } from '@holo/session';
+import {
+  type PlayMap,
+  type Project,
+  performed,
+  playedAt,
+  playedTimes,
+  playMap,
+  projectEnd,
+  type Track,
+  writtenAt,
+} from '@holo/session';
 import { aheadThreads, startAhead, warmAhead } from './ahead.ts';
 import { companion } from './companion.ts';
 import { audioFiles } from './files.ts';
@@ -135,7 +145,16 @@ export class AudioEngine {
   private livePending: Project | null = null;
   private liveFrame = 0;
   segments: TempoSegment[] = [{ frame: 0, tick: 0, framesPerTick: 25 }];
+  /** The song as written: what the studio shows and edits. */
   private project: Project | null = null;
+  /**
+   * How the song as written plays (its repeats and jumps), null when straight through. The audio
+   * thread plays the song as heard, so its frames and ticks are the played song's; the studio's
+   * ticks are the written song's, and go between them here.
+   */
+  private map: PlayMap | null = null;
+  /** The played song's cycle. */
+  private cycle: Project['cycle'] | null = null;
   private liveFallback: number[] = [];
   private liveScheduled = false;
   private samplers = new Set<string>();
@@ -414,15 +433,21 @@ export class AudioEngine {
    * What changed is found by what the session shares: an edit keeps every list it leaves alone, so
    * the same tempo list, track list or regions are the same music, without reading through them.
    */
-  private syncNow(project: Project, live: boolean): void {
-    this.project = project;
+  private syncNow(written: Project, live: boolean): void {
+    this.project = written;
     if (!this.port) return;
     const sr = this.sampleRate;
+    // what plays: the song with its repeats played out (the very same song when it has none)
+    const project = performed(written);
+    const map = playMap(written);
     if (project !== this.synced || (this.partsDeferred && !live)) {
       this.synced = project;
       if (!live) this.partsDeferred = false;
       if (!this.sentTempo || this.sentTempo.tempo !== project.tempo || this.sentTempo.meter !== project.meter) {
-        const tick = this.sentTempo ? this.positionTick() : null;
+        const was = this.sentTempo ? this.playedTick() : null;
+        // (where the playhead was in the music, when the repeats have changed)
+        const tick = was !== null && map !== this.map ? playedAt(map, writtenAt(this.map, was).tick) : was;
+        this.map = map;
         this.segments = compileTempo(project, sr);
         this.post({ type: 'tempo', segments: this.segments, ppq: 960, ...meterTicks(project) });
         this.sentTempo = { tempo: project.tempo, meter: project.meter };
@@ -431,7 +456,7 @@ export class AudioEngine {
         this.sentCycle = '';
         // the playhead keeps its place in the music (its frame alone would have moved with the tempo)
         if (tick !== null && tick >= 0 && Math.round(tickToFrame(this.segments, tick)) !== this.songFrame())
-          this.locate(tick);
+          this.locateAt(tick);
       }
       const from = this.graphFrom;
       if (
@@ -486,8 +511,9 @@ export class AudioEngine {
         this.sentArts.set(t.id, t.articulations);
       }
     }
-    this.syncInputs(project);
+    this.syncInputs(written);
     const c = project.cycle;
+    this.cycle = c;
     const cycleKey = `${c.on}:${c.start}:${c.end}:${this.tempoGen}`;
     if (cycleKey !== this.sentCycle) {
       this.post({
@@ -863,7 +889,7 @@ export class AudioEngine {
     // starting: the strips laid out afresh by how long each has been taking, if that helps a good deal
     // (a strip that moves builds what it plays with as it starts)
     if (this.ahead && !this.playing) for (const m of this.ahead.rebalance(1.25)) this.post(m);
-    const frame = Math.round(tickToFrame(this.segments, fromTick));
+    const frame = Math.round(tickToFrame(this.segments, this.toPlayed(fromTick)));
     const bar = this.project ? meterTicks(this.project).barTicks : 3840;
     const countIn = countInBars > 0 ? Math.round(countInBars * bar * (this.segments[0]?.framesPerTick ?? 25)) : 0;
     this.post({ type: 'play', frame, record, countIn, cmd: ++this.cmd });
@@ -876,12 +902,31 @@ export class AudioEngine {
     this.told = { frame, playing: false };
   }
 
+  /** The playhead to a tick of the song as written. */
   locate(tick: number): void {
     if (!this.port) {
       // before the audio starts the playhead is kept in ticks (the tempo map needs the device's rate)
       this.idleTick = tick;
       return;
     }
+    this.locateAt(this.toPlayed(tick));
+  }
+
+  /**
+   * Where a tick of the song as written plays: of the times it does (a repeat plays it more than
+   * once), the one nearest the playhead, so the second time through stays the second.
+   */
+  private toPlayed(tick: number): number {
+    const map = this.map;
+    if (!map || tick < 0 || !this.port) return tick;
+    const times = playedTimes(map, tick);
+    if (!times.length) return playedAt(map, tick);
+    const now = this.playedTick();
+    return times.reduce((a, b) => (Math.abs(b - now) < Math.abs(a - now) ? b : a));
+  }
+
+  /** The playhead to a tick of the song as played. */
+  private locateAt(tick: number): void {
     const frame = Math.round(tickToFrame(this.segments, tick));
     const playing = this.playing;
     this.post({ type: 'locate', frame, cmd: ++this.cmd });
@@ -959,12 +1004,37 @@ export class AudioEngine {
     return this.caughtUp() ? this.transport[1] === 1 : this.told.playing;
   }
 
-  /** The playhead in ticks (negative during a count-in). */
+  /** The playhead in ticks of the song as written (negative during a count-in). */
   positionTick(): number {
     if (!this.port) return this.idleTick;
+    return writtenAt(this.map, this.playedTick()).tick;
+  }
+
+  /** Which time through the music under the playhead this is (1, 2… where it repeats). */
+  positionPass(): number {
+    return this.port ? writtenAt(this.map, this.playedTick()).n : 1;
+  }
+
+  /** The playhead in ticks of the song as played (a recording's end). */
+  playedPosition(): number {
+    return this.port ? this.playedTick() : this.idleTick;
+  }
+
+  /** The playhead in ticks of the song as played. */
+  private playedTick(): number {
     const frame = this.songFrame();
     if (frame < 0) return frame / (this.segments[0]?.framesPerTick ?? 25);
     return frameToTick(this.segments, frame);
+  }
+
+  /** Where a tick of the song as played is in the song as written, and which time through. */
+  writtenOf(played: number): { tick: number; n: number } {
+    return writtenAt(this.map, played);
+  }
+
+  /** How the song plays (its repeats and jumps), as of the last sync; null when straight through. */
+  get playMap(): PlayMap | null {
+    return this.map;
   }
 
   /**
@@ -972,6 +1042,12 @@ export class AudioEngine {
    * with. HO[LO] Engine says itself which of its frames was being heard (`frame`).
    */
   heardTick(performanceTime: number, frame?: number): number | null {
+    const played = this.heardPlayedTick(performanceTime, frame);
+    return played === null ? null : writtenAt(this.map, played).tick;
+  }
+
+  /** The same, in ticks of the song as played (a recording keeps these, to place each pass's notes). */
+  heardPlayedTick(performanceTime: number, frame?: number): number | null {
     const ctx = this.ctx;
     if (!ctx || !this.playing) return null;
     if (!this.caughtUp()) return frameToTick(this.segments, Math.max(0, this.told.frame));
@@ -984,7 +1060,7 @@ export class AudioEngine {
       heardFrame = (contextTime + (performanceTime - perf) / 1000) * ctx.sampleRate;
     }
     let song = (this.transport[0] as number) - this.lookahead() + (heardFrame - (this.transport[2] as number));
-    const c = this.project?.cycle;
+    const c = this.cycle;
     if (c?.on && c.end > c.start) {
       const s = tickToFrame(this.segments, c.start);
       const e = tickToFrame(this.segments, c.end);

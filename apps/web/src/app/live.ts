@@ -32,7 +32,10 @@ import {
   updateChannel,
   updateTrack,
 } from './actions.ts';
-import { store, toast } from './store.ts';
+import { type AiJobStatus, store, toast } from './store.ts';
+
+/** Scans this studio has heard of (so a phone's new one is offered once). */
+const seenScans = new Set<string>();
 
 let socket: WebSocket | null = null;
 let retry = 1000;
@@ -250,6 +253,29 @@ async function onMessage(msg: Record<string, unknown>): Promise<void> {
     case 'command':
       await command(msg);
       return;
+    case 'scan': {
+      store.set({ scanTick: store.get().scanTick + 1 });
+      // a scan this studio didn't make (a phone's): offer to review it, once
+      const id = String(msg.id ?? '');
+      const s = store.get();
+      const making = s.scanView !== null && s.scanView.id === null;
+      if (id && !seenScans.has(id) && msg.project === s.project?.id && !making && s.scanView?.id !== id) {
+        toast('Pages scanned on another device arrived', 'info', 12000, {
+          label: 'Review',
+          run: () => store.set({ scanView: { id } }),
+        });
+      }
+      seenScans.add(id);
+      return;
+    }
+    case 'ai-status': {
+      const job = msg.job as AiJobStatus;
+      const was = store.get().aiJob;
+      store.set({ aiJob: job });
+      if (job.state === 'done' && was?.state !== 'done') toast(`AI: ${job.summary || 'done'}`, 'ai', 8000);
+      if (job.state === 'failed' && was?.state !== 'failed') toast(`The AI stopped: ${job.error ?? ''}`, 'error', 8000);
+      return;
+    }
     case 'render-status': {
       // a creation rendering this song on the host (its result arrives as operations, an undo step)
       const job = msg.job as RenderStatus;

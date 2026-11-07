@@ -12,6 +12,7 @@ COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY apps/web/package.json apps/web/
 COPY apps/server/package.json apps/server/
 COPY packages/session/package.json packages/session/
+COPY packages/score/package.json packages/score/
 COPY packages/engine/package.json packages/engine/
 COPY packages/music/package.json packages/music/
 COPY packages/cli/package.json packages/cli/
@@ -26,6 +27,7 @@ FROM base AS deps
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY apps/server/package.json apps/server/
 COPY packages/session/package.json packages/session/
+COPY packages/score/package.json packages/score/
 COPY packages/engine/package.json packages/engine/
 COPY packages/music/package.json packages/music/
 COPY packages/cli/package.json packages/cli/
@@ -39,6 +41,7 @@ COPY --from=deps /app/apps/server/node_modules ./apps/server/node_modules
 COPY --from=deps /app/packages/engine/node_modules ./packages/engine/node_modules
 COPY --from=deps /app/packages/music/node_modules ./packages/music/node_modules
 COPY --from=deps /app/packages/cli/node_modules ./packages/cli/node_modules
+COPY --from=deps /app/packages/score/node_modules ./packages/score/node_modules
 COPY package.json pnpm-workspace.yaml ./
 COPY apps/server ./apps/server
 COPY packages ./packages

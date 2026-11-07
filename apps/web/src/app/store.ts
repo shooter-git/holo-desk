@@ -15,8 +15,24 @@ export interface Step {
 export type SaveState = 'saved' | 'dirty' | 'saving' | 'offline' | 'conflict' | 'error';
 export type Tool = 'pointer' | 'pencil' | 'eraser';
 export type EditorPane = 'piano' | 'mixer' | null;
+/** What the editor shows for a track's notes: the Piano Roll or the Score. */
+export type NoteView = 'roll' | 'score';
 export type MobileTab = 'tracks' | 'editor' | 'mixer' | 'play' | 'library';
 export type Dialog = null | 'projects' | 'settings' | 'creations' | 'shortcuts' | 'about' | 'remote';
+
+/** An AI job on a scan (the server's AiJob). */
+export interface AiJobStatus {
+  id: string;
+  task: 'read' | 'check' | 'fix';
+  scan: string;
+  project: string;
+  state: 'waiting' | 'running' | 'done' | 'failed';
+  started: number;
+  finished: number | null;
+  lines: string[];
+  summary: string | null;
+  error: string | null;
+}
 
 export interface Toast {
   id: number;
@@ -39,6 +55,21 @@ export interface AppState {
   selectedNotes: Note[];
 
   editor: EditorPane;
+  noteView: NoteView;
+  /** The Score shows every track (a full score), not just the selected one. */
+  scoreAll: boolean;
+  /** The Score's size, as a percentage. */
+  scoreZoom: number;
+  /** Writing in the Score: keys and clicks enter notes. */
+  scoreWrite: boolean;
+  /** The Scan window: a new scan being made (id null), or one being reviewed. */
+  scanView: { id: string | null } | null;
+  /** The Print window: the full score ("score"), every part ("parts"), or one track's part. */
+  printView: { what: string } | null;
+  /** Goes up when the host says a scan changed (the review reads it again). */
+  scanTick: number;
+  /** The AI's job on a scan, as the runner last told it. */
+  aiJob: AiJobStatus | null;
   editorHeight: number;
   inspector: boolean;
   library: boolean;
@@ -146,6 +177,14 @@ const initial: AppState = {
   selectedRegions: [],
   selectedNotes: [],
   editor: 'piano',
+  noteView: 'roll',
+  scoreAll: false,
+  scoreZoom: 45,
+  scoreWrite: false,
+  scanView: null,
+  printView: null,
+  scanTick: 0,
+  aiJob: null,
   // the editor takes a good share of the window to start with; a remembered height stands over this
   editorHeight:
     typeof window === 'undefined' ? 300 : Math.max(260, Math.min(520, Math.round(window.innerHeight * 0.42))),
@@ -196,6 +235,9 @@ const initial: AppState = {
 /** Settings that survive a reload on this device (never the song itself). */
 const REMEMBER: (keyof AppState)[] = [
   'editor',
+  'noteView',
+  'scoreAll',
+  'scoreZoom',
   'editorHeight',
   'inspector',
   'library',

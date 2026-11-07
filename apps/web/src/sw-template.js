@@ -8,9 +8,12 @@
 //   Samples (/packs) have their own cache, filled by the studio as instruments load.
 const BUILD = /* BUILD */ null;
 const SHELL = `holo-shell-${BUILD.version}`;
+// big files only some devices use (the score's engraver): kept the first time they're fetched
+const LAZY = 'holo-lazy';
 
 const at = (path) => new URL(path, self.registration.scope).href;
 const shell = new Set(BUILD.shell.map(at));
+const lazy = new Set((BUILD.lazy ?? []).map(at));
 
 self.addEventListener('install', (event) => {
   event.waitUntil(
@@ -38,6 +41,9 @@ self.addEventListener('activate', (event) => {
     (async () => {
       for (const name of await caches.keys())
         if (name.startsWith('holo-shell-') && name !== SHELL) await caches.delete(name);
+      // an older version's big files go once this one is in charge
+      const kept = await caches.open(LAZY);
+      for (const request of await kept.keys()) if (!lazy.has(request.url)) await kept.delete(request);
       await self.clients.claim();
     })(),
   );
@@ -67,5 +73,16 @@ self.addEventListener('fetch', (event) => {
   }
   if (shell.has(url.href)) {
     event.respondWith(caches.match(url.href).then((hit) => hit ?? fetch(request)));
+  } else if (lazy.has(url.href)) {
+    event.respondWith(
+      (async () => {
+        const cache = await caches.open(LAZY);
+        const hit = await cache.match(url.href);
+        if (hit) return hit;
+        const response = await fetch(request);
+        if (response.ok) await cache.put(url.href, response.clone());
+        return response;
+      })(),
+    );
   }
 });

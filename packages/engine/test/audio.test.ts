@@ -147,4 +147,35 @@ describe('rendering', () => {
       ),
     ).toBe(true);
   });
+  it('plays the repeats as written: a bar with a repeat sign plays twice', async () => {
+    const { renderSession } = await import('../src/render.ts');
+    const { newTrack } = await import('@holo/session');
+    const p = newProject('Twice');
+    p.tempo = [{ tick: 0, bpm: 120 }];
+    const drums = newTrack('Drums', { type: 'synth', preset: 'Drum Synth' });
+    drums.regions = [{ ...newRegion(0, PPQ * 4), notes: [{ t: 0, d: PPQ / 2, p: 36, v: 110 }] }];
+    p.tracks = [drums];
+    p.form = [{ tick: PPQ * 4, k: 'end' }];
+    const source = {
+      instrument: () => Promise.reject(new Error('no packs here')),
+      sample: () => Promise.reject(new Error('no packs here')),
+      audio: () => Promise.reject(new Error('no audio here')),
+      impulse: () => Promise.reject(new Error('no packs here')),
+    };
+    const sr = 44100;
+    const out = await renderSession(p, source, { sampleRate: sr, tail: 1 });
+    expect(out.errors).toEqual([]);
+    // two bars at 120 (the bar twice), and the tail
+    expect(out.channels[0]?.length).toBe(sr * 5);
+    const peak = (from: number, to: number) => {
+      let m = 0;
+      for (const v of (out.channels[0] ?? new Float32Array()).subarray(Math.round(from * sr), Math.round(to * sr)))
+        m = Math.max(m, Math.abs(v));
+      return m;
+    };
+    // the kick at the start of each time through, and quiet before the second
+    expect(peak(0, 0.2)).toBeGreaterThan(0.05);
+    expect(peak(1.7, 1.99)).toBeLessThan(peak(0, 0.2) / 20);
+    expect(peak(2, 2.2)).toBeGreaterThan(0.05);
+  });
 });

@@ -106,6 +106,68 @@ the recordings themselves are listed in the song's `files` and kept beside the s
 - Where regions overlap on one track, the later one in the list (drawn on top) is heard, as in Logic.
 - Which input *device* a track records from is each computer's own setting (Audio & MIDI), not the song's.
 
+## The score
+
+A song can be written out as a score. The notes stay what plays (and what the piano roll shows);
+the score adds what notation needs on top, all of it optional, so a song without it is unchanged
+and an older HO[LO] still plays it.
+
+```jsonc
+// on a note: how it's written
+"n": { "sp": [6, -1, 70],            // spelled B♭: letter (0 C … 6 B), accidental, the pitch it spells
+       "w": [960, 480],              // written a quarter, sounding an eighth (a staccato)
+       "vo": 1, "st": 1,             // voice 1–4, staff 1… of the part
+       "a": ["stacc", "acc"],        // articulations and ornaments
+       "g": "a",                     // a grace note: "a" acciaccatura, "p" appoggiatura
+       "dv": 72,                     // the velocity the dynamics last gave it
+       "ly": ["Hal-", "Sing"],       // lyric syllables by verse ("-" joins, "_" holds)
+       "tb": [3, 62],                // tablature string (1 the highest), for this pitch
+       "tu": [5, 4],                 // a tuplet the timing alone doesn't say
+       "hd": "x", "stem": "down", "fi": "3" }
+// on a region: markings over its notes, ticks from the region's start
+"marks": [{ "t": 0, "k": "dyn", "v": "mf" }, { "t": 0, "k": "slur", "e": 1920, "st": 1, "vo": 1 },
+          { "t": 960, "k": "cresc", "e": 3840 }, { "t": 3840, "k": "oct", "e": 5760, "v": 8 }]
+// on a track: the part
+"score": { "abbr": "Pno.", "staves": 2, "split": 60, "clefs": [[0, 1, "G"], [0, 2, "F"]],
+           "tr": [2, 1],                                  // written a major second above (B♭ clarinet)
+           "drums": { "36": [-3, "normal"], "42": [5, "x"] },
+           "tab": { "tuning": [64, 59, 55, 50, 45, 40], "capo": 2 }, "grid": 240, "hidden": false }
+// on the song
+"keys": [{ "tick": 0, "fifths": -1, "mode": "minor" }, { "tick": 30720, "fifths": 2, "mode": "major" }],
+"form": [{ "tick": 3840, "k": "start" }, { "tick": 11520, "k": "end", "times": 3 },
+         { "tick": 11520, "k": "ending", "e": 15360, "passes": [1, 2] }, { "tick": 23040, "k": "ds", "al": "coda" }],
+"score": { "composer": "…", "groups": [["trk_a", "trk_b", "brace"]], "breaks": [[15360, "system"]],
+           "page": { "size": "a4", "staff": 7 }, "concert": true }
+```
+
+- **Hints follow the note.** A hint that depends on the note's sound carries the value it was made
+  for: the spelling its pitch, the written length its sounding length, `dv` its velocity. When the
+  note changes (dragged in the piano roll), the hint no longer matches and the score works it out
+  afresh; the rest (articulations, lyrics, voice) stays with the note.
+- **Ties and tuplets** come from the timing: one long note across a bar line is drawn as tied notes.
+- **Marks**: `dyn`, `cresc`, `dim`, `slur`, `text` (above: "pizz."), `expr` (below: "dolce"), `oct`
+  (8, 15, −8), `breath`, `caesura`, `gliss`. Pedal is the sustain lane (CC 64).
+- **Clefs**: `G`, `F`, `C1`–`C5`, `G8vb`, `G8va`, `G15ma`, `F8vb`, `F8va`, `perc`, `tab`.
+- **Keys**: `fifths` −7…7, `mode` major, minor, dorian, phrygian, lydian, mixolydian or locrian. The
+  first point is the song's `key`: setting one sets the other.
+- **Form**: `start`/`end` repeat a passage (`times`, 2 when unset); `ending` is a first or second
+  ending to `e`, taken on `passes`; `segno`, `coda`, `toCoda`, `fine`; `dc`/`ds` jump to the start or
+  the segno, `al` `fine` or `coda`, and `repeats: true` plays the repeats again after the jump.
+  The timeline holds the music once, as written. Playing it follows the form: a repeat goes back to
+  the last `start` (or the last `end`, or the top, where a pickup plays again), an ending is skipped
+  on the passes it doesn't list, the first `dc`/`ds` jumps once, and only after it do `toCoda` and
+  `fine` count. `performed(project)` (in `@holo/session`) is the song as heard, which the engines play;
+  `playMap`, `writtenAt` and `playedAt` go between the two timelines, and `unrollOps` writes the form
+  out. Engines from before the form (a creation's pinned copy) play the music straight through.
+- **Ornaments**: `tr`, `mord`, `pmord`, `turn`, `trem1`–`trem4` and `arp` in a note's `n.a` play as
+  the notes they stand for (a trill on the note above in the key, about 13 a second, ending on the
+  note; a chord rolled from the bottom), made at playback by `realize`: the song keeps the one note.
+- **A pickup**: the first meter point's `pickup` is how many ticks of the first bar are written (an
+  upbeat). The bar stays a full bar on the timeline; it is bar 0, and the next is bar 1.
+- **Tempo marks**: a tempo point may carry `text` ("Allegro", "rit."), `mm` (show ♩ = 120), and a
+  gradual change `ramp` (until this tick) `to` (bpm). Points with `gen` were made by the score from a
+  ramp or a fermata, and are made again when that changes.
+
 ## Channels and plugins
 
 ```jsonc
@@ -180,6 +242,7 @@ the bytes stores one and answers its id).
 Edits travel as operations (`ops.ts`): `setProject`, `addTrack`, `removeTrack`, `moveTrack`,
 `updateTrack`, `updateChannel`, `addPlugin`, `updatePlugin`, `removePlugin`, `movePlugin`, `addBus`,
 `removeBus`, `updateBus`, `addRegion`, `updateRegion`, `removeRegion`, `moveRegion`, `setNotes`,
-`addNotes`, `setCC`, `setAutomation` (with `curve`), `addFile`. `setProject` takes `finish` and `loop` (`null`
+`addNotes`, `setNotesIn` and `setMarksIn` (replace only what starts in `[from, to)` of a region), `setCC`,
+`setAutomation` (with `curve`), `addFile`. `setProject` takes `finish`, `loop`, `keys`, `form` and `score` (`null`
 removes them). `POST /api/projects/:id/ops` with `{ "ops": [...], "author": "AI", "label": "…" }`
 applies them through the open studio when there is one.

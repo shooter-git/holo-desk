@@ -4,6 +4,7 @@ import {
   automationTargets,
   DIVISIONS,
   DRUM_PRESETS,
+  type FormMark,
   findLane,
   type Instrument,
   type Op,
@@ -678,6 +679,63 @@ function drawWave(
   }
 }
 
+const FORM_WORDS: Partial<Record<FormMark['k'], string>> = {
+  segno: 'Segno',
+  coda: 'Coda',
+  toCoda: 'To Coda',
+  fine: 'Fine',
+};
+
+/**
+ * The song's repeats and jumps on the ruler, as on a score: repeat signs at their bar lines, first and
+ * second endings bracketed, the jumps named. The timeline keeps the music as written; these say how
+ * it plays.
+ */
+function drawForm(
+  ctx: CanvasRenderingContext2D,
+  project: Project,
+  w: number,
+  h: number,
+  /** Where a bar line's number ends (words written from a bar line go after it). */
+  labelEnd: (tick: number) => number,
+): void {
+  const v = tracksView;
+  const color = '#62d2c3';
+  const top = h / 2;
+  ctx.fillStyle = color;
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 1;
+  for (const f of project.form ?? []) {
+    const x = Math.round(v.tickToX(f.tick));
+    const xe = f.e !== undefined ? Math.round(v.tickToX(f.e)) : x;
+    if (xe < -100 || x > w + 100) continue;
+    if (f.k === 'start' || f.k === 'end') {
+      // a thick line and a thin one, the dots on the inside
+      const dir = f.k === 'start' ? 1 : -1;
+      ctx.fillRect(x - (dir > 0 ? 0 : 2), top + 1, 2, h - top - 2);
+      ctx.fillRect(x + dir * 4, top + 1, 1, h - top - 2);
+      for (const y of [top + (h - top) * 0.38, top + (h - top) * 0.66]) {
+        ctx.beginPath();
+        ctx.arc(x + dir * 7.5, y, 1.4, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      if (f.k === 'end' && (f.times ?? 2) > 2) ctx.fillText(`×${f.times}`, x - 26, top + 9);
+    } else if (f.k === 'ending') {
+      ctx.fillRect(x, top + 1, Math.max(4, xe - x - 3), 1);
+      ctx.fillRect(x, top + 1, 1, 4);
+      ctx.fillText(`${(f.passes ?? []).join(',')}.`, labelEnd(f.tick) + 3, h - 3);
+    } else {
+      const word =
+        f.k === 'dc' || f.k === 'ds'
+          ? `${f.k === 'dc' ? 'D.C.' : 'D.S.'}${f.al ? ` al ${f.al === 'fine' ? 'Fine' : 'Coda'}` : ''}`
+          : (FORM_WORDS[f.k] ?? f.k);
+      // signs where music starts read from the bar line on; those where it stops, up to it
+      const before = f.k !== 'segno' && f.k !== 'coda';
+      ctx.fillText(word, before ? x - ctx.measureText(word).width - 4 : labelEnd(f.tick) + 3, h - 3);
+    }
+  }
+}
+
 function drawRuler(
   ctx: CanvasRenderingContext2D,
   project: Project,
@@ -706,6 +764,13 @@ function drawRuler(
   const labelEvery = gridStep(v.pxPerTick, 34, bar, bar);
   ctx.font = REGION_FONT;
   ctx.textBaseline = 'alphabetic';
+  // (a repeat sign at a bar line moves its number along)
+  const starts = new Set((project.form ?? []).filter((f) => f.k === 'start').map((f) => f.tick));
+  const labelX = (t: number) => v.tickToX(t) + 3 + (starts.has(t) ? 10 : 0);
+  const labelEnd = (t: number) =>
+    t % labelEvery === 0 && t % bar === 0
+      ? labelX(t) + ctx.measureText(String(tickToBarBeat(project.meter, t).bar)).width
+      : labelX(t);
   for (let t = Math.floor(v.x / step) * step; t < v.xToTick(w); t += step) {
     const x = Math.round(v.tickToX(t)) + 0.5;
     const isBar = t % bar === 0;
@@ -713,9 +778,10 @@ function drawRuler(
     ctx.fillRect(x, isBar ? h - 12 : h - 5, 1, isBar ? 12 : 5);
     if (isBar && t % labelEvery === 0) {
       ctx.fillStyle = '#b4bcc8';
-      ctx.fillText(String(tickToBarBeat(project.meter, t).bar), x + 3, h - 3);
+      ctx.fillText(String(tickToBarBeat(project.meter, t).bar), labelX(t), h - 3);
     }
   }
+  drawForm(ctx, project, w, h, labelEnd);
   // markers
   for (const mk of showMarkers ? project.markers : []) {
     const x = v.tickToX(mk.tick);

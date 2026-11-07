@@ -7,6 +7,7 @@
  *  - a suffix ! accents the note, ? makes it a ghost (soft), ~ ties it into the next same pitch
  *  - durations count a unit you choose (an eighth, a sixteenth…) and may be 1/2 or 1.5
  *  - a velocity can be given per note: E4:2@96
+ *  - a sharp or flat is kept as written on the score (Bb4 stays B♭, A#4 stays A♯)
  *
  * Note names are scientific pitch (middle C, MIDI 60, is C4) unless you ask for Logic's naming,
  * where middle C is C3.
@@ -29,13 +30,25 @@ export function noteName(pitch: number, middleC: MiddleC = 'C4'): string {
 
 /** "C#4", "Db4", "Bb-1", "E4+25c"; or a plain MIDI number "61". */
 export function parseNoteName(text: string, middleC: MiddleC = 'C4'): number {
-  if (/^\d+(\.\d+)?$/.test(text)) return Number(text);
+  return parseSpelledName(text, middleC).p;
+}
+
+const STEPS = 'CDEFGAB';
+
+/**
+ * A note name with how it was spelled: the pitch, and [letter 0–6, accidental, pitch] for a name
+ * written with a letter (a plain MIDI number has no spelling). The score keeps the spelling.
+ */
+export function parseSpelledName(text: string, middleC: MiddleC = 'C4'): { p: number; sp?: [number, number, number] } {
+  if (/^\d+(\.\d+)?$/.test(text)) return { p: Number(text) };
   const m = /^([A-Ga-g])([#b♯♭]*)(-?\d+)(?:([+-]\d+)c)?$/.exec(text.trim());
   if (!m) throw new Error(`Not a note name: "${text}"`);
   const [, letter = 'C', accidentals = '', octave = '4', cents] = m;
-  let pc = LETTER[letter.toUpperCase()] ?? 0;
-  for (const a of accidentals) pc += a === '#' || a === '♯' ? 1 : -1;
-  return (Number(octave) + octaveShift(middleC)) * 12 + pc + (cents ? Number(cents) / 100 : 0);
+  let alter = 0;
+  for (const a of accidentals) alter += a === '#' || a === '♯' ? 1 : -1;
+  const pc = (LETTER[letter.toUpperCase()] ?? 0) + alter;
+  const p = (Number(octave) + octaveShift(middleC)) * 12 + pc + (cents ? Number(cents) / 100 : 0);
+  return { p, sp: [STEPS.indexOf(letter.toUpperCase()), alter, p] };
 }
 
 function parseDuration(s: string): number {
@@ -90,7 +103,7 @@ export function parseNotation(text: string, options: ParseOptions): Note[] {
     if (head !== 'r') {
       const pitches = head.startsWith('(') ? head.slice(1, -1).trim().split(/\s+/) : [head];
       for (const name of pitches) {
-        const p = parseNoteName(name, middleC);
+        const { p, sp } = parseSpelledName(name, middleC);
         const v = Math.max(1, Math.min(127, vel + accent));
         const held = open.get(p);
         if (held && held.t + held.d === t) {
@@ -99,6 +112,8 @@ export function parseNotation(text: string, options: ParseOptions): Note[] {
           continue;
         }
         const note: Note = { t, d, p, v };
+        // a sharp or a flat is kept as written; a plain letter is spelled by the key on the score
+        if (sp && sp[1] !== 0) note.n = { sp };
         notes.push(note);
         if (tie) open.set(p, note);
       }

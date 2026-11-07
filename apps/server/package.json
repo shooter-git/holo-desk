@@ -1,7 +1,7 @@
 {
   "name": "@holo/server",
   "private": true,
-  "version": "0.4.1",
+  "version": "0.5.0",
   "license": "MIT",
   "type": "module",
   "scripts": {
@@ -15,6 +15,7 @@
     "@fastify/websocket": "11.3.6",
     "@holo/engine": "workspace:*",
     "@holo/music": "workspace:*",
+    "@holo/score": "workspace:*",
     "@holo/session": "workspace:*",
     "fastify": "5.12.8"
   },

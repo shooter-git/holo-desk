@@ -26,6 +26,17 @@
 velocity), `?` ghost (−35), `~` tie into the next same pitch, `@96` exact velocity. Names: `C#4`, `Db4`,
 `Bb-1`, or MIDI numbers `61`.
 
+## Score text (holo score show / write)
+
+`bar N`, then headers: `time 3/4`, `time 7/8 (2+2+3)`, `key D minor`, `tempo 96 "Andante"`, `tempo "rit."@3`,
+`|:`, `:|`, `:|x3`, `ending 1`, `ending 2`, `segno`, `coda`, `to coda`, `fine`, `D.S. al Coda`, `D.C. al Fine`.
+Lines: `P1: …`, `P1 s2: …`, `P1 s1 v2: …`, `clef P1 s2 F`, `lyrics P1 1: syl- la- ble *`, `chords: Dm@1 A7@3`.
+Notes `c4`, `f#5`, `bb3`, `c##4`; values `w h q e s t x` (+ dots); `[c4 e4]:q`; `r:q`; `R`; `~`; `3:2{…}`.
+Articulations and ornaments: `stacc staccis ten acc marc ferm tr mord pmord turn arp trem1…trem4 up down
+open stop harm snap`; `+grace`, `+appog`. Dynamics `pppp…ffff sf sfz sffz fz rfz fp sfp`; `< > !` hairpins;
+`( )` slurs; `"above"`, `_"below"`; `8va 8vb 15ma 15mb … loco`.
+Clefs: `G F C1–C5 G8vb G8va G15ma F8vb F8va perc tab`.
+
 ## Positions
 
 `bar`, `bar.beat`, `bar.beat.sixteenth`, `bar.beat.sixteenth.tick`; `t:3840` is a raw tick. 960 ticks

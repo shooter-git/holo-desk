@@ -5,6 +5,7 @@ export * from './compile.ts';
 export * from './convolver.ts';
 export * from './core.ts';
 export * from './ethereal.ts';
+export * from './fm.ts';
 export * from './glass.ts';
 export * from './keys.ts';
 export * from './master.ts';

@@ -22,6 +22,12 @@ export const SYNTH_PRESETS = [
   'Tine Piano',
   'Reed Piano',
   'Clav Keys',
+  'FM Keys',
+  'FM Bells',
+  'FM Bass',
+  'FM Brass',
+  'FM Pluck',
+  'FM Pad',
   'Drum Synth',
 ] as const;
 
@@ -141,6 +147,32 @@ SYNTH_MACROS['Tine Piano'] = keys({ tone: 0.55, bark: 0.35, decay: 1, tremolo: 0
 SYNTH_MACROS['Reed Piano'] = keys({ tone: 0.6, bark: 0.4, decay: 1, tremolo: 0.25, pickup: 0.5, stereo: 0.2 });
 SYNTH_MACROS['Clav Keys'] = keys({ tone: 0.75, bark: 0.3, decay: 1, tremolo: 0, pickup: 0.6, stereo: 0 });
 
+/** The FM synth's Ratio knob: the main modulator's frequency over the note's. */
+export const FM_RATIOS = [0.5, 1, 1.5, 2, 3, 3.5, 4, 5, 7, 9, 14];
+
+const fm = (d: Record<'brightness' | 'ratio' | 'feedback' | 'attack' | 'decay' | 'release', number>): ParamDef[] => [
+  { id: 'brightness', name: 'Brightness', min: 0, max: 2, default: d.brightness, unit: '×' },
+  {
+    id: 'ratio',
+    name: 'Ratio',
+    min: 0,
+    max: FM_RATIOS.length - 1,
+    default: FM_RATIOS.indexOf(d.ratio),
+    step: 1,
+    options: FM_RATIOS.map((r) => `${r}`),
+  },
+  { id: 'feedback', name: 'Feedback', min: 0, max: 1, default: d.feedback },
+  { id: 'attack', name: 'Attack', min: 0.001, max: 4, default: d.attack, unit: 's', scale: 'log' },
+  { id: 'decay', name: 'Decay', min: 0.05, max: 12, default: d.decay, unit: 's', scale: 'log' },
+  { id: 'release', name: 'Release', min: 0.01, max: 8, default: d.release, unit: 's', scale: 'log' },
+];
+SYNTH_MACROS['FM Keys'] = fm({ brightness: 1, ratio: 14, feedback: 0.2, attack: 0.002, decay: 3.5, release: 0.35 });
+SYNTH_MACROS['FM Bells'] = fm({ brightness: 1, ratio: 3.5, feedback: 0, attack: 0.002, decay: 6, release: 2.5 });
+SYNTH_MACROS['FM Bass'] = fm({ brightness: 1, ratio: 1, feedback: 0.35, attack: 0.002, decay: 1.5, release: 0.08 });
+SYNTH_MACROS['FM Brass'] = fm({ brightness: 1, ratio: 1, feedback: 0.25, attack: 0.06, decay: 1, release: 0.25 });
+SYNTH_MACROS['FM Pluck'] = fm({ brightness: 1, ratio: 2, feedback: 0.1, attack: 0.002, decay: 0.9, release: 0.25 });
+SYNTH_MACROS['FM Pad'] = fm({ brightness: 1, ratio: 2, feedback: 0, attack: 0.9, decay: 3, release: 2.5 });
+
 /** What each synth with knobs is, for its window. */
 export const SYNTH_NOTES: Record<string, string> = {
   'Fat Mono':
@@ -165,6 +197,16 @@ export const SYNTH_NOTES: Record<string, string> = {
     'A struck steel reed read by an electrostatic pickup: sweet when soft, snarling when hard. Its tremolo swells the level, as the originals did.',
   'Clav Keys':
     'A string pinned by a hammer and read by pickups along it: bright, percussive and funky, with a yarn-damper thump when you let go. Pickup slides from the round neck sound to the thin bridge one.',
+  'FM Keys':
+    'Four-operator FM keys: a glassy tine on the attack over two warm, slightly detuned bodies. Play harder and it brightens. Ratio sets the tine (whole numbers stay in tune; the others ring like bells).',
+  'FM Bells':
+    'Clear, long FM bells and chimes from inharmonic ratios. Brightness is how much shimmer; Decay how long they ring.',
+  'FM Bass':
+    'A punchy FM bass: a stacked modulator snaps open on the attack and settles into a round, solid tone. Feedback adds grit.',
+  'FM Brass':
+    'FM brass: the modulators swell in with the note, so it blares as it opens up. Attack sets how slowly it speaks.',
+  'FM Pluck': 'A bright, short FM pluck, made for arpeggios and sequences.',
+  'FM Pad': 'A slow, wide FM pad from two detuned pairs, one on each side, brightening as it swells.',
 };
 
 /** A synth's knob at its value in the instrument's params (its preset's default where it has none), kept in range. */

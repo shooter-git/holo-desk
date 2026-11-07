@@ -12,6 +12,7 @@ import type { PreparedImpulse } from './convolver.ts';
 import { DrumSynth } from './drums.ts';
 import { Biquad, dbToGain, Smooth } from './dsp.ts';
 import { ETHEREAL_PRESETS, EtherealSynth } from './ethereal.ts';
+import { FM_PRESETS, FmSynth } from './fm.ts';
 import { createEffect, type Effect, type Host } from './fx.ts';
 import { GlassLineVoice, GlassVoice } from './glass.ts';
 import type { Instrument } from './instrument.ts';
@@ -1063,6 +1064,7 @@ export class EngineCore implements Host {
         if (ETHEREAL_PRESETS.includes(spec.preset)) return new EtherealSynth(this.sr, spec.preset, spec.params);
         if (ORGAN_PRESETS.includes(spec.preset)) return new TonewheelOrgan(this.sr, spec.preset, spec.params);
         if (KEYS_PRESETS.includes(spec.preset)) return new ElectricKeys(this.sr, spec.preset, spec.params);
+        if (FM_PRESETS.includes(spec.preset)) return new FmSynth(this.sr, spec.preset, spec.params);
         return new Synth(this.sr, spec.preset, spec.params);
       case 'drums':
         return new DrumSynth(this.sr);

@@ -179,6 +179,29 @@ function song(): Project {
 }
 
 /** Two tracks, a room and a master with nothing on it: what a live note leaves behind dies away. */
+/** One of each family of synths with its own voices, effects or tail, sending to a hall. */
+function families(): Project {
+  const p = newProject('Families');
+  p.tempo = [{ tick: 0, bpm: 104 }];
+  const hall = newBus('Hall');
+  hall.channel.inserts = [newPlugin('space', { space: 0, decay: 0.8, dry: -60, wet: -6 })];
+  p.buses = [hall];
+  const presets = ['Tonewheel Gospel', 'Tine Piano', 'FM Bells', 'Morph Pad', 'Drone Glass', 'Analog Machine'];
+  presets.push('Bansuri', 'Tanpura', 'Harmonium', 'Choir Ahh', 'War Drums');
+  p.tracks = presets.map((preset, k) => {
+    const t = newTrack(preset, { type: 'synth', preset });
+    const notes =
+      preset === 'Analog Machine'
+        ? [36, 42, 38, 42, 36, 46, 38, 39].map((key, i) => ({ t: i * (PPQ / 2), d: PPQ / 4, p: key, v: 100 }))
+        : [0, 1, 2, 3].map((b) => ({ t: b * PPQ, d: Math.round(PPQ * 1.4), p: 55 + ((b * 3 + k) % 7), v: 90 }));
+    t.regions = [{ ...newRegion(0, BAR * 2), notes }];
+    t.channel.sends = [{ bus: hall.id, level: -14, pre: false }];
+    t.channel.pan = ((k % 5) - 2) * 0.2;
+    return t;
+  });
+  return p;
+}
+
 function light(): Project {
   const p = newProject('Live');
   p.tempo = [{ tick: 0, bpm: 120 }];
@@ -345,6 +368,22 @@ function peak(x: Float32Array, from = 0, to = x.length): number {
 function graphOf(p: Project, nums: (id: string) => number): GraphSpec {
   return compileGraph(p, nums, compileTempo(p, SR));
 }
+
+describe('rendering ahead: every family of synths', () => {
+  const p = families();
+  const nums = numbering();
+  // played straight through (the edits the main song makes along the way are its own)
+  const batches = new Map<number, ToWorklet[]>([[0, setup(p, nums)]]);
+  const graph = graphOf(p, nums);
+  const BLOCKS = 500;
+  const reference = one(batches, BLOCKS);
+
+  it('has a song to play, the same numbers split three ways as on one engine', () => {
+    expect(peak(reference[0] as Float32Array)).toBeGreaterThan(0.02);
+    const owners = aheadOwners(graph, 3, () => 0.1);
+    expect(same(split(batches, BLOCKS, 3, owners), reference)).toBe(true);
+  }, 60_000);
+});
 
 describe('rendering ahead', () => {
   const p = song();

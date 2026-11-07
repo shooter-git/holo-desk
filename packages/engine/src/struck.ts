@@ -134,7 +134,6 @@ class StruckVoice implements Voice {
   private readonly y2 = new Float64Array(MAX_PLAYERS * MODES);
   private readonly c = new Float64Array(MAX_PLAYERS * MODES);
   private readonly rr = new Float64Array(MAX_PLAYERS * MODES);
-  private readonly strikeAmp = new Float64Array(MAX_PLAYERS * MODES);
   /** Each player's moment (samples after the note), tuning and place. */
   private readonly at = new Int32Array(MAX_PLAYERS);
   private readonly detune = new Float64Array(MAX_PLAYERS);

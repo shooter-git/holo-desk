@@ -50,6 +50,9 @@ holo track set Strings --volume -4 --pan -0.3 --instrument synth:"Warm Pad"
 holo track add Bass --instrument synth:"Fat Mono"                # a Moog-style mono: legato glides
 holo synth Bass cutoff=450 emphasis=0.5 glide=0.12 drive=0.7     # its knobs (holo synth Bass lists them)
 holo synth Pad space=0.7 shimmer=0.6 bloom=2                     # Ethereal Pad/Keys: a shimmering hall of its own
+holo track add Organ --instrument synth:"Tonewheel Gospel"      # drawbar organ, rotor fast on the mod wheel
+holo synth Organ drawbars=6 rotor=2 drive=0.5                    # stepped knobs take their option's number
+holo track add Beat --instrument synth:"Analog Machine"         # a drum machine on the GM drum keys
 holo automate --track Strings volume 9=-24 13=-6 17=-6 21=-30  # a swell and a fade (dB)
 holo automate --track Keys reverb.mix 1=10 17=45                # a plugin moving (on its first reverb)
 holo automate --bus Hall volume 33=0 41=-60                     # a bus; --track master for the master

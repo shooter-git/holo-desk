@@ -304,7 +304,6 @@ class ClavVoice implements Voice {
   private apIn = 0;
   private readonly apCoef: number;
   private readonly p: KeysParams;
-  private readonly sr: number;
   private readonly f: number;
   private readonly vel: number;
   private thump = 0;
@@ -315,7 +314,6 @@ class ClavVoice implements Voice {
 
   constructor(p: KeysParams, key: number, velocity: number, sr: number, seed: number) {
     this.p = p;
-    this.sr = sr;
     this.key = key;
     this.f = hz(key);
     this.vel = velocity / 127;

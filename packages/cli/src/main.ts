@@ -238,7 +238,7 @@ Writing (positions are bar.beat.sixteenth: 14, 14.3, 14.3.2; notes as "D5:1 B5:2
   holo clear --track T --from 14 --to 18
   holo track add NAME --instrument synth:"Warm Pad"|pack/name
   holo track set T [--volume -6] [--pan -0.3] [--mute on|off] [--solo on|off] [--instrument …] [--arm on|off]
-  holo synth T [knob=value…]           a synth's own knobs (Fat Mono/Poly, Ethereal Pad/Keys): shown, or set
+  holo synth T [knob=value…]           a synth's own knobs (most built-in synths have six): shown, or set
                                       e.g. holo synth Bass cutoff=500 glide=0.12 drive=0.7
   holo fx add T|bus-name|master TYPE [param=value…]     e.g. holo fx add Keys harmonizer key=9 scale=6 voice1=2
   holo fx set T TYPE|ID param=value…

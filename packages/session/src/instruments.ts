@@ -67,6 +67,76 @@ export const SYNTH_PRESETS = [
 
 export type SynthPreset = (typeof SYNTH_PRESETS)[number];
 
+/**
+ * The built-in synths in families, as the Library and the instrument menu show them. Every preset is
+ * in exactly one.
+ */
+export const SYNTH_FAMILIES: { name: string; presets: readonly string[] }[] = [
+  {
+    name: 'Keys',
+    presets: ['Soft Keys', 'Electric Piano', 'Tine Piano', 'Reed Piano', 'Clav Keys', 'FM Keys', 'Ethereal Keys'],
+  },
+  {
+    name: 'Organs and reeds',
+    presets: ['Tonewheel Jazz', 'Tonewheel Gospel', 'Tonewheel Rock', 'Tonewheel Ballad', 'Harmonium', 'Sheng'],
+  },
+  {
+    name: 'Synths',
+    presets: [
+      'Fat Mono',
+      'Fat Poly',
+      'Analog Bass',
+      'Sub Bass',
+      'Bright Lead',
+      'Pluck',
+      'Warm Pad',
+      'Strings Ensemble',
+      'FM Bass',
+      'FM Brass',
+      'FM Pluck',
+      'FM Pad',
+      'Morph Pad',
+      'Morph Lead',
+      'Morph Pluck',
+      'Morph Bass',
+    ],
+  },
+  { name: 'Bells and glass', presets: ['Glass Bells', 'FM Bells', 'Glass Harmonica'] },
+  { name: 'Textures', presets: ['Ethereal Pad', 'Drone Field', 'Drone Metal', 'Drone Breath', 'Drone Glass'] },
+  { name: 'Voices', presets: ['Choir Ahh', 'Male Choir', 'Morph Choir'] },
+  {
+    name: 'World',
+    presets: [
+      'Shakuhachi',
+      'Bansuri',
+      'Dizi',
+      'Celtic Pipes',
+      'Koto',
+      'Guzheng',
+      'Gayageum',
+      'Shamisen',
+      'Pipa',
+      'Sitar',
+      'Tanpura',
+    ],
+  },
+  {
+    name: 'Drums and percussion',
+    presets: [
+      'Drum Synth',
+      'Analog Machine',
+      'Punch Machine',
+      'Lo-fi Machine',
+      'Hand Machine',
+      'Taiko',
+      'War Drums',
+      'Frame Drum',
+      'Opera Gongs',
+      'Anvil',
+    ],
+  },
+];
+
 /** The synths that are drum kits: each key a sound of its own, laid out on the General MIDI drum keys. */
 export const DRUM_PRESETS: readonly string[] = [
   'Drum Synth',
@@ -409,6 +479,55 @@ export const SYNTH_NOTES: Record<string, string> = {
     'FM brass: the modulators swell in with the note, so it blares as it opens up. Attack sets how slowly it speaks.',
   'FM Pluck': 'A bright, short FM pluck, made for arpeggios and sequences.',
   'FM Pad': 'A slow, wide FM pad from two detuned pairs, one on each side, brightening as it swells.',
+  'Morph Pad':
+    'A wavetable pad gliding between a soft tone and glassy partials: Morph sets where, Motion sways it slowly, Texture breathes air into it, Space is its hall.',
+  'Morph Lead': 'A wavetable lead between a saw and a narrow pulse, the filter snapping open on each note.',
+  'Morph Pluck':
+    'A short wavetable pluck whose filter closes fast: lovely under an arpeggiator. Morph darkens it from bright to soft.',
+  'Morph Bass': 'A solid wavetable bass from hollow to saw. Brightness opens it up.',
+  'Morph Choir': 'Wordless voices gliding from "ah" to "oo" (Morph), three to a note, in a hall.',
+  'Drone Field':
+    "A breathing field of tone: the note's harmonics as narrow bands of noise, each wandering on its own. Hold a chord and let it evolve; Swell is how slowly it rises.",
+  'Drone Metal':
+    'Bowed metal: the inharmonic ring of a struck bar, sustained and slowly shifting. Density breaks it into shimmering grains.',
+  'Drone Breath': 'Airy, breathy harmonics, like wind across many pipes. Tone darkens or brightens it.',
+  'Drone Glass': 'High glassy partials sparkling in and out (Density) in a wide hall: a cold, crystalline texture.',
+  'Analog Machine':
+    'A classic analog drum machine: a long booming kick that falls in pitch (Decay lengthens it), a hissing snare, handclaps, metallic hats and a cowbell, on the General MIDI drum keys.',
+  'Punch Machine':
+    'A harder, shorter machine kit for house and techno: a kick with a click on top, a snapping snare and crisp hats. Drive pushes it.',
+  'Lo-fi Machine':
+    'The analog machine through a few bits and a low sample rate, its top rolled off: dusty and warm. Tone opens it up a little.',
+  'Hand Machine':
+    'Synthesised hand percussion: congas, bongos, claves, wood blocks, shakers and a soft low drum, spread wide.',
+  Shakuhachi:
+    'An end-blown bamboo flute: hollow and breathy, each note scooping up into pitch, the vibrato arriving once it settles. Breath is how much air; Overblow pushes it up toward its octave.',
+  Bansuri: 'A side-blown bamboo flute: sweet and soft with a wide, gentle vibrato.',
+  Dizi: 'A side-blown bamboo flute with a buzzing membrane: bright and reedy. Overblow makes it cut through.',
+  'Celtic Pipes':
+    'A reedy chanter over two drones. The drones start on the first note of a phrase and hold until you let every key go.',
+  Koto: 'A long zither plucked with picks: clean and bright, ringing through its wooden body. Vibrato is the left hand pressing the string after the pluck.',
+  Guzheng: 'A zither with many strings: shimmering plucks and a singing left-hand vibrato. Lovely for glissandi.',
+  Gayageum: 'A zither plucked with the fingers: warm and round, with a deep, slow vibrato.',
+  Shamisen: 'A three-stringed lute with a skin body, struck with a large plectrum: sharp, percussive and buzzy (Buzz).',
+  Pipa: 'A pear-shaped lute: held notes are played as a fast tremolo of plucks.',
+  Sitar:
+    'A long-necked lute whose strings buzz on a wide bridge (Buzz), with sympathetic strings tuned to the scale of the first note you play, ringing along.',
+  Tanpura:
+    'A drone lute that plays itself: hold a note and it cycles the fifth below, the note twice and the octave below, each string blooming as it buzzes.',
+  Harmonium:
+    'Hand-pumped free reeds in two ranks a little apart, breathing with the bellows (Tremolo). Detune is the celeste.',
+  Sheng: 'Mouth-blown free reeds, bright, each note voiced with its fifth and octave.',
+  'Glass Harmonica':
+    'Rubbed glass bowls: pure, shimmering tones that swell in and ring on after. Detune is the shimmer.',
+  'Choir Ahh':
+    'A wordless mixed choir. Vowel glides from "ah" through "oh" to "oo"; Ensemble is how many singers and how loosely together.',
+  'Male Choir': "Low, dark men's voices on a vowel: for chant and weight.",
+  Taiko: 'A deep barrel drum: a boom that falls in pitch after the strike, and the slap of the stick. Play low notes.',
+  'War Drums': 'Several big low drums struck together, a little apart (Ensemble): a massed thunder.',
+  'Frame Drum': 'A shallow skin drum: more skin than boom.',
+  'Opera Gongs': 'Hand gongs whose pitch slides after the strike: down for the low ones, up for the high ones.',
+  Anvil: 'A struck steel block: a hard, high, ringing clang.',
 };
 
 /** A synth's knob at its value in the instrument's params (its preset's default where it has none), kept in range. */

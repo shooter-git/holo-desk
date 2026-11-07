@@ -16,6 +16,7 @@ import { createEffect, type Effect, type Host } from './fx.ts';
 import { GlassLineVoice, GlassVoice } from './glass.ts';
 import type { Instrument } from './instrument.ts';
 import { createMidiEffect, EventList, type MidiEffect, type MidiHost } from './midifx.ts';
+import { ORGAN_PRESETS, TonewheelOrgan } from './organ.ts';
 import type { PartPlans } from './parts.ts';
 import { PlanVoice, prepareLengthened, type SampleData } from './performance.ts';
 import {
@@ -1059,6 +1060,7 @@ export class EngineCore implements Host {
       case 'synth':
         if (FAT_PRESETS.includes(spec.preset)) return new FatSynth(this.sr, spec.preset, spec.params);
         if (ETHEREAL_PRESETS.includes(spec.preset)) return new EtherealSynth(this.sr, spec.preset, spec.params);
+        if (ORGAN_PRESETS.includes(spec.preset)) return new TonewheelOrgan(this.sr, spec.preset, spec.params);
         return new Synth(this.sr, spec.preset, spec.params);
       case 'drums':
         return new DrumSynth(this.sr);

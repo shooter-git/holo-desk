@@ -15,6 +15,10 @@ export const SYNTH_PRESETS = [
   'Fat Poly',
   'Ethereal Pad',
   'Ethereal Keys',
+  'Tonewheel Jazz',
+  'Tonewheel Gospel',
+  'Tonewheel Rock',
+  'Tonewheel Ballad',
   'Drum Synth',
 ] as const;
 
@@ -64,6 +68,64 @@ SYNTH_MACROS['Ethereal Keys'] = ethereal({
   space: 0.42,
 });
 
+/**
+ * The tonewheel organ's drawbar settings, 16′ to 1′ (each drawbar 0 to 8), in the usual groups of two,
+ * four and three. The Drawbars knob steps through them.
+ */
+export const ORGAN_REGISTRATIONS = [
+  '88 8000 000',
+  '83 8000 000',
+  '80 8000 000',
+  '88 8800 000',
+  '68 8600 000',
+  '86 8800 004',
+  '88 8888 888',
+  '88 8000 008',
+  '00 8080 800',
+  '00 6876 400',
+  '80 0000 008',
+];
+export const ORGAN_PERCUSSION = ['Off', '2nd Fast', '3rd Fast', '2nd Slow', '3rd Slow'];
+export const ORGAN_VIBRATO = ['Off', 'V1', 'V2', 'V3', 'C1', 'C2', 'C3'];
+export const ORGAN_ROTOR = ['Off', 'Slow', 'Fast'];
+
+const organ = (d: Record<'drawbars' | 'percussion' | 'click' | 'vibrato' | 'rotor' | 'drive', number>): ParamDef[] => [
+  {
+    id: 'drawbars',
+    name: 'Drawbars',
+    min: 0,
+    max: ORGAN_REGISTRATIONS.length - 1,
+    default: d.drawbars,
+    step: 1,
+    options: ORGAN_REGISTRATIONS,
+  },
+  {
+    id: 'percussion',
+    name: 'Percussion',
+    min: 0,
+    max: ORGAN_PERCUSSION.length - 1,
+    default: d.percussion,
+    step: 1,
+    options: ORGAN_PERCUSSION,
+  },
+  { id: 'click', name: 'Click', min: 0, max: 1, default: d.click },
+  {
+    id: 'vibrato',
+    name: 'Vibrato',
+    min: 0,
+    max: ORGAN_VIBRATO.length - 1,
+    default: d.vibrato,
+    step: 1,
+    options: ORGAN_VIBRATO,
+  },
+  { id: 'rotor', name: 'Rotor', min: 0, max: ORGAN_ROTOR.length - 1, default: d.rotor, step: 1, options: ORGAN_ROTOR },
+  { id: 'drive', name: 'Drive', min: 0, max: 1, default: d.drive },
+];
+SYNTH_MACROS['Tonewheel Jazz'] = organ({ drawbars: 1, percussion: 2, click: 0.6, vibrato: 6, rotor: 1, drive: 0.15 });
+SYNTH_MACROS['Tonewheel Gospel'] = organ({ drawbars: 3, percussion: 0, click: 0.5, vibrato: 6, rotor: 1, drive: 0.35 });
+SYNTH_MACROS['Tonewheel Rock'] = organ({ drawbars: 0, percussion: 0, click: 0.7, vibrato: 0, rotor: 1, drive: 0.7 });
+SYNTH_MACROS['Tonewheel Ballad'] = organ({ drawbars: 5, percussion: 0, click: 0.3, vibrato: 5, rotor: 1, drive: 0.05 });
+
 /** What each synth with knobs is, for its window. */
 export const SYNTH_NOTES: Record<string, string> = {
   'Fat Mono':
@@ -74,6 +136,14 @@ export const SYNTH_NOTES: Record<string, string> = {
     'A wide supersaw with shimmering partials and breath, blooming open as it swells, in its own shimmering hall. Motion sways the filter and the tuning; Space is how much hall.',
   'Ethereal Keys':
     'Glowing keys: bell and octave partials over a softer supersaw, ringing into a shimmering hall. Lovely under an arpeggiator.',
+  'Tonewheel Jazz':
+    'A drawbar organ through its rotating speaker, set for jazz: mellow drawbars, a crisp third-harmonic percussion that strikes only on detached notes, and the scanner chorus. The mod wheel switches the rotor between slow and fast.',
+  'Tonewheel Gospel':
+    'The drawbar organ fuller and pushed harder, with the scanner chorus: made for swelling chords and fast-rotor climaxes (mod wheel up).',
+  'Tonewheel Rock':
+    'The drawbar organ with the first three drawbars out and the preamp overdriven: growling chords and stabs. Drive is how hard it breaks up.',
+  'Tonewheel Ballad':
+    'A soft drawbar organ with a gentle chorus and a whisper of the top drawbar, for sustained chords under a ballad.',
 };
 
 /** A synth's knob at its value in the instrument's params (its preset's default where it has none), kept in range. */

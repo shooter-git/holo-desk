@@ -7,6 +7,7 @@ export * from './core.ts';
 export * from './ethereal.ts';
 export * from './glass.ts';
 export * from './master.ts';
+export * from './organ.ts';
 export * from './parts.ts';
 export * from './peq.ts';
 export * from './performance.ts';

@@ -62,6 +62,8 @@ export interface MixRecipe {
   frames: number;
   /** Frames a second of the file made, if not its first input's rate (any input at another is resampled). */
   rate?: number;
+  /** One channel, the left's (a mono recording kept mono: half the size). */
+  mono?: boolean;
   /** Frames faded in (straight) and out (an S curve) at the ends. */
   fadeIn: number;
   fadeOut: number;
@@ -255,5 +257,5 @@ export function mixFile(recipe: MixRecipe, inputs: Map<string, DecodedInput>, bi
     }
     return out;
   };
-  return pcmWav({ rate, bits, channels: [quantize(left), quantize(right)] });
+  return pcmWav({ rate, bits, channels: recipe.mono ? [quantize(left)] : [quantize(left), quantize(right)] });
 }

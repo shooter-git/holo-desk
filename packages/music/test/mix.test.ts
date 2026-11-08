@@ -230,6 +230,13 @@ describe('recordings lined up and resampled', () => {
     expect(sha256(made)).toBe(PINNED);
   });
 
+  it('writes one channel when the recipe says it is mono', () => {
+    const recipe: MixRecipe = { in: [['k:a.wav', 0.5, 0.5]], start: 1, frames: 3, fadeIn: 0, fadeOut: 0, mono: true };
+    const out = decodeWav(mixFile(recipe, new Map([['k:a.wav', input([0, 0.5, -0.5, 0.25])]]), 16));
+    expect(out.channels).toHaveLength(1);
+    expect(left(mixFile(recipe, new Map([['k:a.wav', input([0, 0.5, -0.5, 0.25])]]), 16))).toEqual([8192, -8192, 4096]);
+  });
+
   it('says the file’s rate when its inputs’ rates differ', () => {
     const recipe: MixRecipe = {
       in: [

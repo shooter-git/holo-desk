@@ -1,4 +1,7 @@
+export * from './archives.ts';
 export * from './build.ts';
+export * from './bytes.ts';
+export * from './bzip2.ts';
 export * from './compare.ts';
 export * from './cut.ts';
 export * from './fetch.ts';
@@ -13,3 +16,6 @@ export * from './packs.ts';
 export * from './sevenzip.ts';
 export * from './source.ts';
 export * from './sync.ts';
+export * from './tar.ts';
+export * from './xz.ts';
+export * from './zip.ts';

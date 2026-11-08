@@ -210,10 +210,15 @@ the pack's line in an experience's `packs.json`, its map and checksums together.
 each pack's size first) or `pnpm packs install`, from their pinned source:
 - a git commit;
 - notes cut from published downloads;
-- an archive;
+- an archive: 7z, ZIP (ZIP64 too) or tar, bare or compressed with gzip, bzip2 or xz. HO[LO] reads them
+  itself (`packages/music/src/archives.ts`, with its own bzip2, xz, tar and ZIP readers): a big one is
+  downloaded straight to disk and streamed through, never held in memory, and goes once what's wanted is
+  out of it. A FLAC in one is decoded to a WAV; a WAV is taken as it is;
 - files *made* from a library's recordings: the `mix` source, a drum hit's microphones mixed at fixed
-  gains, a note trimmed and faded. It's all plain arithmetic, so the same downloads make the same bytes
-  anywhere.
+  gains, a note trimmed and faded, recordings of one note layered into a section. Each input can start
+  at its own frame (a fraction too) and play at its own rate, resampled to the file's by a windowed sinc
+  whose sines are summed out by hand. Its downloads may be files in an archive. It's all plain
+  arithmetic, so the same downloads make the same bytes anywhere.
 
 **Remove** (`DELETE /api/packs/:id`, or `pnpm packs remove`) frees a pack's folder. The Library first
 names the songs that play it (`GET /api/packs/:id/songs`), and clears the pack's files from this

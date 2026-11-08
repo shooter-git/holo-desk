@@ -1,9 +1,11 @@
 /**
  * LZMA and LZMA2, decoded: the algorithm of Igor Pavlov's LZMA SDK (public domain) written out in
- * TypeScript, enough to read a 7z archive's header (which 7-Zip compresses with LZMA as a rule) and
- * its streams when they are LZMA or LZMA2. The whole output is known in advance here, so the output
- * itself is the dictionary.
+ * TypeScript, enough to read a 7z archive's header (which 7-Zip compresses with LZMA as a rule), its
+ * streams when they are LZMA or LZMA2, and an xz file's LZMA2. In a 7z the whole output is known in
+ * advance, so the output itself is the dictionary; an xz is read a chunk at a time through a window
+ * that keeps the dictionary behind it.
  */
+import type { ByteReader } from './bytes.ts';
 
 const INIT = 1024; // a probability of one half, in 11 bits
 const STATES = 12;
@@ -116,6 +118,8 @@ function length(rc: RangeDecoder, probs: Uint16Array, posState: number): number 
 /** The decoder's state: its probabilities, the last four distances, and where it is in the output. */
 class LzmaDecoder {
   pos = 0;
+  /** Where in out the dictionary was last reset (below 0 once the window has moved past it). */
+  start = 0;
   private lc = 0;
   private lp = 0;
   private pb = 0;
@@ -136,7 +140,7 @@ class LzmaDecoder {
   private readonly align = new Uint16Array(1 << ALIGN_BITS);
   private readonly len = new Uint16Array(LEN_PROBS);
   private readonly repLen = new Uint16Array(LEN_PROBS);
-  readonly out: Uint8Array;
+  out: Uint8Array;
 
   constructor(out: Uint8Array) {
     this.out = out;
@@ -193,13 +197,16 @@ class LzmaDecoder {
     if (end > out.length) throw new Error('LZMA data runs past its output');
     const pbMask = (1 << this.pb) - 1;
     const lpMask = (1 << this.lp) - 1;
+    const start = this.start;
+    // how far back a match may reach: to the dictionary's reset, and no further than the window holds
+    const floor = Math.max(0, start);
     while (this.pos < end) {
       const pos = this.pos;
-      const posState = pos & pbMask;
+      const posState = (pos - start) & pbMask;
       const state = this.state;
       if (rc.bit(this.isMatch, (state << POS_BITS_MAX) + posState) === 0) {
-        const prev = pos > 0 ? (out[pos - 1] as number) : 0;
-        const base = 0x300 * (((pos & lpMask) << this.lc) + (prev >> (8 - this.lc)));
+        const prev = pos > start ? (out[pos - 1] as number) : 0;
+        const base = 0x300 * ((((pos - start) & lpMask) << this.lc) + (prev >> (8 - this.lc)));
         let symbol = 1;
         if (state >= 7) {
           let matchByte = out[pos - this.rep0 - 1] as number;
@@ -219,7 +226,7 @@ class LzmaDecoder {
       }
       let len: number;
       if (rc.bit(this.isRep, state) !== 0) {
-        if (pos === 0) throw new Error('Corrupt LZMA data');
+        if (pos <= start) throw new Error('Corrupt LZMA data');
         if (rc.bit(this.isRepG0, state) === 0) {
           if (rc.bit(this.isRep0Long, (state << POS_BITS_MAX) + posState) === 0) {
             this.state = state < 7 ? 9 : 11;
@@ -258,7 +265,7 @@ class LzmaDecoder {
       }
       len += MATCH_MIN_LEN;
       const dist = this.rep0;
-      if (dist >= pos) throw new Error('Corrupt LZMA data');
+      if (dist >= pos - floor) throw new Error('Corrupt LZMA data');
       if (pos + len > end) throw new Error('LZMA data runs past its output');
       const from = pos - dist - 1;
       for (let i = 0; i < len; i++) out[pos + i] = out[from + i] as number;
@@ -308,6 +315,8 @@ export function decodeLzma2(input: Uint8Array, at: number, end: number, size: nu
     const control = byte();
     if (control === 0) break;
     if (control === 1 || control === 2) {
+      // control 1 resets the dictionary
+      if (control === 1) dec.start = dec.pos;
       const n = byte() * 256 + byte() + 1;
       if (p + n > end || dec.pos + n > size) throw new Error('Corrupt LZMA2 data');
       out.set(input.subarray(p, p + n), dec.pos);
@@ -319,6 +328,7 @@ export function decodeLzma2(input: Uint8Array, at: number, end: number, size: nu
     const unpacked = ((control & 0x1f) << 16) + byte() * 256 + byte() + 1;
     const packed = byte() * 256 + byte() + 1;
     const mode = (control >> 5) & 3;
+    if (mode === 3) dec.start = dec.pos;
     if (mode >= 2) dec.setProps(...props(byte()));
     else if (mode === 1) dec.reset();
     else if (!ready) throw new Error('Corrupt LZMA2 data');
@@ -331,4 +341,100 @@ export function decodeLzma2(input: Uint8Array, at: number, end: number, size: nu
   }
   if (dec.pos !== size) throw new Error('LZMA2 data ends early');
   return out;
+}
+
+/** The most an LZMA2 chunk unpacks to. */
+const CHUNK = 1 << 21;
+
+/**
+ * An LZMA2 stream read a chunk at a time (as an xz block holds one), its dictionary kept in a window
+ * that grows to the dictionary's size and then moves along.
+ */
+export class Lzma2Reader {
+  private readonly src: ByteReader;
+  private readonly dec: LzmaDecoder;
+  /** The window's largest size: the dictionary and a chunk. */
+  private readonly cap: number;
+  private readonly packed = new Uint8Array(1 << 16);
+  private ready = false;
+  private props = false;
+  private reset = true;
+  private done = false;
+
+  constructor(src: ByteReader, dictSize: number) {
+    this.src = src;
+    // a dictionary bigger than any xz writes (64 MiB at -9) is held to 1 GiB: a match further back fails
+    this.cap = Math.min(dictSize, 1 << 30) + CHUNK;
+    this.dec = new LzmaDecoder(new Uint8Array(Math.min(this.cap, 1 << 22)));
+  }
+
+  /** Room for n more bytes after the window's end: it grows, then drops what the dictionary no longer needs. */
+  private room(n: number): void {
+    const dec = this.dec;
+    if (dec.pos + n <= dec.out.length) return;
+    if (dec.out.length < this.cap) {
+      const bigger = new Uint8Array(Math.min(this.cap, Math.max(dec.out.length * 2, dec.pos + n)));
+      bigger.set(dec.out.subarray(0, dec.pos));
+      dec.out = bigger;
+      if (dec.pos + n <= bigger.length) return;
+    }
+    const shift = dec.pos - (this.cap - CHUNK);
+    dec.out.copyWithin(0, shift, dec.pos);
+    dec.pos -= shift;
+    dec.start -= shift;
+  }
+
+  /** The next chunk's bytes (a new array), or null at the stream's end. */
+  next(): Uint8Array | null {
+    if (this.done) return null;
+    const src = this.src;
+    const dec = this.dec;
+    const byte = () => src.u8('LZMA2 data');
+    const control = byte();
+    if (control === 0) {
+      this.done = true;
+      return null;
+    }
+    if (control === 1 || control === 2) {
+      if (control === 1) {
+        this.reset = false;
+        this.props = true;
+      } else if (this.reset) throw new Error('Corrupt LZMA2 data');
+      const n = byte() * 256 + byte() + 1;
+      this.room(n);
+      if (control === 1) dec.start = dec.pos;
+      const at = dec.pos;
+      src.take(dec.out.subarray(at, at + n), n, 'LZMA2 data');
+      dec.pos += n;
+      return dec.out.slice(at, at + n);
+    }
+    if (control < 0x80) throw new Error('Corrupt LZMA2 data');
+    const unpacked = ((control & 0x1f) << 16) + byte() * 256 + byte() + 1;
+    const packed = byte() * 256 + byte() + 1;
+    const mode = (control >> 5) & 3;
+    if (mode === 3) this.reset = false;
+    else if (this.reset) throw new Error('Corrupt LZMA2 data');
+    this.room(unpacked);
+    if (mode === 3) dec.start = dec.pos;
+    if (mode >= 2) {
+      dec.setProps(...props(byte()));
+      this.props = false;
+    } else if (this.props) throw new Error('Corrupt LZMA2 data');
+    else if (mode === 1) dec.reset();
+    else if (!this.ready) throw new Error('Corrupt LZMA2 data');
+    this.ready = true;
+    src.take(this.packed, packed, 'LZMA2 data');
+    const at = dec.pos;
+    const rc = new RangeDecoder(this.packed, 0, packed);
+    dec.decode(rc, at + unpacked, false);
+    if (!rc.finished) throw new Error('Corrupt LZMA2 data');
+    return dec.out.slice(at, at + unpacked);
+  }
+}
+
+/** The dictionary size an LZMA2 property byte gives (as an xz filter holds it). */
+export function lzma2DictSize(byte: number): number {
+  if (byte > 40) throw new Error('Not LZMA2 properties');
+  if (byte === 40) return 0xffffffff;
+  return (2 | (byte & 1)) * 2 ** (Math.floor(byte / 2) + 11);
 }

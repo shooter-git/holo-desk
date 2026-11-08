@@ -6,6 +6,7 @@
  */
 import { type InstrumentManifest, songImpulses } from '@holo/engine';
 import type { Instrument, Project } from '@holo/session';
+import type { ArchiveFormat } from './archives.ts';
 import type { MixSource } from './mix.ts';
 
 /** A git repository at one commit (GitHub's are fetched file by file, others with git). */
@@ -36,8 +37,9 @@ export interface CutSource {
 }
 
 /**
- * Files taken out of a published archive (a 7z): each entry decoded from FLAC and written as the PCM
- * WAV ffmpeg writes (its fmt, an INFO list naming the software, then the samples).
+ * Files taken out of a published archive (7z, ZIP or tar, bare or compressed with gzip, bzip2 or xz):
+ * a FLAC entry decoded and written as the PCM WAV ffmpeg writes (its fmt, an INFO list naming the
+ * software, then the samples), a WAV entry as it is.
  */
 export interface ArchiveSource {
   kind: 'archive';
@@ -46,6 +48,8 @@ export interface ArchiveSource {
   url: string;
   /** The archive's sha256. */
   sha256: string;
+  /** What it is, if its address's ending doesn't say (.7z, .zip, .tar, .tar.gz, .tar.bz2, .tar.xz). */
+  format?: ArchiveFormat;
   /** The ISFT tag of the WAVs (the software that first wrote them); none for a bare WAV. */
   software?: string;
   /** Each file: its entry in the archive. */

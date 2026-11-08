@@ -4,6 +4,7 @@ export * from './cut.ts';
 export * from './fetch.ts';
 export * from './flac.ts';
 export * from './identity.ts';
+export * from './layers.ts';
 export * from './lzma.ts';
 export * from './manifest.ts';
 export * from './mix.ts';

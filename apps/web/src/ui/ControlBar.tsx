@@ -28,6 +28,7 @@ import { useEffect, useRef, useState } from 'react';
 import {
   apply,
   beginGesture,
+  cancelGesture,
   endGesture,
   gestureChange,
   locate,
@@ -49,6 +50,7 @@ import { midi } from '../audio/midi.ts';
 import { startDrag, TAP, Wordmark } from './controls.tsx';
 import { useFrame, useMedia } from './frame.ts';
 import { openMenuAt } from './menu.tsx';
+import { tapTempo } from './tap-tempo.ts';
 import { ViewMenu } from './ViewMenu.tsx';
 
 /** Where the bar is too narrow for the full display: the position shortens and the time goes (the CSS hides the rest). */
@@ -90,6 +92,16 @@ export function Lcd({ compact = false }: { compact?: boolean }) {
   const [editingTempo, setEditingTempo] = useState(false);
   // Escape leaves the tempo as it was: the field's blur, as it goes, must not commit what was typed
   const cancelled = useRef(false);
+  // the click that opens the tempo field is the first tap; clicks after it, in time, set the tempo as they go
+  const taps = useRef(tapTempo());
+  const tapping = useRef(false);
+  const tempoInput = useRef<HTMLInputElement>(null);
+  useEffect(
+    () => () => {
+      if (tapping.current) endGesture();
+    },
+    [],
+  );
   useFrame(() => {
     const p = store.get().project;
     if (!p) return;
@@ -130,10 +142,28 @@ export function Lcd({ compact = false }: { compact?: boolean }) {
       )}
       <div
         className="editable"
-        title="Tempo: drag up or down, double-click (or tap) to type"
+        title="Tempo: drag up or down, click to type, or keep clicking in time to tap it"
         onPointerDown={(e) => {
-          if (e.button !== 0 || (e.target as HTMLElement).tagName === 'INPUT') return;
-          const touch = e.pointerType === 'touch';
+          if (e.button !== 0) return;
+          if (editingTempo) {
+            // (the field keeps the focus, and what it shows stays selected to type over)
+            e.preventDefault();
+            const tapped = taps.current.tap(e.timeStamp);
+            if (tapped === null) return;
+            if (!tapping.current) {
+              tapping.current = true;
+              beginGesture('Tempo');
+            }
+            gestureChange(setBpm(tapped));
+            const input = tempoInput.current;
+            if (input) {
+              input.value = String(Math.max(20, Math.min(400, tapped)));
+              input.select();
+            }
+            return;
+          }
+          taps.current.reset();
+          taps.current.tap(e.timeStamp);
           let v = store.get().project?.tempo[0]?.bpm ?? 120;
           let tx = 0;
           let ty = 0;
@@ -150,38 +180,47 @@ export function Lcd({ compact = false }: { compact?: boolean }) {
             },
             onEnd: (wasCancelled) => {
               endGesture();
-              // a finger can't double-click: a tap opens the field instead
-              if (touch && !moved && !wasCancelled) {
+              // a click (a tap) without a drag opens the field
+              if (!moved && !wasCancelled) {
                 cancelled.current = false;
+                tapping.current = false;
                 setEditingTempo(true);
               }
             },
           });
         }}
-        onDoubleClick={() => {
-          cancelled.current = false;
-          setEditingTempo(true);
-        }}
       >
         {editingTempo ? (
           <input
-            // biome-ignore lint/a11y/noAutofocus: the field appears because it was double-clicked
+            ref={tempoInput}
+            // biome-ignore lint/a11y/noAutofocus: the field appears because it was clicked
             autoFocus
             defaultValue={String(bpm)}
+            onFocus={(e) => e.currentTarget.select()}
             inputMode="decimal"
             aria-label="Tempo"
             onKeyDown={(e) => {
               if (e.key === 'Enter') e.currentTarget.blur();
               if (e.key === 'Escape') {
                 cancelled.current = true;
+                if (tapping.current) {
+                  tapping.current = false;
+                  cancelGesture();
+                }
                 setEditingTempo(false);
               }
             }}
             onBlur={(e) => {
               if (!cancelled.current) {
                 const v = Number(e.currentTarget.value);
-                if (v > 0 && v !== bpm) apply(setBpm(v), 'Tempo');
+                const typed = v > 0 && v !== bpm;
+                if (tapping.current) {
+                  // what was typed over the tapped tempo is the same change: one undo step
+                  if (typed) gestureChange(setBpm(v));
+                  endGesture();
+                } else if (typed) apply(setBpm(v), 'Tempo');
               }
+              tapping.current = false;
               setEditingTempo(false);
             }}
           />

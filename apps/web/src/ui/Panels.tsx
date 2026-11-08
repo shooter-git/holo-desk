@@ -688,6 +688,7 @@ export function LibraryPanel({ overlay = false, full = false }: { overlay?: bool
           'Click an instrument to make a new track with it.'
         )}
       </div>
+      <Palettes query={query} overlay={overlay} />
       <details className="disclosure" open>
         <summary>Built-in</summary>
         {SYNTH_FAMILIES.map((family) => {
@@ -715,7 +716,6 @@ export function LibraryPanel({ overlay = false, full = false }: { overlay?: bool
           );
         })}
       </details>
-      <Palettes query={query} overlay={overlay} />
       {groups.map(({ pack, categories }) => (
         <details key={pack.id} className="disclosure" open={!!q}>
           <summary>

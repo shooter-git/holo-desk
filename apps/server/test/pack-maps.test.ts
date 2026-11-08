@@ -172,8 +172,8 @@ describe('a palette (sounds, and no files of its own)', () => {
       ],
     };
     const repo = repository([rock, palette]);
-    // no files: an empty checksums file, and a lock that names it all the same
-    expect(repo.files.get('packs/big-drums/files.sha256')).toBe('');
+    // no files: a checksums file of one comment line (GitHub's raw host can refuse an empty file)
+    repo.files.set('packs/big-drums/files.sha256', "# No files of its own: this palette's sounds play other packs.\n");
     useShippedMaps(new PackMaps(repo.lock, null, repo.fetch));
     const dir = join(work, 'palette');
     // the kit's samples from a folder (empty files: their checksums are the empty file's)

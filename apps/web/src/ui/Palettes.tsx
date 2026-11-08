@@ -171,7 +171,8 @@ export function Palettes({ query, overlay }: { query: string; overlay: boolean }
               <Palette size={14} className="muted" />
               <span>{palette.name}</span>
               <span className="meta muted">
-                {ready === sounds.length ? `${sounds.length} sounds` : `${ready} of ${sounds.length} sounds`}
+                {ready === sounds.length ? '' : `${ready} of `}
+                {sounds.length} sound{sounds.length === 1 ? '' : 's'}
               </span>
             </summary>
             {palette.description && <div className="muted palette-about">{palette.description}</div>}

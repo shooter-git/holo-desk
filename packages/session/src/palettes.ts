@@ -63,7 +63,8 @@ export interface PackSound {
   instrument: SoundInstrument;
   /** Its effects, in order: audio effects go on the track's inserts, MIDI effects before the instrument. */
   inserts?: SoundEffect[];
-  space?: SoundSpace;
+  /** Its room; none sends to the song's first bus as a new track does, and null keeps it dry. */
+  space?: SoundSpace | null;
   /** The track's fader, in dB: a palette's sounds are levelled to sit together. */
   volume?: number;
   /** −1 (left) to 1 (right). */
@@ -188,7 +189,7 @@ export function soundRoom(project: Pick<Project, 'buses'>, space: SoundSpace): B
 /**
  * The changes that add a sound to a song as a new track: its instrument, effects, level and pan, and
  * a send to its room (the room's bus made when the song hasn't one yet). Without a room, it sends to
- * the song's first bus as a new track does. Throws for a sound this engine can't play (checkSound).
+ * the song's first bus as a new track does; with `space: null`, it stays dry. Throws for a sound this engine can't play (checkSound).
  */
 export function soundTrack(
   project: Pick<Project, 'buses'>,
@@ -218,7 +219,7 @@ export function soundTrack(
       ops.push({ op: 'addBus', bus });
     }
     track.channel.sends.push({ bus: bus.id, level: sound.space.send, pre: false });
-  } else {
+  } else if (sound.space !== null) {
     const first = project.buses[0];
     if (first) track.channel.sends.push({ bus: first.id, level: -18, pre: false });
   }

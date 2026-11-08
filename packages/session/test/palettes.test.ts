@@ -58,6 +58,9 @@ describe('palette sounds', () => {
     const project = newProject('Test');
     const { track } = soundTrack(project, { name: 'Keys', family: 'Keys', instrument: { synth: 'Soft Keys' } });
     expect(track.channel.sends).toEqual([{ bus: project.buses[0]?.id, level: -18, pre: false }]);
+    // and a dry one sends nowhere
+    const dry = soundTrack(project, { name: 'Sub', family: 'Bass', instrument: { synth: 'Sub Bass' }, space: null });
+    expect(dry.track.channel.sends).toEqual([]);
   });
 
   it('say what this engine lacks (coming) apart from what is wrong', () => {

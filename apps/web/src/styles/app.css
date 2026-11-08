@@ -2615,6 +2615,8 @@ button.list-item {
 .toasts {
   position: fixed;
   left: 50%;
+  /* (as wide as its words, not the half of the screen right of its anchor) */
+  width: max-content;
   bottom: calc(18px + var(--safe-bottom));
   z-index: var(--z-toast);
   display: flex;
@@ -2779,6 +2781,21 @@ html[data-layout="phone-landscape"] .toasts {
 
 .start-audio .start-note {
   font-size: 11px;
+}
+
+/* another studio is open: the way to drive it from this phone instead */
+.start-audio .start-remote {
+  display: grid;
+  justify-items: center;
+  gap: 10px;
+  margin-top: 4px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line-2);
+}
+
+.start-audio .start-remote p {
+  font-size: 12px;
+  text-wrap: balance;
 }
 
 /* ---------- small words: utilities ---------- */

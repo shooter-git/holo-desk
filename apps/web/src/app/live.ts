@@ -48,12 +48,18 @@ function send(msg: unknown): void {
   if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify(msg));
 }
 
+/** What kind of device this is, from the browser's own description. */
+function deviceKind(): 'phone' | 'tablet' | 'computer' {
+  const ua = navigator.userAgent;
+  return /iPhone|Android.+Mobile/.test(ua) ? 'phone' : /iPad|Android/.test(ua) ? 'tablet' : 'computer';
+}
+
 /** This device's name for the others: the one set in Audio & MIDI settings, or the browser and kind. */
 export function device(): string {
   const named = store.get().deviceName.trim();
   if (named) return named;
   const ua = navigator.userAgent;
-  const kind = /iPhone|Android.+Mobile/.test(ua) ? 'phone' : /iPad|Android/.test(ua) ? 'tablet' : 'computer';
+  const kind = deviceKind();
   const browser = /Edg\//.test(ua)
     ? 'Edge'
     : /Firefox\//.test(ua)
@@ -248,6 +254,7 @@ async function onMessage(msg: Record<string, unknown>): Promise<void> {
       });
       store.set({ peers });
       metersWhileRemotes();
+      offerRemote(peers);
       return;
     }
     case 'command':
@@ -437,6 +444,40 @@ function metersWhileRemotes(): void {
     window.clearInterval(metersTimer);
     metersTimer = 0;
   }
+}
+
+/**
+ * Another studio open while this one is on a phone or tablet: its name, else null. Each studio runs
+ * its own transport, so Play here wouldn't move that one; HO[LO] Remote is the way to drive it.
+ */
+export function otherStudioToDrive(peers: { role: string; name: string }[]): string | null {
+  if (deviceKind() === 'computer') return null;
+  const me = device();
+  return peers.find((p) => p.role === 'editor' && p.name !== me)?.name ?? null;
+}
+
+/**
+ * Said once a visit, when another studio turns up after this one has started (before then the
+ * Start the studio card says it).
+ */
+let remoteOffered = false;
+function offerRemote(peers: { role: string; name: string }[]): void {
+  if (remoteOffered || !store.get().audioReady) return;
+  const other = otherStudioToDrive(peers);
+  if (!other) return;
+  remoteOffered = true;
+  try {
+    if (sessionStorage.getItem('holo:remote-offered')) return;
+    sessionStorage.setItem('holo:remote-offered', '1');
+  } catch {
+    // (no storage: said once for this page)
+  }
+  toast(
+    `HO[LO] is also open on ${other}. Play here runs this ${deviceKind()}'s own studio; to control that one, use HO[LO] Remote.`,
+    'info',
+    12_000,
+    { label: 'Open Remote', run: () => location.assign('/remote') },
+  );
 }
 
 /** Rename this device (the others see it at once). */

@@ -44,6 +44,12 @@ describe('a 7z archive', () => {
     expect(() => z.read('missing.flac')).toThrow(/isn't in the archive/);
   });
 
+  it('reads BZip2 folders (as FreePats packs some guitars)', () => {
+    // made with 7-Zip 16.02: -m0=BZip2
+    const z = new SevenZip(fixture('bzip2.7z'));
+    for (const f of ['mono16.wav', 'readme.txt', 'stereo24-rs.wav']) expect(z.read(f)).toEqual(fixture(f));
+  });
+
   it('undoes the Delta filter 7-Zip chains in front of LZMA2 for audio', () => {
     // made with 7-Zip 16.02: -m0=Delta:2 -m1=LZMA2, one folder of two coders
     const z = new SevenZip(fixture('delta.7z'));

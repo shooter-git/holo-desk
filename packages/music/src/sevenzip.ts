@@ -1,11 +1,12 @@
 /**
  * A 7z archive, read: its header (compressed with LZMA by 7-Zip as a rule) and the files in its
- * folders when they are stored, Deflate (Node's zlib), LZMA or LZMA2, alone or after the Delta filter
+ * folders when they are stored, Deflate (Node's zlib), BZip2, LZMA or LZMA2, alone or after the Delta filter
  * 7-Zip puts in front of audio (a folder's coders chained, each one stream in and one out). Enough for
  * the sample libraries published as one; the branch-call filters, encryption and the other methods
  * aren't read. Every file's CRC is checked.
  */
 import { crc32, inflateRawSync } from 'node:zlib';
+import { decodeBzip2 } from './bzip2.ts';
 import { decodeLzma, decodeLzma2 } from './lzma.ts';
 
 const SIGNATURE = [0x37, 0x7a, 0xbc, 0xaf, 0x27, 0x1c];
@@ -353,6 +354,7 @@ export class SevenZip {
     if (coder.method === '040108') return new Uint8Array(inflateRawSync(this.bytes.subarray(start, end)));
     if (coder.method === '030101') return decodeLzma(this.bytes, start, end, coder.properties, size);
     if (coder.method === '21') return decodeLzma2(this.bytes, start, end, size);
+    if (coder.method === '040202') return decodeBzip2(this.bytes.subarray(start, end));
     throw new Error(`A 7z folder compressed with method ${coder.method} isn’t read here`);
   }
 

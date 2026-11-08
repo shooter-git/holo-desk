@@ -4,7 +4,7 @@
  * folder you have) and every file's sha256. Samples are never committed into an experience: its build
  * fetches what its songs play and checks each file against these.
  */
-import { type InstrumentManifest, songImpulses } from '@holo/engine';
+import { type InstrumentManifest, songImpulses, songKits } from '@holo/engine';
 import type { Instrument, Project } from '@holo/session';
 import type { MixSource } from './mix.ts';
 
@@ -143,7 +143,7 @@ export function pinPack(manifest: PackManifest, checksums: Record<string, string
   return { ...rest, files };
 }
 
-/** The pack instruments a song plays (its tracks' and their articulations'). */
+/** The pack instruments a song plays (its tracks' and their articulations', and its plugins' kits). */
 export function songInstruments(project: Project): { pack: string; name: string }[] {
   const seen = new Map<string, { pack: string; name: string }>();
   const add = (i: Instrument) => {
@@ -153,6 +153,11 @@ export function songInstruments(project: Project): { pack: string; name: string 
   for (const t of project.tracks) {
     add(t.instrument);
     for (const a of t.articulations) add(a.instrument);
+  }
+  // and the kits its plugins play (a Drum Replacer's)
+  for (const kit of songKits(project)) {
+    const [pack = '', ...rest] = kit.split('/');
+    seen.set(kit, { pack, name: rest.join('/') });
   }
   return [...seen.values()];
 }

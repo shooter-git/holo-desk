@@ -6,7 +6,11 @@ import { paramValue } from '@holo/session';
 import { Softener, StereoWidth, TapeWarmth, WowFlutter } from './character.ts';
 import type { PreparedImpulse } from './convolver.ts';
 import { Biquad, dbToGain } from './dsp.ts';
+import { Lofi, Phaser, RotarySpeaker, Tremolo } from './modfx.ts';
 import { ParametricEq } from './peq.ts';
+import type { SamplerSpec } from './protocol.ts';
+import { DrumReplacer } from './replacer.ts';
+import { StringResonance } from './resonance.ts';
 import { Shimmer } from './shimmer.ts';
 import { SpaceDesigner } from './space.ts';
 
@@ -24,6 +28,10 @@ export interface Host {
   loopRange?(): { start: number; end: number } | null;
   /** Audio the song has loaded, by key (a clip's, or a plugin's data: a drift curve). */
   clip(key: string): Float32Array[] | undefined;
+  /** The song's position in quarter notes at the block's start (a tremolo keeps to the beat by it). */
+  beatAt?(): number;
+  /** A pack instrument's samples by key (a Drum Replacer's kit), once they have been handed over. */
+  sampler?(key: string): SamplerSpec | undefined;
 }
 
 export interface Effect {
@@ -33,8 +41,10 @@ export interface Effect {
    * as setParams with the whole. Plugins without it take the whole.
    */
   setParam?(id: string, params: Record<string, number>, settings?: Record<string, string>): void;
-  /** Something it was waiting for (an impulse response) may have arrived. */
+  /** Something it was waiting for (an impulse response, a kit's samples) may have arrived. */
   refresh?(): void;
+  /** Panic: whatever it plays itself (a Drum Replacer's hits) stops at once. */
+  silence?(): void;
   process(l: Float32Array, r: Float32Array, n: number): void;
   reset(): void;
   /** Gain reduction now, in dB (≤ 0), for meters. */
@@ -43,7 +53,8 @@ export interface Effect {
   latency?: number;
 }
 
-const DIVISION_BEATS = [2, 1, 1.5, 0.5, 0.75, 1 / 3, 0.25];
+/** Each of DELAY_DIVISIONS in quarter notes. */
+export const DIVISION_BEATS = [2, 1, 1.5, 0.5, 0.75, 1 / 3, 0.25];
 
 /** `n` frames of one block into another (no view made on the way). */
 function copy(dst: Float32Array, src: Float32Array, n: number): void {
@@ -769,6 +780,18 @@ export function createEffect(type: string, host: Host): Effect | null {
       return new WowFlutter(host);
     case 'shimmer':
       return new Shimmer(host);
+    case 'rotary':
+      return new RotarySpeaker(host);
+    case 'phaser':
+      return new Phaser(host);
+    case 'tremolo':
+      return new Tremolo(host);
+    case 'lofi':
+      return new Lofi(host);
+    case 'resonance':
+      return new StringResonance(host);
+    case 'replacer':
+      return new DrumReplacer(host);
     default:
       return null;
   }

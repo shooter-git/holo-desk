@@ -8,16 +8,24 @@
 
 import { AHEAD_BLOCK, type AheadEdge, AheadLink, aheadPlan } from './ahead.ts';
 import { FAT_PRESETS, FatSynth } from './analog.ts';
+import { CHOIR_PRESETS, ChoirSynth } from './choir.ts';
 import type { PreparedImpulse } from './convolver.ts';
+import { DRONE_PRESETS, DroneSynth } from './drone.ts';
 import { DrumSynth } from './drums.ts';
 import { Biquad, dbToGain, Smooth } from './dsp.ts';
 import { ETHEREAL_PRESETS, EtherealSynth } from './ethereal.ts';
+import { FM_PRESETS, FmSynth } from './fm.ts';
 import { createEffect, type Effect, type Host } from './fx.ts';
 import { GlassLineVoice, GlassVoice } from './glass.ts';
 import type { Instrument } from './instrument.ts';
+import { ElectricKeys, KEYS_PRESETS } from './keys.ts';
+import { DrumMachine, MACHINE_PRESETS } from './machine.ts';
 import { createMidiEffect, EventList, type MidiEffect, type MidiHost } from './midifx.ts';
+import { MORPH_PRESETS, MorphSynth } from './morph.ts';
+import { ORGAN_PRESETS, TonewheelOrgan } from './organ.ts';
 import type { PartPlans } from './parts.ts';
 import { PlanVoice, prepareLengthened, type SampleData } from './performance.ts';
+import { PLUCKED_PRESETS, PluckedSynth } from './plucked.ts';
 import {
   type ChannelSpec,
   type ClipSpec,
@@ -49,8 +57,11 @@ import {
   TRANSPORT_FLOATS,
   type TrackSpec,
 } from './protocol.ts';
+import { REED_PRESETS, ReedSynth } from './reeds.ts';
 import { Sampler } from './sampler.ts';
+import { STRUCK_PRESETS, StruckSynth } from './struck.ts';
 import { Synth } from './synth.ts';
+import { WIND_PRESETS, WindSynth } from './wind.ts';
 
 const MAX_BLOCK = 1024;
 /**
@@ -1063,6 +1074,17 @@ export class EngineCore implements Host {
       case 'synth':
         if (FAT_PRESETS.includes(spec.preset)) return new FatSynth(this.sr, spec.preset, spec.params);
         if (ETHEREAL_PRESETS.includes(spec.preset)) return new EtherealSynth(this.sr, spec.preset, spec.params);
+        if (ORGAN_PRESETS.includes(spec.preset)) return new TonewheelOrgan(this.sr, spec.preset, spec.params);
+        if (KEYS_PRESETS.includes(spec.preset)) return new ElectricKeys(this.sr, spec.preset, spec.params);
+        if (FM_PRESETS.includes(spec.preset)) return new FmSynth(this.sr, spec.preset, spec.params);
+        if (MORPH_PRESETS.includes(spec.preset)) return new MorphSynth(this.sr, spec.preset, spec.params);
+        if (DRONE_PRESETS.includes(spec.preset)) return new DroneSynth(this.sr, spec.preset, spec.params);
+        if (MACHINE_PRESETS.includes(spec.preset)) return new DrumMachine(this.sr, spec.preset, spec.params);
+        if (WIND_PRESETS.includes(spec.preset)) return new WindSynth(this.sr, spec.preset, spec.params);
+        if (PLUCKED_PRESETS.includes(spec.preset)) return new PluckedSynth(this.sr, spec.preset, spec.params);
+        if (REED_PRESETS.includes(spec.preset)) return new ReedSynth(this.sr, spec.preset, spec.params);
+        if (CHOIR_PRESETS.includes(spec.preset)) return new ChoirSynth(this.sr, spec.preset, spec.params);
+        if (STRUCK_PRESETS.includes(spec.preset)) return new StruckSynth(this.sr, spec.preset, spec.params);
         return new Synth(this.sr, spec.preset, spec.params);
       case 'drums':
         return new DrumSynth(this.sr);

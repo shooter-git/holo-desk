@@ -3,6 +3,7 @@ import {
   type AudioClip,
   automationTargets,
   DIVISIONS,
+  DRUM_PRESETS,
   type FormMark,
   findLane,
   type Instrument,
@@ -11,7 +12,7 @@ import {
   type Project,
   quantize,
   type Region,
-  SYNTH_PRESETS,
+  SYNTH_FAMILIES,
   type Track,
   ticksPerBar,
   ticksPerBeat,
@@ -87,7 +88,7 @@ import { drawClipWave, drawFades, fadeTo, trimEnd, trimStart } from './wave.ts';
 export const tracksView = new Viewport(store.get().zoom);
 
 function instrumentIcon(i: Instrument) {
-  if (i.type === 'synth' && i.preset === 'Drum Synth') return <Drum />;
+  if (i.type === 'synth' && DRUM_PRESETS.includes(i.preset)) return <Drum />;
   if (i.type === 'synth' && /Bass|Lead|Pluck|Pad/.test(i.preset)) return <Waves />;
   if (i.type === 'synth') return <Piano />;
   if (i.type === 'sampler' || i.type === 'performance') return <Music />;
@@ -109,9 +110,12 @@ export function instrumentLabel(i: Instrument): string {
 
 /** The menu of instruments to put on a track (or a new one). */
 export function instrumentMenu(onPick: (i: Instrument) => void): MenuEntry[] {
-  const entries: MenuEntry[] = [{ heading: 'Built-in' }];
-  for (const preset of SYNTH_PRESETS)
-    entries.push({ label: preset, onSelect: () => onPick({ type: 'synth', preset }) });
+  const entries: MenuEntry[] = [];
+  for (const family of SYNTH_FAMILIES) {
+    entries.push({ heading: family.name });
+    for (const preset of family.presets)
+      entries.push({ label: preset, onSelect: () => onPick({ type: 'synth', preset }) });
+  }
   for (const pack of library.packs) {
     // a pack with rooms but no instruments has nothing to put under a heading
     if (pack.instruments.length === 0) continue;

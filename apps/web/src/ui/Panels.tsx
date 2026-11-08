@@ -1,10 +1,12 @@
 /** The Inspector (the selected region and track, and its channel strip) and the Library (instruments). */
-import { type Instrument, SYNTH_PRESETS, tickToBarBeat } from '@holo/session';
+import { type Instrument, SYNTH_FAMILIES, tickToBarBeat } from '@holo/session';
 import {
   AudioWaveform,
   Check,
   Download,
   Drum,
+  Globe,
+  Mic,
   Music,
   Piano,
   Search,
@@ -394,6 +396,18 @@ export function Inspector({ overlay = false }: { overlay?: boolean }) {
   );
 }
 
+/** Each family of built-in synths' icon (a preset of its own in PRESET_ICON comes first). */
+const FAMILY_ICON: Record<string, typeof Piano> = {
+  Keys: Piano,
+  'Organs and reeds': Piano,
+  Synths: AudioWaveform,
+  'Bells and glass': Sparkles,
+  Textures: Sparkles,
+  Voices: Mic,
+  World: Globe,
+  'Drums and percussion': Drum,
+};
+
 const PRESET_ICON: Record<string, typeof Piano> = {
   'Drum Synth': Drum,
   'Analog Bass': Waves,
@@ -699,7 +713,6 @@ export function LibraryPanel({ overlay = false, full = false }: { overlay?: bool
   );
   const currentKey = instrumentKey(track?.instrument);
   // a stable object per instrument, so a memoised row sees the same props
-  const synths = useMemo(() => SYNTH_PRESETS.map((preset): Instrument => ({ type: 'synth', preset })), []);
 
   const groups = useMemo(
     () =>
@@ -740,23 +753,30 @@ export function LibraryPanel({ overlay = false, full = false }: { overlay?: bool
       </div>
       <details className="disclosure" open>
         <summary>Built-in</summary>
-        <div className="list">
-          {synths
-            .filter((i) => i.type === 'synth' && (!q || i.preset.toLowerCase().includes(q)))
-            .map((inst) => {
-              const preset = inst.type === 'synth' ? inst.preset : '';
-              return (
-                <LibraryItem
-                  key={preset}
-                  instrument={inst}
-                  icon={PRESET_ICON[preset] ?? Piano}
-                  title={preset}
-                  current={instrumentKey(inst) === currentKey}
-                  onPick={pick}
-                />
-              );
-            })}
-        </div>
+        {SYNTH_FAMILIES.map((family) => {
+          const presets = family.presets.filter((p) => !q || `${p} ${family.name}`.toLowerCase().includes(q));
+          if (!presets.length) return null;
+          return (
+            <div key={family.name}>
+              <div className="label category">{family.name}</div>
+              <div className="list">
+                {presets.map((preset) => {
+                  const inst: Instrument = { type: 'synth', preset };
+                  return (
+                    <LibraryItem
+                      key={preset}
+                      instrument={inst}
+                      icon={PRESET_ICON[preset] ?? FAMILY_ICON[family.name] ?? Piano}
+                      title={preset}
+                      current={instrumentKey(inst) === currentKey}
+                      onPick={pick}
+                    />
+                  );
+                })}
+              </div>
+            </div>
+          );
+        })}
       </details>
       {groups.map(({ pack, categories }) => (
         <details key={pack.id} className="disclosure" open={!!q}>

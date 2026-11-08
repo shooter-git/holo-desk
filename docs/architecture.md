@@ -239,6 +239,27 @@ and glides when played legato. **Ethereal Pad / Keys**: a stereo supersaw with s
 hall of its own with an octave-up shimmer; it counts as sounding until its tail is quiet. A knob turned
 while it plays updates the instrument where it is (it isn't made again), so no note is cut.
 
+The other families, each a file with a `PRESETS` table, an `X_PRESETS` list that `makeInstrument`
+(`core.ts`) dispatches on, six knobs in `SYNTH_MACROS` and a family in `SYNTH_FAMILIES`:
+
+- `organ.ts`: a tonewheel organ (nine tempered wheels a key, sharing phase across keys; staggered
+  contacts for the click; single-trigger percussion; the scanner vibrato and chorus; a preamp; a horn
+  and drum rotor with their own inertia, slow and fast on the mod wheel).
+- `keys.ts`: struck tine, struck reed and pinned string, each through its pickup's nonlinearity.
+- `fm.ts`: four operators in eight wirings, the top one fed back.
+- `morph.ts`: two spectra built by inverse FFT into a band-limited table per octave, crossfaded; also
+  exports `buildTables`, `tableLevel` and `readTable` for the families below.
+- `drone.ts`: ten noise-excited resonators on a note's partials, wandering and breaking into grains.
+- `machine.ts`: synthesised drum-machine kits on the General MIDI drum keys (`DRUM_PRESETS` in the
+  session package is every synth that's a kit, for the pads and the kit warnings).
+- `wind.ts`, `plucked.ts`, `reeds.ts`, `choir.ts`, `struck.ts`: modelled flutes and pipes (tuned
+  breath, delayed vibrato, drones), strings on a buzzing bridge (a resonant body, sympathetic strings,
+  a self-playing drone), free reeds and rubbed glass, formant voices, and modal drums and metal with
+  pitch glides and an ensemble of players.
+
+Several carry their own hall (Ethereal's `Hall`, exported) and count as sounding until it's quiet.
+`ahead.ts` guesses the heavier ones (`HEAVY_SYNTHS`) at about twice a plain synth's cost per voice.
+
 ## HO[LO] Engine and the studio
 
 HO[LO] Engine carries its own copy of the engine. Its hello says which (the fingerprint of

@@ -16,6 +16,10 @@ import {
   parseProject,
   projectFromMidi,
   readMidi,
+  SYNTH_FAMILIES,
+  SYNTH_MACROS,
+  SYNTH_NOTES,
+  SYNTH_PRESETS,
   secondsToTick,
   tickToBarBeat,
   tickToSeconds,
@@ -212,5 +216,32 @@ describe('audio tracks', () => {
     const back = parseProject(JSON.parse(JSON.stringify({ ...p, tracks: [track] })));
     expect(back.tracks[0]?.regions[0]?.audio?.stretch).toBe(4);
     expect(back.tracks[0]?.regions[0]?.audio?.gain).toBe(0);
+  });
+});
+
+describe('built-in synths', () => {
+  it('puts every preset in exactly one family, and gives every preset but the Drum Synth its knobs', () => {
+    const named = SYNTH_FAMILIES.flatMap((f) => [...f.presets]);
+    expect([...named].sort()).toEqual([...SYNTH_PRESETS].sort());
+    expect(new Set(named).size).toBe(named.length);
+    for (const preset of SYNTH_PRESETS) {
+      if (
+        [
+          'Drum Synth',
+          'Soft Keys',
+          'Electric Piano',
+          'Warm Pad',
+          'Glass Bells',
+          'Analog Bass',
+          'Sub Bass',
+          'Bright Lead',
+          'Pluck',
+          'Strings Ensemble',
+        ].includes(preset)
+      )
+        continue;
+      expect(SYNTH_MACROS[preset]?.length, preset).toBe(6);
+      expect(SYNTH_NOTES[preset], preset).toBeTruthy();
+    }
   });
 });

@@ -5,7 +5,15 @@
  * played by pitch has its notes, chromatically, the lowest at the bottom left.
  */
 
-import { GM_DRUMS, type Instrument, type MiddleC, noteName, type Project, type Track } from '@holo/session';
+import {
+  DRUM_PRESETS,
+  GM_DRUMS,
+  type Instrument,
+  type MiddleC,
+  noteName,
+  type Project,
+  type Track,
+} from '@holo/session';
 import type { InstrumentMap } from '../audio/pack-files.ts';
 
 export interface Pad {
@@ -53,7 +61,7 @@ export function padTrack(
  * hit), not as a pitch: a MIDI effect that moves or adds notes then plays other drums.
  */
 export function playsHits(instrument: Instrument | null | undefined, manifest: InstrumentMap | null): boolean {
-  if (instrument?.type === 'synth') return instrument.preset === 'Drum Synth';
+  if (instrument?.type === 'synth') return DRUM_PRESETS.includes(instrument.preset);
   if (!padManifestKey(instrument) || !manifest) return false;
   return Boolean(manifest.pads?.length) || manifest.pitched === false;
 }
@@ -84,7 +92,7 @@ export function padsFor(
     chromatic: false,
   };
   if (!instrument || instrument.type === 'none') return gm;
-  if (instrument.type === 'synth' && instrument.preset === 'Drum Synth') return gm;
+  if (instrument.type === 'synth' && DRUM_PRESETS.includes(instrument.preset)) return gm;
   if (padManifestKey(instrument)) {
     // until the map comes, the pads it had: a kit's names the moment it's there
     if (!manifest) return gm;

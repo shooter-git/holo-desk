@@ -1054,7 +1054,7 @@ export function updateChannel(target: string, patch: ChannelPatch, label = 'Mixe
 }
 
 /** Mixer moves while dragging: applied live, one undo step per gesture. */
-let gesture: { label: string; before: Project } | null = null;
+let gesture: { label: string; before: Project; last?: Project } | null = null;
 export function beginGesture(label: string): void {
   const p = store.get().project;
   if (p) gesture = { label, before: p };
@@ -1064,6 +1064,7 @@ export function gestureChange(ops: Op[]): void {
   if (!s.project) return;
   try {
     const next = applyOps(s.project, ops);
+    if (gesture) gesture.last = next;
     store.set({ project: next, saveState: 'dirty' });
     // (the pointer moves far more often than frames are drawn: the audio thread follows once a frame)
     engine.syncSoon(next);
@@ -1081,6 +1082,21 @@ export function endGesture(): void {
     changed(s.project);
   }
   gesture = null;
+}
+/**
+ * Calls a gesture off (Escape): the song goes back to how it was, with no undo step. Where something
+ * else changed the song meanwhile, that stays: the gesture ends as usual.
+ */
+export function cancelGesture(): void {
+  const s = store.get();
+  if (!gesture?.last || s.project !== gesture.last) {
+    endGesture();
+    return;
+  }
+  const { before } = gesture;
+  gesture = null;
+  store.set({ project: before });
+  changed(before);
 }
 
 export function addPlugin(target: string, type: string, slot: 'inserts' | 'midiFx'): void {

@@ -128,7 +128,9 @@ export class Packs {
       name: pack.name,
       license: pack.license,
       credit: pack.credit,
-      source: pack.source,
+      // what kind of pack it is (yours, or one HO[LO] pins): its recipe, a large map for a kit kept on
+      // many microphones, stays here
+      source: { kind: pack.source.kind },
       bytes,
       instruments: pack.instruments.map((i) => ({
         name: i.name,

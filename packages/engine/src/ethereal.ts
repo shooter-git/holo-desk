@@ -389,7 +389,8 @@ class AetherVoice implements Voice {
 }
 
 /** The hall: eight delays through a Householder matrix, damped, two swaying, after four diffusers. */
-class Hall {
+/** A small, swaying hall (eight lines, fed back through each other): Ethereal's, and the other synths that carry their own space. */
+export class Hall {
   private readonly lines: Float32Array[] = [];
   private readonly lens: Int32Array;
   private readonly pos = new Int32Array(8);

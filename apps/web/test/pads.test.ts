@@ -65,6 +65,9 @@ describe('pads for what plays them', () => {
     expect(gm.pads.map((p) => p.note)).toEqual(GM_PADS);
     expect(gm.pads.find((p) => p.note === 56)?.name).toBe('Cowbell');
     expect(padsFor({ type: 'none' }, null, opts).pads.map((p) => p.note)).toEqual(GM_PADS);
+    // and for the drum machines
+    for (const preset of ['Analog Machine', 'Punch Machine', 'Lo-fi Machine', 'Hand Machine'])
+      expect(padsFor({ type: 'synth', preset }, null, opts).pads.map((p) => p.note)).toEqual(GM_PADS);
   });
 
   it('plays notes by pitch for a synth, the lowest at the bottom left', () => {
@@ -127,6 +130,8 @@ describe('an instrument that plays each key as its own hit', () => {
     expect(playsHits(sampler(map('bongo_hi')), map('bongo_hi'))).toBe(true);
     expect(playsHits(sampler(map('grand')), map('grand'))).toBe(false);
     expect(playsHits({ type: 'synth', preset: 'Drum Synth' }, null)).toBe(true);
+    expect(playsHits({ type: 'synth', preset: 'Analog Machine' }, null)).toBe(true);
+    expect(playsHits({ type: 'synth', preset: 'Tine Piano' }, null)).toBe(false);
     expect(playsHits({ type: 'synth', preset: 'Fat Mono' }, null)).toBe(false);
     // not known until its map comes
     expect(playsHits(sampler(map('kit')), null)).toBe(false);

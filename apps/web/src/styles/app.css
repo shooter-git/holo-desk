@@ -1873,10 +1873,24 @@ button.list-item {
   margin-top: 2px;
 }
 
-.sound-text {
+.sound-text,
+.item-text {
   display: flex;
   flex-direction: column;
   min-width: 0;
+}
+
+/* a search result's pack (or palette) and category, under its name */
+.item-where {
+  overflow: hidden;
+  font-size: 10.5px;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.library-none {
+  padding: 4px 10px 10px;
 }
 
 .sound-note {

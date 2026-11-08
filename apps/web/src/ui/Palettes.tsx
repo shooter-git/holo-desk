@@ -24,6 +24,7 @@ import { addSound } from '../app/actions.ts';
 import { store } from '../app/store.ts';
 import { type AvailablePack, installs, useInstalls } from '../audio/installs.ts';
 import { library, type PackSummary } from '../audio/samples.ts';
+import { type Field, rank, WEIGHT, words } from './search.ts';
 
 const FAMILY_ICON: Record<string, typeof Piano> = {
   Keys: Piano,
@@ -139,34 +140,69 @@ export function Palettes({ query, overlay }: { query: string; overlay: boolean }
     return [...out.values()].sort((a, b) => a.name.localeCompare(b.name));
   }, [installedPacks, packs]);
 
-  const q = query.trim().toLowerCase();
-  const shown = palettes
-    .map((p) => ({
-      palette: p,
-      sounds: p.sounds.filter((s) => !q || `${s.name} ${s.family} ${s.note ?? ''} ${p.name}`.toLowerCase().includes(q)),
-    }))
-    .filter((x) => x.sounds.length);
-  if (!shown.length) return null;
+  const q = words(query);
+  const shown = palettes.map((p) => ({ palette: p, sounds: q.length ? [] : p.sounds })).filter((x) => x.sounds.length);
+  // while searching, every palette's sounds are one list, best match first
+  const found = useMemo(
+    () =>
+      rank(
+        words(query),
+        palettes.flatMap((palette) => palette.sounds.map((sound) => ({ palette, sound }))),
+        ({ palette, sound }): Field[] => [
+          { text: sound.name, weight: WEIGHT.title },
+          { text: sound.family, weight: WEIGHT.category },
+          { text: palette.name, weight: WEIGHT.source },
+          { text: sound.note ?? '', weight: WEIGHT.note },
+        ],
+      ).map((r) => r.item),
+    [palettes, query],
+  );
+  if (!shown.length && !found.length) return null;
   const busy = !!queue || job?.state === 'running';
+  const row = (palette: PaletteView, s: PackSound, where?: string) => {
+    const st = soundState(s, installed, available);
+    const waiting = queue?.label === `${palette.id}/${s.name}`;
+    return (
+      <SoundRow
+        key={`${palette.id}/${s.name}`}
+        palette={palette}
+        sound={s}
+        state={st}
+        waiting={waiting}
+        progress={waiting ? Math.round(((job?.done ?? 0) / Math.max(1, job?.total ?? 1)) * 100) : 0}
+        busy={busy}
+        available={available}
+        where={where}
+        overlay={overlay}
+      />
+    );
+  };
 
   return (
     <details className="disclosure palettes" open>
       <summary>
-        Palettes <span className="meta muted pack-license">{palettes.length} sets of sounds</span>
+        Palettes{' '}
+        <span className="meta muted pack-license">
+          {q.length ? `${found.length} found` : `${palettes.length} sets of sounds`}
+        </span>
       </summary>
       <div className="muted palettes-hint">
         Ready-made sounds: a click adds a new track with the sound’s effects and room, installing what it plays first.
       </div>
+      {q.length > 0 && (
+        <div className="list">
+          {found.map(({ palette, sound }) => row(palette, sound, `${palette.name} · ${sound.family}`))}
+        </div>
+      )}
       {shown.map(({ palette, sounds }) => {
         const mine = queue?.label.startsWith(`${palette.id}/`) ? queue : null;
-        const states = new Map(sounds.map((s) => [s, soundState(s, installed, available)]));
-        const ready = [...states.values()].filter((s) => s.kind !== 'coming').length;
+        const ready = sounds.filter((s) => soundState(s, installed, available).kind !== 'coming').length;
         const families = [
           ...SOUND_FAMILIES.filter((f) => sounds.some((s) => s.family === f)),
           ...new Set(sounds.map((s) => s.family).filter((f) => !(SOUND_FAMILIES as readonly string[]).includes(f))),
         ];
         return (
-          <details key={palette.id} className="palette" open={!!q}>
+          <details key={palette.id} className="palette">
             <summary>
               <Palette size={14} className="muted" />
               <span>{palette.name}</span>
@@ -191,62 +227,73 @@ export function Palettes({ query, overlay }: { query: string; overlay: boolean }
                 {job?.state === 'running' && <span className="muted">{job.line}</span>}
               </div>
             )}
-            {families.map((family) => {
-              const Icon = FAMILY_ICON[family] ?? Music;
-              return (
-                <div key={family}>
-                  <div className="label category">{family}</div>
-                  <div className="list">
-                    {sounds
-                      .filter((s) => s.family === family)
-                      .map((s) => {
-                        const st = states.get(s) as SoundState;
-                        const waiting = mine?.label === `${palette.id}/${s.name}`;
-                        const meta =
-                          st.kind === 'coming'
-                            ? 'coming'
-                            : waiting
-                              ? `${Math.round(((job?.done ?? 0) / Math.max(1, job?.total ?? 1)) * 100)}%`
-                              : st.kind === 'install'
-                                ? diskSize(st.bytes)
-                                : '';
-                        const title =
-                          st.kind === 'coming'
-                            ? st.why
-                            : st.kind === 'install'
-                              ? `${s.note ? `${s.note} ` : ''}A click installs ${st.ids
-                                  .map((id) => available.get(id)?.name ?? id)
-                                  .join(' and ')} (${diskSize(st.bytes)}) first.`
-                              : s.note;
-                        return (
-                          <button
-                            key={s.name}
-                            type="button"
-                            className={`list-item sound${st.kind === 'coming' ? ' coming' : ''}`}
-                            disabled={st.kind === 'coming' || (busy && st.kind === 'install')}
-                            title={title}
-                            onClick={() => void pickSound(palette, s, st, overlay)}
-                          >
-                            <Icon size={14} className="muted" />
-                            <span className="sound-text">
-                              <span>{s.name}</span>
-                              {s.note && <span className="muted sound-note">{s.note}</span>}
-                            </span>
-                            {meta && (
-                              <span className="meta">
-                                {st.kind === 'install' && !waiting && <Download size={11} />} {meta}
-                              </span>
-                            )}
-                          </button>
-                        );
-                      })}
-                  </div>
-                </div>
-              );
-            })}
+            {families.map((family) => (
+              <div key={family}>
+                <div className="label category">{family}</div>
+                <div className="list">{sounds.filter((s) => s.family === family).map((s) => row(palette, s))}</div>
+              </div>
+            ))}
           </details>
         );
       })}
     </details>
+  );
+}
+
+/** A palette's sound: a click adds it (installing what it plays first), or why it can't be yet. */
+function SoundRow({
+  palette,
+  sound: s,
+  state: st,
+  waiting,
+  progress,
+  busy,
+  available,
+  where,
+  overlay,
+}: {
+  palette: PaletteView;
+  sound: PackSound;
+  state: SoundState;
+  /** its packs are installing now, `progress` percent of the way */
+  waiting: boolean;
+  progress: number;
+  busy: boolean;
+  available: Map<string, AvailablePack>;
+  /** where it comes from (a search's results are one list): its palette and family */
+  where?: string | undefined;
+  overlay: boolean;
+}) {
+  const Icon = FAMILY_ICON[s.family] ?? Music;
+  const meta =
+    st.kind === 'coming' ? 'coming' : waiting ? `${progress}%` : st.kind === 'install' ? diskSize(st.bytes) : '';
+  const title =
+    st.kind === 'coming'
+      ? st.why
+      : st.kind === 'install'
+        ? `${s.note ? `${s.note} ` : ''}A click installs ${st.ids
+            .map((id) => available.get(id)?.name ?? id)
+            .join(' and ')} (${diskSize(st.bytes)}) first.`
+        : s.note;
+  return (
+    <button
+      type="button"
+      className={`list-item sound${st.kind === 'coming' ? ' coming' : ''}`}
+      disabled={st.kind === 'coming' || (busy && st.kind === 'install')}
+      title={title}
+      onClick={() => void pickSound(palette, s, st, overlay)}
+    >
+      <Icon size={14} className="muted" />
+      <span className="sound-text">
+        <span>{s.name}</span>
+        {where && <span className="muted item-where">{where}</span>}
+        {s.note && <span className="muted sound-note">{s.note}</span>}
+      </span>
+      {meta && (
+        <span className="meta">
+          {st.kind === 'install' && !waiting && <Download size={11} />} {meta}
+        </span>
+      )}
+    </button>
   );
 }

@@ -33,6 +33,7 @@ import { library, type PackSummary } from '../audio/samples.ts';
 import { NumberBox } from './AudioEditor.tsx';
 import { Strip } from './Mixer.tsx';
 import { Palettes } from './Palettes.tsx';
+import { type Field, rank, WEIGHT, words } from './search.ts';
 import { instrumentLabel } from './Tracks.tsx';
 import { setStretch } from './wave.ts';
 
@@ -435,6 +436,7 @@ const LibraryItem = memo(function LibraryItem({
   instrument,
   icon: Icon,
   title,
+  where,
   meta,
   current,
   onPick,
@@ -442,6 +444,8 @@ const LibraryItem = memo(function LibraryItem({
   instrument: Instrument;
   icon: typeof Piano;
   title: string;
+  /** where it comes from (a search's results are one list): its pack and category */
+  where?: string;
   meta?: string;
   current: boolean;
   onPick: (i: Instrument) => void;
@@ -454,7 +458,14 @@ const LibraryItem = memo(function LibraryItem({
       onClick={() => onPick(instrument)}
     >
       <Icon size={meta ? 14 : 15} className="muted" />
-      <span>{title}</span>
+      {where ? (
+        <span className="item-text">
+          <span>{title}</span>
+          <span className="muted item-where">{where}</span>
+        </span>
+      ) : (
+        <span>{title}</span>
+      )}
       {meta && <span className="meta">{meta}</span>}
       {current && !meta && <Check size={14} className="meta" />}
     </button>
@@ -561,13 +572,23 @@ function MorePacks({ query, installed }: { query: string; installed: string }) {
   const running = job?.state === 'running' || !!queue;
   const install = (p: AvailablePack) => void installs.install([p.id]);
 
-  const q = query.trim().toLowerCase();
-  const missing = (packs ?? []).filter(
-    (p) =>
-      !p.installed &&
-      // a palette has no samples to install: its sounds are under Palettes
-      !(p.sounds?.length && !p.instruments.length) &&
-      (!q || `${p.name} ${p.instruments.map((i) => `${i.title} ${i.category}`).join(' ')}`.toLowerCase().includes(q)),
+  const missing = useMemo(
+    () =>
+      rank(
+        words(query),
+        // a palette has no samples to install: its sounds are under Palettes
+        (packs ?? []).filter((p) => !p.installed && !(p.sounds?.length && !p.instruments.length)),
+        // a pack matches as well as its best instrument does
+        (p) =>
+          p.instruments.length
+            ? p.instruments.map((i): Field[] => [
+                { text: i.title, weight: WEIGHT.title },
+                { text: i.category, weight: WEIGHT.category },
+                { text: p.name, weight: WEIGHT.source },
+              ])
+            : [{ text: p.name, weight: WEIGHT.title }],
+      ).map((r) => r.item),
+    [packs, query],
   );
   if (!missing.length) return null;
   return (
@@ -608,6 +629,17 @@ function MorePacks({ query, installed }: { query: string; installed: string }) {
   );
 }
 
+/** An instrument in a search's results: a built-in synth or a pack's (with its size). */
+interface SearchHit {
+  key: string;
+  instrument: Instrument;
+  icon: typeof Piano;
+  title: string;
+  category: string;
+  source: string;
+  size?: number;
+}
+
 /** The icon for a pack instrument's category. */
 function categoryIcon(category: string): typeof Piano {
   if (/drum|kit|percussion/i.test(category)) return Drum;
@@ -623,7 +655,7 @@ export function LibraryPanel({ overlay = false, full = false }: { overlay?: bool
   const [query, setQuery] = useState('');
   const [importing, setImporting] = useState(false);
   const file = useRef<HTMLInputElement>(null);
-  const q = query.trim().toLowerCase();
+  const searching = words(query).length > 0;
 
   const importPack = async (f: File) => {
     setImporting(true);
@@ -667,12 +699,48 @@ export function LibraryPanel({ overlay = false, full = false }: { overlay?: bool
           categories: [...new Set(p.instruments.map((i) => i.category))].map((c) => ({
             name: c,
             items: p.instruments
-              .filter((i) => i.category === c && (!q || `${i.title} ${i.category} ${p.name}`.toLowerCase().includes(q)))
+              .filter((i) => i.category === c)
               .map((i) => ({ ...i, instrument: { type: 'sampler', pack: p.id, name: i.name } as Instrument })),
           })),
         })),
-    [packs, q],
+    [packs],
   );
+
+  // while searching, the built-in synths and the packs' instruments are one list, best match first
+  const results = useMemo(() => {
+    const q = words(query);
+    if (!q.length) return [];
+    const all: SearchHit[] = [
+      ...SYNTH_FAMILIES.flatMap((family) =>
+        family.presets.map((preset) => ({
+          key: `synth:${preset}`,
+          instrument: { type: 'synth', preset } as Instrument,
+          icon: PRESET_ICON[preset] ?? FAMILY_ICON[family.name] ?? Piano,
+          title: preset,
+          category: family.name,
+          source: 'Built-in',
+        })),
+      ),
+      ...groups.flatMap(({ pack, categories }) =>
+        categories.flatMap((c) =>
+          c.items.map((i) => ({
+            key: `${pack.id}/${i.name}`,
+            instrument: i.instrument,
+            icon: categoryIcon(c.name),
+            title: i.title,
+            category: c.name,
+            source: pack.name,
+            size: i.size,
+          })),
+        ),
+      ),
+    ];
+    return rank(q, all, (h): Field[] => [
+      { text: h.title, weight: WEIGHT.title },
+      { text: h.category, weight: WEIGHT.category },
+      { text: h.source, weight: WEIGHT.source },
+    ]).map((r) => r.item);
+  }, [groups, query]);
 
   return (
     <aside className={`library${overlay ? ' overlay-panel' : ''}${full ? ' full' : ''}`} aria-label="Library">
@@ -698,71 +766,108 @@ export function LibraryPanel({ overlay = false, full = false }: { overlay?: bool
         )}
       </div>
       <Palettes query={query} overlay={overlay} />
-      <details className="disclosure" open>
-        <summary>Built-in</summary>
-        {SYNTH_FAMILIES.map((family) => {
-          const presets = family.presets.filter((p) => !q || `${p} ${family.name}`.toLowerCase().includes(q));
-          if (!presets.length) return null;
-          return (
-            <div key={family.name}>
-              <div className="label category">{family.name}</div>
-              <div className="list">
-                {presets.map((preset) => {
-                  const inst: Instrument = { type: 'synth', preset };
-                  return (
-                    <LibraryItem
-                      key={preset}
-                      instrument={inst}
-                      icon={PRESET_ICON[preset] ?? FAMILY_ICON[family.name] ?? Piano}
-                      title={preset}
-                      current={instrumentKey(inst) === currentKey}
-                      onPick={pick}
-                    />
-                  );
-                })}
-              </div>
-            </div>
-          );
-        })}
-      </details>
-      {groups.map(({ pack, categories }) => (
-        <details key={pack.id} className="disclosure" open={!!q}>
+      {searching ? (
+        <details className="disclosure" open>
           <summary>
-            {pack.name} <span className="meta muted pack-license">{licenceLabel(pack)}</span>
+            Instruments{' '}
+            <span className="meta muted pack-license">{results.length ? `${results.length} found` : ''}</span>
           </summary>
-          {categories
-            .filter((c) => c.items.length)
-            .map((c) => (
-              <div key={c.name}>
-                <div className="label category">{c.name}</div>
-                <div className="list">
-                  {c.items.map((i) => {
-                    const st = states.get(`${pack.id}/${i.name}`);
-                    return (
-                      <LibraryItem
-                        key={i.name}
-                        instrument={i.instrument}
-                        icon={categoryIcon(c.name)}
-                        title={i.title}
-                        meta={
-                          st?.state === 'loading'
-                            ? `${Math.round((st.done / Math.max(1, st.total)) * 100)}%`
-                            : st?.state === 'error'
-                              ? 'error'
-                              : `${i.size} MB`
-                        }
-                        current={instrumentKey(i.instrument) === currentKey}
-                        onPick={pick}
-                      />
-                    );
-                  })}
-                </div>
-              </div>
-            ))}
-          <div className="muted pack-credit">{pack.credit}</div>
-          <PackFoot pack={pack} />
+          {results.length ? (
+            <div className="list">
+              {results.map((h) => {
+                const st = h.size === undefined ? undefined : states.get(h.key);
+                return (
+                  <LibraryItem
+                    key={h.key}
+                    instrument={h.instrument}
+                    icon={h.icon}
+                    title={h.title}
+                    where={`${h.source} · ${h.category}`}
+                    meta={
+                      h.size === undefined
+                        ? undefined
+                        : st?.state === 'loading'
+                          ? `${Math.round((st.done / Math.max(1, st.total)) * 100)}%`
+                          : st?.state === 'error'
+                            ? 'error'
+                            : `${h.size} MB`
+                    }
+                    current={instrumentKey(h.instrument) === currentKey}
+                    onPick={pick}
+                  />
+                );
+              })}
+            </div>
+          ) : (
+            <div className="muted library-none">No instrument matches “{query.trim()}”.</div>
+          )}
         </details>
-      ))}
+      ) : (
+        <>
+          <details className="disclosure" open>
+            <summary>Built-in</summary>
+            {SYNTH_FAMILIES.map((family) => {
+              const presets = family.presets;
+              return (
+                <div key={family.name}>
+                  <div className="label category">{family.name}</div>
+                  <div className="list">
+                    {presets.map((preset) => {
+                      const inst: Instrument = { type: 'synth', preset };
+                      return (
+                        <LibraryItem
+                          key={preset}
+                          instrument={inst}
+                          icon={PRESET_ICON[preset] ?? FAMILY_ICON[family.name] ?? Piano}
+                          title={preset}
+                          current={instrumentKey(inst) === currentKey}
+                          onPick={pick}
+                        />
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            })}
+          </details>
+          {groups.map(({ pack, categories }) => (
+            <details key={pack.id} className="disclosure">
+              <summary>
+                {pack.name} <span className="meta muted pack-license">{licenceLabel(pack)}</span>
+              </summary>
+              {categories.map((c) => (
+                <div key={c.name}>
+                  <div className="label category">{c.name}</div>
+                  <div className="list">
+                    {c.items.map((i) => {
+                      const st = states.get(`${pack.id}/${i.name}`);
+                      return (
+                        <LibraryItem
+                          key={i.name}
+                          instrument={i.instrument}
+                          icon={categoryIcon(c.name)}
+                          title={i.title}
+                          meta={
+                            st?.state === 'loading'
+                              ? `${Math.round((st.done / Math.max(1, st.total)) * 100)}%`
+                              : st?.state === 'error'
+                                ? 'error'
+                                : `${i.size} MB`
+                          }
+                          current={instrumentKey(i.instrument) === currentKey}
+                          onPick={pick}
+                        />
+                      );
+                    })}
+                  </div>
+                </div>
+              ))}
+              <div className="muted pack-credit">{pack.credit}</div>
+              <PackFoot pack={pack} />
+            </details>
+          ))}
+        </>
+      )}
       {packs.length > 0 && (
         <div className="muted library-disk">
           Packs take {diskSize(packs.reduce((sum, p) => sum + (p.bytes ?? 0), 0))} on the computer that runs HO[LO].

@@ -370,7 +370,8 @@ export async function buildApp(config: Config): Promise<{ app: FastifyInstance; 
           bytes: (m as { bytes?: number }).bytes ?? null,
           files: packFiles(m).length,
           instruments: m.instruments.map((i) => ({ name: i.name, title: i.title, category: i.category })),
-          // a palette's: the packs its sounds play, and the sounds
+          // a palette's: what it is, the packs its sounds play, and the sounds
+          ...(m.description ? { description: m.description } : {}),
           requires: m.requires ?? [],
           sounds: m.sounds ?? [],
           // installed, and its map is the one pinned (else `refresh` or a reinstall brings it up to date)

@@ -81,6 +81,8 @@ export interface PackManifest {
   root?: string;
   instruments: PackInstrument[];
   impulses?: { name: string; title?: string; file: string }[];
+  /** What it is, in a line (a palette's). */
+  description?: string;
   /** Other packs its sounds play (a palette's: installed before a sound that plays them is added). */
   requires?: string[];
   /** Ready-made sounds: an instrument with its effects, room and level (a palette's). */

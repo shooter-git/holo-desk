@@ -7,12 +7,13 @@ import { loadConfig } from '../src/config.ts';
 import {
   availablePacks,
   installedPack,
+  installPack,
   packFiles,
   refreshMaps,
   removePack,
   useShippedMaps,
 } from '../src/pack-install.ts';
-import { folderBytes } from '../src/packs.ts';
+import { folderBytes, Packs } from '../src/packs.ts';
 
 const work = mkdtempSync(join(tmpdir(), 'holo-pack-maps-'));
 afterAll(() => rmSync(work, { recursive: true, force: true }));
@@ -145,6 +146,54 @@ describe("an installed pack's map, when HO[LO] pins a newer one", () => {
     expect(readFileSync(join(dir, 'prog-kit', 'holo-pack.json'), 'utf8')).toBe(progText);
     // and once current, nothing more to do
     expect(await refreshMaps(dir)).toEqual([]);
+  });
+});
+
+describe('a palette (sounds, and no files of its own)', () => {
+  it('is pinned and installed as its map alone, and brings the packs it requires', async () => {
+    const rock = kit('rock-kit', 'Rock Kit');
+    const palette: PackManifest = {
+      format: 'holo-pack',
+      version: 1,
+      id: 'big-drums',
+      name: 'Big Drums',
+      license: 'CC0-1.0',
+      credit: 'for the tests',
+      source: { kind: 'none' },
+      instruments: [],
+      requires: ['rock-kit'],
+      sounds: [
+        {
+          name: 'Rock Kit, Roomy',
+          family: 'Drums and percussion',
+          instrument: { pack: 'rock-kit', name: 'kit' },
+          space: { name: 'Room', type: 'space', send: -12 },
+        },
+      ],
+    };
+    const repo = repository([rock, palette]);
+    // no files: an empty checksums file, and a lock that names it all the same
+    expect(repo.files.get('packs/big-drums/files.sha256')).toBe('');
+    useShippedMaps(new PackMaps(repo.lock, null, repo.fetch));
+    const dir = join(work, 'palette');
+    // the kit's samples from a folder (empty files: their checksums are the empty file's)
+    const from = join(work, 'palette-from');
+    for (const f of packFiles(rock as never)) {
+      mkdirSync(dirname(join(from, f)), { recursive: true });
+      writeFileSync(join(from, f), '');
+    }
+    const lines: string[] = [];
+    const r = await installPack(dir, 'big-drums', { from, requires: true, log: (l) => lines.push(l) });
+    expect(r).toEqual({ present: 0, total: 0, checked: true, wrong: [] });
+    expect(installedPack(dir, 'big-drums')).toEqual(palette);
+    expect(installedPack(dir, 'rock-kit')).toEqual(rock);
+    expect(lines[0]).toBe('Rock Kit, which Big Drums plays:');
+    // the server lists it with its sounds and no instruments
+    const packs = new Packs(dir);
+    const listed = packs.summaries().find((p) => p.id === 'big-drums');
+    expect(listed?.instruments).toEqual([]);
+    expect(listed?.sounds?.[0]?.name).toBe('Rock Kit, Roomy');
+    expect(listed?.requires).toEqual(['rock-kit']);
   });
 });
 

@@ -222,7 +222,11 @@ export async function installPack(
     for (const other of all.filter((x) => x !== id && !installedPack(packsDir, x))) {
       const name = (await availablePack(other))?.name ?? other;
       log(`${name}, which ${m.name} plays:`);
-      const r = await installPack(packsDir, other, { ...opts, requires: false, log: (line) => log(`${name}: ${line}`) });
+      const r = await installPack(packsDir, other, {
+        ...opts,
+        requires: false,
+        log: (line) => log(`${name}: ${line}`),
+      });
       if (r.wrong.length) throw new Error(`${name}: ${r.wrong.length} file(s) aren't the ones HO[LO] pins`);
     }
   }

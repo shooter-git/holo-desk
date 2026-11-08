@@ -69,6 +69,8 @@ export interface Pack {
   instruments: PackInstrument[];
   /** Impulse responses for Space Designer (WAV: 1, 2 or 4 channels), under the root. */
   impulses?: { name: string; title?: string; file: string; seconds?: number }[];
+  /** What it is, in a line (a palette's). */
+  description?: string;
   /** Other packs its sounds play. */
   requires?: string[];
   /** Ready-made sounds (a palette's): an instrument with its effects, room and level. */
@@ -145,6 +147,7 @@ export class Packs {
         title: i.title ?? i.name,
         seconds: i.seconds ?? null,
       })),
+      ...(pack.description ? { description: pack.description } : {}),
       ...(pack.requires?.length ? { requires: pack.requires } : {}),
       ...(pack.sounds?.length ? { sounds: pack.sounds } : {}),
     }));

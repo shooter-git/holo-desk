@@ -25,7 +25,14 @@ import {
   LOCK_FILE,
 } from './identity.ts';
 import { mapsDir, PackMaps, readLock } from './pack-lock.ts';
-import { formatPinnedPacks, type PackManifest, type PinnedPack, parseChecksums, pinPack, withRequired } from './packs.ts';
+import {
+  formatPinnedPacks,
+  type PackManifest,
+  type PinnedPack,
+  parseChecksums,
+  pinPack,
+  withRequired,
+} from './packs.ts';
 
 export const RENDERER = 'holo-music.mjs';
 export const PACKS = 'packs.json';

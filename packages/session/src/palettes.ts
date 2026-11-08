@@ -5,9 +5,10 @@
  * the packs it requires and HO[LO]'s synths. A sound that needs a synth, an effect or a pack this
  * engine doesn't have yet is shown as coming, never played half-made.
  */
+
+import { newBus, newPlugin, newTrack } from './defaults.ts';
 import { SYNTH_MACROS, SYNTH_PRESETS } from './instruments.ts';
 import type { Op } from './ops.ts';
-import { newBus, newPlugin, newTrack } from './defaults.ts';
 import { pluginDef } from './plugins.ts';
 import type { Bus, Instrument, Plugin, Project, Track } from './types.ts';
 
@@ -126,7 +127,12 @@ export function checkSound(sound: PackSound): SoundCheck {
   if (!sound.name?.trim()) problems.push('it has no name');
   if (!(SOUND_FAMILIES as readonly string[]).includes(sound.family))
     problems.push(`its family "${sound.family}" isn't one of ${SOUND_FAMILIES.join(', ')}`);
-  const inst = sound.instrument as Partial<{ pack: string; name: string; synth: string; params: Record<string, number> }>;
+  const inst = sound.instrument as Partial<{
+    pack: string;
+    name: string;
+    synth: string;
+    params: Record<string, number>;
+  }>;
   if (inst?.synth !== undefined) {
     if (!(SYNTH_PRESETS as readonly string[]).includes(inst.synth)) missing.push(`the ${inst.synth} synth`);
     else checkParams(`the ${inst.synth} synth`, inst.params, SYNTH_MACROS[inst.synth] ?? [], problems);
@@ -147,11 +153,13 @@ export function checkSound(sound: PackSound): SoundCheck {
     if (!['space', 'shimmer', 'reverb'].includes(s.type))
       problems.push(`its room is a "${s.type}", not a Space Designer, Shimmer or Space Reverb`);
     else effect(s, 'its room’s');
-    if (typeof s.send !== 'number' || s.send < -60 || s.send > 6) problems.push(`its send is ${s.send} dB, outside −60…6`);
+    if (typeof s.send !== 'number' || s.send < -60 || s.send > 6)
+      problems.push(`its send is ${s.send} dB, outside −60…6`);
   }
   if (sound.volume !== undefined && (sound.volume < -60 || sound.volume > 12))
     problems.push(`its volume is ${sound.volume} dB, outside −60…12`);
-  if (sound.pan !== undefined && (sound.pan < -1 || sound.pan > 1)) problems.push(`its pan is ${sound.pan}, outside −1…1`);
+  if (sound.pan !== undefined && (sound.pan < -1 || sound.pan > 1))
+    problems.push(`its pan is ${sound.pan}, outside −1…1`);
   return { missing, problems };
 }
 
@@ -165,7 +173,11 @@ function plugin(fx: SoundEffect, extra: Record<string, number> = {}): Plugin {
 export function soundInstrument(sound: PackSound): Instrument {
   const i = sound.instrument;
   if ('pack' in i) return { type: 'sampler', pack: i.pack, name: i.name };
-  return { type: 'synth', preset: i.synth, ...(i.params && Object.keys(i.params).length ? { params: { ...i.params } } : {}) };
+  return {
+    type: 'synth',
+    preset: i.synth,
+    ...(i.params && Object.keys(i.params).length ? { params: { ...i.params } } : {}),
+  };
 }
 
 /** A room's bus already in the song: the bus of that name whose first effect is that kind of reverb. */
@@ -184,7 +196,8 @@ export function soundTrack(
   opts: { color?: string; index?: number } = {},
 ): { ops: Op[]; track: Track } {
   const { missing, problems } = checkSound(sound);
-  if (missing.length) throw new Error(`${sound.name} needs ${missing.join(' and ')}, which this HO[LO] doesn't have yet`);
+  if (missing.length)
+    throw new Error(`${sound.name} needs ${missing.join(' and ')}, which this HO[LO] doesn't have yet`);
   if (problems.length) throw new Error(`${sound.name}: ${problems.join('; ')}`);
   const track = newTrack(sound.name, soundInstrument(sound), opts.color);
   for (const fx of sound.inserts ?? []) {
@@ -212,4 +225,3 @@ export function soundTrack(
   ops.push({ op: 'addTrack', track, ...(opts.index !== undefined ? { index: opts.index } : {}) });
   return { ops, track };
 }
-

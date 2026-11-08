@@ -132,3 +132,71 @@ describe('the engine’s metronome', () => {
     expect(loudest(beep)).toBeGreaterThan(0.2);
   });
 });
+
+describe('the count-in', () => {
+  const PPQ = 960;
+  /** Where the clicks start (seconds from the play, rounded to ms), as the engine plays at this tempo. */
+  function clicks(
+    sr: number,
+    bpm: number,
+    play: { from: number; countInBars: number; metronome: boolean },
+    seconds: number,
+  ): number[] {
+    const core = new EngineCore(sr, (m) => {
+      if (m.type === 'error') throw new Error(m.message);
+    });
+    core.receive({ type: 'init', ring: null, meters: null, transport: null });
+    const framesPerTick = (60 / bpm / PPQ) * sr;
+    core.receive({
+      type: 'tempo',
+      segments: [{ frame: 0, tick: 0, framesPerTick }],
+      ppq: PPQ,
+      beatTicks: PPQ,
+      barTicks: PPQ * 4,
+    });
+    core.receive({ type: 'metronome', on: play.metronome, level: 1, sound: 'stick' });
+    // as the studio sends them: the start and the count-in, each rounded to a frame
+    const frame = Math.round(play.from * PPQ * 4 * framesPerTick);
+    const countIn = Math.round(play.countInBars * PPQ * 4 * framesPerTick);
+    core.receive({ type: 'play', frame, record: true, countIn });
+    const l = new Float32Array(128);
+    const r = new Float32Array(128);
+    const starts: number[] = [];
+    let quiet = Number.POSITIVE_INFINITY;
+    for (let k = 0; k * 128 < seconds * sr; k++) {
+      core.process(l, r, undefined, k * 128);
+      for (let i = 0; i < 128; i++) {
+        if (Math.abs(l[i] as number) > 1e-3) {
+          if (quiet > sr * 0.05) starts.push(Math.round(((k * 128 + i) / sr) * 1000));
+          quiet = 0;
+        } else quiet++;
+      }
+    }
+    return starts;
+  }
+
+  // 72.5 bpm at 44.1 kHz: a bar's frames round down, so the count-in starts a hair after its first beat
+  const beat = 60 / 72.5;
+  const beats = (n: number) => Array.from({ length: n }, (_, i) => Math.round(i * beat * 1000));
+
+  it('clicks every beat of the count-in, the first too, with the metronome off', () => {
+    expect(clicks(44100, 72.5, { from: 0, countInBars: 1, metronome: false }, 6)).toEqual(beats(4));
+  });
+
+  it('counts in from further into the song as well', () => {
+    expect(clicks(44100, 72.5, { from: 4, countInBars: 1, metronome: false }, 6)).toEqual(beats(4));
+    expect(clicks(44100, 72.5, { from: 4, countInBars: 2, metronome: false }, 9)).toEqual(beats(8));
+  });
+
+  it('goes on into the song with the metronome on', () => {
+    expect(clicks(44100, 72.5, { from: 4, countInBars: 1, metronome: true }, 6)).toEqual(beats(8));
+  });
+
+  it('clicks at once when the song starts on a beat a rounded frame puts it past', () => {
+    // (bar 3 at 72.5 bpm lands between two frames: the start is rounded up past the beat)
+    for (const from of [1, 2, 3, 5]) {
+      const got = clicks(44100, 72.5, { from, countInBars: 0, metronome: true }, 2);
+      expect(got[0], `from bar ${from + 1}`).toBe(0);
+    }
+  });
+});

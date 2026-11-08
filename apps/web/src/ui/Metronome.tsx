@@ -4,10 +4,12 @@
  */
 import type { ClickSound } from '@holo/engine';
 import { Metronome } from 'lucide-react';
-import { useEffect, useId, useRef, useState } from 'react';
+import { useEffect, useId, useRef, useState, useSyncExternalStore } from 'react';
 import { setMetronomeLevel, setMetronomeSound, syncMetronome, toggleMetronome } from '../app/actions.ts';
 import { isPhone, useLayout } from '../app/layout.ts';
 import { store, useApp } from '../app/store.ts';
+import { companion } from '../audio/companion.ts';
+import { playsClickSounds } from '../audio/engine-features.ts';
 import { LONG_PRESS_MS } from './gesture.ts';
 
 const SOUNDS: [ClickSound, string][] = [
@@ -23,9 +25,15 @@ const COUNT_IN: [number, string][] = [
   [2, '2 bars'],
 ];
 
-/** The metronome's sound, volume and count-in (each choice heard as it's made). */
-export function MetronomeSettings() {
+/**
+ * The metronome's sound, volume and count-in (each choice heard as it's made). `inSettings`: in the
+ * Audio & MIDI settings, which have HO[LO] Engine's download themselves.
+ */
+export function MetronomeSettings({ inSettings = false }: { inSettings?: boolean }) {
   const on = useApp((s) => s.metronome);
+  const engine = useSyncExternalStore(companion.subscribe, companion.snapshot);
+  // the studio plays through an HO[LO] Engine from before the sounds: say so, rather than seem broken
+  const beepOnly = engine.device !== null && !playsClickSounds(engine.version);
   const sound = useApp((s) => s.metronomeSound);
   const level = useApp((s) => s.metronomeLevel);
   const countIn = useApp((s) => s.countIn);
@@ -63,6 +71,22 @@ export function MetronomeSettings() {
             </button>
           ))}
         </div>
+        {beepOnly && (
+          <span className="engine-stale" role="status">
+            HO[LO] Engine on this computer ({engine.version || 'an older one'}) is from before these sounds, so it plays
+            the beep whichever is chosen.{' '}
+            {inSettings ? (
+              'Quit it and start the new one (its download is above).'
+            ) : (
+              <>
+                Quit it and start the new one:{' '}
+                <button type="button" className="btn ghost" onClick={() => store.set({ dialog: 'settings' })}>
+                  Audio &amp; MIDI settings
+                </button>
+              </>
+            )}
+          </span>
+        )}
       </div>
       <label className="vstack">
         <span className="hstack">

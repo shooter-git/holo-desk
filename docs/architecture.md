@@ -224,6 +224,25 @@ each pack's size first) or `pnpm packs install`, from their pinned source:
 names the songs that play it (`GET /api/packs/:id/songs`), and clears the pack's files from this
 device's cache.
 
+**Palettes.** A pack may also carry ready-made sounds (`sounds`, typed in
+`packages/session/src/palettes.ts`): each an instrument (a pack's, or a synth with its knobs set), the
+effects it plays through (a MIDI effect such as the Arpeggiator goes before the instrument), a room
+and a fader level. `requires` names the packs its sounds play. A palette has no files of its own:
+source `none`, no instruments, a `files.sha256` of one comment line (GitHub's raw host can refuse an
+empty file), so installing it is writing its map, and
+`pnpm packs install` brings the packs it requires.
+- The Library lists every pinned palette's sounds by family (from the maps, or as installed when
+  offline). A click installs the packs that sound plays, one at a time while it shows how far each has
+  got (`apps/web/src/audio/installs.ts`, the same queue More packs uses), then adds the track
+  (`soundTrack`): its room is a bus of that name with one reverb on it, made once and shared by every
+  sound that names it.
+- `checkSound` asks this engine whether it has the sound's synth and effects; a sound that needs one it
+  hasn't got, or a pack that isn't pinned yet, shows as coming rather than playing half-made. holo-packs'
+  `tools/check.mjs` runs the same check, so a palette can name pieces still being made (`coming`).
+- An experience pins the packs its songs play and the packs those require (`withRequired`, in
+  `pin.ts` and `sync.ts`); a track made from a palette plays its packs directly, so the palette itself
+  is never needed to build the music.
+
 **The recipes**, in HO[LO] Packs, run this repository's own code. They measure every layer's loudness
 and set it where one velocity curve meets it, so an instrument gets louder smoothly the harder it's
 played.

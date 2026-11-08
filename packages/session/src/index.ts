@@ -8,6 +8,7 @@ export * from './keysig.ts';
 export * from './midi-file.ts';
 export * from './notation.ts';
 export * from './ops.ts';
+export * from './palettes.ts';
 export * from './plugins.ts';
 export * from './realize.ts';
 export * from './summary.ts';

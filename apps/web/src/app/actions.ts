@@ -31,6 +31,7 @@ import {
   newRegion,
   newTrack,
   type Op,
+  type PackSound,
   PPQ,
   type Project,
   paramValue,
@@ -39,6 +40,7 @@ import {
   quantize,
   type Region,
   secondsToTick,
+  soundTrack,
   TRACK_COLORS,
   type Track,
   type TrackPatch,
@@ -890,6 +892,22 @@ export function addTrack(instrument: Instrument, name?: string): string | null {
   if (reverb) track.channel.sends.push({ bus: reverb.id, level: -18, pre: false });
   const index = s.selectedTrack ? p.tracks.findIndex((t) => t.id === s.selectedTrack) + 1 : p.tracks.length;
   apply([{ op: 'addTrack', track, index }], 'New Track');
+  selectTrack(track.id);
+  return track.id;
+}
+
+/**
+ * A palette's sound as a new track: its instrument, effects, level and pan, sending to its room (the
+ * room's bus made when the song hasn't one). Its packs must be installed first (the Library does it).
+ */
+export function addSound(sound: PackSound): string | null {
+  const s = store.get();
+  const p = s.project;
+  if (!p) return null;
+  const color = TRACK_COLORS[p.tracks.length % TRACK_COLORS.length];
+  const index = s.selectedTrack ? p.tracks.findIndex((t) => t.id === s.selectedTrack) + 1 : p.tracks.length;
+  const { ops, track } = soundTrack(p, sound, { ...(color ? { color } : {}), index });
+  apply(ops, 'New Track');
   selectTrack(track.id);
   return track.id;
 }

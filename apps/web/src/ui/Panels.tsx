@@ -27,10 +27,12 @@ import {
   updateTrack,
 } from '../app/actions.ts';
 import { store, toast, useApp } from '../app/store.ts';
+import { type AvailablePack, installs, useInstalls } from '../audio/installs.ts';
 import { forgetPackFiles } from '../audio/pack-files.ts';
 import { library, type PackSummary } from '../audio/samples.ts';
 import { NumberBox } from './AudioEditor.tsx';
 import { Strip } from './Mixer.tsx';
+import { Palettes } from './Palettes.tsx';
 import { instrumentLabel } from './Tracks.tsx';
 import { setStretch } from './wave.ts';
 
@@ -459,18 +461,6 @@ const LibraryItem = memo(function LibraryItem({
   );
 });
 
-interface AvailablePack {
-  id: string;
-  name: string;
-  license: string;
-  credit: string;
-  instruments: { title: string; category: string }[];
-  /** Its samples' size on disk: what installing it takes. */
-  bytes: number | null;
-  installed: boolean;
-  current: boolean;
-}
-
 /** A size on disk, as people read one. */
 function diskSize(bytes: number): string {
   if (bytes >= 1e9) return `${(bytes / 1e9).toFixed(1)} GB`;
@@ -546,84 +536,28 @@ function PackFoot({ pack }: { pack: PackSummary }) {
   );
 }
 
-interface InstallJob {
-  id: string;
-  name: string;
-  state: 'running' | 'done' | 'error';
-  line: string;
-  done: number;
-  total: number;
-  error?: string;
-}
-
 /**
  * The sample libraries HO[LO] ships maps for that aren't installed yet: installed by the server
  * (from their pinned sources, every file checked), one at a time, while the Library shows how far
  * it has got.
  */
 function MorePacks({ query, installed }: { query: string; installed: string }) {
-  const [packs, setPacks] = useState<AvailablePack[] | null>(null);
-  const [job, setJob] = useState<InstallJob | null>(null);
-
-  const load = useCallback(async () => {
-    try {
-      const res = await fetch('/api/packs/available');
-      if (!res.ok) return;
-      const body = (await res.json()) as { packs: AvailablePack[]; job: InstallJob | null };
-      setPacks(body.packs);
-      setJob(body.job);
-    } catch {
-      // offline: the installed packs still play
-    }
-  }, []);
+  const { packs, job, queue } = useInstalls();
   // again when the installed packs change (one removed comes back here)
   useEffect(() => {
     void installed;
-    void load();
-  }, [load, installed]);
-
-  // while one installs, follow it; when it's done, the Library shows its instruments
-  const running = job?.state === 'running';
-  useEffect(() => {
-    if (!running) return;
-    let alive = true;
-    const timer = setInterval(async () => {
-      try {
-        const res = await fetch('/api/packs/install');
-        const next = (await res.json()) as InstallJob | null;
-        if (!alive) return;
-        setJob(next);
-        if (next && next.state !== 'running') {
-          if (next.state === 'done') toast(`${next.name} is installed`);
-          else toast(`${next.name}: ${next.error ?? 'the install failed'}`, 'error', 10000);
-          await library.refresh();
-          await load();
-        }
-      } catch {
-        // the host is away for a moment: ask again
-      }
-    }, 1000);
-    return () => {
-      alive = false;
-      clearInterval(timer);
-    };
-  }, [running, load]);
-
-  const install = async (p: AvailablePack) => {
-    try {
-      const res = await fetch(`/api/packs/${encodeURIComponent(p.id)}/install`, { method: 'POST' });
-      const body = (await res.json()) as InstallJob & { error?: string };
-      if (!res.ok) throw new Error(body.error ?? 'The pack could not be installed');
-      setJob(body);
-    } catch (err) {
-      toast(err instanceof Error ? err.message : String(err), 'error', 8000);
-    }
-  };
+    void installs.load();
+  }, [installed]);
+  // one at a time: while one installs (here or for a palette's sound), the others wait
+  const running = job?.state === 'running' || !!queue;
+  const install = (p: AvailablePack) => void installs.install([p.id]);
 
   const q = query.trim().toLowerCase();
   const missing = (packs ?? []).filter(
     (p) =>
       !p.installed &&
+      // a palette has no samples to install: its sounds are under Palettes
+      !(p.sounds?.length && !p.instruments.length) &&
       (!q || `${p.name} ${p.instruments.map((i) => `${i.title} ${i.category}`).join(' ')}`.toLowerCase().includes(q)),
   );
   if (!missing.length) return null;
@@ -716,15 +650,18 @@ export function LibraryPanel({ overlay = false, full = false }: { overlay?: bool
 
   const groups = useMemo(
     () =>
-      packs.map((p) => ({
-        pack: p,
-        categories: [...new Set(p.instruments.map((i) => i.category))].map((c) => ({
-          name: c,
-          items: p.instruments
-            .filter((i) => i.category === c && (!q || `${i.title} ${i.category} ${p.name}`.toLowerCase().includes(q)))
-            .map((i) => ({ ...i, instrument: { type: 'sampler', pack: p.id, name: i.name } as Instrument })),
+      // a palette with no instruments of its own is under Palettes
+      packs
+        .filter((p) => p.instruments.length || !p.sounds?.length)
+        .map((p) => ({
+          pack: p,
+          categories: [...new Set(p.instruments.map((i) => i.category))].map((c) => ({
+            name: c,
+            items: p.instruments
+              .filter((i) => i.category === c && (!q || `${i.title} ${i.category} ${p.name}`.toLowerCase().includes(q)))
+              .map((i) => ({ ...i, instrument: { type: 'sampler', pack: p.id, name: i.name } as Instrument })),
+          })),
         })),
-      })),
     [packs, q],
   );
 
@@ -751,6 +688,7 @@ export function LibraryPanel({ overlay = false, full = false }: { overlay?: bool
           'Click an instrument to make a new track with it.'
         )}
       </div>
+      <Palettes query={query} overlay={overlay} />
       <details className="disclosure" open>
         <summary>Built-in</summary>
         {SYNTH_FAMILIES.map((family) => {

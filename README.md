@@ -169,6 +169,14 @@ shows how far it has got. Every file is checked against its pinned checksum. **R
 installed pack, frees the disk it takes: it names the songs that play it first, and More packs can
 install it again.
 
+**Palettes** are sets of ready-made sounds for a style: a cinematic hybrid score, a classic symphony
+orchestra, a felt piano with chamber strings, cold glassy pulses, minimalist patterns, a darker Viennese
+voicing of the grand, and instruments of Asian traditions (gamelan, Chinese, Japanese, Indian, Southeast
+Asian and Korean). Each sound is an instrument with its effects, its room and a level matched to the
+rest of its palette. In the Library, **Palettes** lists them by family: a click installs the packs that
+sound plays (if they aren't installed yet) and adds a new track ready to play. A palette has no audio of
+its own, and a sound that waits for something HO[LO] doesn't have yet is shown as coming.
+
 **The packs live in their own repository, [HO[LO] Packs](https://github.com/shooter-git/holo-packs).**
 Each pack there has its own page: where its sounds come from, every instrument, its licence, its size
 and a kit's pads. Its catalog lists every instrument by family (pianos, drum kits, strings, woodwinds,

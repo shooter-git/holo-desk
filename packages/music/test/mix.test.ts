@@ -139,3 +139,141 @@ describe('a file made from recordings', () => {
     }
   });
 });
+
+describe('recordings lined up and resampled', () => {
+  /** A float input: one channel. */
+  const input = (samples: number[] | Float32Array, rate = 44100) => ({
+    rate,
+    channels: [Float32Array.from(samples)],
+  });
+  const left = (bytes: Uint8Array) =>
+    [...(decodeWav(bytes).channels[0] as Float32Array)].map((x) => Math.round(x * 32768));
+
+  it('starts each input at its own frame: later, earlier, or before the file starts', () => {
+    const a = input([0, 0, 0.25, 0.5, 0, 0]);
+    const b = input([0.125, 0.25, 0, 0, 0, 0]);
+    const inputs = new Map([
+      ['k:a.wav', a],
+      ['k:b.wav', b],
+    ]);
+    // a's hit is two frames in: start it there; b's is at its first frame, so it comes in one late
+    const recipe: MixRecipe = {
+      in: [
+        ['k:a.wav', 1, 1, { start: 2 }],
+        ['k:b.wav', 1, 1, { start: -1 }],
+      ],
+      start: 0,
+      frames: 4,
+      fadeIn: 0,
+      fadeOut: 0,
+    };
+    expect(left(mixFile(recipe, inputs, 16))).toEqual([8192, 16384 + 4096, 8192, 0]);
+    // without its own start, an input starts at the recipe's
+    const same: MixRecipe = { ...recipe, in: [['k:a.wav', 1, 1]], start: 2 };
+    expect(left(mixFile(same, inputs, 16))).toEqual([8192, 16384, 0, 0]);
+  });
+
+  it('resamples to the file’s rate: a tone comes out the tone it was, to within -90 dB', () => {
+    const tone = (rate: number, n: number, hz = 1000, phase = 0) =>
+      Float32Array.from({ length: n }, (_, i) => 0.5 * Math.sin(2 * Math.PI * hz * (i / rate) + phase));
+    for (const [from, to] of [
+      [44100, 48000],
+      [48000, 44100],
+      [96000, 48000],
+    ] as const) {
+      const recipe: MixRecipe = { in: [['k:t.wav', 1, 1]], start: 0, frames: to / 2, fadeIn: 0, fadeOut: 0, rate: to };
+      const out = decodeWav(mixFile(recipe, new Map([['k:t.wav', input(tone(from, from), from)]]), 24));
+      expect(out.rate).toBe(to);
+      const want = tone(to, to / 2);
+      let err = 0;
+      // away from the ends, where the kernel runs off the input
+      for (let i = 200; i < to / 2 - 200; i++)
+        err = Math.max(err, Math.abs(((out.channels[0] as Float32Array)[i] as number) - (want[i] as number)));
+      expect(20 * Math.log10(err / 0.5), `${from} to ${to}`).toBeLessThan(-90);
+    }
+  });
+
+  it('plays an input at another rate (higher) and a fraction of a frame late', () => {
+    const rate = 8000;
+    const n = 4000;
+    const src = Float32Array.from({ length: n }, (_, i) => 0.5 * Math.sin((2 * Math.PI * 400 * i) / rate));
+    const recipe: MixRecipe = {
+      in: [['k:t.wav', 1, 1, { rate: 8800, start: -0.5 }]],
+      start: 0,
+      frames: 2000,
+      fadeIn: 0,
+      fadeOut: 0,
+    };
+    const out = decodeWav(mixFile(recipe, new Map([['k:t.wav', input(src, rate)]]), 24)).channels[0] as Float32Array;
+    // 400 Hz played 10% fast is 440 Hz; the input's frame -0.5 is heard first (half its frame late)
+    for (const i of [500, 777, 1500]) {
+      const want = 0.5 * Math.sin((2 * Math.PI * 400 * (i * 1.1 - 0.5)) / rate);
+      expect(Math.abs((out[i] as number) - want)).toBeLessThan(1e-4);
+    }
+  });
+
+  it('makes the same bytes every time, on every computer (its sums by hand: no library maths)', () => {
+    let seed = 1;
+    const noise = Float32Array.from({ length: 3000 }, () => {
+      seed = (seed * 1103515245 + 12345) % 2 ** 31;
+      return Math.round(((seed / 2 ** 31) * 2 - 1) * 20000) / 32768;
+    });
+    const recipe: MixRecipe = {
+      in: [['k:n.wav', 0.7, 0.6, { start: 3.25, rate: 44000 }]],
+      start: 0,
+      frames: 2900,
+      fadeIn: 10,
+      fadeOut: 100,
+      rate: 48000,
+    };
+    const made = mixFile(recipe, new Map([['k:n.wav', input(noise)]]), 24);
+    expect(sha256(made)).toBe(PINNED);
+  });
+
+  it('says the file’s rate when its inputs’ rates differ', () => {
+    const recipe: MixRecipe = {
+      in: [
+        ['k:a.wav', 1, 1],
+        ['k:b.wav', 1, 1],
+      ],
+      start: 0,
+      frames: 4,
+      fadeIn: 0,
+      fadeOut: 0,
+    };
+    const inputs = new Map([
+      ['k:a.wav', input([0, 0, 0, 0], 44100)],
+      ['k:b.wav', input([0, 0, 0, 0], 48000)],
+    ]);
+    expect(() => mixFile(recipe, inputs, 16)).toThrow(/say the file's rate/);
+    expect(decodeWav(mixFile({ ...recipe, rate: 48000 }, inputs, 16)).rate).toBe(48000);
+  });
+
+  it('reads an AIFF download (big-endian, as Iowa publishes them)', () => {
+    // FORM AIFF: COMM (2 channels, 3 frames, 16 bits, 44100 Hz as an 80-bit float), SSND
+    const bytes = new Uint8Array(54 + 12);
+    const v = new DataView(bytes.buffer);
+    const tag = (at: number, s: string) => {
+      for (let i = 0; i < 4; i++) bytes[at + i] = s.charCodeAt(i);
+    };
+    tag(0, 'FORM');
+    v.setUint32(4, bytes.length - 8);
+    tag(8, 'AIFF');
+    tag(12, 'COMM');
+    v.setUint32(16, 18);
+    v.setUint16(20, 2);
+    v.setUint32(22, 3);
+    v.setUint16(26, 16);
+    v.setUint16(28, 0x400e);
+    v.setUint32(30, 0xac440000);
+    tag(38, 'SSND');
+    v.setUint32(42, 8 + 12);
+    for (const [i, x] of [16384, -16384, 0, 8192, -32768, 32767].entries()) v.setInt16(54 + i * 2, x);
+    const d = decodeInput(bytes);
+    expect(d.rate).toBe(44100);
+    expect([...(d.channels[0] as Float32Array)].map((x) => x * 32768)).toEqual([16384, 0, -32768]);
+    expect([...(d.channels[1] as Float32Array)].map((x) => x * 32768)).toEqual([-16384, 8192, 32767]);
+  });
+});
+
+const PINNED = '1ad31f08715e60c8e5d9c96bc49b22ac768656b9ebe5571949fc3664a7b6bf13';

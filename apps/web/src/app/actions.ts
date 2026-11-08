@@ -91,6 +91,7 @@ export function apply(ops: Op[], label: string): Project | null {
 }
 
 function changed(project: Project): void {
+  document.title = `${project.title} · HO[LO] Desk`;
   engine.sync(project);
   loadInstruments(project);
   refreshRouting();
@@ -255,6 +256,30 @@ export async function openProject(id: string): Promise<void> {
     store.set({ dialog: null });
   } catch (err) {
     toast(err instanceof Error ? err.message : String(err), 'error');
+  }
+}
+
+/**
+ * Give a song a new name. The open song's rename is an undo step like any other edit; one that
+ * isn't open is loaded, renamed and saved as it stands. Resolves once the new name is saved.
+ */
+export async function renameSong(id: string, title: string): Promise<boolean> {
+  const name = title.trim();
+  if (!name) return false;
+  try {
+    if (store.get().project?.id === id) {
+      if (store.get().project?.title === name) return true;
+      if (!apply([{ op: 'setProject', patch: { title: name } }], 'Rename Song')) return false;
+      await saveNow();
+      return true;
+    }
+    const doc = await api.project(id);
+    if (doc.title === name) return true;
+    await api.save({ ...doc, title: name }, doc.revision);
+    return true;
+  } catch (err) {
+    toast(err instanceof Error ? err.message : String(err), 'error');
+    return false;
   }
 }
 

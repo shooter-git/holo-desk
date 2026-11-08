@@ -1,7 +1,7 @@
 /** The songs, grouped: your own, then each experience's, with the engine each experience builds with. */
-import { FileMusic, FolderOpen, History, Plus, Trash2 } from 'lucide-react';
+import { FileMusic, FolderOpen, History, Pencil, Plus, Trash2 } from 'lucide-react';
 import { type KeyboardEvent, useState } from 'react';
-import { openPiece, openProject } from '../app/actions.ts';
+import { openPiece, openProject, renameSong } from '../app/actions.ts';
 import { api, type Creation, type ProjectRow } from '../app/api.ts';
 import { engineBadge, groupSongs } from '../app/songs.ts';
 import { toast } from '../app/store.ts';
@@ -33,6 +33,9 @@ export function SongGroups({
   const [title, setTitle] = useState('');
   // the song whose bin button was pressed once: the second press moves it
   const [binning, setBinning] = useState<string | null>(null);
+  // the song being renamed, and its name so far
+  const [renaming, setRenaming] = useState<string | null>(null);
+  const [newName, setNewName] = useState('');
   if (rows === null) return <div className="list-item muted">Loading…</div>;
   const groups = groupSongs(rows, creations);
   const newSong = async (c: Creation) => {
@@ -47,6 +50,12 @@ export function SongGroups({
     } catch (err) {
       toast(err instanceof Error ? err.message : String(err), 'error', 8000);
     }
+  };
+  const rename = async (r: ProjectRow) => {
+    const name = newName.trim();
+    setRenaming(null);
+    if (!name || name === r.title) return;
+    if (await renameSong(r.id, name)) reload();
   };
   return (
     <>
@@ -118,54 +127,103 @@ export function SongGroups({
                   {g.key ? (g.creation?.exportHelp ?? 'No songs yet.') : 'No songs yet.'}
                 </div>
               )}
-              {g.songs.map((r) => (
-                // biome-ignore lint/a11y/useSemanticElements: a row with a button of its own (the bin) can't be a button itself
-                <div
-                  key={r.id}
-                  className={`list-item${current === r.id ? ' active' : ''}`}
-                  role="button"
-                  tabIndex={0}
-                  aria-current={current === r.id ? 'true' : undefined}
-                  onClick={() => void openProject(r.id)}
-                  onKeyDown={pressable(() => void openProject(r.id))}
-                >
-                  <FileMusic size={16} className="muted" />
-                  <span className="strong">{r.title}</span>
-                  {r.piece && <span className="muted">{r.piece}</span>}
-                  <span className="meta">{when(r.modified)}</span>
-                  {binning === r.id ? (
-                    <span className="hstack" onClick={(e) => e.stopPropagation()}>
-                      <span className="muted">Move to the bin?</span>
-                      <button
-                        type="button"
-                        className="btn danger"
-                        onClick={() => {
-                          setBinning(null);
-                          void api.remove(r.id).then(reload);
-                        }}
-                      >
-                        Move
-                      </button>
-                      <button type="button" className="btn ghost" onClick={() => setBinning(null)}>
-                        Keep
-                      </button>
-                    </span>
-                  ) : (
+              {g.songs.map((r) =>
+                renaming === r.id ? (
+                  <div key={r.id} className={`list-item renaming${current === r.id ? ' active' : ''}`}>
+                    <FileMusic size={16} className="muted" />
+                    <input
+                      className="input"
+                      // biome-ignore lint/a11y/noAutofocus: the field appears because Rename was pressed
+                      autoFocus
+                      aria-label={`A new name for ${r.title}`}
+                      value={newName}
+                      onFocus={(e) => e.currentTarget.select()}
+                      onChange={(e) => setNewName(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') void rename(r);
+                        else if (e.key === 'Escape') {
+                          e.stopPropagation();
+                          setRenaming(null);
+                        }
+                      }}
+                    />
                     <button
                       type="button"
-                      className="btn ghost icon"
-                      title="Move to the bin"
-                      aria-label={`Move ${r.title} to the bin`}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setBinning(r.id);
-                      }}
+                      className="btn primary"
+                      disabled={!newName.trim()}
+                      onClick={() => void rename(r)}
                     >
-                      <Trash2 />
+                      Rename
                     </button>
-                  )}
-                </div>
-              ))}
+                    <button type="button" className="btn ghost" onClick={() => setRenaming(null)}>
+                      Cancel
+                    </button>
+                  </div>
+                ) : (
+                  // biome-ignore lint/a11y/useSemanticElements: a row with a button of its own (the bin) can't be a button itself
+                  <div
+                    key={r.id}
+                    className={`list-item${current === r.id ? ' active' : ''}`}
+                    role="button"
+                    tabIndex={0}
+                    aria-current={current === r.id ? 'true' : undefined}
+                    onClick={() => void openProject(r.id)}
+                    onKeyDown={pressable(() => void openProject(r.id))}
+                  >
+                    <FileMusic size={16} className="muted" />
+                    <span className="strong">{r.title}</span>
+                    {r.piece && <span className="muted">{r.piece}</span>}
+                    <span className="meta">{when(r.modified)}</span>
+                    {binning === r.id ? (
+                      <span className="hstack" onClick={(e) => e.stopPropagation()}>
+                        <span className="muted">Move to the bin?</span>
+                        <button
+                          type="button"
+                          className="btn danger"
+                          onClick={() => {
+                            setBinning(null);
+                            void api.remove(r.id).then(reload);
+                          }}
+                        >
+                          Move
+                        </button>
+                        <button type="button" className="btn ghost" onClick={() => setBinning(null)}>
+                          Keep
+                        </button>
+                      </span>
+                    ) : (
+                      <>
+                        <button
+                          type="button"
+                          className="btn ghost icon"
+                          title="Rename"
+                          aria-label={`Rename ${r.title}`}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setBinning(null);
+                            setNewName(r.title);
+                            setRenaming(r.id);
+                          }}
+                        >
+                          <Pencil />
+                        </button>
+                        <button
+                          type="button"
+                          className="btn ghost icon"
+                          title="Move to the bin"
+                          aria-label={`Move ${r.title} to the bin`}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setBinning(r.id);
+                          }}
+                        >
+                          <Trash2 />
+                        </button>
+                      </>
+                    )}
+                  </div>
+                ),
+              )}
               {g.pieces.map((p) => (
                 <button
                   key={p.piece}

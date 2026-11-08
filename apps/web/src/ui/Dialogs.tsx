@@ -23,6 +23,7 @@ import { engine } from '../audio/engine.ts';
 import { midi } from '../audio/midi.ts';
 import { Wordmark } from './controls.tsx';
 import { useFrame } from './frame.ts';
+import { MetronomeSettings } from './Metronome.tsx';
 import { SongGroups } from './Songs.tsx';
 
 function Dialog({
@@ -761,6 +762,10 @@ function SettingsDialog() {
           <span className="muted">
             Lowest is best for playing live; if you hear crackles, try Balanced. {platformTip()}
           </span>
+        </section>
+        <section className="vstack">
+          <div className="label">Metronome</div>
+          <MetronomeSettings />
         </section>
         <section className="vstack">
           <div className="label">MIDI devices</div>

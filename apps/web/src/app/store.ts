@@ -2,6 +2,7 @@
  * The studio's state: the open song, its undo history, what's selected and how the screen is laid
  * out. One small store; components read slices of it with useApp(selector).
  */
+import type { ClickSound } from '@holo/engine';
 import type { DIVISIONS, MiddleC, Note, Project } from '@holo/session';
 import { useSyncExternalStore } from 'react';
 import type { LatencyMode } from '../audio/engine.ts';
@@ -99,6 +100,9 @@ export interface AppState {
   playing: boolean;
   recording: boolean;
   metronome: boolean;
+  /** The metronome's volume on this device (0–1, the engine's level). */
+  metronomeLevel: number;
+  metronomeSound: ClickSound;
   countIn: number;
   latencyMode: LatencyMode;
   /** Logic's Low Latency Mode: nothing that delays the sound while you play. */
@@ -209,6 +213,8 @@ const initial: AppState = {
   playing: false,
   recording: false,
   metronome: false,
+  metronomeLevel: 0.6,
+  metronomeSound: 'beep',
   countIn: 1,
   latencyMode: 'lowest',
   lowLatency: true,
@@ -248,6 +254,8 @@ const REMEMBER: (keyof AppState)[] = [
   'keyHeight',
   'follow',
   'metronome',
+  'metronomeLevel',
+  'metronomeSound',
   'countIn',
   'latencyMode',
   'lowLatency',

@@ -9,6 +9,7 @@
 import { AHEAD_BLOCK, type AheadEdge, AheadLink, aheadPlan } from './ahead.ts';
 import { FAT_PRESETS, FatSynth } from './analog.ts';
 import { CHOIR_PRESETS, ChoirSynth } from './choir.ts';
+import { Click, type ClickSound, isClickSound } from './click.ts';
 import type { PreparedImpulse } from './convolver.ts';
 import { DRONE_PRESETS, DroneSynth } from './drone.ts';
 import { DrumSynth } from './drums.ts';
@@ -716,10 +717,8 @@ export class EngineCore implements Host {
   private meterSpans: MeterSpan[] = [];
   private metronome = false;
   private clickLevel = 0.5;
-  private clickPhase = 0;
-  private clickEnv = 0;
-  private clickFreq = 1000;
-  private clickNext = 1;
+  private clickSound: ClickSound = 'beep';
+  private click: Click;
   private sendCounter = 0;
   private failed = false;
   /** Audio for clips, by key. */
@@ -751,6 +750,7 @@ export class EngineCore implements Host {
     this.sr = sr;
     this.send = post;
     this.master = new Strip(sr);
+    this.click = new Click(sr);
     this.allStrips = [this.master];
     this.tempo = [{ frame: 0, tick: 0, framesPerTick: sr / 960 / 2 }];
     this.midiHost = {
@@ -1021,6 +1021,9 @@ export class EngineCore implements Host {
       case 'metronome':
         this.metronome = msg.on;
         this.clickLevel = msg.level;
+        // (a studio from before the sounds sends none: the beep)
+        this.clickSound = isClickSound(msg.sound) ? msg.sound : 'beep';
+        if (msg.audition) this.click.start(this.clickSound, false);
         break;
       case 'live':
         this.liveQueue.push(...msg.events);
@@ -1660,29 +1663,29 @@ export class EngineCore implements Host {
     return [beat, Math.round(beat - start) % bar === 0];
   }
 
-  /** Clicks on the beats (an accent on each bar); during a count-in they play whatever the metronome says. */
+  /**
+   * Clicks on the beats (an accent on each bar), in the metronome's sound; during a count-in they play
+   * whatever the metronome says.
+   */
   private clicks(out0: Float32Array, out1: Float32Array, n: number): void {
     let startAt = -1;
+    let accent = false;
     if (this.playing && (this.metronome || this.pos < 0)) {
       const t0 = this.tickAtSigned(this.pos);
       const t1 = this.tickAtSigned(this.pos + n);
       const [beat, bar] = this.nextBeat(t0);
       if (beat < t1 && (this.metronome || beat < 0)) {
         startAt = Math.max(0, Math.min(n - 1, Math.round(this.frameAtSigned(beat) - this.pos)));
-        this.clickFreq = bar ? 1760 : 1175;
-        this.clickNext = bar ? 1 : 0.6;
+        accent = bar;
       }
     }
-    if (startAt < 0 && this.clickEnv < 1e-4) return;
+    const click = this.click;
+    if (startAt < 0 && !click.active) return;
+    const gain = this.clickLevel * 0.5;
     for (let i = 0; i < n; i++) {
-      if (i === startAt) {
-        this.clickEnv = this.clickNext;
-        this.clickPhase = 0;
-      }
-      if (this.clickEnv < 1e-4) continue;
-      this.clickPhase += this.clickFreq / this.sr;
-      const y = Math.sin(2 * Math.PI * this.clickPhase) * this.clickEnv * this.clickLevel * 0.5;
-      this.clickEnv *= 0.9986;
+      if (i === startAt) click.start(this.clickSound, accent);
+      if (!click.active) continue;
+      const y = click.next() * gain;
       out0[i] = (out0[i] as number) + y;
       out1[i] = (out1[i] as number) + y;
     }

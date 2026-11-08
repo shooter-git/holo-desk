@@ -2,6 +2,7 @@ export * from './ahead.ts';
 export * from './analog.ts';
 export * from './character.ts';
 export * from './choir.ts';
+export * from './click.ts';
 export * from './compile.ts';
 export * from './convolver.ts';
 export * from './core.ts';

@@ -8,6 +8,7 @@ import {
   type AheadPool,
   aheadPartGuess,
   aheadTrackGuess,
+  type ClickSound,
   clipKey,
   compileClips,
   compileGraph,
@@ -1000,8 +1001,9 @@ export class AudioEngine {
     };
   }
 
-  setMetronome(on: boolean, level = 0.6): void {
-    this.post({ type: 'metronome', on, level });
+  /** `audition`: one click now, to hear the sound and level. */
+  setMetronome(on: boolean, level = 0.6, sound: ClickSound = 'beep', audition = false): void {
+    this.post({ type: 'metronome', on, level, sound, ...(audition ? { audition } : {}) });
   }
 
   panic(): void {

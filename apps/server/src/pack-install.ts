@@ -31,6 +31,7 @@ import {
   sha256,
   withRequired,
 } from '@holo/music';
+import { PRIVATE_PREFIX } from './pack-import.ts';
 import { folderBytes, type Pack } from './packs.ts';
 
 const run = promisify(execFile);
@@ -204,6 +205,15 @@ export interface InstallResult {
 }
 
 /**
+ * A pack of your own in the packs folder under this id (imported, or made on this computer): HO[LO]
+ * never installs or refreshes a pinned pack over it.
+ */
+function ownPack(packsDir: string, id: string): boolean {
+  const kind = installedPack(packsDir, id)?.source?.kind;
+  return id.startsWith(PRIVATE_PREFIX) || kind === 'imported' || kind === 'local';
+}
+
+/**
  * Install one of the shipped libraries (from a folder you have, else its pinned source), and write its
  * map. A pack with no files of its own (a palette) is only its map. With `requires`, the packs it
  * requires that aren't installed yet are installed first, one at a time.
@@ -214,8 +224,14 @@ export async function installPack(
   opts: { from?: string; log?: (line: string) => void; requires?: boolean } = {},
 ): Promise<InstallResult> {
   const log = opts.log ?? (() => undefined);
+  if (id.startsWith(PRIVATE_PREFIX)) throw new Error(`${id} is a pack of your own: there's nothing to install`);
   const m = await availablePack(id);
   if (!m) throw new Error(`No pack "${id}". Available: ${shippedMaps()?.ids().join(', ') || 'none'}`);
+  if (ownPack(packsDir, m.id))
+    throw new Error(
+      `${m.id} here is a pack of your own (${installedPack(packsDir, m.id)?.source.kind}): HO[LO] won't install ` +
+        `${m.name} over it. Remove it, or import it again (it gets a mine- id), then install.`,
+    );
   mkdirSync(packsDir, { recursive: true });
   if (opts.requires) {
     const all = await withRequired([id], async (x) => (await availablePack(x))?.requires);
@@ -258,7 +274,7 @@ export function removePack(packsDir: string, id: string): number {
 
 /** Bring an installed pack's map up to date with the shipped one (no download). */
 export function refreshPack(packsDir: string, m: Manifest): boolean {
-  if (!installedPack(packsDir, m.id)) return false;
+  if (!installedPack(packsDir, m.id) || ownPack(packsDir, m.id)) return false;
   writeFileSync(join(packsDir, m.id, 'holo-pack.json'), `${JSON.stringify(m)}\n`);
   return true;
 }

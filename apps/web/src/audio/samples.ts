@@ -12,7 +12,7 @@ import {
   type ZoneManifest,
   zoneExtras,
 } from '@holo/engine';
-import type { PackSound } from '@holo/session';
+import { type Instrument, type PackSound, type ParamDef, type SampleMic, samplerKnobs } from '@holo/session';
 import { engine } from './engine.ts';
 import { channelData, instrumentManifest, packFileData } from './pack-files.ts';
 
@@ -23,6 +23,10 @@ export interface InstrumentSummary {
   zones: number;
   /** Megabytes the samples take on disk. */
   size: number;
+  /** A kit (pads of its pieces, or one sound): it has Tune and Decay knobs. */
+  kit?: boolean;
+  /** The microphones it was recorded with: a level knob for each. */
+  mics?: SampleMic[];
 }
 
 export interface PackSummary {
@@ -234,3 +238,14 @@ export class SampleLibrary {
 }
 
 export const library = new SampleLibrary();
+
+/**
+ * A sampler instrument's knobs (a level for each microphone it was recorded with, a kit's tune and
+ * decay), from what the library knows of it: none for one without them, or not installed.
+ */
+export function samplerKnobDefs(i: Instrument, packs: PackSummary[] = library.packs): ParamDef[] | null {
+  if (i.type !== 'sampler') return null;
+  const summary = packs.find((p) => p.id === i.pack)?.instruments.find((x) => x.name === i.name);
+  if (!summary || (!summary.kit && !summary.mics?.length)) return null;
+  return samplerKnobs(summary.mics);
+}

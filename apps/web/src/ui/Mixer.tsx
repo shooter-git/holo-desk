@@ -5,6 +5,7 @@ import {
   type Channel,
   DRUM_PIECES,
   DRUM_PRESETS,
+  type Instrument,
   macroValue,
   type Op,
   type ParamDef,
@@ -21,6 +22,7 @@ import {
   type Stage,
   SYNTH_MACROS,
   SYNTH_NOTES,
+  samplerKnobValue,
   type Track,
 } from '@holo/session';
 import { Headphones, Power, RotateCcw, SlidersHorizontal, X } from 'lucide-react';
@@ -41,7 +43,7 @@ import {
 import { isPhone, useLayout } from '../app/layout.ts';
 import { store, useApp } from '../app/store.ts';
 import { engine } from '../audio/engine.ts';
-import { library } from '../audio/samples.ts';
+import { library, type PackSummary, samplerKnobDefs } from '../audio/samples.ts';
 import { Fader, formatDb, Knob, Meter, PanKnob, startDrag, TAP } from './controls.tsx';
 import { prepare, useFrame, useSize } from './frame.ts';
 import { openMenu, openMenuAt } from './menu.tsx';
@@ -143,6 +145,11 @@ const NO_BUSES: Bus[] = [];
 export const Strip = memo(function Strip({ id, kind, name, color, channel, track, selected }: StripProps) {
   const buses = useApp((s) => s.project?.buses ?? NO_BUSES);
   const show = useApp((s) => s.show);
+  // (a kit's knobs show once the library knows it)
+  const packs = useSyncExternalStore(
+    (fn) => library.subscribe(fn),
+    () => library.packs,
+  );
   const set = (patch: Partial<Channel>) => gestureChange([{ op: 'updateChannel', target: id, patch }]);
   // the fader takes whatever height is left; the slots above scroll when the strip is short
   const faderBox = useRef<HTMLDivElement>(null);
@@ -189,7 +196,7 @@ export const Strip = memo(function Strip({ id, kind, name, color, channel, track
               }
             >
               <span className="grow">{instrumentLabel(track.instrument)}</span>
-              {track.instrument.type === 'synth' && SYNTH_MACROS[track.instrument.preset] && (
+              {hasKnobs(track.instrument, packs) && (
                 <button
                   type="button"
                   className="slot-edit"
@@ -1071,16 +1078,33 @@ export function PluginWindow() {
   );
 }
 
-/** A synth's own knobs (Fat, Ethereal): turned, they change what's sounding. */
+/** Whether an instrument has knobs of its own: a synth with them, or a kit (its microphones, tune and decay). */
+function hasKnobs(i: Instrument, packs: PackSummary[]): boolean {
+  if (i.type === 'synth') return Boolean(SYNTH_MACROS[i.preset]);
+  return samplerKnobDefs(i, packs) !== null;
+}
+
+/** What a kit's knobs do, for its window. */
+const KIT_NOTE =
+  "Tune moves the hits that come after it, up or down; Decay keeps that much of each hit's ring, shortening what rings now too.";
+const MICS_NOTE =
+  'Each microphone the kit was recorded with, at its own level, mixed as it plays: all the way down, a microphone is off. ';
+
+/** A synth's own knobs (Fat, Ethereal…), or a kit's (its microphones, tune, decay): turned, they change what's sounding. */
 export function SynthWindow() {
   const id = useApp((s) => s.synth);
   const project = useApp((s) => s.project);
   const layout = useLayout();
   const phone = isPhone(layout);
   const vp = useViewport();
+  const packs = useSyncExternalStore(
+    (fn) => library.subscribe(fn),
+    () => library.packs,
+  );
   if (!id || !project) return null;
   const track = project.tracks.find((t) => t.id === id);
   const inst = track?.instrument;
+  if (track && inst?.type === 'sampler') return <KitWindow track={track} inst={inst} packs={packs} />;
   if (!track || inst?.type !== 'synth') return null;
   const defs = SYNTH_MACROS[inst.preset];
   if (!defs) return null;
@@ -1133,6 +1157,78 @@ export function SynthWindow() {
         ))}
       </div>
       <div className="muted plugin-note">{SYNTH_NOTES[inst.preset]}</div>
+    </Floating>
+  );
+}
+
+/** A sampler kit's knobs: each microphone's level, then tune and decay. */
+function KitWindow({
+  track,
+  inst,
+  packs,
+}: {
+  track: Track;
+  inst: Extract<Instrument, { type: 'sampler' }>;
+  packs: PackSummary[];
+}) {
+  const layout = useLayout();
+  const phone = isPhone(layout);
+  const vp = useViewport();
+  const defs = samplerKnobDefs(inst, packs);
+  if (!defs) return null;
+  const title = instrumentLabel(inst);
+  const mics = defs.length > 2;
+  const close = () => store.set({ synth: null });
+  const change = (param: string, value: number) =>
+    gestureChange([
+      {
+        op: 'updateTrack',
+        track: track.id,
+        patch: { instrument: { ...inst, params: { ...inst.params, [param]: value } } },
+      } satisfies Op,
+    ]);
+  return (
+    <Floating
+      key={track.id}
+      width={phone ? vp.w : mics ? 560 : 300}
+      phone={phone}
+      label={title}
+      onClose={close}
+      header={
+        <>
+          <span className="name">{title}</span>
+          <span className="muted">{track.name}</span>
+          <button
+            type="button"
+            className="btn ghost icon"
+            title={mics ? 'Back to the kit as it was mixed' : 'Back to the kit as it was recorded'}
+            aria-label="Back to the kit's own settings"
+            disabled={!inst.params}
+            onClick={() =>
+              updateTrack(track.id, { instrument: { type: 'sampler', pack: inst.pack, name: inst.name } }, 'Reset')
+            }
+          >
+            <RotateCcw />
+          </button>
+          <button type="button" className="btn ghost icon" title="Close" aria-label="Close" onClick={close}>
+            <X />
+          </button>
+        </>
+      }
+    >
+      <div className="face">
+        {defs.map((p) => (
+          <Knob
+            key={p.id}
+            def={p}
+            value={samplerKnobValue(defs, inst.params, p.id)}
+            onBegin={() => beginGesture(`${title}: ${p.name}`)}
+            onEnd={endGesture}
+            onChange={(v) => change(p.id, v)}
+          />
+        ))}
+      </div>
+      <div className="muted plugin-note">{mics ? MICS_NOTE + KIT_NOTE : KIT_NOTE}</div>
     </Floating>
   );
 }

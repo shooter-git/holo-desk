@@ -159,6 +159,8 @@ export class AudioEngine {
   private liveFallback: number[] = [];
   private liveScheduled = false;
   private samplers = new Set<string>();
+  /** How many microphones each loaded instrument sounds a hit on (what a hit costs, rendering ahead). */
+  private samplerMics = new Map<string, number>();
   /** Samplers whose samples are in shared memory: they outlive the threads, so a restart needn't load them again. */
   private kept = new Map<string, SamplerSpec>();
   /** Sampler keys the song's tracks play (as of the last graph). */
@@ -499,7 +501,9 @@ export class AudioEngine {
         let events = compileTrack(t, this.segments);
         if (this.ahead && !planned) {
           const length = tickToFrame(this.segments, projectEnd(project));
-          this.ahead.setPart(this.numOf(t.id), aheadTrackGuess(events, instrumentSpec(t.instrument), length, sr));
+          const inst = instrumentSpec(t.instrument);
+          const mics = inst.kind === 'sampler' ? (this.samplerMics.get(inst.key) ?? 1) : 1;
+          this.ahead.setPart(this.numOf(t.id), aheadTrackGuess(events, inst, length, sr, mics));
         }
         // a planned part's notes play as its plans; its sequence keeps only its controllers
         if (planned) events = withoutNotes(events);
@@ -750,6 +754,7 @@ export class AudioEngine {
    */
   addSampler(spec: SamplerSpec): void {
     this.samplers.add(spec.key);
+    this.samplerMics.set(spec.key, Math.max(1, spec.mics?.length ?? 1));
     if (this.usedSamplers.has(spec.key)) this.unused.delete(spec.key);
     else this.markUnused(spec.key);
     let sent = spec;

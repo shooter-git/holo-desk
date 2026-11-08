@@ -5,7 +5,7 @@
  */
 import { type Dirent, existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, normalize, resolve, sep } from 'node:path';
-import type { PackSound } from '@holo/session';
+import type { PackSound, SampleMic } from '@holo/session';
 
 export interface Zone {
   file: string;
@@ -28,6 +28,9 @@ export interface Zone {
   decay?: number;
   release?: number;
   fadeOut?: number;
+  /** The microphone it was recorded with (one of its instrument's `mics`), and where it sits if mono. */
+  mic?: string;
+  pan?: number;
 }
 
 export interface PackInstrument {
@@ -39,9 +42,15 @@ export interface PackInstrument {
   attack: number;
   oneShot: boolean;
   velocityRange: number;
+  /** How it plays (see the engine's SamplerSpec): notes at once, a key's own limit, a choke's fade. */
+  polyphony?: number;
+  notePolyphony?: number;
+  offTime?: number;
   zones: Zone[];
   /** A kit's pads, every piece once, in rows of four: the key each plays and what sounds there. */
   pads?: { key: number; name: string }[];
+  /** A multi-microphone instrument's microphones: every one's zone for a hit sounds together. */
+  mics?: SampleMic[];
   size?: number;
 }
 
@@ -133,7 +142,9 @@ export class Packs {
       name: pack.name,
       license: pack.license,
       credit: pack.credit,
-      source: pack.source,
+      // what kind of pack it is (yours, or one HO[LO] pins): its recipe, a large map for a kit kept on
+      // many microphones, stays here
+      source: { kind: pack.source.kind },
       bytes,
       instruments: pack.instruments.map((i) => ({
         name: i.name,
@@ -141,6 +152,9 @@ export class Packs {
         category: i.category,
         zones: i.zones.length,
         size: i.size ?? 0,
+        // its knobs' window: a kit's tune and decay, and a level for each microphone
+        ...(i.pads?.length || i.pitched === false ? { kit: true } : {}),
+        ...(i.mics?.length ? { mics: i.mics } : {}),
       })),
       impulses: (pack.impulses ?? []).map((i) => ({
         name: i.name,

@@ -390,8 +390,23 @@ function region(v: unknown, where: string): Region {
 
 function instrument(v: unknown, where: string): Track['instrument'] {
   if (!isObj(v)) return { type: 'none' };
-  if (v.type === 'sampler')
-    return { type: 'sampler', pack: str(v.pack, `${where}.pack`), name: str(v.name, `${where}.name`) };
+  if (v.type === 'sampler') {
+    const out: Track['instrument'] = {
+      type: 'sampler',
+      pack: str(v.pack, `${where}.pack`),
+      name: str(v.name, `${where}.name`),
+    };
+    // its knobs (a microphone's level, tune, decay): only numbers, and only when there are some
+    if (isObj(v.params)) {
+      const params = Object.fromEntries(
+        Object.entries(v.params)
+          .filter(([, x]) => typeof x === 'number' && Number.isFinite(x))
+          .map(([k, x]) => [k, x as number]),
+      );
+      if (Object.keys(params).length) out.params = params;
+    }
+    return out;
+  }
   if (v.type === 'synth') {
     const out: Track['instrument'] = { type: 'synth', preset: str(v.preset, `${where}.preset`, 'Soft Keys') };
     if (isObj(v.params)) out.params = Object.fromEntries(Object.entries(v.params).map(([k, x]) => [k, num(x, k)]));

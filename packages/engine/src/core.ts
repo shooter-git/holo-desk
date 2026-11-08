@@ -1125,7 +1125,7 @@ export class EngineCore implements Host {
         return new DrumSynth(this.sr);
       case 'sampler': {
         const s = this.samplers.get(spec.key);
-        return s ? new Sampler(this.sr, s) : null;
+        return s ? new Sampler(this.sr, s, spec.params) : null;
       }
       default:
         return null;
@@ -1136,26 +1136,23 @@ export class EngineCore implements Host {
     const key = JSON.stringify([spec.instrument, spec.articulations]);
     if (!force && key === node.instKey && node.instruments.every((x) => x !== null)) return;
     const specs = [spec.instrument, ...spec.articulations];
-    // the same synths with their knobs turned: each takes its new settings as it plays (made again, its
-    // notes and its hall's tail would be cut at every move of a knob)
+    // the same synths (or the same kit) with their knobs turned: each takes its new settings as it
+    // plays (made again, its notes and its hall's tail would be cut at every move of a knob)
     if (
       !force &&
       specs.length === node.instSpecs.length &&
       specs.every((s, i) => {
         const was = node.instSpecs[i];
         const inst = node.instruments[i];
-        return (
-          s.kind === 'synth' &&
-          was?.kind === 'synth' &&
-          s.preset === was.preset &&
-          inst !== null &&
-          inst?.update !== undefined
-        );
+        const same =
+          (s.kind === 'synth' && was?.kind === 'synth' && s.preset === was.preset) ||
+          (s.kind === 'sampler' && was?.kind === 'sampler' && s.key === was.key);
+        return same && inst !== null && inst?.update !== undefined;
       })
     ) {
       for (let i = 0; i < specs.length; i++) {
         const s = specs[i] as InstrumentSpec;
-        node.instruments[i]?.update?.(s.kind === 'synth' ? s.params : undefined);
+        node.instruments[i]?.update?.(s.kind === 'synth' || s.kind === 'sampler' ? s.params : undefined);
       }
       node.instSpecs = specs;
       node.instKey = key;

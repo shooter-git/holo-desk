@@ -5,9 +5,13 @@ import {
   describeNotes,
   describeProject,
   formatNotation,
+  formatParam,
+  MIC_OFF,
+  micParam,
   newAudioTrack,
   newProject,
   newRegion,
+  newTrack,
   noteName,
   PPQ,
   parseNotation,
@@ -20,6 +24,8 @@ import {
   SYNTH_MACROS,
   SYNTH_NOTES,
   SYNTH_PRESETS,
+  samplerKnobs,
+  samplerKnobValue,
   secondsToTick,
   tickToBarBeat,
   tickToSeconds,
@@ -243,5 +249,39 @@ describe('built-in synths', () => {
       expect(SYNTH_MACROS[preset]?.length, preset).toBe(6);
       expect(SYNTH_NOTES[preset], preset).toBeTruthy();
     }
+  });
+});
+
+describe('a kit with microphones', () => {
+  it('keeps its knobs in the song, only numbers, and reads songs from before them as they were', () => {
+    const p = newProject('x');
+    const kit = { ...newTrack('Kit', { type: 'sampler', pack: 'naked-drums', name: 'kit' }) };
+    const track = {
+      ...kit,
+      instrument: { ...kit.instrument, params: { 'mic:room': -6, tune: 1.5, decay: 'long', bad: Number.NaN } },
+    };
+    const back = parseProject(JSON.parse(JSON.stringify({ ...p, tracks: [track, newTrack('Old', kit.instrument)] })));
+    expect(back.tracks[0]?.instrument).toEqual({
+      type: 'sampler',
+      pack: 'naked-drums',
+      name: 'kit',
+      params: { 'mic:room': -6, tune: 1.5 },
+    });
+    expect(back.tracks[1]?.instrument).toEqual({ type: 'sampler', pack: 'naked-drums', name: 'kit' });
+  });
+
+  it('has a level knob for each microphone, off at its lowest, then tune and decay', () => {
+    const defs = samplerKnobs([
+      { id: 'kick-in', name: 'Kick In' },
+      { id: 'room', name: 'Room', level: -9 },
+    ]);
+    expect(defs.map((d) => d.id)).toEqual([micParam('kick-in'), micParam('room'), 'tune', 'decay']);
+    const room = defs[1] as (typeof defs)[number];
+    expect(room.default).toBe(-9);
+    expect(formatParam(room, MIC_OFF)).toBe('Off');
+    expect(formatParam(room, -3)).toBe('-3.0 dB');
+    expect(samplerKnobValue(defs, { tune: 40 }, 'tune')).toBe(12);
+    expect(samplerKnobValue(defs, undefined, 'decay')).toBe(100);
+    expect(samplerKnobs(undefined).map((d) => d.id)).toEqual(['tune', 'decay']);
   });
 });

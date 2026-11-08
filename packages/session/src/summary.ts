@@ -10,7 +10,11 @@ import type { Instrument, Note, Project, Track } from './types.ts';
 import { projectEnd } from './validate.ts';
 
 export function describeInstrument(i: Instrument): string {
-  if (i.type === 'sampler') return `${i.pack}/${i.name}`;
+  if (i.type === 'sampler') {
+    // a kit's knobs where they've been turned (holo kit shows them all)
+    const knobs = Object.entries(i.params ?? {}).map(([k, v]) => `${k}=${Math.round(v * 100) / 100}`);
+    return knobs.length ? `${i.pack}/${i.name} (${knobs.join(' ')})` : `${i.pack}/${i.name}`;
+  }
   if (i.type === 'synth') return `synth "${i.preset}"`;
   return 'no instrument';
 }

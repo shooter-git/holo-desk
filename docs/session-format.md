@@ -32,6 +32,9 @@ in what's missing.
 {
   "id": "trk_…", "name": "Double bass (jazz)", "color": "#b07bd9", "kind": "instrument",
   "instrument": { "type": "sampler", "pack": "meatbass", "name": "upright" },
+                // a kit keeps its knobs where they're turned: { …, "params": { "mic:room": -6,
+                // "tune": -1, "decay": 70 } } (each microphone's level in dB, -60 is off; tune in
+                // semitones; decay in percent of each hit's ring; see samplerKnobs in packages/session)
                 // or { "type": "synth", "preset": "Warm Pad", "params": {…} } (the synths with knobs,
                 // "Fat Mono", "Tonewheel Jazz", "FM Keys" and most others, take them there:
                 // { "cutoff": 450, … }, see SYNTH_MACROS in packages/session), a Performance or Glass

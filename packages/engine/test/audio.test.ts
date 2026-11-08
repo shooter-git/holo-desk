@@ -179,3 +179,69 @@ describe('rendering', () => {
     expect(peak(2, 2.2)).toBeGreaterThan(0.05);
   });
 });
+
+describe('a kit on several microphones, rendered headless', () => {
+  it('loads each microphone and its pan from the pack, and mixes them at the song’s knobs', async () => {
+    const { renderSession } = await import('../src/render.ts');
+    const { encodeWav } = await import('../src/wav.ts');
+    const { newTrack } = await import('@holo/session');
+    const sr = 48000;
+    // a mono close microphone (a steady 0.25) and a stereo room (0.1 left, 0.05 right), half a second each
+    const files: Record<string, Uint8Array> = {
+      'snare/close.wav': encodeWav([new Float32Array(sr / 2).fill(0.25)], sr),
+      'snare/room.wav': encodeWav([new Float32Array(sr / 2).fill(0.1), new Float32Array(sr / 2).fill(0.05)], sr),
+    };
+    const zone = (file: string, mic: string, pan?: number) => ({
+      file,
+      root: 38,
+      lo: 38,
+      hi: 38,
+      lovel: 1,
+      hivel: 127,
+      gain: 0,
+      start: 0,
+      end: sr / 2,
+      loopStart: 0,
+      loopEnd: 0,
+      rate: sr,
+      rr: 1,
+      mic,
+      ...(pan !== undefined ? { pan } : {}),
+    });
+    const source = {
+      instrument: async (pack: string, name: string) => ({
+        pack,
+        name,
+        release: 0.05,
+        attack: 0,
+        oneShot: true,
+        pitched: false,
+        velocityRange: 0,
+        mics: [
+          { id: 'close', name: 'Close' },
+          { id: 'room', name: 'Room', level: -6.0206 },
+        ],
+        zones: [zone('snare/close.wav', 'close', 1), zone('snare/room.wav', 'room')],
+      }),
+      sample: async (_pack: string, file: string) => files[file] as Uint8Array,
+      audio: () => Promise.reject(new Error('no audio here')),
+      impulse: () => Promise.reject(new Error('no packs here')),
+    };
+    const p = newProject('Kit');
+    p.tempo = [{ tick: 0, bpm: 120 }];
+    const kit = newTrack('Kit', { type: 'sampler', pack: 'test', name: 'kit' });
+    kit.regions = [{ ...newRegion(0, PPQ * 4), notes: [{ t: 0, d: PPQ / 2, p: 38, v: 127 }] }];
+    p.tracks = [kit];
+    const at = (out: Float32Array[], side: number) => (out[side] as Float32Array)[Math.round(sr * 0.1)] as number;
+    const plain = await renderSession(p, source, { sampleRate: sr, tail: 0.5, finish: false });
+    expect(plain.errors).toEqual([]);
+    // the close microphone hard right (√2 × 0.25 there, nothing left), the room at its starting -6 dB
+    expect(at(plain.channels, 0)).toBeCloseTo(0.05, 4);
+    expect(at(plain.channels, 1)).toBeCloseTo(0.25 * Math.SQRT2 + 0.025, 4);
+    // the song's knobs: the close microphone off, the room up to 0 dB
+    kit.instrument = { type: 'sampler', pack: 'test', name: 'kit', params: { 'mic:close': -60, 'mic:room': 0 } };
+    const mixed = await renderSession(p, source, { sampleRate: sr, tail: 0.5, finish: false });
+    expect(at(mixed.channels, 0)).toBeCloseTo(0.1, 4);
+    expect(at(mixed.channels, 1)).toBeCloseTo(0.05, 4);
+  });
+});

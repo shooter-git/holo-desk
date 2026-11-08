@@ -331,9 +331,16 @@ export function aheadPartGuess(plans: PartPlans, length: number): number {
 /**
  * A sequenced track's instrument's share of a block, from its notes (a track's compiled events) and
  * the song's length (frames): the notes it holds together for a good part of the song (each with a
- * little release), a synth's voices dearer than a sampler's.
+ * little release), a synth's voices dearer than a sampler's, a kit's hit as dear as the microphones
+ * it sounds (`mics`, when it has several).
  */
-export function aheadTrackGuess(events: Float64Array, instrument: InstrumentSpec, length: number, sr: number): number {
+export function aheadTrackGuess(
+  events: Float64Array,
+  instrument: InstrumentSpec,
+  length: number,
+  sr: number,
+  mics = 1,
+): number {
   const each =
     instrument.kind === 'synth'
       ? HEAVY_SYNTHS.test(instrument.preset)
@@ -341,7 +348,7 @@ export function aheadTrackGuess(events: Float64Array, instrument: InstrumentSpec
         : 0.025
       : instrument.kind === 'none'
         ? 0
-        : 0.012;
+        : 0.012 * Math.max(1, mics);
   if (!each) return 0;
   const release = Math.round(0.3 * sr);
   const edges: [number, number][] = [];

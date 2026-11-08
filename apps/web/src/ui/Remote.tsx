@@ -156,16 +156,21 @@ export function Remote() {
           <section className={`remote-deck${lost ? ' stale' : ''}`}>
             {lost && (
               <div className="remote-banner stale" role="status">
-                <WifiOff size={15} />{' '}
-                {connection === 'online'
-                  ? `The studio hasn’t reported for ${stale} s`
-                  : `Can’t reach HO[LO] on ${location.host}. Trying again…`}
+                <WifiOff size={15} />
+                <span>
+                  {connection === 'online'
+                    ? `The studio hasn’t reported for ${stale} s`
+                    : `Can’t reach HO[LO] on ${location.host}. Trying again…`}
+                </span>
               </div>
             )}
             {!lost && !studio.state.audio && (
               <div className="remote-banner">
-                <Headphones size={15} /> The studio on <b>{studio.name}</b> hasn’t started its audio. Press{' '}
-                <b>Start the studio</b> there once, then play from here.
+                <Headphones size={15} />
+                <span>
+                  The studio on <b>{studio.name}</b> hasn’t started its audio. Press <b>Start the studio</b> there once,
+                  then play from here.
+                </span>
               </div>
             )}
             <RemoteLcd />

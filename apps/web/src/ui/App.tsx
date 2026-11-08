@@ -3,6 +3,7 @@ import { Library as LibraryIcon, Music2, Piano, Redo2, Rows3, Settings, SlidersV
 import { lazy, Suspense, useEffect, useRef } from 'react';
 import { ensureAudio, redo, resolveConflict, undo } from '../app/actions.ts';
 import { isPhone, type Layout, useLayout } from '../app/layout.ts';
+import { otherStudioToDrive } from '../app/live.ts';
 import { type MobileTab, store, useApp } from '../app/store.ts';
 import { AudioEditor, AudioEditorBar } from './AudioEditor.tsx';
 import { ControlBar, Lcd, SaveDot, TransportButtons } from './ControlBar.tsx';
@@ -252,6 +253,7 @@ function BounceStatus() {
 
 function StartAudio() {
   const ready = useApp((s) => s.audioReady);
+  const other = useApp((s) => otherStudioToDrive(s.peers));
   if (ready) return null;
   return (
     <div className="start-audio">
@@ -266,6 +268,17 @@ function StartAudio() {
           Start the studio
         </button>
         <p className="start-note">Starts the audio and asks to use your MIDI devices.</p>
+        {other && (
+          <div className="start-remote">
+            <p>
+              HO[LO] is also open on <b>{other}</b>. A studio here plays on its own; to control that one from here, use
+              HO[LO] Remote.
+            </p>
+            <a className="btn" href="/remote">
+              Open Remote
+            </a>
+          </div>
+        )}
       </div>
     </div>
   );

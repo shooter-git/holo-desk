@@ -140,6 +140,68 @@ describe('a file made from recordings', () => {
   });
 });
 
+describe('downloads shared by the files made from them', () => {
+  it('keeps a download two names share (the same bytes) until both files are made, and lets it go after', async () => {
+    const same = wav16([[100, 200, 300, 400]], 8000);
+    const server = createServer((req, res) => {
+      if (req.url === '/lib/a.wav' || req.url === '/lib/b.wav') res.end(Buffer.from(same));
+      else res.writeHead(404).end();
+    });
+    await new Promise<void>((ok) => server.listen(0, '127.0.0.1', ok));
+    const dir = join(import.meta.dirname, '../../../node_modules/.cache/holo-music-test-shared');
+    rmSync(dir, { recursive: true, force: true });
+    try {
+      const port = (server.address() as { port: number }).port;
+      const decoded = new Map([
+        ['lib:a.wav', decodeInput(same)],
+        ['lib:b.wav', decodeInput(same)],
+      ]);
+      // one file from each name, and one from the same download twice over
+      const x: MixRecipe = { in: [['lib:a.wav', 1, 1]], start: 0, frames: 4, fadeIn: 0, fadeOut: 0 };
+      const y: MixRecipe = { in: [['lib:b.wav', 0.5, 0.5]], start: 0, frames: 4, fadeIn: 0, fadeOut: 0 };
+      const z: MixRecipe = {
+        in: [
+          ['lib:a.wav', 0.5, 0.5],
+          ['lib:a.wav', 0.25, 0.25, { start: -1 }],
+        ],
+        start: 0,
+        frames: 4,
+        fadeIn: 0,
+        fadeOut: 0,
+      };
+      const made = [x, y, z].map((r) => mixFile(r, decoded, 16));
+      const pack: PinnedPack = {
+        id: 'lib',
+        name: 'Lib',
+        license: 'CC0-1.0',
+        credit: '',
+        source: {
+          kind: 'mix',
+          bases: { lib: `http://127.0.0.1:${port}/lib/` },
+          downloads: { 'lib:a.wav': sha256(same), 'lib:b.wav': sha256(same) },
+          bits: 16,
+          files: { 'x.wav': x, 'y.wav': y, 'z.wav': z },
+        },
+        instruments: [],
+        files: {
+          'x.wav': sha256(made[0] as Uint8Array),
+          'y.wav': sha256(made[1] as Uint8Array),
+          'z.wav': sha256(made[2] as Uint8Array),
+        },
+      };
+      const cache = new SampleCache(dir);
+      const want = Object.keys(pack.files).map((path) => ({ pack, path, sha256: pack.files[path] as string }));
+      await fetchFiles(want, { cache, parallel: 1 });
+      for (const [i, f] of ['x.wav', 'y.wav', 'z.wav'].entries())
+        expect(cache.read(pack.files[f] as string, '.wav')).toEqual(made[i]);
+      expect(cache.has(sha256(same), '.wav')).toBe(false);
+    } finally {
+      server.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
 describe('recordings lined up and resampled', () => {
   /** A float input: one channel. */
   const input = (samples: number[] | Float32Array, rate = 44100) => ({

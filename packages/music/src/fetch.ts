@@ -266,9 +266,10 @@ export async function fetchFiles(files: NeededFile[], opts: FetchOptions): Promi
   const jobs: { files: NeededFile[]; run: () => Promise<void> }[] = [];
   const byDownload = new Map<string, NeededFile[]>();
   const byArchive = new Map<PinnedPack, NeededFile[]>();
-  // a mix's downloads: how many files still to make from each (it's let go when none are left)
+  // a mix's downloads: how many files still to make from each cached file (it's let go when none are
+  // left); counted by the cached file, so two downloads with the same bytes keep it until both are used
   const uses = new Map<string, number>();
-  const useKey = (pack: PinnedPack, name: string) => `${pack.id}\0${name}`;
+  const useKey = (source: MixSource, name: string) => `${source.downloads[name]}${mixExtension(name)}`;
   for (const f of rest) {
     if (other.includes(f)) continue;
     const source = f.pack.source;
@@ -289,7 +290,8 @@ export async function fetchFiles(files: NeededFile[], opts: FetchOptions): Promi
     } else if (source.kind === 'mix') {
       const recipe = source.files[f.path];
       if (!recipe) throw new Error(`${label(f)} has no recipe in its pack's mix`);
-      for (const [name] of recipe.in) uses.set(useKey(f.pack, name), (uses.get(useKey(f.pack, name)) ?? 0) + 1);
+      for (const name of new Set(recipe.in.map(([n]) => n)))
+        uses.set(useKey(source, name), (uses.get(useKey(source, name)) ?? 0) + 1);
       jobs.push({
         files: [f],
         run: async () => {
@@ -299,8 +301,8 @@ export async function fetchFiles(files: NeededFile[], opts: FetchOptions): Promi
           }
           cache.put(f.sha256, extname(f.path), mixFile(recipe, inputs, source.bits), label(f));
           for (const name of inputs.keys()) {
-            const left = (uses.get(useKey(f.pack, name)) ?? 1) - 1;
-            uses.set(useKey(f.pack, name), left);
+            const left = (uses.get(useKey(source, name)) ?? 1) - 1;
+            uses.set(useKey(source, name), left);
             if (left <= 0) cache.drop(source.downloads[name] as string, mixExtension(name));
           }
         },

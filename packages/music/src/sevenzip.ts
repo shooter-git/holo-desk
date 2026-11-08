@@ -1,7 +1,9 @@
 /**
  * A 7z archive, read: its header (compressed with LZMA by 7-Zip as a rule) and the files in its
- * folders when they are stored, Deflate (Node's zlib), LZMA or LZMA2. Enough for the sample libraries
- * published as one; filters, encryption and the other methods aren't read. Every file's CRC is checked.
+ * folders when they are stored, Deflate (Node's zlib), LZMA or LZMA2, alone or after the Delta filter
+ * 7-Zip puts in front of audio (a folder's coders chained, each one stream in and one out). Enough for
+ * the sample libraries published as one; the branch-call filters, encryption and the other methods
+ * aren't read. Every file's CRC is checked.
  */
 import { crc32, inflateRawSync } from 'node:zlib';
 import { decodeLzma, decodeLzma2 } from './lzma.ts';
@@ -29,10 +31,16 @@ const NAME = 0x11;
 interface Coder {
   method: string;
   properties: Uint8Array;
+  ins: number;
+  outs: number;
 }
 
 interface Folder {
   coders: Coder[];
+  /** [coder whose input it is, coder whose output feeds it]: how the chain is joined. */
+  binds: [number, number][];
+  /** Each coder's output size. */
+  sizes: number[];
   /** Index of its first packed stream. */
   pack: number;
   size: number;
@@ -110,7 +118,7 @@ class Reader {
 
 const hex = (bytes: Uint8Array) => Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
 
-function readFolder(r: Reader): Coder[] {
+function readFolder(r: Reader): { coders: Coder[]; binds: [number, number][] } {
   const n = r.number();
   const coders: Coder[] = [];
   let ins = 0;
@@ -126,18 +134,18 @@ function readFolder(r: Reader): Coder[] {
       numOut = r.number();
     }
     const properties = flags & 0x20 ? r.take(r.number()) : new Uint8Array(0);
-    coders.push({ method, properties });
+    coders.push({ method, properties, ins: numIn, outs: numOut });
     ins += numIn;
     outs += numOut;
   }
-  for (let i = 0; i < outs - 1; i++) {
-    r.number();
-    r.number();
-  }
+  const binds: [number, number][] = [];
+  for (let i = 0; i < outs - 1; i++) binds.push([r.number(), r.number()]);
   const packed = ins - (outs - 1);
   if (packed > 1) for (let i = 0; i < packed; i++) r.number();
-  if (packed !== 1 || outs !== 1) throw new Error('A 7z folder with more than one stream');
-  return coders;
+  // a chain of coders each one stream in and one out (a filter in front of a compressor), or one coder
+  if (packed !== 1 || coders.some((c) => c.ins !== 1 || c.outs !== 1))
+    throw new Error('A 7z folder with more than one stream');
+  return { coders, binds };
 }
 
 function readStreams(r: Reader): Streams {
@@ -163,11 +171,16 @@ function readStreams(r: Reader): Streams {
       if (r.u8() !== 0) throw new Error('A 7z header kept outside its archive');
       let pack = 0;
       for (let i = 0; i < n; i++) {
-        streams.folders.push({ coders: readFolder(r), pack, size: 0, crc: null, streams: [] });
+        streams.folders.push({ ...readFolder(r), pack, sizes: [], size: 0, crc: null, streams: [] });
         pack++;
       }
       if (r.number() !== UNPACK_SIZE) throw new Error('Not a 7z header');
-      for (const f of streams.folders) f.size = r.number();
+      // every coder's output size; the folder's is the output no other coder takes
+      for (const f of streams.folders) {
+        f.sizes = f.coders.map(() => r.number());
+        const main = f.coders.findIndex((_, i) => !f.binds.some(([, out]) => out === i));
+        f.size = f.sizes[main] as number;
+      }
       let sub = r.number();
       if (sub === CRC) {
         const crcs = r.digests(n);
@@ -334,24 +347,45 @@ export class SevenZip {
     return out;
   }
 
+  /** A coder's output from the packed bytes [start, end). */
+  private decode(coder: Coder, start: number, end: number, size: number): Uint8Array {
+    if (coder.method === '00') return this.bytes.slice(start, end);
+    if (coder.method === '040108') return new Uint8Array(inflateRawSync(this.bytes.subarray(start, end)));
+    if (coder.method === '030101') return decodeLzma(this.bytes, start, end, coder.properties, size);
+    if (coder.method === '21') return decodeLzma2(this.bytes, start, end, size);
+    throw new Error(`A 7z folder compressed with method ${coder.method} isn’t read here`);
+  }
+
   /** A folder's whole unpacked data. */
   private unpack(streams: Streams, index: number): Uint8Array {
     const folder = streams.folders[index];
     if (!folder) throw new Error('Not a 7z header');
-    if (folder.coders.length !== 1) throw new Error('A 7z folder with more than one coder isn’t read here');
-    const coder = folder.coders[0] as Coder;
     let start = 32 + streams.packPos;
     for (let i = 0; i < folder.pack; i++) start += streams.packSizes[i] as number;
     const end = start + (streams.packSizes[folder.pack] as number);
     if (end > this.bytes.length) throw new Error('A 7z archive that ends early');
-    let out: Uint8Array;
-    if (coder.method === '00') out = this.bytes.slice(start, end);
-    else if (coder.method === '040108') out = new Uint8Array(inflateRawSync(this.bytes.subarray(start, end)));
-    else if (coder.method === '030101') out = decodeLzma(this.bytes, start, end, coder.properties, folder.size);
-    else if (coder.method === '21') out = decodeLzma2(this.bytes, start, end, folder.size);
-    else throw new Error(`A 7z folder compressed with method ${coder.method} isn’t read here`);
+    // the coder the packed stream feeds, then each coder its output feeds, to the folder's output
+    let at = folder.coders.findIndex((_, c) => !folder.binds.some(([input]) => input === c));
+    let out = this.decode(folder.coders[at] as Coder, start, end, folder.sizes[at] as number);
+    for (;;) {
+      const next = folder.binds.find(([, output]) => output === at);
+      if (!next) break;
+      at = next[0];
+      out = filter(folder.coders[at] as Coder, out, folder.sizes[at] as number);
+    }
     if (out.length !== folder.size) throw new Error('A 7z folder that unpacks to the wrong size');
     if (folder.crc !== null && crc32(out) !== folder.crc) throw new Error('A 7z folder is damaged (its CRC differs)');
     return out;
   }
+}
+
+/** A filter undone over another coder's output: the Delta filter (each byte less the one `distance` back). */
+function filter(coder: Coder, input: Uint8Array, size: number): Uint8Array {
+  if (coder.method !== '03') throw new Error(`A 7z folder filtered with method ${coder.method} isn’t read here`);
+  if (input.length !== size) throw new Error('A 7z folder that unpacks to the wrong size');
+  const distance = ((coder.properties[0] ?? 0) as number) + 1;
+  const out = new Uint8Array(input.length);
+  for (let i = 0; i < input.length; i++)
+    out[i] = ((input[i] as number) + (i >= distance ? (out[i - distance] as number) : 0)) & 0xff;
+  return out;
 }

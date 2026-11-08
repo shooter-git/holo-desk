@@ -716,6 +716,13 @@ export class EngineCore implements Host {
   /** Where each meter starts (none: the one beat and bar above throughout). */
   private meterSpans: MeterSpan[] = [];
   private metronome = false;
+  /** Where a count-in ends (the frame recording starts at): its beats click, whatever the metronome says. */
+  private countInTo = 0;
+  /**
+   * The first frame a beat may click at: where the last block ended, or a frame before where playing
+   * starts (the start and a count-in's length are each rounded to a frame, and may pass a beat by one).
+   */
+  private clickFrom = 0;
   private clickLevel = 0.5;
   private clickSound: ClickSound = 'beep';
   private click: Click;
@@ -990,6 +997,9 @@ export class EngineCore implements Host {
       case 'play':
         this.lastCmd = msg.cmd ?? this.lastCmd;
         this.pos = msg.frame - msg.countIn;
+        // (from the song's start the count-in is before it; from further in, it's the bar before)
+        this.countInTo = msg.countIn > 0 ? msg.frame : 0;
+        this.clickFrom = this.pos - 1;
         this.playing = true;
         this.recording = msg.record;
         for (const t of this.trackOrder) {
@@ -1001,6 +1011,7 @@ export class EngineCore implements Host {
         this.lastCmd = msg.cmd ?? this.lastCmd;
         this.playing = false;
         this.recording = false;
+        this.countInTo = 0;
         for (const t of this.trackOrder) {
           if (this.playsSong(t)) this.endSeqNotes(t, 0);
           this.finishCapture(t);
@@ -1014,6 +1025,8 @@ export class EngineCore implements Host {
           this.seek(t, msg.frame);
         }
         this.pos = msg.frame;
+        this.countInTo = 0;
+        this.clickFrom = this.pos - 1;
         break;
       case 'cycle':
         this.cycle = { on: msg.on, start: msg.start, end: msg.end, wrap: msg.wrap ?? false };
@@ -1670,15 +1683,18 @@ export class EngineCore implements Host {
   private clicks(out0: Float32Array, out1: Float32Array, n: number): void {
     let startAt = -1;
     let accent = false;
-    if (this.playing && (this.metronome || this.pos < 0)) {
-      const t0 = this.tickAtSigned(this.pos);
-      const t1 = this.tickAtSigned(this.pos + n);
-      const [beat, bar] = this.nextBeat(t0);
-      if (beat < t1 && (this.metronome || beat < 0)) {
-        startAt = Math.max(0, Math.min(n - 1, Math.round(this.frameAtSigned(beat) - this.pos)));
+    if (this.playing && (this.metronome || this.pos < this.countInTo)) {
+      // each beat clicks in the block its frame (rounded) lands in, or at once where playing has just
+      // started a frame past it
+      const from = Math.min(this.clickFrom, this.pos);
+      const [beat, bar] = this.nextBeat(this.tickAtSigned(from - 0.5));
+      const frame = Math.round(this.frameAtSigned(beat));
+      if (frame < this.pos + n && (this.metronome || frame < this.countInTo)) {
+        startAt = Math.max(0, frame - this.pos);
         accent = bar;
       }
     }
+    this.clickFrom = this.pos + n;
     const click = this.click;
     if (startAt < 0 && !click.active) return;
     const gain = this.clickLevel * 0.5;

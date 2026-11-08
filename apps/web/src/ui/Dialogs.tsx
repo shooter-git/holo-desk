@@ -765,7 +765,7 @@ function SettingsDialog() {
         </section>
         <section className="vstack">
           <div className="label">Metronome</div>
-          <MetronomeSettings />
+          <MetronomeSettings inSettings />
         </section>
         <section className="vstack">
           <div className="label">MIDI devices</div>

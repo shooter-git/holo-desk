@@ -206,7 +206,8 @@ export interface ProjectOrigin {
 }
 
 export type Instrument =
-  | { type: 'sampler'; pack: string; name: string }
+  /** `params`: its own knobs (samplerKnobs: each microphone's level, tune, decay), where they're moved. */
+  | { type: 'sampler'; pack: string; name: string; params?: Record<string, number> }
   | { type: 'synth'; preset: string; params?: Record<string, number> }
   | { type: 'performance'; pack: string; name: string; play?: PerformancePlay }
   | { type: 'glass'; line?: boolean; options?: Record<string, number> }

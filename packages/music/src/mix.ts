@@ -35,6 +35,11 @@ export interface MixRecipe {
   /** Frames faded in (straight) and out (an S curve) at the ends. */
   fadeIn: number;
   fadeOut: number;
+  /**
+   * One channel, the inputs' left sides (at their left gains): a mono microphone kept on its own, at
+   * half a stereo file's size and memory (the sampler places it by its pan).
+   */
+  mono?: boolean;
 }
 
 const encodePath = (path: string) => path.split('/').map(encodeURIComponent).join('/');
@@ -121,5 +126,5 @@ export function mixFile(recipe: MixRecipe, inputs: Map<string, DecodedInput>, bi
     }
     return out;
   };
-  return pcmWav({ rate, bits, channels: [quantize(left), quantize(right)] });
+  return pcmWav({ rate, bits, channels: recipe.mono ? [quantize(left)] : [quantize(left), quantize(right)] });
 }

@@ -1,3 +1,4 @@
+import type { SampleMic } from '@holo/session';
 import type { PreparedImpulse } from './convolver.ts';
 
 /**
@@ -42,7 +43,8 @@ export const EV_BEND = 3;
 export const EV_PRESSURE = 4;
 
 export type InstrumentSpec =
-  | { kind: 'sampler'; key: string }
+  /** `params`: its knobs (each microphone's level in dB, tune, decay), taken as it plays. */
+  | { kind: 'sampler'; key: string; params?: Record<string, number> }
   | { kind: 'synth'; preset: string; params?: Record<string, number> }
   | { kind: 'drums' }
   | { kind: 'none' };
@@ -123,6 +125,13 @@ export interface SampleZone {
   decay?: number;
   /** Seconds its notes take to fade when let go, in place of the instrument's (a bass string's damper is slower). */
   release?: number;
+  /**
+   * The microphone it was recorded with (one of the instrument's `mics`): a hit sounds the zone of
+   * every microphone that has one for its key, velocity and round robin, together.
+   */
+  mic?: string;
+  /** Where a mono sample sits, -1 (left) to 1 (right): its microphone's pan when absent. */
+  pan?: number;
 }
 
 export interface SamplerSpec {
@@ -150,6 +159,8 @@ export interface SamplerSpec {
   releaseDecay?: number;
   /** dB between the softest and the hardest velocity for release samples (velocityRange when absent). */
   releaseVelocityRange?: number;
+  /** The microphones its zones were recorded with, each at its own level (a multi-microphone kit). */
+  mics?: SampleMic[];
 }
 
 /**

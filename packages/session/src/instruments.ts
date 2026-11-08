@@ -89,6 +89,55 @@ export function macroValues(preset: string, params?: Record<string, number>): Re
   return Object.fromEntries((SYNTH_MACROS[preset] ?? []).map((p) => [p.id, macroValue(preset, params, p.id)]));
 }
 
+/**
+ * A microphone a multi-microphone instrument was recorded with (a drum kit's kick, overheads, room):
+ * its zones name it, and every microphone's zone for a hit sounds together, each at its own level.
+ */
+export interface SampleMic {
+  id: string;
+  name: string;
+  /** dB it starts at (0 when absent): at MIC_OFF or below it's off. */
+  level?: number;
+  /** Where its mono samples sit, -1 (left) to 1 (right), unless a zone says (the centre when absent). */
+  pan?: number;
+}
+
+/** A microphone's knob at its lowest: off. */
+export const MIC_OFF = -60;
+
+/** The param (in a sampler instrument's params) that sets a microphone's level, in dB. */
+export const micParam = (id: string): string => `mic:${id}`;
+
+/**
+ * A sampler instrument's own knobs (shown in its window, stored as its params): each microphone's
+ * level where it has microphones, then Tune (semitones, every hit) and Decay (how much of each
+ * hit's ring is kept). They move while it plays.
+ */
+export function samplerKnobs(mics: readonly SampleMic[] | undefined): ParamDef[] {
+  return [
+    ...(mics ?? []).map(
+      (m): ParamDef => ({
+        id: micParam(m.id),
+        name: m.name,
+        min: MIC_OFF,
+        max: 12,
+        default: Math.min(12, Math.max(MIC_OFF, m.level ?? 0)),
+        unit: 'dB',
+      }),
+    ),
+    { id: 'tune', name: 'Tune', min: -12, max: 12, default: 0, unit: 'st' },
+    { id: 'decay', name: 'Decay', min: 5, max: 100, default: 100, unit: '%' },
+  ];
+}
+
+/** A sampler knob's value in the instrument's params (its default where it has none), kept in range. */
+export function samplerKnobValue(defs: readonly ParamDef[], params: Record<string, number> | undefined, id: string): number {
+  const def = defs.find((p) => p.id === id);
+  const v = params?.[id];
+  if (!def) return v ?? 0;
+  return Math.min(def.max, Math.max(def.min, v ?? def.default));
+}
+
 /** General MIDI drum notes, as drum pads usually send them. */
 export const GM_DRUMS: Record<number, string> = {
   35: 'Kick 2',

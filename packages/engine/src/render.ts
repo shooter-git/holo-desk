@@ -3,7 +3,16 @@
  * renders (the server, `holo render-audio`, a creation's build) run this same function with the
  * same sample decoding, so the same session always gives the same numbers.
  */
-import { type AudioClip, type Project, performed, playedAt, playedTimes, playMap, projectEnd } from '@holo/session';
+import {
+  type AudioClip,
+  type Project,
+  performed,
+  playedAt,
+  playedTimes,
+  playMap,
+  projectEnd,
+  type SampleMic,
+} from '@holo/session';
 import {
   clipKey,
   compileClips,
@@ -51,6 +60,9 @@ export interface ZoneManifest {
   release?: number;
   /** Frames (at its rate) faded out before its end, as it's loaded: a sample kept shorter than its file. */
   fadeOut?: number;
+  /** The microphone it was recorded with, and where it sits if mono (see SampleZone). */
+  mic?: string;
+  pan?: number;
 }
 
 /**
@@ -74,10 +86,12 @@ export interface PlayingManifest {
   undamped?: number;
   releaseDecay?: number;
   releaseVelocityRange?: number;
+  /** A multi-microphone instrument's microphones (see SamplerSpec). */
+  mics?: SampleMic[];
 }
 
 /** The zone's and the instrument's optional settings, as the sampler takes them (only those the pack has). */
-type ZoneExtras = Pick<SampleZone, 'group' | 'offBy' | 'trigger' | 'part' | 'decay' | 'release'>;
+type ZoneExtras = Pick<SampleZone, 'group' | 'offBy' | 'trigger' | 'part' | 'decay' | 'release' | 'mic' | 'pan'>;
 
 export function zoneExtras(z: ZoneManifest): ZoneExtras {
   const out: ZoneExtras = {};
@@ -87,6 +101,8 @@ export function zoneExtras(z: ZoneManifest): ZoneExtras {
   if (z.part) out.part = z.part;
   if (z.decay !== undefined) out.decay = z.decay;
   if (z.release !== undefined) out.release = z.release;
+  if (typeof z.mic === 'string' && z.mic) out.mic = z.mic;
+  if (typeof z.pan === 'number' && Number.isFinite(z.pan) && z.pan !== 0) out.pan = Math.max(-1, Math.min(1, z.pan));
   return out;
 }
 
@@ -98,6 +114,18 @@ export function playingExtras(m: PlayingManifest): PlayingManifest {
   if (m.undamped !== undefined) out.undamped = m.undamped;
   if (m.releaseDecay !== undefined) out.releaseDecay = m.releaseDecay;
   if (m.releaseVelocityRange !== undefined) out.releaseVelocityRange = m.releaseVelocityRange;
+  if (Array.isArray(m.mics) && m.mics.length) {
+    out.mics = m.mics
+      .filter((x) => typeof x?.id === 'string' && x.id)
+      .map((x) => ({
+        id: x.id,
+        name: typeof x.name === 'string' && x.name ? x.name : x.id,
+        ...(typeof x.level === 'number' && Number.isFinite(x.level) ? { level: x.level } : {}),
+        ...(typeof x.pan === 'number' && Number.isFinite(x.pan) && x.pan !== 0
+          ? { pan: Math.max(-1, Math.min(1, x.pan)) }
+          : {}),
+      }));
+  }
   return out;
 }
 

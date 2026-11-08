@@ -264,7 +264,11 @@ export type ToWorklet =
   | { type: 'plans'; num: number; plans: import('./parts.ts').PartPlans | null }
   /** Sample files of a Performance instrument (`pack/name`), by their index in its manifest. */
   | { type: 'performance'; key: string; samples: { index: number; left: Float32Array; right: Float32Array }[] }
-  | { type: 'metronome'; on: boolean; level: number }
+  /**
+   * `sound`: the click's (engines before it play the beep); `audition`: one click now, to hear the
+   * sound and level being chosen.
+   */
+  | { type: 'metronome'; on: boolean; level: number; sound?: import('./click.ts').ClickSound; audition?: boolean }
   /** Live MIDI without shared memory (and the AI's played notes): [status, d1, d2, track num]… */
   | { type: 'live'; events: number[] }
   | { type: 'panic' }

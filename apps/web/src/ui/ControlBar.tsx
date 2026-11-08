@@ -8,7 +8,6 @@ import {
   Library,
   ListMusic,
   Maximize2,
-  Metronome,
   Minimize2,
   PanelLeft,
   Piano,
@@ -37,7 +36,6 @@ import {
   stop,
   toggleCycle,
   toggleFullscreen,
-  toggleMetronome,
   togglePlay,
   toggleRecord,
   undo,
@@ -49,6 +47,7 @@ import { engine } from '../audio/engine.ts';
 import { midi } from '../audio/midi.ts';
 import { startDrag, TAP, Wordmark } from './controls.tsx';
 import { useFrame, useMedia } from './frame.ts';
+import { MetronomeButton } from './Metronome.tsx';
 import { openMenuAt } from './menu.tsx';
 import { tapTempo } from './tap-tempo.ts';
 import { ViewMenu } from './ViewMenu.tsx';
@@ -494,7 +493,6 @@ export function ControlBar() {
   const layout = useLayout();
   const phone = isPhone(layout);
   const title = useApp((s) => s.project?.title ?? '');
-  const metronome = useApp((s) => s.metronome);
   const editor = useApp((s) => s.editor);
   const inspector = useApp((s) => s.inspector);
   const library = useApp((s) => s.library);
@@ -558,16 +556,7 @@ export function ControlBar() {
           >
             <Redo2 />
           </button>
-          <button
-            type="button"
-            className={`btn ghost icon${metronome ? ' on' : ''}`}
-            title="Metronome"
-            aria-label="Metronome"
-            aria-pressed={metronome}
-            onClick={toggleMetronome}
-          >
-            <Metronome />
-          </button>
+          <MetronomeButton className="btn ghost icon" title="Metronome" />
           <ViewMenu />
           <button
             type="button"
@@ -655,18 +644,7 @@ export function ControlBar() {
       <div className="hstack cb-centre">
         <TransportButtons minimal={!show.barNav} />
         <Lcd compact={narrow} />
-        {show.barMetronome && (
-          <button
-            type="button"
-            className={`btn icon cb-metro${metronome ? ' on' : ''}`}
-            title="Metronome (K)"
-            aria-label="Metronome (K)"
-            aria-pressed={metronome}
-            onClick={toggleMetronome}
-          >
-            <Metronome />
-          </button>
-        )}
+        {show.barMetronome && <MetronomeButton className="btn icon cb-metro" title="Metronome (K)" />}
       </div>
       <div className="right">
         {/* the Library opens at the right, so its button sits here */}

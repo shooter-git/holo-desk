@@ -3513,6 +3513,56 @@ html[data-layout="phone-landscape"] .toasts {
   border-top: 1px solid var(--line);
 }
 
+/* the metronome's sound, volume and count-in: under its button, or a sheet on a phone */
+.metro-menu {
+  position: fixed;
+  z-index: var(--z-popover);
+  display: grid;
+  gap: 8px;
+  width: min(320px, calc(100vw - 16px));
+  padding: 12px;
+  border: 1px solid var(--line-3);
+  border-radius: var(--radius-l);
+  background: linear-gradient(180deg, var(--bg-3), var(--bg-2));
+  box-shadow: var(--shadow);
+}
+
+.metro-menu.sheet {
+  top: auto;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  z-index: var(--z-dialog);
+  width: 100%;
+  padding-bottom: calc(12px + var(--safe-bottom));
+  border-radius: 16px 16px 0 0;
+  animation: sheet 0.22s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.metro-settings {
+  gap: 12px;
+  max-width: 360px;
+}
+
+.metro-settings .seg {
+  align-self: flex-start;
+}
+
+.metro-settings input[type="range"] {
+  width: 100%;
+}
+
+.metro-settings .grow {
+  flex: 1;
+}
+
+/* (no key to press on a phone or tablet) */
+@media (pointer: coarse) {
+  .metro-settings kbd {
+    display: none;
+  }
+}
+
 .btn:has(.view-badge) {
   position: relative;
 }

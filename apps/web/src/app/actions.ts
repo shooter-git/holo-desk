@@ -5,11 +5,13 @@
  */
 
 import {
+  type ClickSound,
   clipKey,
   compileClips,
   compileTempo,
   detectHits,
   frameToTick,
+  isClickSound,
   kitSource,
   songKits,
   tickToFrame,
@@ -362,7 +364,7 @@ export function ensureAudio(): Promise<void> {
           engine.sync(p);
           loadInstruments(p);
         }
-        engine.setMetronome(store.get().metronome);
+        syncMetronome();
         engine.setLowLatency(store.get().lowLatency);
         if (store.get().outputDevice)
           void engine.setOutput(store.get().outputDevice).catch(() => store.set({ outputDevice: '' }));
@@ -382,7 +384,7 @@ export async function setLatencyMode(mode: AppStateLatency): Promise<void> {
   companion.setFloor(mode);
   if (engine.ctx) {
     await engine.start(mode);
-    engine.setMetronome(store.get().metronome);
+    syncMetronome();
   }
 }
 type AppStateLatency = ReturnType<typeof store.get>['latencyMode'];
@@ -452,7 +454,7 @@ async function switchEngine(remote: boolean): Promise<void> {
   try {
     await engine.start(store.get().latencyMode);
     store.set({ audioReady: true });
-    engine.setMetronome(store.get().metronome);
+    syncMetronome();
     engine.setLowLatency(store.get().lowLatency);
     const p = store.get().project;
     if (p) loadInstruments(p);
@@ -611,9 +613,26 @@ export function toggleFullscreen(): void {
 }
 
 export function toggleMetronome(): void {
-  const on = !store.get().metronome;
-  store.set({ metronome: on });
-  engine.setMetronome(on);
+  store.set({ metronome: !store.get().metronome });
+  syncMetronome();
+}
+
+/** Tells the engine how the metronome sounds on this device; `audition` plays one click to hear it. */
+export function syncMetronome(audition = false): void {
+  const s = store.get();
+  const level = Number.isFinite(s.metronomeLevel) ? Math.max(0, Math.min(1, s.metronomeLevel)) : 0.6;
+  engine.setMetronome(s.metronome, level, isClickSound(s.metronomeSound) ? s.metronomeSound : 'beep', audition);
+}
+
+export function setMetronomeSound(sound: ClickSound): void {
+  store.set({ metronomeSound: sound });
+  syncMetronome(true);
+}
+
+/** The metronome's volume (0–1). */
+export function setMetronomeLevel(level: number): void {
+  store.set({ metronomeLevel: Math.max(0, Math.min(1, level)) });
+  syncMetronome();
 }
 
 // ---- recording ----

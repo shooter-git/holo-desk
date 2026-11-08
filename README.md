@@ -200,6 +200,11 @@ plays. Velocity follows each drum's real loudness: every layer is measured and s
 velocity curve meets it, so a drum gets louder smoothly the harder it's hit and changes its timbre at
 each layer, the same way for every drum and every key of the piano.
 
+A kit recorded on several microphones can keep each one: every microphone of a hit sounds together,
+and the kit's window (the button on its instrument slot) has a level for each (the close microphones,
+overheads, rooms), turned while it plays. Every kit also has **Tune** and **Decay** there. They're
+kept in the song, and `holo kit Drums mic:room=-6 decay=70` sets them from the command line.
+
 You can also import your own from the studio: **Library → Import a sample pack (.zip)**. SFZ
 instruments come in with their mapping. Folders of samples named by note (C4, F#3, `_v2`, `_rr1`…)
 become instruments, and a folder of one-shot hits becomes a drum kit on the General MIDI keys.

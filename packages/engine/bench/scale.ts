@@ -6,6 +6,7 @@
  *   pnpm bench --ahead 4             the same rendered ahead on 4 worker threads (as the studio plays)
  *   pnpm bench --seconds 4 --rate 44100 --only 3,4 --json results.json
  *   pnpm bench --session song.json --from 9 [--ahead 4]   a real song (its samples from the data folder)
+ *   pnpm bench --effects             each audio plugin on its own, against a block's time
  *
  * A song here is made up, nothing recorded: built-in synths playing chords and runs (so many voices
  * sound at once), plugins on every track, automation lanes on every track, sends to buses, and
@@ -22,11 +23,13 @@ import { resolve } from 'node:path';
 import { Worker } from 'node:worker_threads';
 import {
   DRUM_PRESETS,
+  defaultParams,
   newBus,
   newPlugin,
   newProject,
   newRegion,
   newTrack,
+  PLUGINS,
   PPQ,
   type Project,
   parseProject,
@@ -55,16 +58,18 @@ import {
   meterTicks,
   songClips,
   songImpulses,
+  songKits,
   tickToFrame,
 } from '../src/compile.ts';
 import { prepareImpulse } from '../src/convolver.ts';
 import { EngineCore } from '../src/core.ts';
+import { createEffect, type Host } from '../src/fx.ts';
 import { dataFolderSource } from '../src/node.ts';
 import { isPlanned, partSamples, planTrack } from '../src/parts.ts';
 import { EV_OFF, EV_ON, EVENT_SIZE, type GraphSpec, type ToWorklet } from '../src/protocol.ts';
 import { buildSampler, loadClipAudio, loadImpulse } from '../src/render.ts';
 import { resample } from '../src/resample.ts';
-import { generateSpace } from '../src/spaces.ts';
+import { generateSpace, SPACE_NAMES } from '../src/spaces.ts';
 import { decodeWav } from '../src/wav.ts';
 
 interface Size {
@@ -88,7 +93,21 @@ const SIZES: Size[] = [
   { tracks: 128, voices: 16, inserts: 6, lanes: 6, halls: 6 },
 ];
 
-const INSERTS = ['eq', 'compressor', 'peq', 'chorus', 'delay', 'saturator', 'width', 'softener'];
+const INSERTS = [
+  'eq',
+  'compressor',
+  'peq',
+  'chorus',
+  'delay',
+  'saturator',
+  'width',
+  'softener',
+  'rotary',
+  'phaser',
+  'tremolo',
+  'lofi',
+  'replacer',
+];
 // the synths the reference numbers (docs/architecture.md) were measured with, so they stay comparable;
 // the heavier families (organ, wavetable, modelled instruments with halls) cost about twice a voice
 const PRESETS = [
@@ -144,6 +163,8 @@ function song(size: Size, seconds: number): Project {
     t.channel.inserts = Array.from({ length: size.inserts }, (_, i) =>
       newPlugin(INSERTS[(k + i) % INSERTS.length] as string),
     );
+    // the first track a piano's: its strings ringing (one is what a song has)
+    if (k === 0) t.channel.inserts.push(newPlugin('resonance', { bass: 9 }));
     t.channel.sends = halls.map((h) => ({ bus: h.id, level: -18, pre: false }));
     const lanes: NonNullable<typeof t.channel.automation> = [];
     const targets = ['volume', 'pan', ...t.channel.sends.map((s) => `send:${s.bus}`)];
@@ -213,6 +234,7 @@ async function session(p: Project, dataDir: string, sr: number, fromBar: number)
     for (const i of [t.instrument, ...t.articulations.map((a) => a.instrument)])
       if (i.type === 'sampler') keys.add(`${i.pack}/${i.name}`);
   }
+  for (const kit of songKits(p)) keys.add(kit);
   for (const key of keys) {
     const [pack = '', ...rest] = key.split('/');
     messages.push({ type: 'sampler', spec: await buildSampler(source, pack, rest.join('/'), sr) });
@@ -514,6 +536,72 @@ async function measureAhead(name: string, played: Played, seconds: number, sr: n
   return res;
 }
 
+/** Each audio plugin alone over made-up music (its defaults; spaces with their generated halls): ms a block. */
+function measureEffects(seconds: number, sr: number): { name: string; mean: number; p99: number; worst: number }[] {
+  const out: { name: string; mean: number; p99: number; worst: number }[] = [];
+  const n = Math.round(sr * (seconds + 1));
+  const l = new Float32Array(n);
+  const r = new Float32Array(n);
+  for (let i = 0; i < n; i++) {
+    const t = i / sr;
+    const k = Math.floor(t / 0.5);
+    const tt = t - k * 0.5;
+    const f = [220, 277, 330, 440][k % 4] as number;
+    const kick = Math.sin(2 * Math.PI * 60 * tt) * Math.exp(-tt / 0.12) * 0.6;
+    l[i] = (Math.sin(2 * Math.PI * f * t) + 0.5 * Math.sin(2 * Math.PI * f * 1.5 * t)) * Math.exp(-tt * 6) * 0.3 + kick;
+    r[i] = (l[i] as number) * 0.9;
+  }
+  const halls = new Map<string, ReturnType<typeof prepareImpulse>>();
+  for (const def of PLUGINS) {
+    if (def.kind !== 'audio') continue;
+    const params = defaultParams(def.type);
+    const host: Host = {
+      sr,
+      lowLatency: false,
+      beatSeconds: () => 0.5,
+      beatAt: () => 0,
+      songFrame: () => 0,
+      clip: () => undefined,
+      impulse: (key) => {
+        let h = halls.get(key);
+        if (!h) {
+          const space = SPACE_NAMES[Math.round(params.space ?? 4)] ?? 'concert';
+          h = prepareImpulse(generateSpace(space, Math.round(params.seed ?? 7), params.decay ?? 1, sr));
+          halls.set(key, h);
+        }
+        return h;
+      },
+    };
+    const fx = createEffect(def.type, host);
+    if (!fx) continue;
+    fx.setParams(params);
+    const a = l.slice();
+    const b = r.slice();
+    const warm = Math.round(sr / BLOCK);
+    const blocks = Math.floor(n / BLOCK);
+    // (the blocks' views and times made beforehand: nothing here for the collector to stop for)
+    const views = Array.from({ length: blocks }, (_, k) => [
+      a.subarray(k * BLOCK, (k + 1) * BLOCK),
+      b.subarray(k * BLOCK, (k + 1) * BLOCK),
+    ]);
+    const times = new Float64Array(blocks - warm);
+    for (let k = 0; k < blocks; k++) {
+      const [va, vb] = views[k] as [Float32Array, Float32Array];
+      const t0 = performance.now();
+      fx.process(va, vb, BLOCK);
+      if (k >= warm) times[k - warm] = performance.now() - t0;
+    }
+    times.sort();
+    out.push({
+      name: def.name,
+      mean: times.reduce((x, y) => x + y, 0) / times.length,
+      p99: times[Math.floor(times.length * 0.99)] as number,
+      worst: times[times.length - 1] as number,
+    });
+  }
+  return out;
+}
+
 const seconds = Number(arg('seconds') ?? 8);
 const ahead = Number(arg('ahead') ?? 0);
 const sessionFile = arg('session');
@@ -533,6 +621,19 @@ const how = ahead
   ? `rendered ahead on ${ahead} worker thread${ahead === 1 ? '' : 's'} (load: the audio thread's; workers: each one's share)`
   : 'one thread';
 let sr = Number(arg('rate') ?? 48000);
+if (process.argv.includes('--effects')) {
+  console.log(
+    `Each audio plugin on its own, ${seconds} s of plucked chords and drum hits at ${sr} Hz, blocks of 128 frames\n`,
+  );
+  console.log('| plugin | mean | 99% of blocks | worst block | of a block (mean) |');
+  console.log('|---|---|---|---|---|');
+  for (const r of measureEffects(seconds, sr)) {
+    console.log(
+      `| ${r.name} | ${r.mean.toFixed(3)} ms | ${r.p99.toFixed(3)} ms | ${r.worst.toFixed(3)} ms | ${pct(r.mean / ((BLOCK / sr) * 1000))} |`,
+    );
+  }
+  process.exit(0);
+}
 if (sessionFile) {
   const project = parseProject(JSON.parse(readFileSync(resolve(sessionFile), 'utf8')));
   sr = Number(arg('rate') ?? project.sampleRate ?? 48000);

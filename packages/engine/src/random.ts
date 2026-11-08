@@ -479,3 +479,19 @@ export function namedRandom(...parts: (string | number)[]): NumpyRandom {
   const words = high ? [low, high] : [low];
   return new NumpyRandom(words);
 }
+
+/**
+ * A number in [0, 1) that depends only on three integers: randomness tied to where it's drawn (a
+ * bar, a step, a part), the same however the song is played, from wherever it starts and on whatever
+ * thread. Nothing is kept between draws, so nothing is allocated.
+ */
+export function positionRandom(a: number, b: number, c: number): number {
+  let h =
+    Math.imul(a | 0, 0x9e3779b1) ^ Math.imul((b | 0) + 0x632be5ab, 0x85ebca77) ^ Math.imul((c | 0) + 1, 0xc2b2ae3d);
+  h ^= h >>> 16;
+  h = Math.imul(h, 0x7feb352d);
+  h ^= h >>> 15;
+  h = Math.imul(h, 0x846ca68b);
+  h ^= h >>> 16;
+  return (h >>> 0) / 4294967296;
+}

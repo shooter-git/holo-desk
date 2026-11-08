@@ -272,6 +272,41 @@ export function meterTicks(project: Project): { beatTicks: number; barTicks: num
   };
 }
 
+/**
+ * The pack kit a plugin plays, as its instrument key (`pack/name`): a Drum Replacer's, unless it plays
+ * a built-in kit. Loaded as the song's instruments are, and kept while a plugin plays it.
+ */
+export function insertKit(p: { type: string; settings?: Record<string, string> }): string | null {
+  if (p.type !== 'replacer') return null;
+  const kit = (p.settings?.kit ?? '').trim();
+  return kit && !kit.startsWith('synth:') && kit.includes('/') ? kit : null;
+}
+
+/** Every pack kit a song's plugins play (Drum Replacers'), once each. */
+export function songKits(project: Project): string[] {
+  const out = new Set<string>();
+  const channels = [project.master, ...project.buses.map((b) => b.channel), ...project.tracks.map((t) => t.channel)];
+  for (const c of channels) {
+    for (const p of c.inserts) {
+      const kit = insertKit(p);
+      if (kit) out.add(kit);
+    }
+  }
+  return [...out];
+}
+
+/** The same, from a compiled mixer (what the studio's engine keeps samples for). */
+export function graphKits(graph: GraphSpec): string[] {
+  const out = new Set<string>();
+  for (const c of [graph.master, ...graph.buses, ...graph.tracks]) {
+    for (const p of c.inserts) {
+      const kit = insertKit(p);
+      if (kit) out.add(kit);
+    }
+  }
+  return [...out];
+}
+
 /** Every response a song's spaces need at a rate (Space Designer's, Shimmer's), once each. */
 export function songImpulses(project: Project, rate: number): { key: string; source: ImpulseSource }[] {
   const out = new Map<string, ImpulseSource>();

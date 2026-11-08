@@ -758,6 +758,8 @@ export class EngineCore implements Host {
       beatSeconds: () => this.beatSeconds(),
       beatAt: () => this.beatAt(),
       playing: () => this.playing,
+      barAt: () => this.barAt(),
+      barBeats: () => this.barBeats(),
     };
     this.post({ type: 'ready' });
   }
@@ -799,6 +801,10 @@ export class EngineCore implements Host {
   impulse(key: string): PreparedImpulse | undefined {
     return this.dormant ? undefined : this.impulses.get(key);
   }
+  /** A pack instrument's samples for a plugin (a Drum Replacer's kit): none for a strip this engine doesn't play. */
+  sampler(key: string): SamplerSpec | undefined {
+    return this.dormant ? undefined : this.samplers.get(key);
+  }
   songFrame(): number {
     return this.pos;
   }
@@ -816,6 +822,30 @@ export class EngineCore implements Host {
   }
   beatAt(): number {
     return this.tickAt(this.pos) / this.ppq;
+  }
+  /** The bar the playhead is in, from 0 by the song's meters, and how far into it (4.5: half way through the fifth). */
+  barAt(): number {
+    const tick = this.tickAt(this.pos);
+    const spans = this.meterSpans;
+    if (!spans.length) return tick / this.barTicks;
+    let bars = 0;
+    for (let i = 0; i < spans.length; i++) {
+      const m = spans[i] as MeterSpan;
+      const next = spans[i + 1];
+      if (!next || tick < next.tick) return bars + (tick - m.tick) / m.barTicks;
+      bars += (next.tick - m.tick) / m.barTicks;
+    }
+    return bars;
+  }
+  /** Quarter notes in the bar the playhead is in. */
+  barBeats(): number {
+    const tick = this.tickAt(this.pos);
+    let bar = this.barTicks;
+    for (const m of this.meterSpans) {
+      if (m.tick > tick) break;
+      bar = m.barTicks;
+    }
+    return bar / this.ppq;
   }
   private tickAtSigned(frame: number): number {
     return frame < 0 ? frame / (this.tempo[0] as TempoSegment).framesPerTick : this.tickAt(frame);
@@ -947,12 +977,15 @@ export class EngineCore implements Host {
         this.samplers.set(msg.spec.key, msg.spec);
         for (const t of this.trackOrder)
           if (t.spec && usesSampler(t.spec, msg.spec.key)) this.buildInstruments(t, t.spec, true);
+        // plugins that play it (a Drum Replacer's kit) pick it up (those this engine plays)
+        for (const s of this.allStrips) if (s.role !== ROLE_NONE) for (const ins of s.inserts) ins.effect.refresh?.();
         break;
       case 'forgetSampler':
         // (a track still on it, if any, keeps a silent instrument until the samples come again)
         this.samplers.delete(msg.key);
         for (const t of this.trackOrder)
           if (t.spec && usesSampler(t.spec, msg.key)) this.buildInstruments(t, t.spec, true);
+        for (const s of this.allStrips) if (s.role !== ROLE_NONE) for (const ins of s.inserts) ins.effect.refresh?.();
         break;
       case 'play':
         this.lastCmd = msg.cmd ?? this.lastCmd;
@@ -1014,6 +1047,8 @@ export class EngineCore implements Host {
           for (const m of t.midiFx) m.fx.reset();
           t.seqHeld.clear();
         }
+        // and what plugins play themselves (a Drum Replacer's hits)
+        for (const s of this.allStrips) for (const ins of s.inserts) ins.effect.silence?.();
         break;
     }
   }
@@ -1445,7 +1480,7 @@ export class EngineCore implements Host {
     for (const slot of t.midiFx) {
       if (slot.bypass) continue;
       spare.clear();
-      slot.fx.process(list, spare, n);
+      slot.fx.process(list, spare, n, song);
       const tmp = list;
       list = spare;
       spare = tmp;

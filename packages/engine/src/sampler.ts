@@ -124,8 +124,64 @@ class SampleLayer {
   }
 
   /**
+   * The hit's only sample, from `start` to `end`, at its microphone's level as it was (a level on
+   * the move takes render()). It steps the voice's envelope itself, a sample at a time, as the
+   * sampler always played one sample: nothing to fill first or read back.
+   */
+  renderAlone(l: Float32Array, r: Float32Array, start: number, end: number, voice: SampleVoice, ctl: Controls): void {
+    const z = this.zone;
+    const left = z.left;
+    const right = z.right ?? z.left;
+    const ratio = this.baseRatio * 2 ** (ctl.bend / 12);
+    const len = left.length;
+    const looped = z.loopEnd > z.loopStart && !voice.released;
+    const loopLen = this.loopLen;
+    const xf = this.xf;
+    const fadeFrom = z.loopEnd - xf;
+    const fading = looped && xf > 0;
+    // (at full level, as without microphones, exactly the gain it always had)
+    const gl = this.gl * ctl.expression * this.m;
+    const gr = this.gr * ctl.expression * this.m;
+    for (let i = start; i < end; i++) {
+      if (!voice.step()) {
+        voice.over = true;
+        break;
+      }
+      const e = voice.e;
+      if (this.pos >= len - 1) {
+        this.ended = true;
+        break;
+      }
+      this.read(left, false);
+      let sl = this.y;
+      let sr = sl;
+      if (right !== left) {
+        this.read(right, false);
+        sr = this.y;
+      }
+      if (fading && this.pos > fadeFrom) {
+        // cross-fade into the loop's start so the seam never clicks
+        const a = (this.pos - fadeFrom) / xf;
+        this.read(left, true);
+        sl = sl * (1 - a) + this.y * a;
+        if (right !== left) this.read(right, true);
+        sr = sr * (1 - a) + this.y * a;
+      }
+      l[i] = (l[i] as number) + sl * e * gl;
+      r[i] = (r[i] as number) + sr * e * gr;
+      this.pos += ratio;
+      if (looped && this.pos >= z.loopEnd) this.pos -= loopLen;
+    }
+  }
+
+  /** The microphone's level it plays at now (it glides to a new one in render()). */
+  get level(): number {
+    return this.m;
+  }
+
+  /**
    * Add `n` frames from `start` under the hit's envelope (`env`, from 0), at `micGain` (reached from
-   * where it was by the last frame). Looping while `looped`.
+   * where it was by the last frame), looping while `looped`.
    */
   render(
     l: Float32Array,
@@ -149,14 +205,18 @@ class SampleLayer {
     const xf = this.xf;
     const fadeFrom = z.loopEnd - xf;
     const fading = loops && xf > 0;
+    // a microphone's level moved since the last block: it glides there, a step a sample
     let m = this.m;
-    const dm = n > 0 ? (micGain - m) / n : 0;
+    const ramp = m !== micGain && n > 0;
+    const dm = ramp ? (micGain - m) / n : 0;
+    let kl = gl * m;
+    let kr = gr * m;
     for (let k = 0; k < n; k++) {
+      const e = env[k] as number;
       if (this.pos >= len - 1) {
         this.ended = true;
         break;
       }
-      const e = env[k] as number;
       this.read(left, false);
       let sl = this.y;
       let sr = sl;
@@ -172,10 +232,14 @@ class SampleLayer {
         if (right !== left) this.read(right, true);
         sr = sr * (1 - a) + this.y * a;
       }
-      m += dm;
+      if (ramp) {
+        m += dm;
+        kl = gl * m;
+        kr = gr * m;
+      }
       const i = start + k;
-      l[i] = (l[i] as number) + sl * e * gl * m;
-      r[i] = (r[i] as number) + sr * e * gr * m;
+      l[i] = (l[i] as number) + sl * e * kl;
+      r[i] = (r[i] as number) + sr * e * kr;
       this.pos += ratio;
       if (loops && this.pos >= z.loopEnd) this.pos -= loopLen;
     }
@@ -194,8 +258,13 @@ class SampleVoice implements Voice {
   private killing = 0;
   /** How fast `killing` falls each sample: a kill's, or a choke's. */
   private killCoef = 0.995;
-  /** The kit's decay as it has fallen so far (1: untouched). */
+  /** The kit's decay as it has fallen so far (1: untouched), and how fast it falls a sample now. */
   private tail = 1;
+  private decayCoef = 1;
+  /** The envelope's level step() made (killed, choked and decayed). */
+  e = 0;
+  /** Its envelope has ended, or a kill or the kit's decay has faded it away. */
+  over = false;
   /** Let go by its key (or the pedal) since the sampler last looked: its release sample is due. */
   letGo = false;
   /** A release or pedal sample's voice (never counted against a key's notes, never let go by a key). */
@@ -267,52 +336,63 @@ class SampleVoice implements Voice {
     return this.killing > 0;
   }
 
+  /**
+   * The envelope a sample on, into `e`: false once it's over. A field rather than a returned double,
+   * which a call V8 doesn't inline would box.
+   */
+  step(): boolean {
+    const env = this.env;
+    env.step();
+    let e = env.level;
+    if (this.killing > 0) {
+      this.killing *= this.killCoef;
+      e *= this.killing;
+      if (this.killing < 1e-3) return false;
+    }
+    if (this.decayCoef !== 1) {
+      this.tail *= this.decayCoef;
+      if (this.tail < 1e-4) return false;
+    }
+    if (this.tail !== 1) e *= this.tail;
+    if (env.off) return false;
+    this.e = e;
+    return true;
+  }
+
   render(l: Float32Array, r: Float32Array, start: number, end: number, ctl: Controls): void {
     const state = this.state;
+    // the kit's decay: what's left of the hit falls 69 dB over that share of its length
+    this.decayCoef = state.decay < 1 ? Math.exp(-6.9 / Math.max(1, state.decay * this.frames)) : 1;
+    const looped = !this.released;
+    const layers = this.layers;
+    const first = layers[0] as SampleLayer;
+    if (layers.length === 1 && (first.mic < 0 || first.level === state.mic[first.mic])) {
+      // one sample at a level that isn't moving (as every hit of a pack without microphones is)
+      first.renderAlone(l, r, start, end, this, ctl);
+      if (this.over || first.ended) this.done = true;
+      return;
+    }
+    // several microphones (or one whose level is gliding): the envelope once, read by each
     const want = end - start;
     if (state.env.length < want) state.env = new Float64Array(want);
     const out = state.env;
-    const env = this.env;
-    // the kit's decay: what's left of the hit falls 69 dB over that share of its length
-    const decaying = state.decay < 1;
-    const decayCoef = decaying ? Math.exp(-6.9 / Math.max(1, state.decay * this.frames)) : 1;
     let n = 0;
-    let over = false;
     for (let k = 0; k < want; k++) {
-      env.step();
-      let e = env.level;
-      if (this.killing > 0) {
-        this.killing *= this.killCoef;
-        e *= this.killing;
-        if (this.killing < 1e-3) {
-          over = true;
-          break;
-        }
-      }
-      if (decaying) {
-        this.tail *= decayCoef;
-        if (this.tail < 1e-4) {
-          over = true;
-          break;
-        }
-      }
-      if (this.tail !== 1) e *= this.tail;
-      if (env.off) {
-        over = true;
+      if (!this.step()) {
+        this.over = true;
         break;
       }
-      out[k] = e;
+      out[k] = this.e;
       n = k + 1;
     }
-    const looped = !this.released;
     let sounding = false;
-    for (const layer of this.layers) {
+    for (const layer of layers) {
       if (layer.ended) continue;
       const gain = layer.mic >= 0 ? (state.mic[layer.mic] as number) : 1;
       layer.render(l, r, start, n, out, ctl, looped, gain);
       if (!layer.ended) sounding = true;
     }
-    if (over || !sounding) this.done = true;
+    if (this.over || !sounding) this.done = true;
   }
 }
 

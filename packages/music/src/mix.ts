@@ -32,14 +32,11 @@ export interface MixRecipe {
   /** The inputs' first frame kept, and how many (past an input's end it adds nothing). */
   start: number;
   frames: number;
+  /** One channel, the left's (a mono recording kept mono: half the size). */
+  mono?: boolean;
   /** Frames faded in (straight) and out (an S curve) at the ends. */
   fadeIn: number;
   fadeOut: number;
-  /**
-   * One channel, the inputs' left sides (at their left gains): a mono microphone kept on its own, at
-   * half a stereo file's size and memory (the sampler places it by its pan).
-   */
-  mono?: boolean;
 }
 
 const encodePath = (path: string) => path.split('/').map(encodeURIComponent).join('/');

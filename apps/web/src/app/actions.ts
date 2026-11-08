@@ -4,13 +4,23 @@
  * and the AI all call these.
  */
 
-import { frameToTick, tickToFrame } from '@holo/engine';
+import {
+  clipKey,
+  compileClips,
+  compileTempo,
+  detectHits,
+  frameToTick,
+  kitSource,
+  songKits,
+  tickToFrame,
+} from '@holo/engine';
 import type { LiveRoute } from '@holo/engine/companion';
 import {
   applyOps,
   barToTick,
   type ChannelPatch,
   DIVISIONS,
+  DRUM_PIECES,
   type Instrument,
   meterAt,
   type Note,
@@ -24,6 +34,7 @@ import {
   type PackSound,
   PPQ,
   type Project,
+  paramValue,
   pluginDef,
   projectEnd,
   quantize,
@@ -475,6 +486,11 @@ export function loadInstruments(project: Project): void {
       if (i.type === 'sampler' || i.type === 'performance') void library.ensure(i.pack, i.name, first ? 0 : 1);
     }
   }
+  // the kits plugins play (a Drum Replacer's)
+  for (const kit of songKits(project)) {
+    const [pack = '', ...rest] = kit.split('/');
+    void library.ensure(pack, rest.join('/'), 1);
+  }
 }
 
 // ---- live routing ----
@@ -894,6 +910,74 @@ export function addSound(sound: PackSound): string | null {
   apply(ops, 'New Track');
   selectTrack(track.id);
   return track.id;
+}
+
+/**
+ * A Drum Replacer's hits, heard in its track's recordings as the track plays them (each region at its
+ * gain, the later of overlapping regions on top), as notes of its piece on a new track that plays its
+ * kit: the drum part to play on any kit from here on.
+ */
+export async function hitsToMidi(trackId: string, pluginId: string): Promise<void> {
+  const p = store.get().project;
+  const t = p?.tracks.find((x) => x.id === trackId);
+  const plugin = t?.channel.inserts.find((x) => x.id === pluginId);
+  if (!p || !t || !plugin || t.kind !== 'audio') return;
+  await ensureAudio();
+  const ctx = engine.ctx;
+  if (!ctx) return;
+  const sr = ctx.sampleRate;
+  const segments = compileTempo(p, sr);
+  const audioOf = new Map(t.regions.flatMap((r) => (r.audio ? [[clipKey(r.audio), r.audio] as const] : [])));
+  const loaded = new Map<string, Float32Array[]>();
+  const frames: { frame: number; velocity: number }[] = [];
+  try {
+    for (const clip of compileClips(t, segments, sr)) {
+      const audio = audioOf.get(clip.key);
+      if (!audio) continue;
+      let channels = loaded.get(clip.key);
+      if (!channels) {
+        channels = await audioFiles.load(p.id, audio, ctx);
+        loaded.set(clip.key, channels);
+      }
+      // the stretch of it this piece plays, at its gain
+      const from = Math.max(0, clip.source);
+      const to = Math.min(channels[0]?.length ?? 0, clip.source + (clip.end - clip.start));
+      if (to <= from) continue;
+      const played = channels.map((c) => c.slice(from, to).map((v) => v * clip.gain));
+      for (const h of detectHits(played, sr, plugin.params))
+        frames.push({ frame: clip.start + (from - clip.source) + h.frame, velocity: h.velocity });
+    }
+  } catch (err) {
+    toast(`The recording couldn’t be read: ${err instanceof Error ? err.message : String(err)}`, 'error');
+    return;
+  }
+  if (!frames.length) {
+    toast('No hits heard: lower the Threshold or raise the Sensitivity, then try again', 'info');
+    return;
+  }
+  const key = DRUM_PIECES[Math.round(paramValue('replacer', plugin.params, 'piece'))]?.key ?? 36;
+  const kit = kitSource(plugin.settings?.kit);
+  let instrument: Instrument = { type: 'synth', preset: 'Drum Synth' };
+  if (kit.kind === 'synth') instrument = { type: 'synth', preset: kit.preset };
+  else {
+    const [pack = '', ...rest] = kit.key.split('/');
+    instrument = { type: 'sampler', pack, name: rest.join('/') };
+  }
+  const audible = t.regions.filter((r) => r.audio && !r.muted);
+  const start = Math.min(...audible.map((r) => r.start));
+  const end = Math.max(...audible.map((r) => r.start + r.length));
+  const region = newRegion(start, end - start, `${t.name} hits`);
+  region.notes = frames.map((h) => ({
+    t: Math.max(0, Math.round(frameToTick(segments, h.frame)) - start),
+    d: PPQ / 4,
+    p: key,
+    v: h.velocity,
+  }));
+  const track = newTrack(`${t.name} Hits`, instrument, t.color);
+  track.regions = [region];
+  const index = p.tracks.findIndex((x) => x.id === t.id) + 1;
+  apply([{ op: 'addTrack', track, index }], 'Hits to MIDI');
+  toast(`${frames.length} hits on ${track.name}`, 'info');
 }
 
 export function defaultName(i: Instrument): string {

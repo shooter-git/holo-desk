@@ -20,6 +20,7 @@ import {
   type FromWorklet,
   frameToTick,
   type GraphSpec,
+  graphKits,
   type InputSpec,
   impulseBuffers,
   instrumentSpec,
@@ -774,6 +775,8 @@ export class AudioEngine {
     this.usedSamplers = new Set<string>();
     for (const t of graph.tracks)
       for (const i of [t.instrument, ...t.articulations]) if (i.kind === 'sampler') this.usedSamplers.add(i.key);
+    // and the kits plugins play (a Drum Replacer's)
+    for (const kit of graphKits(graph)) this.usedSamplers.add(kit);
     for (const key of this.samplers) {
       if (this.usedSamplers.has(key)) this.unused.delete(key);
       else this.markUnused(key);

@@ -52,6 +52,12 @@ per quarter note.
   1/8, 2 1/8T, 3 1/16, 4 1/16T, 5 1/32), `octaves` 1–4, `gate` %, `latch` 0/1, `swing` %.
 - `scale`: `transpose` semitones, `key`, `scale`, `quantize` 0/1.
 - `velocity`: `scale` %, `offset`, `random`, `min`, `max`.
+- `drummer` (Session Drummer; put it on a kit: Drum Synth, a drum machine or a pack kit): plays along
+  only while the song plays. `genre` (0 rock, 1 pop, 2 funk, 3 soul, 4 hip-hop, 5 house, 6 jazz
+  brushes, 7 half-time, 8 ballad, 9 shuffle), `complexity` %, `loudness` %, `fills` % (how often the
+  fourth bar of a phrase ends in a fill, and how long it is), `swing` %, `kick` (Kick & Snare variation
+  1–4), `cymbal` (0 the style's own, 1 hi-hat, 2 open hi-hat, 3 ride, 4 ride bell), `perc` (0 none, 1
+  tambourine, 2 shaker, 3 cowbell, 4 clap).
 
 ## Audio effects (tracks, buses, master)
 
@@ -60,7 +66,16 @@ shelf, 3 bell, 4 notch, 5 band pass, 6 high shelf, 7 high cut, with `f`, `g`, `q
 (`detector` 0 log, 1 linear), `gate`, `softener` (Transient Softener), `limiter`, `space` (Space
 Designer), `shimmer`, `reverb`, `delay`, `chorus`, `wow` (Wow & Flutter), `width` (Stereo Width:
 `width` %, `position` −100 left … 100 right, `mono` and `monoFreq` for the lows), `tape` (Tape Warmth),
-`saturator`; `holo plugins` lists every parameter with its range.
+`saturator`, `rotary` (Rotary Speaker: `speed` 0 brake, 1 slow, 2 fast; horn and drum speeds and
+ramps, `drive`, `distance` of the microphones), `phaser` (`stages` 0–5 for 2–12), `tremolo` (`mode` 0
+tremolo, 1 auto-pan; `sync` with `division` like the delay's, else `rate` Hz; `shape` 0 sine, 1
+triangle, 2 square), `lofi` (Lo-fi: `bits`, `rate` Hz, `wow`, `noise` dB, `tone`), `resonance` (String
+Resonance: a grand's strings ringing in sympathy; `amount`, `damping`, `brightness` %, `bass` 0–9 extra
+strings below A0), `replacer` (Drum Replacer: hears each hit and plays `piece` of its kit in its place;
+`threshold`, `sensitivity`, `hold` (retrigger ms), `lookahead`, `lowcut`/`highcut` for what it
+listens to, `dynamics`, `curve`, `mix` 0 the recording … 50 both … 100 the kit, `level`; the kit is
+`"settings": { "kit": "pack/Kit" }`, `"synth:Punch Machine"`, or none for the Drum Synth); `holo
+plugins` lists every parameter with its range.
 
 ## Audio regions
 

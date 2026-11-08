@@ -3,8 +3,9 @@
  * what makes live harmonising possible: the AI (or you) sets a key, a scale and the voices, and
  * every note you play is harmonised in the audio thread, with no delay.
  */
-import { paramValue, SCALES } from '@holo/session';
+import { GROOVES, type Groove, paramValue, SCALES } from '@holo/session';
 import { EV_OFF, EV_ON } from './protocol.ts';
+import { positionRandom } from './random.ts';
 
 /** A block's MIDI events in preallocated arrays, ordered by frame offset. */
 export class EventList {
@@ -52,12 +53,20 @@ export interface MidiHost {
   /** The song's position in quarter notes at the block's start, and whether it is playing. */
   beatAt(): number;
   playing(): boolean;
+  /** The bar the block starts in, counted from 0 by the song's meters, and how far into it (4.5: half way through the fifth). */
+  barAt?(): number;
+  /** Quarter notes in that bar (4 in 4/4, 3 in 3/4 and in 6/8). */
+  barBeats?(): number;
 }
 
 export interface MidiEffect {
   setParams(p: Record<string, number>): void;
-  /** Read `input`, write `output` (both for one block of n frames). */
-  process(input: EventList, output: EventList, n: number): void;
+  /**
+   * Read `input`, write `output` (both for one block of n frames). `song` is false where this engine
+   * doesn't play the strip's song (the audio thread's twin of a strip a worker plays): only what comes
+   * in live goes through, and nothing that plays along with the song is made.
+   */
+  process(input: EventList, output: EventList, n: number, song?: boolean): void;
   reset(): void;
   /** Still making notes with nothing coming in (an arpeggio over held or latched keys). */
   busy?(): boolean;
@@ -364,6 +373,292 @@ class Arpeggiator implements MidiEffect {
   }
 }
 
+/** What a groove's step says: how hard (0: nothing), by its character and the Complexity. */
+function stepLevel(ch: number, complexity: number): number {
+  switch (ch) {
+    case 88: // X
+      return 1;
+    case 120: // x
+      return 0.82;
+    case 79: // O
+      return 0.85;
+    case 111: // o
+      return 0.62;
+    case 103: // g
+      return 0.32;
+    default:
+      // a digit: from that tenth of Complexity up
+      if (ch >= 49 && ch <= 57) return complexity * 10 >= ch - 48 - 1e-9 ? 0.5 : 0;
+      return 0;
+  }
+}
+
+const KICK = 36;
+const SNARE = 38;
+const SIDE_STICK = 37;
+const CLOSED_HAT = 42;
+const PEDAL_HAT = 44;
+const OPEN_HAT = 46;
+const CRASH = 49;
+const RIDE = 51;
+const RIDE_BELL = 53;
+const TOMS = [50, 48, 45, 43];
+/** Percussion's keys, by its option: none, tambourine, shaker, cowbell, clap. */
+const PERC_KEYS = [0, 54, 70, 56, 39];
+/** Parts, for the humanising draws. */
+const P_KICK = 1;
+const P_SNARE = 2;
+const P_CYMBAL = 3;
+const P_FOOT = 4;
+const P_PERC = 5;
+const P_FILL = 6;
+const P_CRASH = 7;
+/** Notes the drummer can have sounding at once (each ends a step after it starts). */
+const DRUM_HELD = 64;
+
+/**
+ * Session Drummer: plays a style's groove while the song plays, a step at a time, in time with the
+ * song (by its bars and meters). Complexity brings in the groove's busier notes (and from 60% the
+ * kick varies its second and fourth bars); Loudness is how hard it plays; Fills is how often the
+ * last bar of a four-bar phrase ends in a fill, and how long the fill is, with a crash into the next.
+ * Kick & Snare picks the groove's variation, Cymbals what the cymbal hand plays, Percussion a part
+ * for a second player.
+ *
+ * Every choice it makes by chance (which bars get fills, their shape, each hit's touch) is drawn
+ * from where it falls in the song, so it plays the same each time from wherever it starts, and on
+ * whichever thread. It plays only while the song does, and only where this engine plays the song;
+ * its notes end when the song stops or jumps.
+ */
+class SessionDrummer implements MidiEffect {
+  private groove: Groove = GROOVES[0] as Groove;
+  private complexity = 0.4;
+  private loudness = 0.6;
+  private fills = 0.4;
+  private swing = 0;
+  private variation = 0;
+  private cymbal = 0;
+  private perc = 0;
+  /** The song's beat up to which steps have been played (NaN: not playing). */
+  private done = Number.NaN;
+  private readonly offKey = new Int32Array(DRUM_HELD);
+  private readonly offAt = new Float64Array(DRUM_HELD);
+  private held = 0;
+  /** The block being made: its first beat, beats a frame, and frames. */
+  private beat0 = 0;
+  private bpf = 0;
+  private n = 0;
+  private out: EventList | null = null;
+  private readonly host: MidiHost;
+  constructor(host: MidiHost) {
+    this.host = host;
+  }
+  setParams(p: Record<string, number>): void {
+    const v = (id: string) => paramValue('drummer', p, id);
+    this.groove = GROOVES[Math.round(v('genre'))] ?? (GROOVES[0] as Groove);
+    this.complexity = v('complexity') / 100;
+    this.loudness = v('loudness') / 100;
+    this.fills = v('fills') / 100;
+    this.swing = v('swing') / 100;
+    this.variation = Math.round(v('kick')) - 1;
+    this.cymbal = Math.round(v('cymbal'));
+    this.perc = Math.round(v('perc'));
+  }
+  process(input: EventList, output: EventList, n: number, song = true): void {
+    // whatever comes in goes through: you can play over the drummer
+    for (let i = 0; i < input.count; i++)
+      output.push(
+        input.offset[i] as number,
+        input.kind[i] as number,
+        input.a[i] as number,
+        input.b[i] as number,
+        input.art[i] as number,
+      );
+    if (!song || !this.host.playing()) {
+      this.endAll(output, 0);
+      this.done = Number.NaN;
+      return;
+    }
+    const host = this.host;
+    const bpf = 1 / (host.beatSeconds() * host.sr);
+    const beat0 = host.beatAt();
+    const beat1 = beat0 + n * bpf;
+    // the song jumped (a locate, a cycle going round): what's sounding ends, and it plays on from here
+    if (Number.isNaN(this.done) || beat0 < this.done - 1e-6 || beat0 > this.done + n * bpf + 1e-6) {
+      this.endAll(output, 0);
+      this.done = beat0;
+    }
+    this.beat0 = beat0;
+    this.bpf = bpf;
+    this.n = n;
+    this.out = output;
+    // notes whose step is over
+    for (let k = 0; k < this.held; ) {
+      if ((this.offAt[k] as number) < beat1) {
+        output.push(this.offset(this.offAt[k] as number), EV_OFF, this.offKey[k] as number, 0);
+        this.held--;
+        this.offAt[k] = this.offAt[this.held] as number;
+        this.offKey[k] = this.offKey[this.held] as number;
+      } else k++;
+    }
+    const from = Math.max(0, this.done);
+    this.done = beat1;
+    if (beat1 <= 0) return;
+    // the bars this block reaches into (a count-in plays nothing)
+    const barBeats = host.barBeats?.() ?? 4;
+    const at = host.barAt?.() ?? beat0 / 4;
+    let bar = Math.floor(at);
+    let barStart = beat0 - (at - bar) * barBeats;
+    if (from < barStart && bar > 0) {
+      bar--;
+      barStart -= barBeats;
+    }
+    const g = this.groove;
+    const grid = g.grid;
+    const steps = Math.max(1, Math.round(barBeats * grid));
+    for (; barStart < beat1; bar++, barStart += barBeats) {
+      for (let s = 0; s < steps; s++) {
+        // straight grooves swing their off sixteenths
+        const shift = grid === 4 && s % 2 === 1 ? (this.swing * 0.5) / grid : 0;
+        const sb = barStart + s / grid + shift;
+        if (sb < from || sb >= beat1 || sb < 0) continue;
+        this.step(bar, s, steps, sb);
+      }
+    }
+    this.out = null;
+  }
+
+  /** The block's frame for a beat. */
+  private offset(beat: number): number {
+    return Math.max(0, Math.min(this.n - 1, Math.round((beat - this.beat0) / this.bpf)));
+  }
+
+  /** Whether a bar (the last of a four-bar phrase) ends in a fill, and its length in steps (0: none). */
+  private fillSteps(bar: number, steps: number): number {
+    if (bar < 0 || bar % 4 !== 3 || this.fills <= 0) return 0;
+    const chance = Math.min(1, this.fills * (bar % 8 === 7 ? 1.6 : 1.1));
+    if (positionRandom(bar, 0, P_FILL) >= chance) return 0;
+    // a beat at the least, the whole bar at the most: longer the more Fills asks for
+    const grid = this.groove.grid;
+    const beats = 1 + Math.floor(this.fills * 2.5 + positionRandom(bar, 1, P_FILL) * 1.5);
+    return Math.min(steps, beats * grid);
+  }
+
+  private step(bar: number, s: number, steps: number, sb: number): void {
+    const g = this.groove;
+    const grid = g.grid;
+    const c = this.complexity;
+    const p = s % (4 * grid);
+    const fill = this.fillSteps(bar, steps);
+    const inFill = fill > 0 && s >= steps - fill;
+    const crash = s === 0 && this.fills > 0 && this.fillSteps(bar - 1, steps) > 0;
+    // the hi-hat foot keeps time under everything
+    const footLevel = g.foot ? stepLevel(g.foot.charCodeAt(p), c) : 0;
+    const ride = this.cymbal === 0 ? g.ride === true : this.cymbal >= 3;
+    if (footLevel > 0) this.hit(PEDAL_HAT, footLevel, bar, s, P_FOOT, sb);
+    else if (ride && !g.foot && grid === 4 && (p === grid || p === 3 * grid))
+      this.hit(PEDAL_HAT, 0.5, bar, s, P_FOOT, sb);
+    if (crash) {
+      this.hit(CRASH, 1, bar, s, P_CRASH, sb);
+      this.hit(KICK, 1, bar, s, P_KICK, sb);
+    }
+    if (inFill) {
+      this.fillHit(bar, s - (steps - fill), fill, s, sb);
+      return;
+    }
+    // Kick & Snare: the chosen variation, and from 60% Complexity the next one in the second and fourth bars
+    const vary = this.variation + (c >= 0.6 && bar % 2 === 1 ? 1 : 0);
+    const kick = g.kick[vary % g.kick.length] as string;
+    const snare = g.snare[vary % g.snare.length] as string;
+    if (!crash) {
+      const k = stepLevel(kick.charCodeAt(p), c);
+      if (k > 0) this.hit(KICK, k, bar, s, P_KICK, sb);
+    }
+    const sn = stepLevel(snare.charCodeAt(p), c);
+    if (sn > 0) {
+      const key = g.cross !== undefined && c * 100 < g.cross ? SIDE_STICK : (g.snareKey ?? SNARE);
+      this.hit(key, sn, bar, s, P_SNARE, sb);
+    }
+    const ch = g.cymbal.charCodeAt(p);
+    const cy = stepLevel(ch, c);
+    if (cy > 0 && !crash) {
+      const open = ch === 79;
+      let key: number;
+      if (this.cymbal === 0) key = ride ? RIDE : open ? OPEN_HAT : CLOSED_HAT;
+      else if (this.cymbal === 1) key = open ? OPEN_HAT : CLOSED_HAT;
+      else if (this.cymbal === 2) key = OPEN_HAT;
+      else key = this.cymbal === 3 ? RIDE : RIDE_BELL;
+      this.hit(key, this.cymbal === 2 ? cy * 0.8 : cy, bar, s, P_CYMBAL, sb);
+    }
+    const pk = PERC_KEYS[this.perc] ?? 0;
+    if (pk) {
+      const pl = stepLevel(g.perc.charCodeAt(p), c);
+      if (pl > 0) this.hit(pk, pl * 0.8, bar, s, P_PERC, sb);
+    }
+  }
+
+  /** A fill's step `j` of `len`: around the toms, on the snare, or soft brush triplets; shaped by the bar. */
+  private fillHit(bar: number, j: number, len: number, s: number, sb: number): void {
+    const g = this.groove;
+    const grid = g.grid;
+    // fewer notes for a gentle fill: eighths
+    if (grid === 4 && this.fills < 0.5 && j % 2 === 1) return;
+    const pos = j / len;
+    const shape = Math.floor(positionRandom(bar, 2, P_FILL) * 3);
+    if (g.fill === 'brush') {
+      this.hit(SNARE, 0.3 + 0.35 * pos, bar, s, P_FILL, sb);
+      return;
+    }
+    let key = SNARE;
+    if (g.fill === 'toms') {
+      const tom = TOMS[Math.min(3, Math.floor(pos * 4))] as number;
+      if (shape === 0) key = pos < 0.25 ? SNARE : tom;
+      else if (shape === 1) key = pos < 0.5 ? SNARE : (TOMS[Math.min(3, 1 + Math.floor((pos - 0.5) * 6))] as number);
+      else key = j % 2 === 0 ? SNARE : tom;
+    } else if (shape === 2 && pos >= 0.75) key = TOMS[3] as number;
+    const accent = j % grid === 0 ? 0.12 : 0;
+    this.hit(key, Math.min(1, (key === SNARE ? 0.55 : 0.72) + 0.3 * pos + accent), bar, s, P_FILL, sb);
+    // the kick under each beat of a fill around the toms
+    if (g.fill === 'toms' && j % grid === 0) this.hit(KICK, 0.7, bar, s, P_KICK, sb);
+  }
+
+  /** A note now: how hard by the style, Loudness and a touch of its own; ended a step later. */
+  private hit(key: number, level: number, bar: number, s: number, part: number, sb: number): void {
+    const out = this.out;
+    if (!out) return;
+    const touch = 1 + (positionRandom(bar, s * 16 + part, key) - 0.5) * 0.12;
+    const loud = 0.5 + 0.65 * this.loudness;
+    const vel = Math.max(1, Math.min(127, Math.round(level * this.groove.level * loud * touch * 127)));
+    // the same piece still held: it ends here, before it's struck again
+    for (let k = 0; k < this.held; k++) {
+      if (this.offKey[k] === key) {
+        out.push(this.offset(sb), EV_OFF, key, 0);
+        this.held--;
+        this.offAt[k] = this.offAt[this.held] as number;
+        this.offKey[k] = this.offKey[this.held] as number;
+        break;
+      }
+    }
+    out.push(this.offset(sb), EV_ON, key, vel);
+    if (this.held < DRUM_HELD) {
+      this.offKey[this.held] = key;
+      this.offAt[this.held] = sb + 0.9 / this.groove.grid;
+      this.held++;
+    } else out.push(this.offset(sb), EV_OFF, key, 0);
+  }
+
+  private endAll(output: EventList, offset: number): void {
+    for (let k = 0; k < this.held; k++) output.push(offset, EV_OFF, this.offKey[k] as number, 0);
+    this.held = 0;
+  }
+  reset(): void {
+    this.held = 0;
+    this.done = Number.NaN;
+  }
+  busy(): boolean {
+    return this.held > 0;
+  }
+}
+
 export function createMidiEffect(type: string, host: MidiHost): MidiEffect | null {
   switch (type) {
     case 'harmonizer':
@@ -374,6 +669,8 @@ export function createMidiEffect(type: string, host: MidiHost): MidiEffect | nul
       return new VelocityProcessor();
     case 'arpeggiator':
       return new Arpeggiator(host);
+    case 'drummer':
+      return new SessionDrummer(host);
     default:
       return null;
   }

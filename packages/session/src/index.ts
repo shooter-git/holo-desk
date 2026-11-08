@@ -1,5 +1,6 @@
 export * from './automation.ts';
 export * from './defaults.ts';
+export * from './drummer.ts';
 export * from './form.ts';
 export * from './format.ts';
 export * from './instruments.ts';

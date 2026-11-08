@@ -11,6 +11,33 @@ import type { PinnedPack } from '../src/packs.ts';
 const FIXTURES = join(import.meta.dirname, 'fixtures');
 const fixture = (name: string) => new Uint8Array(readFileSync(join(FIXTURES, name)));
 
+/** A WAV of any number of channels of integer samples (16-bit), written by hand. */
+function wavMulti(channels: number[][], rate = 48000): Uint8Array {
+  const n = channels.length;
+  const frames = (channels[0] as number[]).length;
+  const out = new Uint8Array(44 + frames * n * 2);
+  const v = new DataView(out.buffer);
+  const tag = (at: number, s: string) => {
+    for (let i = 0; i < s.length; i++) v.setUint8(at + i, s.charCodeAt(i));
+  };
+  tag(0, 'RIFF');
+  v.setUint32(4, 36 + frames * n * 2, true);
+  tag(8, 'WAVE');
+  tag(12, 'fmt ');
+  v.setUint32(16, 16, true);
+  v.setUint16(20, 1, true);
+  v.setUint16(22, n, true);
+  v.setUint32(24, rate, true);
+  v.setUint32(28, rate * n * 2, true);
+  v.setUint16(32, n * 2, true);
+  v.setUint16(34, 16, true);
+  tag(36, 'data');
+  v.setUint32(40, frames * n * 2, true);
+  for (let i = 0; i < frames; i++)
+    for (let c = 0; c < n; c++) v.setInt16(44 + (i * n + c) * 2, (channels[c] as number[])[i] as number, true);
+  return out;
+}
+
 /** A WAV of integer samples (16-bit). */
 const wav16 = (channels: number[][], rate = 44100) =>
   pcmWav({ rate, bits: 16, channels: channels.map((c) => Int32Array.from(c)) });
@@ -66,6 +93,39 @@ describe('a file made from recordings', () => {
     const s = (t: number) => 1 - t * t * (3 - 2 * t);
     expect(l.slice(4)).toEqual([0.25, 0.5, 0.75, 1].map((t) => Math.min(32767, Math.round(60000 * s(t)))));
     expect(l[7]).toBe(0);
+  });
+
+  it('takes one channel of a multichannel recording alone, as a mono microphone', () => {
+    // a hit's four microphones in one file (as a DrumGizmo kit keeps them)
+    const four = decodeInput(
+      wavMulti([
+        [1000, 2000, 3000],
+        [4000, 5000, 6000],
+        [7000, 8000, 9000],
+        [-100, -200, -300],
+      ]),
+    );
+    const decoded = new Map([['k:hit.wav', four]]);
+    const recipe: MixRecipe = {
+      in: [
+        ['k:hit.wav', 1, 0.5, { channel: 2 }],
+        ['k:hit.wav', 0, 1, { channel: 3 }],
+      ],
+      start: 0,
+      frames: 3,
+      fadeIn: 0,
+      fadeOut: 0,
+    };
+    const out = decodeWav(mixFile(recipe, decoded, 16));
+    const side = (c: number) => [...(out.channels[c] as Float32Array)].map((x) => Math.round(x * 32768));
+    expect(side(0)).toEqual([7000, 8000, 9000]);
+    expect(side(1)).toEqual([3500 - 100, 4000 - 200, 4500 - 300]);
+    // without a channel, its first two are its left and right, as before
+    const plain = decodeWav(mixFile({ ...recipe, in: [['k:hit.wav', 1, 1]] }, decoded, 16));
+    expect([...(plain.channels[1] as Float32Array)].map((x) => Math.round(x * 32768))).toEqual([4000, 5000, 6000]);
+    expect(() => mixFile({ ...recipe, in: [['k:hit.wav', 1, 1, { channel: 4 }]] }, decoded, 16)).toThrow(
+      /4 channel\(s\), not a channel 4/,
+    );
   });
 
   it('reads a download from its base, by name', () => {

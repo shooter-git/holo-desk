@@ -12,7 +12,7 @@ import { listSongs } from './build.ts';
 import { sha256 } from './fetch.ts';
 import { type ExperienceManifest, readManifest, writeManifest } from './manifest.ts';
 import { PackMaps } from './pack-lock.ts';
-import { formatPinnedPacks, type PinnedPack, parsePinnedPacks, songPacks } from './packs.ts';
+import { formatPinnedPacks, type PinnedPack, parsePinnedPacks, songPacks, withRequired } from './packs.ts';
 
 /** Why a pack a song plays isn't pinned. */
 export type Unpinned =
@@ -57,7 +57,7 @@ export interface SyncOptions {
   fetch?: ConstructorParameters<typeof PackMaps>[2];
 }
 
-/** Bring an experience's packs.json to the packs its songs play. */
+/** Bring an experience's packs.json to the packs its songs play (and the packs those require). */
 export async function syncPinnedPacks(root: string, opts: SyncOptions): Promise<PackChange> {
   const change: PackChange = { added: [], dropped: [], missing: [] };
   const manifest = readManifest(root);
@@ -67,11 +67,11 @@ export async function syncPinnedPacks(root: string, opts: SyncOptions): Promise<
   const pinned = existsSync(file) ? parsePinnedPacks(readFileSync(file, 'utf8')).packs : [];
   const have = new Map(pinned.map((p) => [p.id, p]));
   const played = experiencePacks(resolve(root, manifest.sessions), opts.extra);
-  const wanted = played.filter((id) => !have.has(id));
   const { catalog, packsAt } = engine;
   if (!catalog || !packsAt) {
     // an engine from before packs could be added: it pins what it pins
-    for (const id of wanted) change.missing.push({ id, why: opts.studioPacks?.[id] ? 'older-engine' : 'imported' });
+    for (const id of played.filter((x) => !have.has(x)))
+      change.missing.push({ id, why: opts.studioPacks?.[id] ? 'older-engine' : 'imported' });
     return change;
   }
   const maps = new PackMaps(
@@ -79,7 +79,13 @@ export async function syncPinnedPacks(root: string, opts: SyncOptions): Promise<
     opts.mapsDir,
     ...(opts.fetch ? [opts.fetch] : []),
   );
-  const next: PinnedPack[] = pinned.filter((p) => opts.addOnly || played.includes(p.id));
+  // and the packs those require (one whose instruments play another's files brings it)
+  const needed = await withRequired(played, async (id) => {
+    const map = have.get(id) ?? (catalog[id] ? await maps.get(id).catch(() => null) : null);
+    return map?.requires;
+  });
+  const wanted = needed.filter((id) => !have.has(id));
+  const next: PinnedPack[] = pinned.filter((p) => opts.addOnly || needed.includes(p.id));
   for (const p of pinned) if (!next.includes(p)) change.dropped.push(p.id);
   for (const id of wanted) {
     if (!catalog[id]) {

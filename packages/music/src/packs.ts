@@ -5,7 +5,7 @@
  * fetches what its songs play and checks each file against these.
  */
 import { type InstrumentManifest, songImpulses } from '@holo/engine';
-import type { Instrument, Project } from '@holo/session';
+import type { Instrument, PackSound, Project } from '@holo/session';
 import type { MixSource } from './mix.ts';
 
 /** A git repository at one commit (GitHub's are fetched file by file, others with git). */
@@ -58,9 +58,15 @@ export interface LocalSource {
   note?: string;
 }
 
+/** No files at all: a palette, whose sounds play the packs it requires and the built-in synths. */
+export interface NoSource {
+  kind: 'none';
+  note?: string;
+}
+
 export type { MixSource } from './mix.ts';
 
-export type PackSource = GitSource | CutSource | ArchiveSource | MixSource | LocalSource;
+export type PackSource = GitSource | CutSource | ArchiveSource | MixSource | LocalSource | NoSource;
 
 export type PackInstrument = Omit<InstrumentManifest, 'pack'> & { title?: string; category?: string };
 
@@ -75,6 +81,10 @@ export interface PackManifest {
   root?: string;
   instruments: PackInstrument[];
   impulses?: { name: string; title?: string; file: string }[];
+  /** Other packs its sounds play (a palette's: installed before a sound that plays them is added). */
+  requires?: string[];
+  /** Ready-made sounds: an instrument with its effects, room and level (a palette's). */
+  sounds?: PackSound[];
 }
 
 export interface PinnedPack extends Omit<PackManifest, 'format' | 'version'> {
@@ -161,6 +171,28 @@ export function songInstruments(project: Project): { pack: string; name: string 
 export function songImpulseFiles(project: Project): { pack: string; name: string }[] {
   const out: { pack: string; name: string }[] = [];
   for (const { source } of songImpulses(project, 48000)) if (source.kind === 'file') out.push(source);
+  return out;
+}
+
+/**
+ * Packs with the packs they require, each once, those required first (a pack whose instruments play
+ * another's files, or a palette, brings what it needs). `requiresOf` says what one requires, or null
+ * when it isn't known (it's left as it is).
+ */
+export async function withRequired(
+  ids: string[],
+  requiresOf: (id: string) => Promise<string[] | null | undefined> | string[] | null | undefined,
+): Promise<string[]> {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  const visit = async (id: string, path: string[]) => {
+    if (seen.has(id)) return;
+    if (path.includes(id)) throw new Error(`${[...path, id].join(' → ')}: packs that require each other`);
+    for (const r of (await requiresOf(id)) ?? []) await visit(r, [...path, id]);
+    seen.add(id);
+    out.push(id);
+  };
+  for (const id of ids) await visit(id, []);
   return out;
 }
 

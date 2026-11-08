@@ -25,7 +25,7 @@ import {
   LOCK_FILE,
 } from './identity.ts';
 import { mapsDir, PackMaps, readLock } from './pack-lock.ts';
-import { formatPinnedPacks, type PackManifest, type PinnedPack, parseChecksums, pinPack } from './packs.ts';
+import { formatPinnedPacks, type PackManifest, type PinnedPack, parseChecksums, pinPack, withRequired } from './packs.ts';
 
 export const RENDERER = 'holo-music.mjs';
 export const PACKS = 'packs.json';
@@ -149,7 +149,7 @@ export interface PinOptions {
   /** Where the pin goes (made if needed). */
   dir: string;
   node?: string;
-  /** The packs to put in packs.json (those the songs play): none by default. */
+  /** The packs to put in packs.json (those the songs play, and what they require): none by default. */
   packs?: string[];
   /** Where packs' maps come from: by default fetched from the packs repository, kept in HO[LO]'s data folder. */
   maps?: PackMaps;
@@ -170,8 +170,10 @@ export async function pinEngine(opts: PinOptions): Promise<Pin> {
       catalog = { ...lock.packs };
       const maps =
         opts.maps && opts.maps.lock.commit === lock.commit ? opts.maps : new PackMaps(lock, mapsDir(opts.repo));
-      const known = want.filter((id) => catalog?.[id]);
-      unpinned = want.filter((id) => !catalog?.[id]);
+      // the packs those require come too
+      const ids = await withRequired(want, async (id) => (catalog?.[id] ? (await maps.get(id)).requires : null));
+      const known = ids.filter((id) => catalog?.[id]).sort();
+      unpinned = ids.filter((id) => !catalog?.[id]).sort();
       packs = await Promise.all(known.map((id) => maps.get(id)));
     } else {
       // an engine from before the lock: every pack it carried, as it pinned them

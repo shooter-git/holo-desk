@@ -4337,3 +4337,9 @@ footer.scan-bar {
     break-after: auto;
   }
 }
+
+/* a song's own rename field, in its row */
+.list-item.renaming .input {
+  flex: 1 1 160px;
+  min-width: 0;
+}

@@ -471,6 +471,15 @@ interface AvailablePack {
   current: boolean;
 }
 
+/**
+ * A pack's licence as the Library shows it: a pack you imported is under your own licence (whatever
+ * its text says), a pinned one under its own (a long one is a free-use statement).
+ */
+export function licenceLabel(pack: { license: string; source?: { kind: string } }): string {
+  if (pack.source?.kind === 'imported' || pack.source?.kind === 'local') return 'Your own licence';
+  return pack.license.length > 14 ? 'Free use' : pack.license;
+}
+
 /** A size on disk, as people read one. */
 function diskSize(bytes: number): string {
   if (bytes >= 1e9) return `${(bytes / 1e9).toFixed(1)} GB`;
@@ -641,7 +650,7 @@ function MorePacks({ query, installed }: { query: string; installed: string }) {
                 <b>{p.name}</b>
                 <span className="meta muted">
                   {p.bytes ? `${diskSize(p.bytes)} · ` : ''}
-                  {p.license.length > 14 ? 'Free use' : p.license}
+                  {licenceLabel(p)}
                 </span>
               </div>
               <div className="muted more-pack-list">{p.instruments.map((i) => i.title).join(' · ')}</div>
@@ -781,8 +790,7 @@ export function LibraryPanel({ overlay = false, full = false }: { overlay?: bool
       {groups.map(({ pack, categories }) => (
         <details key={pack.id} className="disclosure" open={!!q}>
           <summary>
-            {pack.name}{' '}
-            <span className="meta muted pack-license">{pack.license.length > 14 ? 'Free use' : pack.license}</span>
+            {pack.name} <span className="meta muted pack-license">{licenceLabel(pack)}</span>
           </summary>
           {categories
             .filter((c) => c.items.length)
@@ -836,7 +844,12 @@ export function LibraryPanel({ overlay = false, full = false }: { overlay?: bool
         </button>
         <div className="muted note">
           SFZ instruments, or folders of WAV/FLAC files named by note (C4, F#3…); a folder of unnamed hits becomes a
-          drum kit.
+          drum kit, and a kit with a folder for each piece keeps each microphone it was recorded with, mixed with its
+          knobs.
+        </div>
+        <div className="muted note">
+          A pack you import stays on this computer, under your own licence. Bouncing or recording one of its instruments
+          into a song's audio puts that audio in the song's experience repository when the song is sent.
         </div>
       </div>
       {packs.length === 0 && (

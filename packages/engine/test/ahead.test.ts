@@ -36,7 +36,15 @@ import {
 import { prepareImpulse } from '../src/convolver.ts';
 import { EngineCore } from '../src/core.ts';
 import { isPlanned, planTrack } from '../src/parts.ts';
-import { EV_OFF, EV_ON, EVENT_SIZE, type GraphSpec, type ToWorklet } from '../src/protocol.ts';
+import {
+  EV_OFF,
+  EV_ON,
+  EVENT_SIZE,
+  type GraphSpec,
+  type SamplerSpec,
+  type SampleZone,
+  type ToWorklet,
+} from '../src/protocol.ts';
 import { generateSpace } from '../src/spaces.ts';
 
 const SR = 48000;
@@ -174,8 +182,98 @@ function song(): Project {
   ];
   vox.channel.sends = [{ bus: hall.id, level: -8, pre: false }];
   vox.channel.inserts = [newPlugin('limiter')];
-  p.tracks = [...tracks, glass, vox];
+  // a kit on three microphones, its room turned down, tuned and shortened
+  const kit = newTrack('Kit', {
+    type: 'sampler',
+    pack: 'test',
+    name: 'kit',
+    params: { 'mic:room': -6, tune: 1, decay: 70 },
+  });
+  const beat = [36, 42, 38, 42, 36, 46, 38, 42];
+  kit.regions = [
+    {
+      ...newRegion(0, BAR * 4),
+      notes: beat.flatMap((key, i) =>
+        [0, 1, 2, 3].map((bar) => ({
+          t: bar * BAR + i * (PPQ / 2),
+          d: PPQ / 4,
+          p: key,
+          v: 60 + ((i * 23 + bar * 7) % 67),
+        })),
+      ),
+    },
+  ];
+  kit.channel.sends = [{ bus: hall.id, level: -12, pre: false }];
+  p.tracks = [...tracks, glass, vox, kit];
   return p;
+}
+
+/**
+ * A kit recorded on three microphones (a mono close one, stereo overheads and room): a kick, a snare
+ * and hi-hats that choke, two velocity layers and two round robins of each, decaying noise.
+ */
+function testKit(key: string): SamplerSpec {
+  let seed = 11;
+  const noise = () => {
+    seed = (seed * 1103515245 + 12345) & 0x7fffffff;
+    return seed / 0x7fffffff - 0.5;
+  };
+  const burst = (frames: number, level: number, decay: number) =>
+    Float32Array.from({ length: frames }, (_, i) => noise() * level * Math.exp(-i / decay));
+  const zones: SampleZone[] = [];
+  const pieces = [
+    { key: 36, ring: 0.4, extra: {} },
+    { key: 38, ring: 0.3, extra: {} },
+    { key: 42, ring: 0.1, extra: { group: 1 } },
+    { key: 46, ring: 0.5, extra: { offBy: 1 } },
+  ];
+  for (const piece of pieces)
+    for (const [lovel, hivel, level] of [
+      [1, 80, 0.3],
+      [81, 127, 0.8],
+    ] as const)
+      for (const rr of [1, 2])
+        for (const [mic, stereo, gain] of [
+          ['close', false, 1],
+          ['oh', true, 0.4],
+          ['room', true, 0.25],
+        ] as const) {
+          const frames = Math.round(SR * piece.ring * (mic === 'room' ? 1.5 : 1));
+          const decay = SR * piece.ring * 0.2;
+          zones.push({
+            left: burst(frames, level * gain, decay),
+            right: stereo ? burst(frames, level * gain, decay) : null,
+            root: piece.key,
+            lo: piece.key,
+            hi: piece.key,
+            lovel,
+            hivel,
+            gain: 0.9,
+            loopStart: 0,
+            loopEnd: 0,
+            rr,
+            mic,
+            ...(mic === 'close' && piece.key === 42 ? { pan: 0.4 } : {}),
+            ...piece.extra,
+          });
+        }
+  return {
+    key,
+    zones,
+    release: 0.08,
+    oneShot: true,
+    pitched: false,
+    velocityRange: 30,
+    attack: 0,
+    polyphony: 12,
+    notePolyphony: 2,
+    offTime: 0.03,
+    mics: [
+      { id: 'close', name: 'Close' },
+      { id: 'oh', name: 'Overheads', level: -2 },
+      { id: 'room', name: 'Room', pan: 0.1 },
+    ],
+  };
 }
 
 /** Two tracks, a room and a master with nothing on it: what a live note leaves behind dies away. */
@@ -223,6 +321,10 @@ function light(): Project {
 function setup(p: Project, nums: (id: string) => number): ToWorklet[] {
   const segments = compileTempo(p, SR);
   const out: ToWorklet[] = [{ type: 'tempo', segments, ppq: PPQ, ...meterTicks(p) }];
+  const kits = new Set(
+    p.tracks.flatMap((t) => (t.instrument.type === 'sampler' ? [`${t.instrument.pack}/${t.instrument.name}`] : [])),
+  );
+  for (const key of kits) out.push({ type: 'sampler', spec: testKit(key) });
   for (const { key, source } of songImpulses(p, SR))
     if (source.kind === 'space')
       out.push({
@@ -273,6 +375,14 @@ function edits(p: Project, nums: (id: string) => number): Map<number, ToWorklet[
   const t1 = edited.tracks[1] as Track;
   t1.channel.volume = -9;
   t1.channel.sends.push({ bus: (edited.buses[2] as Project['buses'][number]).id, level: -12, pre: false });
+  // the kit's microphones mixed again while it plays (the same instrument takes them)
+  const kit = edited.tracks.find((t) => t.name === 'Kit') as Track;
+  kit.instrument = {
+    type: 'sampler',
+    pack: 'test',
+    name: 'kit',
+    params: { 'mic:close': -3, 'mic:room': 2, decay: 40 },
+  };
   return new Map<number, ToWorklet[]>([
     [200, [{ type: 'locate', frame: frame(2.5) }]],
     [400, [{ type: 'graph', graph: compileGraph(edited, nums, segments) }]],

@@ -59,6 +59,8 @@ export function frameToTick(segments: readonly TempoSegment[], frame: number): n
 
 export function instrumentSpec(i: Instrument): InstrumentSpec {
   // a Performance instrument's live notes play on its pack's plain sampler (its parts play as planned)
+  if (i.type === 'sampler' && i.params && Object.keys(i.params).length)
+    return { kind: 'sampler', key: `${i.pack}/${i.name}`, params: i.params };
   if (i.type === 'sampler' || i.type === 'performance') return { kind: 'sampler', key: `${i.pack}/${i.name}` };
   if (i.type === 'glass') return { kind: 'synth', preset: 'Soft Keys' };
   if (i.type === 'synth') {

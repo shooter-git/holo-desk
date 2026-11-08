@@ -1,4 +1,7 @@
+import { newProject, newTrack } from '@holo/session';
 import { describe, expect, it } from 'vitest';
+import { compileGraph, compileTempo } from '../src/compile.ts';
+import { EngineCore } from '../src/core.ts';
 import { GlassLineVoice, GlassVoice, planGlass, planGlassLine } from '../src/glass.ts';
 import { type PerfInstrument, PlanVoice, planPart, type SampleData } from '../src/performance.ts';
 import type { SamplerSpec, SampleZone } from '../src/protocol.ts';
@@ -273,5 +276,182 @@ describe('the sampler, played', () => {
     level(s, SR * 0.2);
     s.cc(64, 0);
     expect(level(s, 64)).toBeCloseTo(0.02, 5);
+  });
+});
+
+describe('the sampler, with microphones', () => {
+  /** A steady level on one microphone (a fade shows as the level falling), 1 s long unless said. */
+  const take = (key: number, mic: string, rr: number, level: number, extra: Partial<SampleZone> = {}): SampleZone => ({
+    left: new Float32Array(SR).fill(level),
+    right: null,
+    root: key,
+    lo: key,
+    hi: key,
+    lovel: 1,
+    hivel: 127,
+    gain: 1,
+    loopStart: 0,
+    loopEnd: 0,
+    rr,
+    mic,
+    ...extra,
+  });
+  const mics = [
+    { id: 'close', name: 'Close' },
+    { id: 'oh', name: 'Overheads' },
+    { id: 'room', name: 'Room' },
+  ];
+  const kit = (zones: SampleZone[], extra: Partial<SamplerSpec> = {}): SamplerSpec => ({
+    key: 'kit',
+    zones,
+    release: 0.05,
+    oneShot: true,
+    pitched: false,
+    velocityRange: 0,
+    attack: 0,
+    mics,
+    ...extra,
+  });
+  /** A snare's two takes on three microphones, each its own level (the overheads' listed the other way round). */
+  const snare = [
+    take(38, 'close', 1, 0.1),
+    take(38, 'close', 2, 0.2),
+    take(38, 'oh', 2, 0.02),
+    take(38, 'oh', 1, 0.01),
+    take(38, 'room', 1, 0.001),
+    take(38, 'room', 2, 0.002),
+  ];
+  /** Both sides `frames` from now (the mix of every voice), rendering up to it. */
+  const sides = (s: Sampler, frames: number): [number, number] => {
+    const l = new Float32Array(frames);
+    const r = new Float32Array(frames);
+    s.render(l, r, 0, frames);
+    return [l[frames - 1] as number, r[frames - 1] as number];
+  };
+  const level = (s: Sampler, frames: number) => sides(s, frames)[0];
+  const hit = (s: Sampler, key: number) => {
+    s.noteOn(key, 127);
+    const v = level(s, 64);
+    s.allNotesOff(true);
+    level(s, SR / 10);
+    return Math.round(v * 1e6) / 1e6;
+  };
+
+  it('sounds every microphone of a hit together, one round robin for them all', () => {
+    const s = new Sampler(SR, kit(snare));
+    expect([hit(s, 38), hit(s, 38), hit(s, 38)]).toEqual([0.111, 0.222, 0.111]);
+    // the hit is one voice
+    s.noteOn(38, 127);
+    expect(s.active).toBe(1);
+  });
+
+  it("sounds only the microphones that have the piece, never another piece's", () => {
+    const kick = take(36, 'close', 1, 0.5);
+    const s = new Sampler(SR, kit([kick, ...snare.filter((z) => z.rr === 1 && z.mic !== 'close')]));
+    // the snare isn't on the close microphone (it has only the kick): the kick doesn't sound for it
+    expect(hit(s, 38)).toBe(0.011);
+    expect(hit(s, 36)).toBe(0.5);
+  });
+
+  it('turns each microphone to its level as it plays, and starts where its knob is', () => {
+    const one = snare.filter((z) => z.rr === 1);
+    const s = new Sampler(SR, kit(one, { mics: [...mics.slice(0, 2), { id: 'room', name: 'Room', level: -60 }] }));
+    // the room starts off
+    expect(hit(s, 38)).toBe(0.11);
+    s.update({ 'mic:room': 0, 'mic:close': -60 });
+    expect(hit(s, 38)).toBe(0.011);
+    // a sounding hit glides to a new level within a block
+    s.noteOn(38, 127);
+    expect(level(s, 64)).toBeCloseTo(0.011, 6);
+    s.update({ 'mic:room': 0, 'mic:close': 0, 'mic:oh': -6.0206 });
+    expect(level(s, 128)).toBeCloseTo(0.1 + 0.005 + 0.001, 5);
+  });
+
+  it("places a mono microphone by its pan, a zone's own pan first", () => {
+    const close = take(38, 'close', 1, 0.1);
+    const s = new Sampler(SR, kit([close], { mics: [{ id: 'close', name: 'Close', pan: 1 }] }));
+    s.noteOn(38, 127);
+    const [l, r] = sides(s, 64);
+    expect(l).toBeCloseTo(0, 6);
+    expect(r).toBeCloseTo(0.1 * Math.SQRT2, 6);
+    const t = new Sampler(SR, kit([{ ...close, pan: -1 }], { mics: [{ id: 'close', name: 'Close', pan: 1 }] }));
+    t.noteOn(38, 127);
+    const [l2, r2] = sides(t, 64);
+    expect(l2).toBeCloseTo(0.1 * Math.SQRT2, 6);
+    expect(r2).toBeCloseTo(0, 6);
+  });
+
+  it('chokes every microphone of the open hi-hat when the closed one is struck', () => {
+    const open = [take(46, 'close', 1, 0.5, { offBy: 1 }), take(46, 'oh', 1, 0.05, { offBy: 1 })];
+    const closed = [take(42, 'close', 1, 0.2, { group: 1 }), take(42, 'oh', 1, 0.02, { group: 1 })];
+    const s = new Sampler(SR, kit([...open, ...closed], { offTime: 0.01 }));
+    s.noteOn(46, 127);
+    expect(level(s, 64)).toBeCloseTo(0.55, 5);
+    s.noteOn(42, 127);
+    expect(level(s, Math.round(SR * 0.03))).toBeCloseTo(0.22, 2);
+  });
+
+  it("counts hits, not microphones, against a key's limit and the polyphony", () => {
+    const two = snare.filter((z) => z.rr === 1 && z.mic !== 'room');
+    const s = new Sampler(SR, kit(two, { notePolyphony: 2, offTime: 0.01 }));
+    s.noteOn(38, 127);
+    s.noteOn(38, 127);
+    expect(level(s, 64)).toBeCloseTo(0.22, 5);
+    s.noteOn(38, 127);
+    // the oldest hit (both its microphones) faded, two still ring
+    expect(level(s, Math.round(SR * 0.03))).toBeCloseTo(0.22, 3);
+    const t = new Sampler(SR, kit([...two, ...two.map((z) => ({ ...z, lo: 40, hi: 40, root: 40 }))], { polyphony: 2 }));
+    t.noteOn(38, 127);
+    t.noteOn(40, 127);
+    // two hits of two microphones each: both fit
+    expect(t.active).toBe(2);
+    expect(level(t, 64)).toBeCloseTo(0.22, 5);
+  });
+
+  it("tunes the hits that come after its knob is turned, and keeps that much of each hit's ring", () => {
+    const short = take(38, 'close', 1, 0.5, { left: new Float32Array(1000).fill(0.5) });
+    const s = new Sampler(SR, kit([short], { mics: [mics[0] as (typeof mics)[number]] }));
+    s.noteOn(38, 127);
+    s.update({ tune: 12 });
+    // the hit already sounding keeps its pitch: 1000 frames
+    expect(level(s, 900)).toBeCloseTo(0.5, 5);
+    level(s, 200);
+    s.noteOn(38, 127);
+    // an octave up, it's over in half the time
+    expect(level(s, 400)).toBeCloseTo(0.5, 5);
+    expect(level(s, 200)).toBe(0);
+
+    const long = take(38, 'close', 1, 0.5);
+    const d = new Sampler(SR, kit([long], { mics: [mics[0] as (typeof mics)[number]] }), { decay: 50 });
+    d.noteOn(38, 127);
+    // half its ring: 60 dB down by half its length, a quarter of the way it's 30 dB down
+    expect(level(d, SR / 4)).toBeCloseTo(0.5 * 10 ** (-30 / 20), 3);
+    level(d, SR / 2);
+    expect(d.active).toBe(0);
+    const whole = new Sampler(SR, kit([long], { mics: [mics[0] as (typeof mics)[number]] }));
+    whole.noteOn(38, 127);
+    expect(level(whole, (SR * 9) / 10)).toBeCloseTo(0.5, 5);
+  });
+
+  it('takes its knobs where it is in the engine, and is made again for another kit', () => {
+    const core = new EngineCore(SR, () => undefined);
+    const p = newProject('t');
+    const track = newTrack('Kit', { type: 'sampler', pack: 'test', name: 'kit' });
+    p.tracks = [track];
+    core.receive({ type: 'sampler', spec: { ...kit(snare), key: 'test/kit' } });
+    core.receive({ type: 'sampler', spec: { ...kit(snare), key: 'test/other' } });
+    const send = () => core.receive({ type: 'graph', graph: compileGraph(p, () => 1, compileTempo(p, SR)) });
+    const instrument = () =>
+      (core as unknown as { tracks: Map<number, { instruments: unknown[] }> }).tracks.get(1)?.instruments[0];
+    send();
+    const first = instrument();
+    expect(first).toBeInstanceOf(Sampler);
+    track.instrument = { type: 'sampler', pack: 'test', name: 'kit', params: { 'mic:room': -12, decay: 60 } };
+    send();
+    expect(instrument()).toBe(first);
+    track.instrument = { type: 'sampler', pack: 'test', name: 'other' };
+    send();
+    expect(instrument()).not.toBe(first);
+    expect(instrument()).toBeInstanceOf(Sampler);
   });
 });

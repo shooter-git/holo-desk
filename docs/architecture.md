@@ -229,6 +229,15 @@ at once, release samples in parts with a decay of their own (a piano's dampers a
 longer a note was held), the sustain pedal's own sound, keys without dampers, a zone's own release time,
 and tails faded as they load.
 
+**Microphones.** A kit recorded on several microphones (a close one on each drum, overheads, rooms)
+keeps each one's recording: its zones name their microphone (`mic`, and `pan` for a mono one) and the
+instrument lists them (`mics`: id, name, starting level, pan). A hit sounds every microphone's zone for
+its key, velocity and round robin together, the round robin chosen once and matched across them by
+number, as one voice, so chokes, polyphony and a key's limit count hits. A sampler instrument's own
+knobs (`params`: each microphone's level, the kit's tune and decay) update it where it is, like a
+synth's: a level glides over a block, tune takes the next hit, decay shortens what's ringing. At their
+starting levels the microphones sum to the kit as its recipe levelled it.
+
 ## Synths
 
 Besides the samplers, the engine's own synths (`packages/engine/src/synth.ts`, `analog.ts`,

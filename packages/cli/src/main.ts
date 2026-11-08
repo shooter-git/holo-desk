@@ -29,8 +29,11 @@ import {
   parsePosition,
   parseProject,
   pluginDef,
+  type SampleMic,
   SYNTH_MACROS,
   SYNTH_PRESETS,
+  samplerKnobs,
+  samplerKnobValue,
   secondsToTick,
   TRACK_COLORS,
   ticksPerBar,
@@ -177,7 +180,8 @@ function position(project: Project, text: string | undefined, fallback = 0): num
 function parseParams(list: string[]): Record<string, number> {
   const out: Record<string, number> = {};
   for (const w of list) {
-    const m = /^([\w]+)=(-?[\d.]+)$/.exec(w);
+    // (a kit's microphone knobs are mic:<id>)
+    const m = /^([\w:-]+)=(-?[\d.]+)$/.exec(w);
     if (!m) throw new Error(`"${w}": parameters are name=number (e.g. mix=30)`);
     out[m[1] as string] = Number(m[2]);
   }
@@ -245,6 +249,8 @@ Writing (positions are bar.beat.sixteenth: 14, 14.3, 14.3.2; notes as "D5:1 B5:2
   holo track set T [--volume -6] [--pan -0.3] [--mute on|off] [--solo on|off] [--instrument …] [--arm on|off]
   holo synth T [knob=value…]           a synth's own knobs (most built-in synths have six): shown, or set
                                       e.g. holo synth Bass cutoff=500 glide=0.12 drive=0.7
+  holo kit T [knob=value…]             a kit's own knobs: each microphone's level (dB), tune, decay
+                                      e.g. holo kit Drums mic:room=-6 mic:overheads=2 tune=-1 decay=70
   holo fx add T|bus-name|master TYPE [param=value…]     e.g. holo fx add Keys harmonizer key=9 scale=6 voice1=2
   holo fx set T TYPE|ID param=value…
   holo fx remove T TYPE|ID
@@ -467,6 +473,46 @@ async function main(): Promise<void> {
         return;
       }
       throw new Error('holo track add NAME --instrument … | holo track set NAME --volume …');
+    }
+
+    case 'kit': {
+      // a sampler kit's own knobs: each microphone's level, tune, decay
+      const project = await song();
+      const track = trackOf(project, words.shift() ?? '');
+      const inst = track.instrument;
+      if (inst.type !== 'sampler') throw new Error(`${track.name} plays no sample-pack instrument`);
+      const m = await call<{ pads?: unknown[]; pitched?: boolean; mics?: SampleMic[] }>(
+        `/api/packs/${encodeURIComponent(inst.pack)}/instruments/${encodeURIComponent(inst.name)}`,
+      );
+      if (!m.pads?.length && m.pitched !== false && !m.mics?.length)
+        throw new Error(`${inst.pack}/${inst.name} isn't a kit and has no microphones of its own`);
+      const defs = samplerKnobs(m.mics);
+      if (!words.length) {
+        console.log(`${track.name}: ${inst.pack}/${inst.name}`);
+        for (const d of defs)
+          console.log(
+            `  ${d.id.padEnd(18)} ${String(samplerKnobValue(defs, inst.params, d.id)).padEnd(8)} ${d.min}..${d.max} ${d.unit ?? ''}${d.offAtMin ? ` (${d.min}: off)` : ''}  ${d.name}`,
+          );
+        return;
+      }
+      const params = parseParams(words);
+      for (const [k, v] of Object.entries(params)) {
+        const d = defs.find((x) => x.id === k);
+        if (!d) throw new Error(`${inst.pack}/${inst.name} has no "${k}": ${defs.map((x) => x.id).join(', ')}`);
+        if (v < d.min || v > d.max) throw new Error(`${k} goes from ${d.min} to ${d.max}`);
+      }
+      await ops(
+        project,
+        [
+          {
+            op: 'updateTrack',
+            track: track.id,
+            patch: { instrument: { ...inst, params: { ...inst.params, ...params } } },
+          },
+        ],
+        `${track.name}'s kit: ${words.join(' ')}`,
+      );
+      return;
     }
 
     case 'synth': {

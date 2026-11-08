@@ -15,6 +15,8 @@ export interface ParamDef {
   scale?: 'lin' | 'log';
   step?: number;
   options?: string[];
+  /** At its lowest it's off, and says so (a microphone's level all the way down). */
+  offAtMin?: boolean;
 }
 
 export interface PluginDef {
@@ -512,6 +514,7 @@ export function paramValue(type: string, params: Record<string, number>, id: str
 
 export function formatParam(p: ParamDef, v: number): string {
   if (p.options) return p.options[Math.round(v)] ?? String(v);
+  if (p.offAtMin && v <= p.min) return 'Off';
   if (p.unit === 'Hz') return v >= 1000 ? `${(v / 1000).toFixed(v >= 10000 ? 1 : 2)} kHz` : `${Math.round(v)} Hz`;
   if (p.unit === 'dB') return `${v > 0 ? '+' : ''}${v.toFixed(1)} dB`;
   if (p.unit === 'ms') return v < 10 ? `${v.toFixed(1)} ms` : `${Math.round(v)} ms`;
@@ -519,6 +522,7 @@ export function formatParam(p: ParamDef, v: number): string {
   if (p.unit === '%') return v !== 0 && Math.abs(v) < 1 ? `${v.toFixed(2)}%` : `${Math.round(v)}%`;
   if (p.unit === 'LR') return Math.abs(v) < 0.5 ? 'Centre' : `${v < 0 ? 'L' : 'R'} ${Math.round(Math.abs(v))}`;
   if (p.unit === ':1') return `${v.toFixed(1)}:1`;
+  if (p.unit === 'st') return `${v > 0 ? '+' : ''}${v.toFixed(1)} st`;
   if (p.unit) return `${Math.round(v * 100) / 100} ${p.unit}`;
   return String(Math.round(v * 100) / 100);
 }

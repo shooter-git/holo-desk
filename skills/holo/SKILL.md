@@ -53,6 +53,7 @@ holo synth Pad space=0.7 shimmer=0.6 bloom=2                     # Ethereal Pad/
 holo track add Organ --instrument synth:"Tonewheel Gospel"      # drawbar organ, rotor fast on the mod wheel
 holo synth Organ drawbars=6 rotor=2 drive=0.5                    # stepped knobs take their option's number
 holo track add Beat --instrument synth:"Analog Machine"         # a drum machine on the GM drum keys
+holo kit Drums mic:room=-6 mic:overheads=2 tune=-1 decay=70      # a kit's microphones, tune and decay (holo kit Drums lists them)
 holo automate --track Strings volume 9=-24 13=-6 17=-6 21=-30  # a swell and a fade (dB)
 holo automate --track Keys reverb.mix 1=10 17=45                # a plugin moving (on its first reverb)
 holo automate --bus Hall volume 33=0 41=-60                     # a bus; --track master for the master

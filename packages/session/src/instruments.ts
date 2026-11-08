@@ -577,6 +577,7 @@ export function samplerKnobs(mics: readonly SampleMic[] | undefined): ParamDef[]
         max: 12,
         default: Math.min(12, Math.max(MIC_OFF, m.level ?? 0)),
         unit: 'dB',
+        offAtMin: true,
       }),
     ),
     { id: 'tune', name: 'Tune', min: -12, max: 12, default: 0, unit: 'st' },
@@ -585,7 +586,11 @@ export function samplerKnobs(mics: readonly SampleMic[] | undefined): ParamDef[]
 }
 
 /** A sampler knob's value in the instrument's params (its default where it has none), kept in range. */
-export function samplerKnobValue(defs: readonly ParamDef[], params: Record<string, number> | undefined, id: string): number {
+export function samplerKnobValue(
+  defs: readonly ParamDef[],
+  params: Record<string, number> | undefined,
+  id: string,
+): number {
   const def = defs.find((p) => p.id === id);
   const v = params?.[id];
   if (!def) return v ?? 0;

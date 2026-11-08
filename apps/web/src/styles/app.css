@@ -446,9 +446,12 @@ a.btn {
 
 /* ---------- control bar ---------- */
 
+/* the sides share the room equally, so the transport stays centred. The right side is never narrower
+   than what it holds: should it ever need more than its share, the centre moves over rather than
+   being covered (the left gives way with the song's title) */
 .control-bar {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr) auto minmax(min-content, 1fr);
   align-items: center;
   gap: 12px;
   height: 52px;
@@ -756,12 +759,18 @@ a.btn {
 }
 
 /* the control bar gives way on narrower screens: the least-used parts go first, in this order, and
-   the Songs button stands in for the title once that is gone (phones have their own bar) */
+   the Songs button stands in for the title once that is gone (phones have their own bar). Each step
+   comes where the right side would no longer fit beside the centre (which grows at each step above) */
 .app:not(.phone) .control-bar .cb-songs {
   display: none;
 }
-@media (max-width: 1600px) {
+@media (max-width: 1660px) {
   .app:not(.phone) .control-bar .cb-optional {
+    display: none;
+  }
+}
+@media (max-width: 1520px) {
+  .app:not(.phone) .control-bar .dsp-meter {
     display: none;
   }
 }
@@ -781,7 +790,6 @@ a.btn {
     justify-content: space-between;
   }
   .app:not(.phone) .control-bar .cb-midi,
-  .app:not(.phone) .control-bar .dsp-meter,
   .app:not(.phone) .control-bar .cb-remote {
     display: none;
   }
@@ -805,8 +813,13 @@ a.btn {
   }
 }
 /* touch controls are bigger, so the bar runs out of room sooner */
-@media (max-width: 1800px) and (pointer: coarse) {
+@media (max-width: 1910px) and (pointer: coarse) {
   .app:not(.phone) .control-bar .cb-optional {
+    display: none;
+  }
+}
+@media (max-width: 1740px) and (pointer: coarse) {
+  .app:not(.phone) .control-bar .dsp-meter {
     display: none;
   }
 }
@@ -817,7 +830,6 @@ a.btn {
 }
 @media (max-width: 1440px) and (pointer: coarse) {
   .app:not(.phone) .control-bar .cb-midi,
-  .app:not(.phone) .control-bar .dsp-meter,
   .app:not(.phone) .control-bar .cb-remote {
     display: none;
   }

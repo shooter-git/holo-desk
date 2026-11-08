@@ -279,6 +279,14 @@ export function aheadPlan(graph: GraphSpec, owners: readonly number[]): AheadPla
 }
 
 /**
+ * The synths that cost about twice the others a voice (measured: the organ's nine wheels and rotor,
+ * the modelled keys, and those carrying their own hall: wavetable, drone, wind, strings, reeds,
+ * choir, struck).
+ */
+const HEAVY_SYNTHS =
+  /^(Tonewheel|Tine|Reed Piano|Clav|Morph|Drone|Ethereal|Shakuhachi|Bansuri|Dizi|Celtic|Koto|Guzheng|Gayageum|Shamisen|Pipa|Sitar|Tanpura|Harmonium|Sheng|Glass Harmonica|Choir|Male Choir|Taiko|War Drums|Frame Drum|Opera Gongs|Anvil)/;
+
+/**
  * A guess at a strip's share of a block before it has been timed (from timings on a 2014 server
  * core at 48 kHz): its plugins (the spaces' convolution above all) and its instrument, or for a
  * planned part what its plans ask for (aheadPartGuess).
@@ -291,7 +299,7 @@ export function aheadGuess(spec: GraphSpec['tracks'][number] | GraphSpec['buses'
   }
   if ('instrument' in spec) {
     if (part !== undefined) c += part;
-    else if (spec.instrument.kind === 'synth') c += 0.06;
+    else if (spec.instrument.kind === 'synth') c += HEAVY_SYNTHS.test(spec.instrument.preset) ? 0.1 : 0.06;
     else if (spec.instrument.kind !== 'none') c += 0.03;
   }
   return c;
@@ -312,7 +320,14 @@ export function aheadPartGuess(plans: PartPlans, length: number): number {
  * little release), a synth's voices dearer than a sampler's.
  */
 export function aheadTrackGuess(events: Float64Array, instrument: InstrumentSpec, length: number, sr: number): number {
-  const each = instrument.kind === 'synth' ? 0.025 : instrument.kind === 'none' ? 0 : 0.012;
+  const each =
+    instrument.kind === 'synth'
+      ? HEAVY_SYNTHS.test(instrument.preset)
+        ? 0.05
+        : 0.025
+      : instrument.kind === 'none'
+        ? 0
+        : 0.012;
   if (!each) return 0;
   const release = Math.round(0.3 * sr);
   const edges: [number, number][] = [];

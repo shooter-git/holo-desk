@@ -5,7 +5,6 @@
  */
 import { createHash, randomBytes } from 'node:crypto';
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs';
-import { tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { constants as zlib } from 'node:zlib';
 import fastifyCompress from '@fastify/compress';
@@ -411,13 +410,16 @@ export async function buildApp(config: Config): Promise<{ app: FastifyInstance; 
     done(null, payload),
   );
   app.post<{ Querystring: { name?: string; license?: string } }>('/api/packs/import', async (req, reply) => {
-    const work = mkdtempSync(join(tmpdir(), 'holo-upload-'));
+    // unpacked beside the packs (on the same disk), so its samples are hard-linked into the pack, not copied
+    const packsDir = join(config.dataDir, 'packs');
+    mkdirSync(packsDir, { recursive: true });
+    const work = mkdtempSync(join(packsDir, '.upload-'));
     try {
       const zip = join(work, 'pack.zip');
       await saveStream(req.body as NodeJS.ReadableStream, zip);
       const unpacked = join(work, 'unpacked');
       extractZip(zip, unpacked);
-      const pack = importFolder(unpacked, join(config.dataDir, 'packs'), {
+      const pack = importFolder(unpacked, packsDir, {
         name: req.query.name?.trim() || 'Imported pack',
         ...(req.query.license ? { license: req.query.license } : {}),
       });

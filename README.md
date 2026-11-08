@@ -160,6 +160,8 @@ pnpm packs list
 pnpm packs install vsco2 vcsl          # by name, or all
 pnpm packs install --from ~/samples    # from files you already have (hard-linked)
 pnpm packs import ~/Downloads/MyPiano.zip --name "My Piano"
+pnpm packs import ~/Samples/MyKit --name "My Kit"   # a kit: a folder for each piece, any microphones
+pnpm packs import-bfd ~/BFD --name "BFD"           # your own BFD: its inventory, then a kit if it can
 pnpm packs remove rock-kit             # to make room: its samples go
 ```
 
@@ -201,6 +203,24 @@ each layer, the same way for every drum and every key of the piano.
 You can also import your own from the studio: **Library → Import a sample pack (.zip)**. SFZ
 instruments come in with their mapping. Folders of samples named by note (C4, F#3, `_v2`, `_rr1`…)
 become instruments, and a folder of one-shot hits becomes a drum kit on the General MIDI keys.
+
+A kit's folder with a folder for each piece (Kick, Snare, Hi-Hat Closed, Hi-Hat Open, Tom 1, Crash,
+Ride…) becomes one kit: each piece on its General MIDI key, the hi-hat choking itself, its velocity
+layers placed by how loud they measure (as the pinned kits' are) and its takes as round robins. Where
+its samples were recorded on several microphones, in folders of their own (`Snare/Close`,
+`Snare/OH`, `Snare/Room`) or named in the files (`Snare_Top_v1.wav`, `Kick_In_v2_rr1.wav`), every
+microphone of a hit sounds together and the kit's window has a level for each. SFZ kits that give
+each microphone a controller (`label_cc`, `amplitude_oncc`) come in the same way.
+
+Your own packs' ids start with `mine-`, so installing HO[LO]'s packs never overwrites one, and their
+samples are hard-linked rather than copied where they're on the same disk. They stay in your data
+folder, but bouncing or recording one into a song makes ordinary audio files, and sending that song
+back to an experience puts its audio in the experience's repository.
+
+`pnpm packs import-bfd` reads BFD from your own copy: it writes an inventory of the folder (names,
+sizes and headers, no audio) to `bfd-inventory.txt` in the data folder, and imports plain WAV or FLAC
+files in a folder for each piece as a kit of your own. BFD's own sample format isn't mapped yet: the
+inventory is what the mapping will be written from.
 
 ## Key commands
 

@@ -9,7 +9,14 @@
  *                                microphones mixed), or take them from a folder you already have
  *                                (hard-linked when it can); each file is checked against the pack's checksums
  *   import PATH [--name N] [--id ID] [--license L]
- *                                your own pack: an .sfz, a folder (of SFZ or of samples named by note), or a .zip
+ *                                your own pack: an .sfz, a folder (of SFZ, of samples named by note, or a drum
+ *                                kit: a folder for each piece, its microphones in folders of their own or named
+ *                                in its files), or a .zip. Its id starts with mine-, so installing HO[LO]'s packs
+ *                                never touches it; its samples are hard-linked into the data folder when they can be
+ *   import-bfd FOLDER [--name N] BFD, your own copy, from its folder: an inventory of what's there goes to
+ *                                the data folder (bfd-inventory.txt). Plain WAV or FLAC files in a folder for each
+ *                                piece are imported as a multi-microphone kit (mine-bfd-…); BFD's own sample
+ *                                format isn't mapped yet, so otherwise it stops and asks for the inventory
  *   refresh                      bring installed packs' maps up to date with the pinned ones (no download)
  *   remove ID                    uninstall a pack
  *   lock [REF] [--check]         pin the packs repository (github.com/shooter-git/holo-packs) at REF, main
@@ -19,11 +26,10 @@
  * The packs' maps and checksums live in the packs repository; packs.lock.json pins one commit of it.
  */
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { formatLock, LOCK_FILE, lockAt, PackMaps, readLock } from '@holo/music';
 import { loadConfig } from './config.ts';
-import { extractZip, importFolder } from './pack-import.ts';
+import { extractZip, importBfd, importFolder, PRIVATE_AUDIO_NOTE } from './pack-import.ts';
 import {
   availablePacks,
   packFiles as files,
@@ -35,6 +41,7 @@ import {
   removePack,
   shippedMaps,
 } from './pack-install.ts';
+import type { Pack } from './packs.ts';
 
 const config = loadConfig();
 const packsDir = join(config.dataDir, 'packs');
@@ -128,7 +135,8 @@ async function main(): Promise<void> {
     let source = resolve(path);
     let temp: string | null = null;
     if (source.toLowerCase().endsWith('.zip')) {
-      temp = mkdtempSync(join(tmpdir(), 'holo-pack-'));
+      // unpacked beside the packs, so its samples can be hard-linked into the pack (one disk, no second copy)
+      temp = mkdtempSync(join(packsDir, '.import-'));
       extractZip(source, temp);
       source = temp;
     } else if (source.toLowerCase().endsWith('.sfz')) {
@@ -139,13 +147,30 @@ async function main(): Promise<void> {
         name: name ?? basename(path).replace(/\.(zip|sfz)$/i, ''),
         ...(id ? { id } : {}),
         ...(license ? { license } : {}),
+        log: (line) => console.log(`  ${line}`),
       });
-      console.log(
-        `Imported "${pack.name}" as ${pack.id}: ${pack.instruments.map((i) => `${i.title} (${i.zones.length})`).join(', ')}`,
-      );
+      imported(pack);
     } finally {
       if (temp) rmSync(temp, { recursive: true, force: true });
     }
+    await rescan();
+    return;
+  }
+  if (command === 'import-bfd') {
+    const name = flag('name');
+    const path = rest[0];
+    if (!path || !existsSync(path)) throw new Error('Give the folder BFD is in (copied from its discs)');
+    const r = importBfd(path, config.dataDir, {
+      ...(name ? { name } : {}),
+      log: (line) => console.log(`  ${line}`),
+    });
+    console.log(`The inventory of ${basename(resolve(path))}: ${r.inventory}`);
+    if (!r.pack) {
+      console.error(r.reason);
+      process.exitCode = 1;
+      return;
+    }
+    imported(r.pack);
     await rescan();
     return;
   }
@@ -167,6 +192,16 @@ async function main(): Promise<void> {
       ?.replace(/^\/\*\*?/, '')
       .replace(/^ \* ?/gm, ''),
   );
+}
+
+/** What an import made, and what becomes of a private pack's sound in a song. */
+function imported(pack: Pack): void {
+  console.log(
+    `Imported "${pack.name}" as ${pack.id}: ${pack.instruments
+      .map((i) => `${i.title} (${i.zones.length}${i.mics?.length ? `, ${i.mics.length} microphones` : ''})`)
+      .join(', ')}`,
+  );
+  console.log(`Note: ${PRIVATE_AUDIO_NOTE}`);
 }
 
 /** `lock`: pin the packs repository at a commit, or check the pinned maps. */

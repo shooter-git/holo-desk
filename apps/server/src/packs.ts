@@ -42,6 +42,10 @@ export interface PackInstrument {
   attack: number;
   oneShot: boolean;
   velocityRange: number;
+  /** How it plays (see the engine's SamplerSpec): notes at once, a key's own limit, a choke's fade. */
+  polyphony?: number;
+  notePolyphony?: number;
+  offTime?: number;
   zones: Zone[];
   /** A kit's pads, every piece once, in rows of four: the key each plays and what sounds there. */
   pads?: { key: number; name: string }[];

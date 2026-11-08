@@ -29,6 +29,7 @@ import {
   readLock,
   SampleCache,
   sha256,
+  withRequired,
 } from '@holo/music';
 import { PRIVATE_PREFIX } from './pack-import.ts';
 import { folderBytes, type Pack } from './packs.ts';
@@ -212,11 +213,15 @@ function ownPack(packsDir: string, id: string): boolean {
   return id.startsWith(PRIVATE_PREFIX) || kind === 'imported' || kind === 'local';
 }
 
-/** Install one of the shipped libraries (from a folder you have, else its pinned source), and write its map. */
+/**
+ * Install one of the shipped libraries (from a folder you have, else its pinned source), and write its
+ * map. A pack with no files of its own (a palette) is only its map. With `requires`, the packs it
+ * requires that aren't installed yet are installed first, one at a time.
+ */
 export async function installPack(
   packsDir: string,
   id: string,
-  opts: { from?: string; log?: (line: string) => void } = {},
+  opts: { from?: string; log?: (line: string) => void; requires?: boolean } = {},
 ): Promise<InstallResult> {
   const log = opts.log ?? (() => undefined);
   if (id.startsWith(PRIVATE_PREFIX)) throw new Error(`${id} is a pack of your own: there's nothing to install`);
@@ -228,10 +233,27 @@ export async function installPack(
         `${m.name} over it. Remove it, or import it again (it gets a mine- id), then install.`,
     );
   mkdirSync(packsDir, { recursive: true });
-  if (opts.from) log(`${fromFolder(packsDir, m, resolve(opts.from), log)} sample(s) from ${opts.from}`);
-  else if (m.source.kind === 'cut' || m.source.kind === 'archive' || m.source.kind === 'mix')
-    await fromRecipe(packsDir, m, log);
-  else await fromGit(packsDir, m, log);
+  if (opts.requires) {
+    const all = await withRequired([id], async (x) => (await availablePack(x))?.requires);
+    for (const other of all.filter((x) => x !== id && !installedPack(packsDir, x))) {
+      const name = (await availablePack(other))?.name ?? other;
+      log(`${name}, which ${m.name} plays:`);
+      const r = await installPack(packsDir, other, {
+        ...opts,
+        requires: false,
+        log: (line) => log(`${name}: ${line}`),
+      });
+      if (r.wrong.length) throw new Error(`${name}: ${r.wrong.length} file(s) aren't the ones HO[LO] pins`);
+    }
+  }
+  // a pack with no files of its own (a palette) is only its map
+  if (packFiles(m).length) {
+    if (opts.from) log(`${fromFolder(packsDir, m, resolve(opts.from), log)} sample(s) from ${opts.from}`);
+    else if (m.source.kind === 'cut' || m.source.kind === 'archive' || m.source.kind === 'mix')
+      await fromRecipe(packsDir, m, log);
+    else await fromGit(packsDir, m, log);
+  }
+  mkdirSync(join(packsDir, m.id), { recursive: true });
   writeFileSync(join(packsDir, m.id, 'holo-pack.json'), `${JSON.stringify(m)}\n`);
   return {
     present: presentFiles(packsDir, m),

@@ -49,6 +49,7 @@ import {
   availablePacks,
   Installer,
   installedPack,
+  packFiles,
   refreshMaps,
   removePack,
   shippedMaps,
@@ -366,7 +367,12 @@ export async function buildApp(config: Config): Promise<{ app: FastifyInstance; 
           credit: m.credit,
           // its samples' size on disk: what installing it takes
           bytes: (m as { bytes?: number }).bytes ?? null,
-          instruments: m.instruments.map((i) => ({ title: i.title, category: i.category })),
+          files: packFiles(m).length,
+          instruments: m.instruments.map((i) => ({ name: i.name, title: i.title, category: i.category })),
+          // a palette's: what it is, the packs its sounds play, and the sounds
+          ...(m.description ? { description: m.description } : {}),
+          requires: m.requires ?? [],
+          sounds: m.sounds ?? [],
           // installed, and its map is the one pinned (else `refresh` or a reinstall brings it up to date)
           installed: have !== null,
           current: have !== null && JSON.stringify(have) === JSON.stringify(m),

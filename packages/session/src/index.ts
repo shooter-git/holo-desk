@@ -1,5 +1,6 @@
 export * from './automation.ts';
 export * from './defaults.ts';
+export * from './drummer.ts';
 export * from './form.ts';
 export * from './format.ts';
 export * from './instruments.ts';
@@ -7,6 +8,7 @@ export * from './keysig.ts';
 export * from './midi-file.ts';
 export * from './notation.ts';
 export * from './ops.ts';
+export * from './palettes.ts';
 export * from './plugins.ts';
 export * from './realize.ts';
 export * from './summary.ts';

@@ -194,6 +194,8 @@ lists them. A plugin may also carry text `settings`:
 - Tape Warmth can take away a fixed centre from its saturated sound: `"settings": { "centre": "0.0012,-0.0004" }`
   (left, right). A creation whose saturation centres itself on the whole loop's average hands that
   average over this way.
+- A Drum Replacer's kit is `"settings": { "kit": "drums/Studio Kit" }` (a pack's instrument, loaded
+  with the song's instruments), `"synth:Analog Machine"` (a drum machine), or absent for the Drum Synth.
 
 ### Stage
 

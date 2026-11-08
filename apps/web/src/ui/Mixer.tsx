@@ -1,8 +1,10 @@
 /** The mixer: a channel strip per track, then the buses and the master; and the plugin windows. */
-import { bandsResponse, peqBands } from '@holo/engine';
+import { bandsResponse, kitSource, peqBands } from '@holo/engine';
 import {
   type Bus,
   type Channel,
+  DRUM_PIECES,
+  DRUM_PRESETS,
   type Instrument,
   macroValue,
   type Op,
@@ -32,6 +34,7 @@ import {
   beginGesture,
   endGesture,
   gestureChange,
+  hitsToMidi,
   selectTrack,
   setInstrument,
   updateChannel,
@@ -1015,6 +1018,7 @@ export function PluginWindow() {
         </div>
       )}
       {(plugin.type === 'space' || plugin.type === 'shimmer') && <SpacePicker target={target} plugin={plugin} />}
+      {plugin.type === 'replacer' && <KitPicker target={target} plugin={plugin} />}
       {plugin.type === 'wow' && plugin.settings?.curve && <WowDrift target={target} plugin={plugin} />}
       <div className="face">
         {def.params
@@ -1025,6 +1029,8 @@ export function PluginWindow() {
           )
           // a drift curve stands in for every generated setting
           .filter(() => plugin.type !== 'wow' || !plugin.settings?.curve)
+          // (a Drum Replacer's piece has its own menu, by its kit)
+          .filter((p) => plugin.type !== 'replacer' || p.id !== 'piece')
           .map((p) =>
             p.options && p.options.length <= 3 ? (
               <div key={p.id} className="knob choice">
@@ -1432,6 +1438,99 @@ function SpacePicker({ target, plugin }: { target: string; plugin: Plugin }) {
         {space >= SPACE_FILE
           ? 'A recorded or exported response, played as it is.'
           : 'Generated to a design: Variation picks another room of the same kind, Decay scales how long it rings.'}
+      </span>
+    </div>
+  );
+}
+
+/** The kits a Drum Replacer can play: the built-in ones, then every installed pack's drums and percussion. */
+function useKits(): { key: string; title: string; pack: string }[] {
+  const packs = useSyncExternalStore(
+    (fn) => library.subscribe(fn),
+    () => library.packs,
+  );
+  return packs.flatMap((p) =>
+    p.instruments
+      .filter((i) => /drum|kit|percussion/i.test(i.category))
+      .map((i) => ({ key: `${p.id}/${i.name}`, title: i.title, pack: p.name })),
+  );
+}
+
+/** A Drum Replacer's kit and the piece it plays, and its hits as notes of their own. */
+function KitPicker({ target, plugin }: { target: string; plugin: Plugin }) {
+  const kits = useKits();
+  const track = useApp((s) => s.project?.tracks.find((t) => t.id === target));
+  useSyncExternalStore(
+    (fn) => library.subscribe(fn),
+    () => library.version,
+  );
+  const kit = plugin.settings?.kit ?? '';
+  const src = kitSource(kit);
+  const piece = Math.round(paramValue('replacer', plugin.params, 'piece'));
+  const [pack = '', ...rest] = src.kind === 'pack' ? src.key.split('/') : [];
+  const load = src.kind === 'pack' ? library.state(pack, rest.join('/')) : undefined;
+  const set = (patch: { params?: Record<string, number>; settings?: Record<string, string> }, label: string) =>
+    apply([{ op: 'updatePlugin', target, plugin: plugin.id, patch }], label);
+  const known = src.kind === 'synth' || kits.some((k) => k.key === kit);
+  const [busy, setBusy] = useState(false);
+  return (
+    <div className="display space-picker">
+      <label className="hstack">
+        <span className="label">Kit</span>
+        <select className="select" value={kit} onChange={(e) => set({ settings: { kit: e.target.value } }, 'Kit')}>
+          <optgroup label="Built in">
+            {DRUM_PRESETS.map((name) => (
+              <option key={name} value={name === 'Drum Synth' ? '' : `synth:${name}`}>
+                {name}
+              </option>
+            ))}
+          </optgroup>
+          {kits.length > 0 && (
+            <optgroup label="Packs">
+              {kits.map((k) => (
+                <option key={k.key} value={k.key}>
+                  {k.pack.toLowerCase().includes(k.title.toLowerCase()) ? k.pack : `${k.title} (${k.pack})`}
+                </option>
+              ))}
+            </optgroup>
+          )}
+          {!known && <option value={kit}>{rest.join('/') || kit} (not installed)</option>}
+        </select>
+      </label>
+      <label className="hstack">
+        <span className="label">Piece</span>
+        <select
+          className="select"
+          value={piece}
+          onChange={(e) => set({ params: { piece: Number(e.target.value) } }, 'Piece')}
+        >
+          {DRUM_PIECES.map((p, i) => (
+            <option key={p.key} value={i}>
+              {p.name}
+            </option>
+          ))}
+        </select>
+      </label>
+      {track?.kind === 'audio' && (
+        <button
+          type="button"
+          className="btn"
+          disabled={busy}
+          title="The hits heard in this track’s recordings, as notes on a new track playing this kit"
+          onClick={() => {
+            setBusy(true);
+            void hitsToMidi(target, plugin.id).finally(() => setBusy(false));
+          }}
+        >
+          {busy ? 'Listening…' : 'Hits to MIDI'}
+        </button>
+      )}
+      <span className="muted plugin-hint">
+        {load?.state === 'loading'
+          ? `Loading the kit (${load.done} of ${load.total})…`
+          : load?.state === 'error'
+            ? `The kit couldn’t load: ${load.message}`
+            : 'Set the Threshold just under the softest hit, and Detect Low and High around the drum, so its neighbours’ spill isn’t heard as hits.'}
       </span>
     </div>
   );

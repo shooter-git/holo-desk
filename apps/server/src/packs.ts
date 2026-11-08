@@ -5,7 +5,7 @@
  */
 import { type Dirent, existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, normalize, resolve, sep } from 'node:path';
-import type { SampleMic } from '@holo/session';
+import type { PackSound, SampleMic } from '@holo/session';
 
 export interface Zone {
   file: string;
@@ -63,7 +63,9 @@ export type PackSource =
   /** Files made from published recordings: mixed, trimmed and faded (the recipe is in the manifest). */
   | { kind: 'mix'; note?: string }
   | { kind: 'local'; note?: string }
-  | { kind: 'imported'; from: string };
+  | { kind: 'imported'; from: string }
+  /** No files at all: a palette, whose sounds play the packs it requires and the built-in synths. */
+  | { kind: 'none'; note?: string };
 
 export interface Pack {
   id: string;
@@ -76,6 +78,12 @@ export interface Pack {
   instruments: PackInstrument[];
   /** Impulse responses for Space Designer (WAV: 1, 2 or 4 channels), under the root. */
   impulses?: { name: string; title?: string; file: string; seconds?: number }[];
+  /** What it is, in a line (a palette's). */
+  description?: string;
+  /** Other packs its sounds play. */
+  requires?: string[];
+  /** Ready-made sounds (a palette's): an instrument with its effects, room and level. */
+  sounds?: PackSound[];
 }
 
 interface Loaded {
@@ -105,6 +113,8 @@ export class Packs {
       if (!existsSync(file)) continue;
       try {
         const pack = JSON.parse(readFileSync(file, 'utf8')) as Pack;
+        // a palette may have no instruments of its own
+        pack.instruments ??= [];
         const root = resolve(dir, pack.root || 'samples');
         // a pack's size on disk, per instrument, for the library to show
         for (const inst of pack.instruments) {
@@ -151,6 +161,9 @@ export class Packs {
         title: i.title ?? i.name,
         seconds: i.seconds ?? null,
       })),
+      ...(pack.description ? { description: pack.description } : {}),
+      ...(pack.requires?.length ? { requires: pack.requires } : {}),
+      ...(pack.sounds?.length ? { sounds: pack.sounds } : {}),
     }));
   }
 

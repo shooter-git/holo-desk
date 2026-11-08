@@ -287,6 +287,18 @@ const HEAVY_SYNTHS =
   /^(Tonewheel|Tine|Reed Piano|Clav|Morph|Drone|Ethereal|Shakuhachi|Bansuri|Dizi|Celtic|Koto|Guzheng|Gayageum|Shamisen|Pipa|Sitar|Tanpura|Harmonium|Sheng|Glass Harmonica|Choir|Male Choir|Taiko|War Drums|Frame Drum|Opera Gongs|Anvil)/;
 
 /**
+ * Plugins dearer than most (timed with `pnpm bench --effects`): String Resonance's hundred strings,
+ * and a Drum Replacer's kit sounding on top of its listening.
+ */
+const EFFECT_COSTS: Record<string, number> = {
+  resonance: 0.07,
+  replacer: 0.02,
+  rotary: 0.015,
+  phaser: 0.012,
+  lofi: 0.008,
+};
+
+/**
  * A guess at a strip's share of a block before it has been timed (from timings on a 2014 server
  * core at 48 kHz): its plugins (the spaces' convolution above all) and its instrument, or for a
  * planned part what its plans ask for (aheadPartGuess).
@@ -295,7 +307,9 @@ export function aheadGuess(spec: GraphSpec['tracks'][number] | GraphSpec['buses'
   let c = 0.003;
   for (const p of spec.inserts) {
     if (p.bypass) continue;
-    c += p.type === 'shimmer' ? 0.5 : p.type === 'space' ? 0.13 : p.type === 'reverb' ? 0.04 : 0.005;
+    c +=
+      EFFECT_COSTS[p.type] ??
+      (p.type === 'shimmer' ? 0.5 : p.type === 'space' ? 0.13 : p.type === 'reverb' ? 0.04 : 0.005);
   }
   if ('instrument' in spec) {
     if (part !== undefined) c += part;

@@ -168,6 +168,16 @@ function song(): Project {
   const lead = newTrack('Lead', { type: 'synth', preset: 'Soft Keys' });
   lead.regions = [{ ...newRegion(0, BAR * 4), notes: chord(5, [76], 16).filter((_, i) => i % 2 === 0) }];
   tracks.push(lead);
+  // a drummer playing a kit, its strings ringing, in time with the song
+  const drums = newTrack('Drums', { type: 'synth', preset: 'Drum Synth' });
+  drums.midiFx = [newPlugin('drummer', { genre: 2, complexity: 70, fills: 80, swing: 20 })];
+  drums.channel.inserts = [newPlugin('resonance', { amount: 40, bass: 9 }), newPlugin('tremolo', { depth: 30 })];
+  tracks.push(drums);
+  // keys through a spinning speaker, a phaser and a worn tape
+  const keys = newTrack('Keys', { type: 'synth', preset: 'Electric Piano' });
+  keys.regions = [{ ...newRegion(0, BAR * 4), notes: chord(3, [55, 62], 16) }];
+  keys.channel.inserts = [newPlugin('rotary', { speed: 2 }), newPlugin('phaser'), newPlugin('lofi', { wow: 40 })];
+  tracks.push(keys);
   // Glass, planned whole
   const glass = newTrack('Glass', { type: 'glass', options: { gain: 0.5, seed: 3 } });
   glass.regions = [{ ...newRegion(0, BAR * 4), notes: chord(9, [64, 71], 16).filter((_, i) => i % 3 === 0) }];
@@ -181,7 +191,8 @@ function song(): Project {
     },
   ];
   vox.channel.sends = [{ bus: hall.id, level: -8, pre: false }];
-  vox.channel.inserts = [newPlugin('limiter')];
+  // a Drum Replacer on it (its look-ahead held back, everything else waiting for it)
+  vox.channel.inserts = [newPlugin('replacer', { threshold: -20, mix: 50 }), newPlugin('limiter')];
   // a kit on three microphones, its room turned down, tuned and shortened
   const kit = newTrack('Kit', {
     type: 'sampler',
@@ -628,6 +639,29 @@ describe('starting while the song renders ahead', () => {
     // (the leader opens a few blocks at a time: at most a few of them)
     expect(before).toBeLessThan(AHEAD_LEAD / 4);
   }, 30_000);
+});
+
+describe('a Session Drummer while the song renders ahead', () => {
+  it("plays once: the audio thread's twin of its track, woken by a live controller, makes no notes of its own", () => {
+    const q = light();
+    const drums = newTrack('Drums', { type: 'synth', preset: 'Drum Synth' });
+    drums.midiFx = [newPlugin('drummer', { genre: 0, fills: 100 })];
+    q.tracks.push(drums);
+    const nums = numbering();
+    const batches = new Map([[0, setup(q, nums)]]);
+    const owners = aheadOwners(graphOf(q, nums), 2, () => 0.1);
+    const kit = nums(drums.id);
+    // a worker plays the drums' song; the audio thread has its twin, for what's played live
+    owners[kit] = 0;
+    const blocks = 1600;
+    const out = split(batches, blocks, 2, owners, (k, core) => {
+      // the mod wheel on the drums wakes their twin (a kit makes no sound of it)
+      if (k >= 100 && k < 1200 && k % 50 === 0) core.receive({ type: 'live', events: [0xb0, 1, k % 100, kit] });
+    });
+    const ref = one(batches, blocks);
+    expect(peak(ref[0] as Float32Array)).toBeGreaterThan(0.05);
+    expect(same(out, ref)).toBe(true);
+  }, 60_000);
 });
 
 describe('live notes while the song renders ahead', () => {

@@ -4,8 +4,8 @@
  * folder you have) and every file's sha256. Samples are never committed into an experience: its build
  * fetches what its songs play and checks each file against these.
  */
-import { type InstrumentManifest, songImpulses } from '@holo/engine';
-import type { Instrument, Project } from '@holo/session';
+import { type InstrumentManifest, songImpulses, songKits } from '@holo/engine';
+import type { Instrument, PackSound, Project } from '@holo/session';
 import type { ArchiveFormat } from './archives.ts';
 import type { MixSource } from './mix.ts';
 
@@ -62,9 +62,15 @@ export interface LocalSource {
   note?: string;
 }
 
+/** No files at all: a palette, whose sounds play the packs it requires and the built-in synths. */
+export interface NoSource {
+  kind: 'none';
+  note?: string;
+}
+
 export type { MixSource } from './mix.ts';
 
-export type PackSource = GitSource | CutSource | ArchiveSource | MixSource | LocalSource;
+export type PackSource = GitSource | CutSource | ArchiveSource | MixSource | LocalSource | NoSource;
 
 export type PackInstrument = Omit<InstrumentManifest, 'pack'> & { title?: string; category?: string };
 
@@ -79,6 +85,12 @@ export interface PackManifest {
   root?: string;
   instruments: PackInstrument[];
   impulses?: { name: string; title?: string; file: string }[];
+  /** What it is, in a line (a palette's). */
+  description?: string;
+  /** Other packs its sounds play (a palette's: installed before a sound that plays them is added). */
+  requires?: string[];
+  /** Ready-made sounds: an instrument with its effects, room and level (a palette's). */
+  sounds?: PackSound[];
 }
 
 export interface PinnedPack extends Omit<PackManifest, 'format' | 'version'> {
@@ -147,7 +159,7 @@ export function pinPack(manifest: PackManifest, checksums: Record<string, string
   return { ...rest, files };
 }
 
-/** The pack instruments a song plays (its tracks' and their articulations'). */
+/** The pack instruments a song plays (its tracks' and their articulations', and its plugins' kits). */
 export function songInstruments(project: Project): { pack: string; name: string }[] {
   const seen = new Map<string, { pack: string; name: string }>();
   const add = (i: Instrument) => {
@@ -158,6 +170,11 @@ export function songInstruments(project: Project): { pack: string; name: string 
     add(t.instrument);
     for (const a of t.articulations) add(a.instrument);
   }
+  // and the kits its plugins play (a Drum Replacer's)
+  for (const kit of songKits(project)) {
+    const [pack = '', ...rest] = kit.split('/');
+    seen.set(kit, { pack, name: rest.join('/') });
+  }
   return [...seen.values()];
 }
 
@@ -165,6 +182,28 @@ export function songInstruments(project: Project): { pack: string; name: string 
 export function songImpulseFiles(project: Project): { pack: string; name: string }[] {
   const out: { pack: string; name: string }[] = [];
   for (const { source } of songImpulses(project, 48000)) if (source.kind === 'file') out.push(source);
+  return out;
+}
+
+/**
+ * Packs with the packs they require, each once, those required first (a pack whose instruments play
+ * another's files, or a palette, brings what it needs). `requiresOf` says what one requires, or null
+ * when it isn't known (it's left as it is).
+ */
+export async function withRequired(
+  ids: string[],
+  requiresOf: (id: string) => Promise<string[] | null | undefined> | string[] | null | undefined,
+): Promise<string[]> {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  const visit = async (id: string, path: string[]) => {
+    if (seen.has(id)) return;
+    if (path.includes(id)) throw new Error(`${[...path, id].join(' → ')}: packs that require each other`);
+    for (const r of (await requiresOf(id)) ?? []) await visit(r, [...path, id]);
+    seen.add(id);
+    out.push(id);
+  };
+  for (const id of ids) await visit(id, []);
   return out;
 }
 

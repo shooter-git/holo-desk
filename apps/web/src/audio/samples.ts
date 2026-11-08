@@ -12,7 +12,7 @@ import {
   type ZoneManifest,
   zoneExtras,
 } from '@holo/engine';
-import { type Instrument, type ParamDef, type SampleMic, samplerKnobs } from '@holo/session';
+import { type Instrument, type PackSound, type ParamDef, type SampleMic, samplerKnobs } from '@holo/session';
 import { engine } from './engine.ts';
 import { channelData, instrumentManifest, packFileData } from './pack-files.ts';
 
@@ -41,6 +41,10 @@ export interface PackSummary {
   instruments: InstrumentSummary[];
   /** Impulse responses for Space Designer. */
   impulses?: { name: string; title: string; seconds: number | null }[];
+  /** A palette's ready-made sounds, the packs they play, and what it is in a line. */
+  sounds?: PackSound[];
+  requires?: string[];
+  description?: string;
 }
 
 export type LoadState =

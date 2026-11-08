@@ -7,7 +7,8 @@
  *                                commits, notes cut from published downloads, files decoded from a
  *                                published archive, or made from a library's recordings: trimmed, a kit's
  *                                microphones mixed), or take them from a folder you already have
- *                                (hard-linked when it can); each file is checked against the pack's checksums
+ *                                (hard-linked when it can); each file is checked against the pack's checksums.
+ *                                A palette (ready-made sounds, no audio of its own) brings the packs it requires
  *   import PATH [--name N] [--id ID] [--license L]
  *                                your own pack: an .sfz, a folder (of SFZ, of samples named by note, or a drum
  *                                kit: a folder for each piece, its microphones in folders of their own or named
@@ -79,9 +80,15 @@ async function main(): Promise<void> {
       ids.add(m.id);
       const inst = installed(m.id);
       const status = inst ? `installed (${present(inst)}/${files(inst).length} samples)` : 'not installed';
-      console.log(
-        `${m.id.padEnd(18)} ${m.name.padEnd(46)} ${String(m.instruments.length).padStart(3)} instruments  ${status}`,
-      );
+      // a palette: sounds, and nothing of its own to install
+      const what =
+        m.sounds?.length && !m.instruments.length
+          ? `${String(m.sounds.length).padStart(3)} sounds       palette, plays ${
+              m.requires?.join(', ') ||
+              (m.sounds.some((x) => 'synth' in x.instrument) ? 'the built-in synths' : 'packs still to come')
+            }`
+          : `${String(m.instruments.length).padStart(3)} instruments  ${status}`;
+      console.log(`${m.id.padEnd(18)} ${m.name.padEnd(46)} ${what}`);
     }
     if (existsSync(packsDir)) {
       for (const id of readdirSync(packsDir)) {
@@ -109,8 +116,10 @@ async function main(): Promise<void> {
       }
       console.log(`${m.name}:`);
       try {
+        // a palette brings the packs its sounds play
         const r = await installPack(packsDir, m.id, {
           ...(from ? { from } : {}),
+          requires: true,
           log: (line) => console.log(`  ${line}`),
         });
         console.log(`  ready: ${r.present}/${r.total} samples${packChecksums(m.id) ? ', checked' : ''}`);

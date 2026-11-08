@@ -3,6 +3,7 @@
  * windows, the command line and the AI all read this one table, so a value means the same thing
  * everywhere. Choice parameters store the option's index.
  */
+import { DRUMMER_CYMBALS, DRUMMER_PERCUSSION, GROOVE_VARIATIONS, GROOVES } from './drummer.ts';
 
 export interface ParamDef {
   id: string;
@@ -177,6 +178,39 @@ export const ARP_MODES = ['Up', 'Down', 'Up/Down', 'As played', 'Random', 'Chord
 export const ARP_RATES = ['1/4', '1/8', '1/8T', '1/16', '1/16T', '1/32'];
 export const DELAY_DIVISIONS = ['1/2', '1/4', '1/4.', '1/8', '1/8.', '1/8T', '1/16'];
 
+/** Rotary Speaker's speeds: the rotors stopped where they are, turning slowly, or quickly. */
+export const ROTARY_SPEEDS = ['Brake', 'Slow', 'Fast'];
+/** Phaser's all-pass stages (a notch for every two). */
+export const PHASER_STAGES = [2, 4, 6, 8, 10, 12];
+/** String Resonance's strings below A0 at most: an extended grand's, down to C0. */
+export const BASS_STRINGS = 9;
+
+/** The kit pieces a Drum Replacer can play, each on its General MIDI drum key. */
+export const DRUM_PIECES: { name: string; key: number }[] = [
+  { name: 'Kick', key: 36 },
+  { name: 'Kick 2', key: 35 },
+  { name: 'Snare', key: 38 },
+  { name: 'Snare 2', key: 40 },
+  { name: 'Side Stick', key: 37 },
+  { name: 'Clap', key: 39 },
+  { name: 'Closed Hi-hat', key: 42 },
+  { name: 'Pedal Hi-hat', key: 44 },
+  { name: 'Open Hi-hat', key: 46 },
+  { name: 'High Tom', key: 50 },
+  { name: 'Mid Tom', key: 48 },
+  { name: 'Low Tom', key: 45 },
+  { name: 'Floor Tom', key: 43 },
+  { name: 'Low Floor Tom', key: 41 },
+  { name: 'Crash', key: 49 },
+  { name: 'Crash 2', key: 57 },
+  { name: 'Splash', key: 55 },
+  { name: 'China', key: 52 },
+  { name: 'Ride', key: 51 },
+  { name: 'Ride Bell', key: 53 },
+  { name: 'Tambourine', key: 54 },
+  { name: 'Cowbell', key: 56 },
+];
+
 export const PLUGINS: PluginDef[] = [
   {
     type: 'eq',
@@ -335,6 +369,20 @@ export const PLUGINS: PluginDef[] = [
     ],
   },
   {
+    type: 'resonance',
+    name: 'String Resonance',
+    kind: 'audio',
+    category: 'Reverb',
+    description:
+      'A grand’s strings left free to ring with what the track plays: every string from the top down to A0, and with Bass Strings the longer ones an extended grand has below it, ringing in sympathy.',
+    params: [
+      pct('amount', 'Amount', 30),
+      pct('damping', 'Damping', 40),
+      pct('brightness', 'Brightness', 50),
+      { id: 'bass', name: 'Bass Strings', min: 0, max: BASS_STRINGS, default: 0, step: 1 },
+    ],
+  },
+  {
     type: 'delay',
     name: 'Tape Delay',
     kind: 'audio',
@@ -387,6 +435,76 @@ export const PLUGINS: PluginDef[] = [
     ],
   },
   {
+    type: 'rotary',
+    name: 'Rotary Speaker',
+    kind: 'audio',
+    category: 'Modulation',
+    description:
+      'A spinning horn for the highs and a drum for the lows, each speeding up and slowing down in its own time, through a valve preamp and picked up by two microphones.',
+    params: [
+      { id: 'speed', name: 'Speed', min: 0, max: 2, default: 1, step: 1, options: ROTARY_SPEEDS },
+      { id: 'hornSlow', name: 'Horn Slow', min: 0.3, max: 2, default: 0.8, unit: 'Hz', scale: 'log' },
+      { id: 'hornFast', name: 'Horn Fast', min: 4, max: 9, default: 6.8, unit: 'Hz', scale: 'log' },
+      { id: 'drumSlow', name: 'Drum Slow', min: 0.2, max: 2, default: 0.7, unit: 'Hz', scale: 'log' },
+      { id: 'drumFast', name: 'Drum Fast', min: 3, max: 8, default: 5.9, unit: 'Hz', scale: 'log' },
+      { id: 'hornRamp', name: 'Horn Ramp', min: 0.1, max: 4, default: 0.8, unit: 's', scale: 'log' },
+      { id: 'drumRamp', name: 'Drum Ramp', min: 0.5, max: 10, default: 4, unit: 's', scale: 'log' },
+      pct('drive', 'Drive', 20),
+      pct('distance', 'Mic Distance', 40),
+      pct('balance', 'Horn', 60),
+      pct('mix', 'Mix', 100),
+    ],
+  },
+  {
+    type: 'phaser',
+    name: 'Phaser',
+    kind: 'audio',
+    category: 'Modulation',
+    description: 'Notches swept up and down the sound by a chain of all-pass stages, the two sides a little apart.',
+    params: [
+      { id: 'rate', name: 'Rate', min: 0.02, max: 10, default: 0.4, unit: 'Hz', scale: 'log' },
+      pct('depth', 'Depth', 80),
+      hz('low', 'Low', 50, 2000, 300),
+      hz('high', 'High', 500, 16000, 3000),
+      { id: 'feedback', name: 'Feedback', min: -90, max: 90, default: 40, unit: '%' },
+      {
+        id: 'stages',
+        name: 'Stages',
+        min: 0,
+        max: PHASER_STAGES.length - 1,
+        default: 1,
+        step: 1,
+        options: PHASER_STAGES.map(String),
+      },
+      pct('spread', 'Stereo', 25),
+      pct('mix', 'Mix', 50),
+    ],
+  },
+  {
+    type: 'tremolo',
+    name: 'Tremolo',
+    kind: 'audio',
+    category: 'Modulation',
+    description:
+      'The level rising and falling (Tremolo) or the sound moving side to side (Auto-pan), free or in time with the song.',
+    params: [
+      { id: 'mode', name: 'Mode', min: 0, max: 1, default: 0, step: 1, options: ['Tremolo', 'Auto-pan'] },
+      onOff('sync', 'Sync', 1),
+      {
+        id: 'division',
+        name: 'Division',
+        min: 0,
+        max: DELAY_DIVISIONS.length - 1,
+        default: 3,
+        step: 1,
+        options: DELAY_DIVISIONS,
+      },
+      { id: 'rate', name: 'Rate', min: 0.1, max: 20, default: 4, unit: 'Hz', scale: 'log' },
+      pct('depth', 'Depth', 50),
+      { id: 'shape', name: 'Shape', min: 0, max: 2, default: 0, step: 1, options: ['Sine', 'Triangle', 'Square'] },
+    ],
+  },
+  {
     type: 'width',
     name: 'Stereo Width',
     kind: 'audio',
@@ -427,6 +545,51 @@ export const PLUGINS: PluginDef[] = [
       hz('tone', 'Tone', 1000, 20000, 12000),
       pct('mix', 'Mix', 100),
       db('output', 'Output', -24, 12, 0),
+    ],
+  },
+  {
+    type: 'lofi',
+    name: 'Lo-fi',
+    kind: 'audio',
+    category: 'Distortion',
+    description:
+      'Fewer bits and a lower sample rate, with the wow of a worn tape and a little hiss: an old sampler or a cassette.',
+    params: [
+      { id: 'bits', name: 'Bits', min: 2, max: 16, default: 12, unit: 'bit' },
+      hz('rate', 'Sample Rate', 1000, 48000, 22050),
+      pct('wow', 'Wow', 10),
+      db('noise', 'Noise', -90, -20, -90),
+      hz('tone', 'Tone', 1000, 20000, 20000),
+      pct('mix', 'Mix', 100),
+    ],
+  },
+  {
+    type: 'replacer',
+    name: 'Drum Replacer',
+    kind: 'audio',
+    category: 'Drums',
+    description:
+      'Hears each hit on a drum track and plays a kit piece in its place, as hard as it was hit: in place of the recording or blended with it.',
+    params: [
+      {
+        id: 'piece',
+        name: 'Piece',
+        min: 0,
+        max: DRUM_PIECES.length - 1,
+        default: 0,
+        step: 1,
+        options: DRUM_PIECES.map((p) => p.name),
+      },
+      db('threshold', 'Threshold', -60, 0, -30),
+      pct('sensitivity', 'Sensitivity', 50),
+      ms('hold', 'Retrigger', 10, 500, 50),
+      ms('lookahead', 'Look-ahead', 0, 10, 5, false),
+      hz('lowcut', 'Detect Low', 20, 5000, 30),
+      hz('highcut', 'Detect High', 200, 20000, 12000),
+      pct('dynamics', 'Dynamics', 80),
+      { id: 'curve', name: 'Curve', min: -100, max: 100, default: 0 },
+      pct('mix', 'Mix', 100),
+      db('level', 'Level', -24, 12, 0),
     ],
   },
   {
@@ -487,6 +650,48 @@ export const PLUGINS: PluginDef[] = [
       { id: 'max', name: 'Max', min: 1, max: 127, default: 127, step: 1 },
     ],
   },
+  {
+    type: 'drummer',
+    name: 'Session Drummer',
+    kind: 'midi',
+    category: 'MIDI FX',
+    description:
+      'A drummer that plays along while the song plays: a groove in a style, as busy and as hard as you ask, with fills into each new phrase. Put it on a kit.',
+    params: [
+      {
+        id: 'genre',
+        name: 'Style',
+        min: 0,
+        max: GROOVES.length - 1,
+        default: 0,
+        step: 1,
+        options: GROOVES.map((g) => g.name),
+      },
+      pct('complexity', 'Complexity', 40),
+      pct('loudness', 'Loudness', 60),
+      pct('fills', 'Fills', 40),
+      pct('swing', 'Swing', 0, 75),
+      { id: 'kick', name: 'Kick & Snare', min: 1, max: GROOVE_VARIATIONS, default: 1, step: 1 },
+      {
+        id: 'cymbal',
+        name: 'Cymbals',
+        min: 0,
+        max: DRUMMER_CYMBALS.length - 1,
+        default: 0,
+        step: 1,
+        options: DRUMMER_CYMBALS,
+      },
+      {
+        id: 'perc',
+        name: 'Percussion',
+        min: 0,
+        max: DRUMMER_PERCUSSION.length - 1,
+        default: 0,
+        step: 1,
+        options: DRUMMER_PERCUSSION,
+      },
+    ],
+  },
 ];
 
 const BY_TYPE = new Map(PLUGINS.map((p) => [p.type, p]));
@@ -515,7 +720,11 @@ export function paramValue(type: string, params: Record<string, number>, id: str
 export function formatParam(p: ParamDef, v: number): string {
   if (p.options) return p.options[Math.round(v)] ?? String(v);
   if (p.offAtMin && v <= p.min) return 'Off';
-  if (p.unit === 'Hz') return v >= 1000 ? `${(v / 1000).toFixed(v >= 10000 ? 1 : 2)} kHz` : `${Math.round(v)} Hz`;
+  if (p.unit === 'Hz') {
+    if (v >= 1000) return `${(v / 1000).toFixed(v >= 10000 ? 1 : 2)} kHz`;
+    // (a slow rate: a wobble's, a rotor's)
+    return v < 10 ? `${v.toFixed(v < 1 ? 2 : 1)} Hz` : `${Math.round(v)} Hz`;
+  }
   if (p.unit === 'dB') return `${v > 0 ? '+' : ''}${v.toFixed(1)} dB`;
   if (p.unit === 'ms') return v < 10 ? `${v.toFixed(1)} ms` : `${Math.round(v)} ms`;
   if (p.unit === 's') return `${v.toFixed(v < 10 ? 2 : 1)} s`;

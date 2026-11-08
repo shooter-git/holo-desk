@@ -23,6 +23,7 @@ import {
   meterTicks,
   songClips,
   songImpulses,
+  songKits,
   tickToFrame,
 } from './compile.ts';
 import { prepareImpulse } from './convolver.ts';
@@ -307,6 +308,8 @@ export async function renderSession(written: Project, source: RenderSource, opts
       if (spec.kind === 'sampler') keys.add(spec.key);
     }
   }
+  // and the kits plugins play (a Drum Replacer's)
+  for (const kit of songKits(project)) keys.add(kit);
   let k = 0;
   for (const key of keys) {
     opts.onProgress?.(`Loading instruments (${++k}/${keys.size})`);

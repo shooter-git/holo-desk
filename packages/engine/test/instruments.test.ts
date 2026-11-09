@@ -205,6 +205,45 @@ describe('the sampler, played', () => {
     expect(level(s, 64)).toBeCloseTo(0.3, 3);
   });
 
+  it('holds a note on a loop that is the whole sample: every frame a number, sounding pass after pass', () => {
+    // 44 cycles of a 441 Hz sine (100 frames each, so the loop is seamless), looped from its first frame to its last
+    const n = 4400;
+    const sine = new Float32Array(n);
+    for (let i = 0; i < n; i++) sine[i] = 0.5 * Math.sin((2 * Math.PI * 441 * i) / SR);
+    const whole = (extra: Partial<SampleZone> = {}) => tone(0, { left: sine, loopStart: 0, loopEnd: n, ...extra });
+    const mics = [
+      { id: 'a', name: 'A' },
+      { id: 'b', name: 'B' },
+    ];
+    const cases: [string, SampleZone[], Partial<SamplerSpec>, number][] = [
+      // one sample (read alone), at its own pitch and between its frames
+      ['alone', [whole()], {}, 60],
+      ['alone, transposed', [whole()], { pitched: true }, 67],
+      // two microphones of it (read under one envelope)
+      ['microphones', [whole({ mic: 'a' }), whole({ mic: 'b' })], { mics, pitched: true }, 67],
+    ];
+    for (const [name, zones, extra, key] of cases) {
+      const s = new Sampler(SR, base(zones, extra));
+      s.noteOn(key, 127);
+      // a second: ten times round the loop and more
+      const l = new Float32Array(SR);
+      const r = new Float32Array(SR);
+      for (let f = 0; f < SR; f += 128) s.render(l, r, f, Math.min(SR, f + 128));
+      expect(l.every(Number.isFinite), `${name}: every frame a number`).toBe(true);
+      const peak = (a: Float32Array) => a.reduce((p, x) => Math.max(p, Math.abs(x)), 0);
+      const first = peak(l.subarray(0, n));
+      expect(first, `${name}: it sounds`).toBeGreaterThan(0.4);
+      // still sounding on its last pass, as loud as on its first
+      expect(peak(l.subarray(SR - n)), `${name}: it goes on`).toBeCloseTo(first, 2);
+      // and no step at the seam bigger than the sine's own steepest
+      const ratio = 2 ** ((key - 60) / 12);
+      const steepest = (first * 2 * Math.PI * 441 * ratio) / SR;
+      let step = 0;
+      for (let i = 1; i < SR; i++) step = Math.max(step, Math.abs((l[i] as number) - (l[i - 1] as number)));
+      expect(step, `${name}: no click at the seam`).toBeLessThan(steepest * 1.1);
+    }
+  });
+
   it('plays the release sample when a note is let go, quieter the longer it was held', () => {
     const struck = tone(0.5);
     const rel = tone(0.2, { trigger: 'release' });

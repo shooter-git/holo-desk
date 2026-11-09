@@ -53,8 +53,13 @@ class SampleLayer {
   /** Its gains into left and right: the zone's level and the hit's velocity, by its pan. */
   private readonly gl: number;
   private readonly gr: number;
+  /** Where its loop ends (never past its last frame), and how long it is (0: no loop). */
+  private readonly loopEnd: number;
   private readonly loopLen: number;
+  /** Frames of cross-fade at the seam: no more than the sample has before its loop starts. */
   private readonly xf: number;
+  /** Reading while it loops: past its last frame is the loop's start again. */
+  private wrap = false;
   /** The microphone's gain it last played at: a knob's new level is reached over a block. */
   private m: number;
   /** The sample read() made. */
@@ -78,9 +83,14 @@ class SampleLayer {
       this.gl = gain * Math.cos(theta) * Math.SQRT2;
       this.gr = gain * Math.sin(theta) * Math.SQRT2;
     }
-    const loop = zone.loopEnd - zone.loopStart;
+    // a loop that runs to the sample's end (or past it) loops the whole of what's there
+    const loopEnd = Math.min(zone.loopEnd, zone.left.length);
+    const loop = Math.max(0, loopEnd - zone.loopStart);
+    this.loopEnd = loop > 0 ? loopEnd : 0;
     this.loopLen = loop;
-    this.xf = loop > 0 ? Math.min(2048, Math.floor(loop / 4)) : 0;
+    // the cross-fade reads a loop's length back, so it can be no longer than what comes before the
+    // loop: a loop from the first frame has none, and joins at its seam as it was cut to
+    this.xf = loop > 0 ? Math.min(2048, Math.floor(loop / 4), Math.floor(zone.loopStart)) : 0;
   }
 
   /** Frames it sounds for, played straight through at its pitch (what the kit's decay is a share of). */
@@ -90,9 +100,9 @@ class SampleLayer {
 
   /**
    * The sample at the read position (a loop's length back, for the cross-fade), by four-point
-   * Hermite interpolation, zero past either end, into `y`. The position comes from the fields and
-   * the sample goes to one: a call V8 doesn't inline boxes every double it passes or returns, a
-   * heap allocation each sample.
+   * Hermite interpolation, zero past either end (or, while it loops, the loop's start again past its
+   * last frame), into `y`. The position comes from the fields and the sample goes to one: a call V8
+   * doesn't inline boxes every double it passes or returns, a heap allocation each sample.
    */
   private read(data: Float32Array, back: boolean): void {
     const p = back ? this.pos - this.loopLen : this.pos;
@@ -110,10 +120,16 @@ class SampleLayer {
       x1 = data[i + 1] as number;
       x2 = data[i + 2] as number;
     } else {
-      xm1 = i > 0 ? (data[i - 1] as number) : 0;
-      x0 = i < n ? (data[i] as number) : 0;
-      x1 = i + 1 < n ? (data[i + 1] as number) : 0;
-      x2 = i + 2 < n ? (data[i + 2] as number) : 0;
+      // at an edge: nothing before the first frame; past the last, the loop's start or nothing
+      const k = this.wrap ? this.loopLen : 0;
+      let j = i - 1;
+      xm1 = j >= 0 && j < n ? (data[j] as number) : k > 0 && j >= n && j - k >= 0 ? (data[j - k] as number) : 0;
+      j = i;
+      x0 = j >= 0 && j < n ? (data[j] as number) : k > 0 && j >= n && j - k >= 0 ? (data[j - k] as number) : 0;
+      j = i + 1;
+      x1 = j >= 0 && j < n ? (data[j] as number) : k > 0 && j >= n && j - k >= 0 ? (data[j - k] as number) : 0;
+      j = i + 2;
+      x2 = j >= 0 && j < n ? (data[j] as number) : k > 0 && j >= n && j - k >= 0 ? (data[j - k] as number) : 0;
     }
     const c = (x1 - xm1) * 0.5;
     const v = x0 - x1;
@@ -134,10 +150,12 @@ class SampleLayer {
     const right = z.right ?? z.left;
     const ratio = this.baseRatio * 2 ** (ctl.bend / 12);
     const len = left.length;
-    const looped = z.loopEnd > z.loopStart && !voice.released;
     const loopLen = this.loopLen;
+    const loopEnd = this.loopEnd;
+    const looped = loopLen > 0 && !voice.released;
+    this.wrap = looped;
     const xf = this.xf;
-    const fadeFrom = z.loopEnd - xf;
+    const fadeFrom = loopEnd - xf;
     const fading = looped && xf > 0;
     // (at full level, as without microphones, exactly the gain it always had)
     const gl = this.gl * ctl.expression * this.m;
@@ -148,7 +166,8 @@ class SampleLayer {
         break;
       }
       const e = voice.e;
-      if (this.pos >= len - 1) {
+      // (a loop that ends at the last frame goes round before it gets there)
+      if (this.pos >= len - 1 && !(looped && this.pos < loopEnd)) {
         this.ended = true;
         break;
       }
@@ -170,7 +189,7 @@ class SampleLayer {
       l[i] = (l[i] as number) + sl * e * gl;
       r[i] = (r[i] as number) + sr * e * gr;
       this.pos += ratio;
-      if (looped && this.pos >= z.loopEnd) this.pos -= loopLen;
+      if (looped && this.pos >= loopEnd) this.pos -= loopLen;
     }
   }
 
@@ -200,10 +219,12 @@ class SampleLayer {
     const gl = this.gl * ctl.expression;
     const gr = this.gr * ctl.expression;
     const len = left.length;
-    const loops = looped && z.loopEnd > z.loopStart;
     const loopLen = this.loopLen;
+    const loopEnd = this.loopEnd;
+    const loops = looped && loopLen > 0;
+    this.wrap = loops;
     const xf = this.xf;
-    const fadeFrom = z.loopEnd - xf;
+    const fadeFrom = loopEnd - xf;
     const fading = loops && xf > 0;
     // a microphone's level moved since the last block: it glides there, a step a sample
     let m = this.m;
@@ -213,7 +234,8 @@ class SampleLayer {
     let kr = gr * m;
     for (let k = 0; k < n; k++) {
       const e = env[k] as number;
-      if (this.pos >= len - 1) {
+      // (a loop that ends at the last frame goes round before it gets there)
+      if (this.pos >= len - 1 && !(loops && this.pos < loopEnd)) {
         this.ended = true;
         break;
       }
@@ -241,7 +263,7 @@ class SampleLayer {
       l[i] = (l[i] as number) + sl * e * kl;
       r[i] = (r[i] as number) + sr * e * kr;
       this.pos += ratio;
-      if (loops && this.pos >= z.loopEnd) this.pos -= loopLen;
+      if (loops && this.pos >= loopEnd) this.pos -= loopLen;
     }
     this.m = micGain;
   }

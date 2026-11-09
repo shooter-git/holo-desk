@@ -53,6 +53,11 @@ export interface MixAt {
   start?: number;
   /** The rate it's played at, if not its own: a little faster plays it a little higher. */
   rate?: number;
+  /**
+   * One of its channels (counted from 0) taken alone, as a mono recording: one microphone of a
+   * recording that keeps every microphone of a hit in one multichannel file.
+   */
+  channel?: number;
 }
 
 export interface MixRecipe {
@@ -213,8 +218,11 @@ export function mixFile(recipe: MixRecipe, inputs: Map<string, DecodedInput>, bi
     if (!recipe.rate && rate && d.rate !== rate)
       throw new Error(`${name} is at ${d.rate} Hz, its file's other inputs at ${rate}: say the file's rate`);
     if (!rate) rate = d.rate;
-    const a = d.channels[0] as Float32Array;
-    const b = (d.channels[1] ?? a) as Float32Array;
+    const ch = at?.channel;
+    if (ch !== undefined && !(Number.isInteger(ch) && ch >= 0 && ch < d.channels.length))
+      throw new Error(`${name} has ${d.channels.length} channel(s), not a channel ${ch}`);
+    const a = d.channels[ch ?? 0] as Float32Array;
+    const b = (ch === undefined ? (d.channels[1] ?? a) : a) as Float32Array;
     const from = at?.start ?? start;
     const plays = at?.rate ?? d.rate;
     if (plays === rate && Number.isInteger(from)) {

@@ -280,6 +280,17 @@ tailnet can reach it when you turn that on. HO[LO] Engine listens on `127.0.0.1:
 a studio served from this computer, the local network or a tailnet (`--origin` names any other). Your songs and packs stay in `./data`. Read
 [SECURITY.md](SECURITY.md) before exposing it any other way.
 
+## Made with HO[LO] Desk
+
+Projects whose music was written in HO[LO] Desk:
+
+| | Project | |
+|---|---|---|
+| <a href="https://github.com/shooter-git/hallowed-lanterns"><img src="https://raw.githubusercontent.com/shooter-git/hallowed-lanterns/main/docs/banner.jpg" width="240" alt="Hallowed Lanterns: a lane under hundreds of lit jack-o'-lanterns at sunset"></a> | **[Hallowed Lanterns](https://github.com/shooter-git/hallowed-lanterns)** | A lantern-lit night walk through a pumpkin patch, in the browser. Its soundtrack was composed with HO[LO] Desk, and its music still makes the round trip: the game sends a piece to the studio and gets the edits back. [Walk it](https://shooter-git.github.io/hallowed-lanterns/). |
+
+Made something with HO[LO] Desk? Open a pull request that adds it to this table, with a link and a
+line about it.
+
 ## Licence and credits
 
 HO[LO] Desk is [MIT licensed](LICENSE). The sample libraries are their authors' work, credited in

@@ -81,13 +81,8 @@ function Dialog({
   );
 }
 
-const when = (iso: string) => {
-  const d = new Date(iso);
-  const days = (Date.now() - d.getTime()) / 86400000;
-  if (days < 1) return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-  if (days < 7) return d.toLocaleDateString([], { weekday: 'short', hour: '2-digit', minute: '2-digit' });
-  return d.toLocaleDateString();
-};
+/** A song's stamp in full, date and time, in the reader's own locale (e.g. "Nov 9, 2026, 2:32 PM"). */
+const when = (iso: string) => new Date(iso).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' });
 
 function ProjectsDialog() {
   const current = useApp((s) => s.project);

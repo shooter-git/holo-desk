@@ -163,7 +163,7 @@ export function SongGroups({
                   // biome-ignore lint/a11y/useSemanticElements: a row with a button of its own (the bin) can't be a button itself
                   <div
                     key={r.id}
-                    className={`list-item${current === r.id ? ' active' : ''}`}
+                    className={`list-item song-row${current === r.id ? ' active' : ''}`}
                     role="button"
                     tabIndex={0}
                     aria-current={current === r.id ? 'true' : undefined}
@@ -171,9 +171,13 @@ export function SongGroups({
                     onKeyDown={pressable(() => void openProject(r.id))}
                   >
                     <FileMusic size={16} className="muted" />
-                    <span className="strong">{r.title}</span>
-                    {r.piece && <span className="muted">{r.piece}</span>}
-                    <span className="meta">{when(r.modified)}</span>
+                    <span className="song-name">
+                      <span className="strong">{r.title}</span>
+                      {r.piece && <span className="muted">{r.piece}</span>}
+                    </span>
+                    <span className="meta" title={`Saved ${when(r.modified)} · created ${when(r.created)}`}>
+                      {when(r.modified)}
+                    </span>
                     {binning === r.id ? (
                       <span className="hstack" onClick={(e) => e.stopPropagation()}>
                         <span className="muted">Move to the bin?</span>
@@ -228,13 +232,15 @@ export function SongGroups({
                 <button
                   key={p.piece}
                   type="button"
-                  className="list-item"
+                  className="list-item song-row"
                   onClick={() => void openPiece(g.key, p.piece)}
                 >
                   <FolderOpen size={16} className="muted" />
-                  <span className="strong">{p.title}</span>
-                  <span className="muted">{p.piece}</span>
-                  {p.edited > 0 && <span className="chip still">{p.edited} edited</span>}
+                  <span className="song-name">
+                    <span className="strong">{p.title}</span>
+                    <span className="muted">{p.piece}</span>
+                    {p.edited > 0 && <span className="chip still">{p.edited} edited</span>}
+                  </span>
                   <span className="meta">in its folder · open · {when(p.modified)}</span>
                 </button>
               ))}

@@ -16,6 +16,18 @@ export interface ProjectRow {
   modified: string;
   creation: string | null;
   piece: string | null;
+  /**
+   * Who the song is by and the album it's on (null: not said). The library's, not the song's: they
+   * aren't in the session, so setting them makes no new revision and never clashes with an edit.
+   */
+  artist: string | null;
+  album: string | null;
+}
+
+/** A song's artist and album as they change: a value sets it, null clears it, left out keeps it. */
+export interface SongDetails {
+  artist?: string | null;
+  album?: string | null;
 }
 
 export interface HistoryRow {
@@ -56,12 +68,18 @@ export class Store {
       );
       CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
     `);
+    // added after the first release: a data folder from before gets the columns, empty
+    const columns = new Set(
+      (this.db.prepare('PRAGMA table_info(projects)').all() as { name: string }[]).map((c) => c.name),
+    );
+    for (const column of ['artist', 'album'])
+      if (!columns.has(column)) this.db.exec(`ALTER TABLE projects ADD COLUMN ${column} TEXT`);
   }
 
   list(): ProjectRow[] {
     return this.db
       .prepare(
-        'SELECT id, title, revision, created, modified, creation, piece FROM projects WHERE deleted = 0 ORDER BY modified DESC',
+        'SELECT id, title, revision, created, modified, creation, piece, artist, album FROM projects WHERE deleted = 0 ORDER BY modified DESC',
       )
       .all() as unknown as ProjectRow[];
   }
@@ -73,10 +91,20 @@ export class Store {
     return row ? parseProject(JSON.parse(row.doc)) : null;
   }
 
+  /** One song as the list has it, or null. */
+  row(id: string): ProjectRow | null {
+    const row = this.db
+      .prepare(
+        'SELECT id, title, revision, created, modified, creation, piece, artist, album FROM projects WHERE id = ? AND deleted = 0',
+      )
+      .get(id);
+    return (row as unknown as ProjectRow | undefined) ?? null;
+  }
+
   findByOrigin(creation: string, piece: string): ProjectRow | null {
     const row = this.db
       .prepare(
-        'SELECT id, title, revision, created, modified, creation, piece FROM projects WHERE deleted = 0 AND creation = ? AND piece = ? ORDER BY modified DESC',
+        'SELECT id, title, revision, created, modified, creation, piece, artist, album FROM projects WHERE deleted = 0 AND creation = ? AND piece = ? ORDER BY modified DESC',
       )
       .get(creation, piece);
     return (row as unknown as ProjectRow | undefined) ?? null;
@@ -144,6 +172,22 @@ export class Store {
       | { doc: string }
       | undefined;
     return row ? parseProject(JSON.parse(row.doc)) : null;
+  }
+
+  /** Set a song's artist or album, or clear them. False when there's no such song. Saving the song keeps them. */
+  setDetails(id: string, details: SongDetails): boolean {
+    const row = this.db.prepare('SELECT artist, album FROM projects WHERE id = ? AND deleted = 0').get(id) as
+      | { artist: string | null; album: string | null }
+      | undefined;
+    if (!row) return false;
+    this.db
+      .prepare('UPDATE projects SET artist = ?, album = ? WHERE id = ?')
+      .run(
+        details.artist === undefined ? row.artist : details.artist,
+        details.album === undefined ? row.album : details.album,
+        id,
+      );
+    return true;
   }
 
   /** Into the bin: hidden from the list, still on disk. */

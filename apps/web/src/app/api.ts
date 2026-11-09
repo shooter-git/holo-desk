@@ -9,6 +9,9 @@ export interface ProjectRow {
   modified: string;
   creation: string | null;
   piece: string | null;
+  /** Who the song is by and the album it's on; null when not said. */
+  artist: string | null;
+  album: string | null;
 }
 
 export interface CreationPiece {
@@ -84,6 +87,12 @@ export const api = {
       body: JSON.stringify({ doc, baseRevision }),
     }),
   remove: (id: string) => call<{ ok: boolean }>(`/api/projects/${id}`, { method: 'DELETE' }),
+  /** Set a song's artist or album (null clears one; one left out stays). */
+  setDetails: (id: string, details: { artist?: string | null; album?: string | null }) =>
+    call<{ ok: boolean; artist: string | null; album: string | null }>(`/api/projects/${id}/details`, {
+      method: 'PUT',
+      body: JSON.stringify(details),
+    }),
   importMidi: (file: File) =>
     call<Project>(`/api/import/midi?title=${encodeURIComponent(file.name.replace(/\.midi?$/i, ''))}`, {
       method: 'POST',

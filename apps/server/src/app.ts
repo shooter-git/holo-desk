@@ -40,7 +40,7 @@ import {
 import Fastify, { type FastifyInstance, type FastifyReply } from 'fastify';
 import type { Config } from './config.ts';
 import { Creations, sessionText } from './creations.ts';
-import { Store } from './db.ts';
+import { type SongDetails, Store } from './db.ts';
 import { Live, type RenderJob } from './live.ts';
 import { NetworkMidi } from './network-midi.ts';
 import { omrRoutes } from './omr.ts';
@@ -235,6 +235,32 @@ export async function buildApp(config: Config): Promise<{ app: FastifyInstance; 
     scans.removeFor(req.params.id);
     return { ok: true };
   });
+
+  // who a song of yours is by and the album it's on (a creation's song is its creation's); each one
+  // given is set, null or empty clears it, one left out stays as it is
+  app.put<{ Params: { id: string }; Body: { artist?: unknown; album?: unknown } }>(
+    '/api/projects/:id/details',
+    async (req, reply) => {
+      const details: SongDetails = {};
+      for (const field of ['artist', 'album'] as const) {
+        const raw = req.body?.[field];
+        if (raw === undefined) continue;
+        if (raw !== null && typeof raw !== 'string')
+          return reply.code(400).send({ error: `${field} is a name, or null for none` });
+        const name = raw === null ? null : raw.trim().replace(/\s+/g, ' ') || null;
+        if (name && name.length > 120)
+          return reply.code(400).send({ error: `An ${field}'s name is 120 characters at most` });
+        details[field] = name;
+      }
+      const project = store.get(req.params.id);
+      if (!project) return reply.code(404).send({ error: 'No such project' });
+      if (project.origin)
+        return reply.code(400).send({ error: `This song is ${project.origin.creation}'s; it stays with its creation` });
+      store.setDetails(project.id, details);
+      const row = store.row(project.id);
+      return { ok: true, artist: row?.artist ?? null, album: row?.album ?? null };
+    },
+  );
 
   app.get<{ Params: { id: string } }>('/api/projects/:id/history', async (req) => store.history(req.params.id));
   app.get<{ Params: { id: string; rev: string } }>('/api/projects/:id/history/:rev', async (req, reply) => {

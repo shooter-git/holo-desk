@@ -3795,6 +3795,19 @@ html[data-layout="phone-landscape"] .toasts {
   font-weight: 650;
 }
 
+/* the search over every group, above them */
+.song-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 12px;
+}
+
+.song-search .input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
 .song-group-note {
   margin: -2px 0 6px;
   font-size: 11px;
@@ -4420,4 +4433,13 @@ footer.scan-bar {
 .list-item.renaming .input {
   flex: 1 1 160px;
   min-width: 0;
+}
+
+/* a song's artist and album: on a narrow screen the buttons go under the fields */
+.list-item.renaming.details {
+  flex-wrap: wrap;
+}
+
+.list-item.renaming.details .input {
+  flex: 1 1 120px;
 }

@@ -1,8 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import type { Creation, CreationEngine, ProjectRow } from '../src/app/api.ts';
-import { engineBadge, groupSongs } from '../src/app/songs.ts';
+import { engineBadge, groupSongs, searchSongs, songDetailNames } from '../src/app/songs.ts';
 
-const row = (id: string, title: string, modified: string, creation: string | null = null): ProjectRow => ({
+const row = (
+  id: string,
+  title: string,
+  modified: string,
+  creation: string | null = null,
+  details: { artist?: string; album?: string } = {},
+): ProjectRow => ({
   id,
   title,
   revision: 1,
@@ -10,6 +16,8 @@ const row = (id: string, title: string, modified: string, creation: string | nul
   modified,
   creation,
   piece: creation ? title.toLowerCase() : null,
+  artist: details.artist ?? null,
+  album: details.album ?? null,
 });
 
 const engine = (relation: CreationEngine['relation']): CreationEngine => ({
@@ -61,6 +69,62 @@ describe('the Songs dialog', () => {
     // a piece already open in the studio is the song; the other waits in its folder
     expect(moon?.pieces.map((p) => p.piece)).toEqual(['ending']);
     expect(groups.find((g) => g.key === 'gone')?.creation).toBeNull();
+  });
+
+  it('groups your songs by album and artist, artists A to Z, after those with neither', () => {
+    const rows = [
+      row('a1', 'Lantern Theme', '2026-11-09T10:00:00Z', null, { artist: 'Mara Vale', album: 'Hallowed Lanterns' }),
+      row('a2', 'Ember', '2026-11-08T10:00:00Z', null, { artist: 'Mara Vale', album: 'Hallowed Lanterns' }),
+      row('a3', 'Demo 4', '2026-11-09T12:00:00Z', null, { artist: 'Mara Vale' }),
+      row('a4', 'Opener', '2026-11-01T10:00:00Z', null, { artist: 'Cold Harbor', album: 'Tidewater' }),
+      row('a5', 'Loose Idea', '2026-11-02T10:00:00Z', null, { album: 'Sketches' }),
+      row('a6', 'Untitled', '2026-11-03T10:00:00Z'),
+    ];
+    const groups = groupSongs(rows, []);
+    expect(groups.map((g) => [g.kind, g.title, g.artist])).toEqual([
+      ['own', 'Your songs', null],
+      ['album', 'Tidewater', 'Cold Harbor'],
+      // the artist's songs on no album were worked on last, so they come before the album
+      ['album', 'Mara Vale', 'Mara Vale'],
+      ['album', 'Hallowed Lanterns', 'Mara Vale'],
+      ['album', 'Sketches', null],
+    ]);
+    expect(groups.find((g) => g.title === 'Hallowed Lanterns')?.songs.map((s) => s.id)).toEqual(['a1', 'a2']);
+    expect(groups.find((g) => g.title === 'Mara Vale')?.album).toBeNull();
+
+    // when every song has an artist or album, there's no empty "Your songs"
+    expect(groupSongs(rows.slice(0, 5), [])[0]?.title).toBe('Tidewater');
+    // but with no songs at all, it's there to say so
+    expect(groupSongs([], []).map((g) => g.title)).toEqual(['Your songs']);
+
+    expect(songDetailNames(rows)).toEqual({
+      artists: ['Cold Harbor', 'Mara Vale'],
+      albums: ['Hallowed Lanterns', 'Sketches', 'Tidewater'],
+    });
+  });
+
+  it('searches by title, artist, album and experience, and keeps each group in its order', () => {
+    const rows = [
+      row('a1', 'Lantern Theme', '2026-11-09T10:00:00Z', null, { artist: 'Mara Vale', album: 'Hallowed Lanterns' }),
+      row('a2', 'Ember', '2026-11-08T10:00:00Z', null, { artist: 'Mara Vale', album: 'Hallowed Lanterns' }),
+      row('a3', 'Opener', '2026-11-01T10:00:00Z', null, { artist: 'Cold Harbor', album: 'Tidewater' }),
+      row('a4', 'Ember Reprise', '2026-11-02T10:00:00Z'),
+      row('p2', 'Theme', '2026-10-17T09:00:00Z', 'moon'),
+    ];
+    const groups = groupSongs(rows, [creation('moon', 'Paper Moon', [], null)]);
+    const titles = (q: string) => searchSongs(groups, q).map((g) => [g.title, g.songs.map((s) => s.id)]);
+
+    expect(searchSongs(groups, '  ')).toBe(groups);
+    expect(titles('mara')).toEqual([['Hallowed Lanterns', ['a1', 'a2']]]);
+    expect(titles('ember')).toEqual([
+      ['Your songs', ['a4']],
+      ['Hallowed Lanterns', ['a2']],
+    ]);
+    expect(titles('tidewater')).toEqual([['Tidewater', ['a3']]]);
+    expect(titles('paper moon')).toEqual([['Paper Moon', ['p2']]]);
+    // a slip of the keys, when nothing matches as typed
+    expect(titles('hallowd')).toEqual([['Hallowed Lanterns', ['a1', 'a2']]]);
+    expect(titles('zzzz')).toEqual([]);
   });
 
   it("badges an experience whose engine isn't the studio's, and points to holo update-engine", () => {

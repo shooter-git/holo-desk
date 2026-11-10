@@ -24,7 +24,7 @@ export interface FoundSystem {
 }
 
 export interface PageLayout {
-  /** Between two staff lines (centre to centre), and a line's thickness. */
+  /** Between two staff lines (center to center), and a line's thickness. */
   space: number;
   thickness: number;
   systems: FoundSystem[];
@@ -47,21 +47,21 @@ export function measureLines(ink: Uint8Array, w: number, h: number): { thickness
   const step = Math.max(1, Math.floor(w / 80));
   for (let x = Math.floor(w * 0.1); x < w * 0.9; x += step) {
     let run = 0;
-    let colour = ink[x] as number;
+    let color = ink[x] as number;
     let lastBlack = 0;
     for (let y = 0; y <= h; y++) {
-      const v = y < h ? (ink[y * w + x] as number) : 1 - colour;
-      if (v === colour) {
+      const v = y < h ? (ink[y * w + x] as number) : 1 - color;
+      if (v === color) {
         run++;
         continue;
       }
-      if (colour === 1 && run < 64) {
+      if (color === 1 && run < 64) {
         black[run] = (black[run] as number) + 1;
         lastBlack = run;
-      } else if (colour === 0 && run < 128 && lastBlack > 0 && lastBlack < 8) {
+      } else if (color === 0 && run < 128 && lastBlack > 0 && lastBlack < 8) {
         white[run] = (white[run] as number) + 1;
       }
-      colour = v;
+      color = v;
       run = 1;
     }
   }
@@ -75,7 +75,7 @@ function lineRows(ink: Uint8Array, w: number, h: number, thickness: number): num
   const x0 = Math.floor(w * 0.2);
   const x1 = Math.floor(w * 0.8);
   const span = x1 - x0;
-  // a row with its neighbours: a thin, faint line a little off level wanders over a few rows (staves
+  // a row with its neighbors: a thin, faint line a little off level wanders over a few rows (staves
   // need five evenly spaced lines, so a little generosity here finds no false ones)
   const counts: number[] = [];
   for (let y = 0; y < h; y++) {

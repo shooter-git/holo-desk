@@ -123,7 +123,7 @@ const boxSum = (s: Float64Array, w: number, x0: number, y0: number, x1: number, 
  */
 export function flatten(img: Gray, radius = Math.max(15, Math.round(Math.min(img.w, img.h) / 40))): Gray {
   const { w, h, data } = img;
-  // the paper's brightness: the bright end of each neighbourhood (ink is a small share of it)
+  // the paper's brightness: the bright end of each neighborhood (ink is a small share of it)
   const small = Math.max(1, Math.round(radius / 2));
   const bw = Math.ceil(w / small);
   const bh = Math.ceil(h / small);
@@ -179,8 +179,8 @@ export function enhance(img: Gray): Gray {
 }
 
 /**
- * Ink and paper: 1 where there's ink. Sauvola's threshold (the neighbourhood's mean, lowered where
- * it's flat), so thin staff lines on grey paper and bold noteheads both come through.
+ * Ink and paper: 1 where there's ink. Sauvola's threshold (the neighborhood's mean, lowered where
+ * it's flat), so thin staff lines on gray paper and bold noteheads both come through.
  */
 export function binarize(img: Gray, radius = 12, k = 0.2): Uint8Array {
   const { w, h, data } = img;
@@ -197,7 +197,7 @@ export function binarize(img: Gray, radius = 12, k = 0.2): Uint8Array {
       const mean = boxSum(sum, w, x0, y0, x1, y1) / n;
       const variance = Math.max(0, boxSum(sq, w, x0, y0, x1, y1) / n - mean * mean);
       const t = mean * (1 + k * (Math.sqrt(variance) / 128 - 1));
-      // faint lines (a thin line in a small photo comes out light grey) still count; paper, flattened
+      // faint lines (a thin line in a small photo comes out light gray) still count; paper, flattened
       // to near white, doesn't
       out[y * w + x] = (data[y * w + x] as number) < Math.min(t, 232) ? 1 : 0;
     }

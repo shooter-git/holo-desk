@@ -9,7 +9,7 @@
  * how long it rings (Damping; longer in the bass, as a piano's strings do). From the tenor up a note
  * has two strings a little apart, as a piano's unisons are, so the ring beats gently and still takes
  * a note whose tuning is a few cents off equal. The strings follow a grand's stretched tuning (its
- * octaves a little wide towards the ends), and sit across the stereo image as the player hears them,
+ * octaves a little wide toward the ends), and sit across the stereo image as the player hears them,
  * the bass on the left.
  *
  * Each string's input is scaled so that, rung at its own pitch for long enough, it rings as loudly
@@ -31,7 +31,7 @@ const SILENT = 1e-7;
 /** The strings' sum at full Amount (set by ear and by measure: a halo under the sound, not a second one). */
 const RING_LEVEL = 0.09;
 
-/** A grand's stretch from equal temperament, in cents (wider octaves towards both ends). */
+/** A grand's stretch from equal temperament, in cents (wider octaves toward both ends). */
 function stretch(midi: number): number {
   const s = (midi - 69) / 12;
   return s > 0 ? 0.9 * s ** 2.4 : -0.25 * (-s) ** 3;

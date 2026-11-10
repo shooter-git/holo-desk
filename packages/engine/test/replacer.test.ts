@@ -30,7 +30,7 @@ function drumTrack(seconds = 3.2): Float32Array {
 
 /**
  * The velocity a hit should get: the track's loudest in its first four milliseconds (a soft hit on a
- * loud one's tail is louder than it was struck), in decibels above the threshold towards full scale.
+ * loud one's tail is louder than it was struck), in decibels above the threshold toward full scale.
  */
 function expected(track: Float32Array, at: number, threshold = -30): number {
   let peak = 0;

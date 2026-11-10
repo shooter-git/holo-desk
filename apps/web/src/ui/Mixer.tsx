@@ -139,7 +139,7 @@ interface StripProps {
 const NO_BUSES: Bus[] = [];
 
 /**
- * One channel strip. Memoised: a song's edits leave the other strips' channel and track
+ * One channel strip. Memoized: a song's edits leave the other strips' channel and track
  * objects as they were, so only the strip that changed is drawn again.
  */
 export const Strip = memo(function Strip({ id, kind, name, color, channel, track, selected }: StripProps) {
@@ -363,10 +363,10 @@ export const Strip = memo(function Strip({ id, kind, name, color, channel, track
                       },
                     ]);
                   },
-                  onEnd: (cancelled) => {
+                  onEnd: (canceled) => {
                     endGesture();
-                    // a scroll that began on the slot is cancelled by the browser: not a tap
-                    if (!moved && !cancelled) store.set({ stage: id });
+                    // a scroll that began on the slot is canceled by the browser: not a tap
+                    if (!moved && !canceled) store.set({ stage: id });
                   },
                 });
               }}
@@ -586,7 +586,7 @@ function eqResponse(params: Record<string, number>, freqs: Float64Array, sr = 48
   return out;
 }
 
-/** Parametric EQ's bands, each in its own colour (the curve's handles and the strip below it). */
+/** Parametric EQ's bands, each in its own color (the curve's handles and the strip below it). */
 const PEQ_COLORS = ['#ff7a7a', '#ffaa5c', '#ffd75e', '#7ee08a', '#4fd6c0', '#5cb8ff', '#a58bff', '#ff8cc6'];
 /** The band types a gain means something for: Low Shelf, Bell, High Shelf. */
 const PEQ_GAINED = new Set([2, 3, 6]);
@@ -845,7 +845,7 @@ function useViewport(): { w: number; h: number } {
 /**
  * A plugin's or a stage's window: it floats where it was put (its header drags it), and on a
  * phone it is a sheet up from the bottom, with a scrim behind it that closes it. Keyed by what
- * it shows, so a new one opens centred and takes the keyboard; closing gives the keyboard back.
+ * it shows, so a new one opens centered and takes the keyboard; closing gives the keyboard back.
  */
 function Floating({
   width,
@@ -1530,7 +1530,7 @@ function KitPicker({ target, plugin }: { target: string; plugin: Plugin }) {
           ? `Loading the kit (${load.done} of ${load.total})…`
           : load?.state === 'error'
             ? `The kit couldn’t load: ${load.message}`
-            : 'Set the Threshold just under the softest hit, and Detect Low and High around the drum, so its neighbours’ spill isn’t heard as hits.'}
+            : 'Set the Threshold just under the softest hit, and Detect Low and High around the drum, so its neighbors’ spill isn’t heard as hits.'}
       </span>
     </div>
   );

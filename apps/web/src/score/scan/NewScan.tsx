@@ -168,7 +168,7 @@ export function NewScan({ project, track, notify, onClose, onSaved, onOpen }: Ne
         <footer className="scan-bar">
           <label className="check">
             <input type="checkbox" checked={enhance} onChange={(e) => setEnhance(e.target.checked)} /> Enhance (faint or
-            grey pages)
+            gray pages)
           </label>
           <span className="grow" />
           {found && (

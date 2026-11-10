@@ -1,5 +1,5 @@
 /**
- * A synthesised drum kit on the General MIDI drum map, so drum pads play something the moment
+ * A synthesized drum kit on the General MIDI drum map, so drum pads play something the moment
  * they're plugged in: kicks, snares, claps, hats (the closed hat chokes the open one), toms,
  * cymbals, a cowbell, hand drums and wood.
  */
@@ -141,7 +141,7 @@ class DrumVoice implements Voice {
   private choke = 0;
   private readonly gain: number;
   /**
-   * Its two filters (the hit's colour, then a low-pass), as coefficients and state in the voice: run
+   * Its two filters (the hit's color, then a low-pass), as coefficients and state in the voice: run
    * in line each sample, since a call V8 doesn't inline boxes every double it passes or returns.
    */
   private readonly fb0: number;

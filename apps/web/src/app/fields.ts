@@ -1,6 +1,6 @@
 /** What a key or a click lands on: whether it's somewhere words are typed, and who Space belongs to. */
 
-/** Inputs whose words are typed: the rest (sliders, checkboxes, colours) take no text. */
+/** Inputs whose words are typed: the rest (sliders, checkboxes, colors) take no text. */
 const TYPED = new Set(['', 'text', 'search', 'url', 'email', 'password', 'number', 'tel']);
 
 /** Whether the element takes typed words: a text field, a text box, or something editable. */

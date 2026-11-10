@@ -353,13 +353,13 @@ export function Inspector({ overlay = false }: { overlay?: boolean }) {
               </label>
             </div>
             <div className="row">
-              <span>Colour</span>
+              <span>Color</span>
               <input
                 type="color"
                 className="swatch-input"
-                aria-label="Track colour"
+                aria-label="Track color"
                 value={track.color}
-                onChange={(e) => updateTrack(track.id, { color: e.target.value }, 'Colour')}
+                onChange={(e) => updateTrack(track.id, { color: e.target.value }, 'Color')}
               />
             </div>
             {track.origin && (
@@ -473,11 +473,11 @@ const LibraryItem = memo(function LibraryItem({
 });
 
 /**
- * A pack's licence as the Library shows it: a pack you imported is under your own licence (whatever
+ * A pack's license as the Library shows it: a pack you imported is under your own license (whatever
  * its text says), a pinned one under its own (a long one is a free-use statement).
  */
-export function licenceLabel(pack: { license: string; source?: { kind: string } }): string {
-  if (pack.source?.kind === 'imported' || pack.source?.kind === 'local') return 'Your own licence';
+export function licenseLabel(pack: { license: string; source?: { kind: string } }): string {
+  if (pack.source?.kind === 'imported' || pack.source?.kind === 'local') return 'Your own license';
   return pack.license.length > 14 ? 'Free use' : pack.license;
 }
 
@@ -605,7 +605,7 @@ function MorePacks({ query, installed }: { query: string; installed: string }) {
                 <b>{p.name}</b>
                 <span className="meta muted">
                   {p.bytes ? `${diskSize(p.bytes)} · ` : ''}
-                  {licenceLabel(p)}
+                  {licenseLabel(p)}
                 </span>
               </div>
               <div className="muted more-pack-list">{p.instruments.map((i) => i.title).join(' · ')}</div>
@@ -687,7 +687,7 @@ export function LibraryPanel({ overlay = false, full = false }: { overlay?: bool
     [track, overlay],
   );
   const currentKey = instrumentKey(track?.instrument);
-  // a stable object per instrument, so a memoised row sees the same props
+  // a stable object per instrument, so a memoized row sees the same props
 
   const groups = useMemo(
     () =>
@@ -833,7 +833,7 @@ export function LibraryPanel({ overlay = false, full = false }: { overlay?: bool
           {groups.map(({ pack, categories }) => (
             <details key={pack.id} className="disclosure">
               <summary>
-                {pack.name} <span className="meta muted pack-license">{licenceLabel(pack)}</span>
+                {pack.name} <span className="meta muted pack-license">{licenseLabel(pack)}</span>
               </summary>
               {categories.map((c) => (
                 <div key={c.name}>
@@ -891,7 +891,7 @@ export function LibraryPanel({ overlay = false, full = false }: { overlay?: bool
           knobs.
         </div>
         <div className="muted note">
-          A pack you import stays on this computer, under your own licence. Bouncing or recording one of its instruments
+          A pack you import stays on this computer, under your own license. Bouncing or recording one of its instruments
           into a song's audio puts that audio in the song's experience repository when the song is sent.
         </div>
       </div>

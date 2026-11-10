@@ -103,7 +103,7 @@ export function roundRect(ctx: CanvasRenderingContext2D, x: number, y: number, w
   ctx.closePath();
 }
 
-/** A CSS colour with a new alpha. Works for #rgb and #rrggbb. */
+/** A CSS color with a new alpha. Works for #rgb and #rrggbb. */
 export function alpha(hex: string, a: number): string {
   let h = hex.replace('#', '');
   if (h.length === 3) h = h.replace(/./g, (c) => c + c);
@@ -124,7 +124,7 @@ export function mix(hex: string, toward: string, t: number): string {
   return `rgb(${c[0]}, ${c[1]}, ${c[2]})`;
 }
 
-/** Logic-style velocity colours: soft notes cool, hard notes hot. */
+/** Logic-style velocity colors: soft notes cool, hard notes hot. */
 export function velocityColor(v: number): string {
   const stops: [number, string][] = [
     [0, '#6d5bd0'],

@@ -896,7 +896,7 @@ type KitLayout = 'pieces' | 'mics' | 'flat';
 /** Takes of one velocity closer than this (dB) are round robins of one layer, when nothing names them. */
 const TAKE_DB = 1.5;
 
-/** A mono microphone's gains into left and right at a pan (-1 to 1): constant power, unity in the centre. */
+/** A mono microphone's gains into left and right at a pan (-1 to 1): constant power, unity in the center. */
 function panGains(pan: number): [number, number] {
   const theta = ((clamp(pan, -1, 1) + 1) * Math.PI) / 4;
   return [Math.cos(theta) * Math.SQRT2, Math.sin(theta) * Math.SQRT2];
@@ -1587,7 +1587,7 @@ export function importFolder(
   const pack: Pack = {
     id,
     name,
-    license: opts.license ?? 'Imported (check its own licence)',
+    license: opts.license ?? 'Imported (check its own license)',
     credit: `Imported from ${basename(source)}.`,
     source: { kind: 'imported', from: basename(source) },
     root: 'samples',
@@ -1602,7 +1602,7 @@ export function importFolder(
 
 // ---- BFD ----
 
-export const BFD_LICENSE = 'Your own licence (BFD)';
+export const BFD_LICENSE = 'Your own license (BFD)';
 
 export interface BfdImport {
   /** Where the inventory of the folder was written. */

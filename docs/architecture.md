@@ -187,7 +187,7 @@ a second, and receives:
 ## Samples
 
 A pack is a folder with `holo-pack.json`: every sample's key and velocity range, its measured root
-pitch, its levelling gain, its start, end and loop. The studio fetches an instrument's files when a
+pitch, its leveling gain, its start, end and loop. The studio fetches an instrument's files when a
 track uses it, decodes them at the device's sample rate, trims them to their measured start and end,
 and hands them to the audio thread (transferred, not copied). Files are kept in the browser's cache
 storage, so the next load needs no network. Zones that play the same stretch of one file (a drum on two
@@ -260,7 +260,7 @@ its key, velocity and round robin together, the round robin chosen once and matc
 number, as one voice, so chokes, polyphony and a key's limit count hits. A sampler instrument's own
 knobs (`params`: each microphone's level, the kit's tune and decay) update it where it is, like a
 synth's: a level glides over a block, tune takes the next hit, decay shortens what's ringing. At their
-starting levels the microphones sum to the kit as its recipe levelled it.
+starting levels the microphones sum to the kit as its recipe leveled it.
 
 ## Synths
 
@@ -283,9 +283,9 @@ The other families, each a file with a `PRESETS` table, an `X_PRESETS` list that
 - `morph.ts`: two spectra built by inverse FFT into a band-limited table per octave, crossfaded; also
   exports `buildTables`, `tableLevel` and `readTable` for the families below.
 - `drone.ts`: ten noise-excited resonators on a note's partials, wandering and breaking into grains.
-- `machine.ts`: synthesised drum-machine kits on the General MIDI drum keys (`DRUM_PRESETS` in the
+- `machine.ts`: synthesized drum-machine kits on the General MIDI drum keys (`DRUM_PRESETS` in the
   session package is every synth that's a kit, for the pads and the kit warnings).
-- `wind.ts`, `plucked.ts`, `reeds.ts`, `choir.ts`, `struck.ts`: modelled flutes and pipes (tuned
+- `wind.ts`, `plucked.ts`, `reeds.ts`, `choir.ts`, `struck.ts`: modeled flutes and pipes (tuned
   breath, delayed vibrato, drones), strings on a buzzing bridge (a resonant body, sympathetic strings,
   a self-playing drone), free reeds and rubbed glass, formant voices, and modal drums and metal with
   pitch glides and an ensemble of players.

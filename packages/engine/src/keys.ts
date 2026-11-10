@@ -1,11 +1,11 @@
 /**
- * Electric keys, modelled: three electromechanical keyboards, each a struck or plucked vibrating body
+ * Electric keys, modeled: three electromechanical keyboards, each a struck or plucked vibrating body
  * read by a pickup, with the pickup's own nonlinearity doing most of the work.
  *
  * - Tine Piano: a hammer strikes a thin tine bolted to a heavy tone bar. The tine's bright overtone
  *   (about six and a quarter times the fundamental, as a clamped bar's is) rings for a moment and
  *   dies; the tone bar keeps the fundamental singing. An electromagnetic pickup sits a little off the
- *   tine's centre, so the louder it's played the more the tine swings across the uneven field: soft,
+ *   tine's center, so the louder it's played the more the tine swings across the uneven field: soft,
  *   it's round and bell-like; hard, it barks. Tremolo pans it between the sides.
  * - Reed Piano: a hammer strikes a steel reed in front of an electrostatic pickup. The reed's motion
  *   changes the gap, and the gap's response is lopsided: soft notes are sweet, hard ones snarl. Its
@@ -339,7 +339,7 @@ class ClavVoice implements Voice {
   retime(): void {
     const p = this.p;
     const t60 = this.released ? 0.025 : p.decay * 3.2 * 2 ** (-(this.key - 40) / 30);
-    // per trip round the string: so that it falls 60 dB in t60
+    // per trip around the string: so that it falls 60 dB in t60
     this.loss = 10 ** (-3 / (t60 * this.f));
     this.bright = 0.25 + 0.6 * p.tone;
   }

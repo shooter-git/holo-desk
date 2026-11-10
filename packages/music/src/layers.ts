@@ -12,7 +12,7 @@ export type Channels = readonly ArrayLike<number>[];
 
 type Coefficients = [b0: number, b1: number, b2: number, a1: number, a2: number];
 
-/** RBJ biquad coefficients, normalised. */
+/** RBJ biquad coefficients, normalized. */
 function biquad(type: 'highshelf' | 'highpass', f0: number, rate: number, q: number, db = 0): Coefficients {
   const w0 = (2 * Math.PI * f0) / rate;
   const cos = Math.cos(w0);
@@ -112,7 +112,7 @@ export interface SpreadLayer {
   hivel: number;
   gain: number;
   level: number;
-  /** Squeezed out by its neighbours (or quieter than velocity 1 reaches): no velocity plays it. */
+  /** Squeezed out by its neighbors (or quieter than velocity 1 reaches): no velocity plays it. */
   unreachable: boolean;
 }
 
@@ -148,14 +148,14 @@ export function spreadLayers(levels: readonly number[], opts: { range?: number; 
   const R = range ?? need;
   // the level at velocity 127: half a layer's worth above the loudest layer
   const ref = top + (R * (w / 2)) / 126;
-  const centre = sorted.map((l) => 127 + (126 * (l - ref)) / R);
+  const center = sorted.map((l) => 127 + (126 * (l - ref)) / R);
   // the layers that get velocities of their own: one quieter than velocity 1 reaches, or squeezed to
-  // nothing between its neighbours, folds away (the quietest left plays from velocity 1)
+  // nothing between its neighbors, folds away (the quietest left plays from velocity 1)
   let kept = sorted.map((_, j) => j);
   for (;;) {
     const now = kept;
     const bounds = now.slice(0, -1).map((j, n) => {
-      const b = Math.round(((centre[j] as number) + (centre[now[n + 1] as number] as number)) / 2);
+      const b = Math.round(((center[j] as number) + (center[now[n + 1] as number] as number)) / 2);
       return Math.max(1, Math.min(126, b));
     });
     const empty = now.findIndex((_, n) => {

@@ -334,7 +334,7 @@ describe('recordings lined up and resampled', () => {
     }
   });
 
-  it('makes the same bytes every time, on every computer (its sums by hand: no library maths)', () => {
+  it('makes the same bytes every time, on every computer (its sums by hand: no library math)', () => {
     let seed = 1;
     const noise = Float32Array.from({ length: 3000 }, () => {
       seed = (seed * 1103515245 + 12345) % 2 ** 31;

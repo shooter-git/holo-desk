@@ -118,7 +118,7 @@ export function planTrack(
   return { kind: 'performance', key: `${inst.pack}/${inst.name}`, notes: plans };
 }
 
-/** A loop's plans: anything that starts before the loop (an early attack) comes round at its end. */
+/** A loop's plans: anything that starts before the loop (an early attack) comes around at its end. */
 export function wrapPlans(plans: PartPlans, start: number, end: number): PartPlans {
   const turn = end - start;
   const wrap = <T extends { at: number }>(p: T): T =>

@@ -26,7 +26,7 @@
   --solo: #f6c453;
   --mute: #5cb8ff;
   --ai: #c792ff;
-  /* the DSP meter's load colours: fine, busy, overloaded */
+  /* the DSP meter's load colors: fine, busy, overloaded */
   --ok: #7ee08a;
   --warn: #ffb74d;
   --danger: #ff6b6b;
@@ -237,7 +237,7 @@ kbd {
   color: var(--text);
 }
 
-/* a lit button is filled, with no more than a hairline of its colour round it: the bar stays a quiet place */
+/* a lit button is filled, with no more than a hairline of its color around it: the bar stays a quiet place */
 .btn.on {
   color: #0d1014;
   background: linear-gradient(180deg, #8fd0ff, var(--accent));
@@ -330,7 +330,7 @@ a.btn {
   border-left: 1px solid var(--line);
 }
 
-/* the segment clips its buttons: the focus ring is drawn inside, over the neighbours */
+/* the segment clips its buttons: the focus ring is drawn inside, over the neighbors */
 .seg .btn:focus-visible {
   position: relative;
   z-index: 1;
@@ -446,8 +446,8 @@ a.btn {
 
 /* ---------- control bar ---------- */
 
-/* the sides share the room equally, so the transport stays centred. The right side is never narrower
-   than what it holds: should it ever need more than its share, the centre moves over rather than
+/* the sides share the room equally, so the transport stays centered. The right side is never narrower
+   than what it holds: should it ever need more than its share, the center moves over rather than
    being covered (the left gives way with the song's title) */
 .control-bar {
   display: grid;
@@ -472,7 +472,7 @@ a.btn {
   justify-content: flex-end;
 }
 
-.control-bar .cb-centre {
+.control-bar .cb-center {
   gap: 10px;
 }
 
@@ -760,7 +760,7 @@ a.btn {
 
 /* the control bar gives way on narrower screens: the least-used parts go first, in this order, and
    the Songs button stands in for the title once that is gone (phones have their own bar). Each step
-   comes where the right side would no longer fit beside the centre (which grows at each step above) */
+   comes where the right side would no longer fit beside the center (which grows at each step above) */
 .app:not(.phone) .control-bar .cb-songs {
   display: none;
 }
@@ -3896,7 +3896,7 @@ html[data-layout="phone-landscape"] .toasts {
   color: var(--warn);
 }
 
-/* ---- the Score: Verovio's engraving in the studio's colours, with the playhead over it ---- */
+/* ---- the Score: Verovio's engraving in the studio's colors, with the playhead over it ---- */
 .score {
   position: relative;
   min-height: 0;

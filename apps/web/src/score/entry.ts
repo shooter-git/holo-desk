@@ -189,7 +189,7 @@ export class Entry {
     const near = chord && c.s.last.length ? c.s.near : c.s.near;
     const { written, pitch } = letterPitch(c.project, c.doc, c.s, step, near);
     if (chord && c.s.last.length) {
-      // a chord is built upwards: the letter above its top note
+      // a chord is built upward: the letter above its top note
       let w = written;
       const top = Math.max(...c.s.last.map((n) => n.p));
       while (fromWritten(c.doc, c.s, w).p <= top) w = { ...w, octave: w.octave + 1 };

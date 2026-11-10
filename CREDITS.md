@@ -5,7 +5,7 @@
 HO[LO] Desk installs free sample packs on request. Their audio isn't stored here, and neither are their
 maps: both live with the packs in [HO[LO] Packs](https://github.com/shooter-git/holo-packs). Its
 [CREDITS.md](https://github.com/shooter-git/holo-packs/blob/main/CREDITS.md) names every library's
-authors, licence and source, and each pack's page says more about it.
+authors, license and source, and each pack's page says more about it.
 
 They are:
 - VSCO 2 Community Edition and the Versilian Community Sample Library (Versilian Studios);

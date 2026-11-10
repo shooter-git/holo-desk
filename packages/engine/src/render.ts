@@ -331,7 +331,7 @@ export async function renderSession(written: Project, source: RenderSource, opts
   core.receive({ type: 'graph', graph: compileGraph(project, numOf, segments) });
   // planned parts: planned whole, their samples loaded, handed over as voices to start
   let pp = 0;
-  /** How far past the loop's start its voices sound (a voice can outlast a turn, and come round onto itself). */
+  /** How far past the loop's start its voices sound (a voice can outlast a turn, and come around onto itself). */
   let reach = turn;
   const planned = project.tracks.filter(isPlanned);
   for (const t of planned) {
@@ -382,7 +382,7 @@ export async function renderSession(written: Project, source: RenderSource, opts
     });
     if (t.kind === 'audio') core.receive({ type: 'clips', num: numOf(t.id), clips: compileClips(t, segments, sr) });
   }
-  // a loop plays turn after turn until everything that rings past its end has come round (its longest
+  // a loop plays turn after turn until everything that rings past its end has come around (its longest
   // voice, and the halls after it), and keeps the last
   const turns = loop ? Math.ceil((reach + LOOP_SETTLE * sr) / Math.max(1, turn)) : 1;
   const length = loop ? turn * turns : Math.max(1, stop - start + Math.round((opts.tail ?? 4) * sr));
@@ -437,7 +437,7 @@ export async function renderSession(written: Project, source: RenderSource, opts
 
 /**
  * A loop's notes as the loop plays them forever: a note still sounding at the end goes on into the
- * start, and stops there where it would have (its end comes round again).
+ * start, and stops there where it would have (its end comes around again).
  */
 function wrapNotes(events: number[], start: number, stop: number): Float64Array {
   const turn = stop - start;

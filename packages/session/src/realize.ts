@@ -21,7 +21,7 @@ function scale(fifths: number): Set<number> {
 }
 
 /** The next note of the scale above (`dir` 1) or below (−1) a pitch. */
-function neighbour(p: number, dir: 1 | -1, notes: Set<number>): number {
+function neighbor(p: number, dir: 1 | -1, notes: Set<number>): number {
   const from = Math.round(p);
   for (let q = from + dir; Math.abs(q - from) <= 2; q += dir)
     if (notes.has(((q % 12) + 12) % 12)) return q + (p - from);
@@ -86,7 +86,7 @@ export function realize(notes: readonly Note[], ctx: RealizeContext): Note[] {
       let count = Math.floor(d / step);
       if (count % 2 === 0) count -= 1;
       if (count >= 3) {
-        const upper = neighbour(n.p, 1, key);
+        const upper = neighbor(n.p, 1, key);
         for (let i = 0; i < count; i++) {
           const last = i === count - 1;
           out.push(sound(n, t + i * step, last ? d - i * step : step, i % 2 ? upper : n.p, i ? n.v - 6 : n.v));
@@ -97,7 +97,7 @@ export function realize(notes: readonly Note[], ctx: RealizeContext): Note[] {
     if (a.includes('turn')) {
       // a turn: above, the note, below, the note (held)
       const step = Math.min(ticksFor(0.09, ctx.tempo, at), Math.floor(d / 5));
-      const seq = [neighbour(n.p, 1, key), n.p, neighbour(n.p, -1, key)];
+      const seq = [neighbor(n.p, 1, key), n.p, neighbor(n.p, -1, key)];
       seq.forEach((p, i) => {
         out.push(sound(n, t + i * step, step, p, i ? n.v - 6 : n.v));
       });
@@ -107,7 +107,7 @@ export function realize(notes: readonly Note[], ctx: RealizeContext): Note[] {
     if (a.includes('mord') || a.includes('pmord') || a.includes('tr')) {
       // a mordent: the note, the one below (above, for an upper mordent or a short trill), the note
       const step = Math.min(ticksFor(0.07, ctx.tempo, at), Math.floor(d / 4));
-      const other = neighbour(n.p, a.includes('mord') ? -1 : 1, key);
+      const other = neighbor(n.p, a.includes('mord') ? -1 : 1, key);
       out.push(sound(n, t, step, n.p, n.v));
       out.push(sound(n, t + step, step, other, n.v - 6));
       out.push(sound(n, t + 2 * step, d - 2 * step, n.p, n.v - 6));

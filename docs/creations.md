@@ -29,7 +29,7 @@ HO[LO] writes only inside the `sessions` folder a creation declares, and only `<
 ## Hearing it as the creation plays it
 
 HO[LO]'s own playback is for editing: the same samples, but not the creation's halls, tone chains,
-synthesised voices or mastering. To hear the song exactly as the creation will play it, with the edits
+synthesized voices or mastering. To hear the song exactly as the creation will play it, with the edits
 you've made and not yet sent, the creation can render it itself. Declare how in `holo.creation.json`:
 
 ```jsonc

@@ -1,5 +1,5 @@
 /**
- * Morph: a wavetable synthesiser that glides between two spectra. Each spectrum (soft, saw, hollow,
+ * Morph: a wavetable synthesizer that glides between two spectra. Each spectrum (soft, saw, hollow,
  * a narrow pulse, glassy partials, two sung vowels) is built once, by inverse FFT, into a table for
  * every octave with only the harmonics that fit below the Nyquist frequency, so nothing aliases at any
  * pitch. A voice reads both of its preset's tables and crossfades between them: Morph sets where,

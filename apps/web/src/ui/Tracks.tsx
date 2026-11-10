@@ -469,7 +469,7 @@ interface DragPreview {
 
 const REGION_FONT = '600 10.5px Inter Variable, system-ui, sans-serif';
 
-// colours with an alpha are parsed once, not four times per region per frame
+// colors with an alpha are parsed once, not four times per region per frame
 const tints = new Map<string, string>();
 function tint(hex: string, a: number): string {
   const key = `${hex}|${a}`;
@@ -481,7 +481,7 @@ function tint(hex: string, a: number): string {
   return v;
 }
 
-// a region's fill, made once per colour, selection and height; drawn translated to the region's top
+// a region's fill, made once per color, selection and height; drawn translated to the region's top
 const gradients = new WeakMap<CanvasRenderingContext2D, Map<string, CanvasGradient>>();
 function regionGradient(ctx: CanvasRenderingContext2D, base: string, selected: boolean, h: number): CanvasGradient {
   let cache = gradients.get(ctx);

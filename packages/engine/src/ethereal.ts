@@ -1,5 +1,5 @@
 /**
- * Ethereal: a synthesiser for pads and glowing keys. Each voice is stereo: five saws spread across
+ * Ethereal: a synthesizer for pads and glowing keys. Each voice is stereo: five saws spread across
  * the field (a supersaw), two sines an octave up tuned a few cents apart (one leaning left, one
  * right, so they shimmer against each other), a bell partial an octave and a fifth up, a sine an
  * octave down, and breath (noise tuned to the note). A gentle low-pass per side blooms open as the

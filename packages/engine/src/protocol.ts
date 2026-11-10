@@ -103,7 +103,7 @@ export interface SampleZone {
   hi: number;
   lovel: number;
   hivel: number;
-  /** Linear gain that levels this sample with its neighbours. */
+  /** Linear gain that levels this sample with its neighbors. */
   gain: number;
   /** Loop in frames (at the context's rate); loopEnd 0 = no loop. */
   loopStart: number;
@@ -258,7 +258,7 @@ export type ToWorklet =
   | { type: 'play'; frame: number; record: boolean; countIn: number; cmd?: number }
   | { type: 'stop'; cmd?: number }
   | { type: 'locate'; frame: number; cmd?: number }
-  /** `wrap`: a loop being rendered, whose notes ring on across the jump (their ends come round again). */
+  /** `wrap`: a loop being rendered, whose notes ring on across the jump (their ends come around again). */
   | { type: 'cycle'; on: boolean; start: number; end: number; wrap?: boolean }
   /** A track's planned part (null: it has none). */
   | { type: 'plans'; num: number; plans: import('./parts.ts').PartPlans | null }

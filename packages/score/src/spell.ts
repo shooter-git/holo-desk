@@ -49,9 +49,9 @@ export const fifthsPos = (s: Pick<Spelling, 'step' | 'alter'>): number => fifths
  * note, −1 falling) tips a chromatic note toward a sharp or a flat.
  */
 export function spellInKey(pitch: number, fifths: number, mode: KeyMode, direction = 0): Spelling {
-  const centre = fifths + (mode === 'minor' || mode === 'dorian' ? 3 : 2);
+  const center = fifths + (mode === 'minor' || mode === 'dorian' ? 3 : 2);
   const options = spellings(pitch)
-    .map((s) => ({ s, dist: Math.abs(fifthsPos(s) - centre) }))
+    .map((s) => ({ s, dist: Math.abs(fifthsPos(s) - center) }))
     .sort((a, b) => a.dist - b.dist || Math.abs(a.s.alter) - Math.abs(b.s.alter));
   const best = options[0];
   if (!best) return spellAs(pitch, 0);
@@ -70,13 +70,13 @@ export function spellInKey(pitch: number, fifths: number, mode: KeyMode, directi
  */
 export function spellChord(spelled: Spelling[], fifths: number, mode: KeyMode, fixed: boolean[]): Spelling[] {
   const out = spelled.slice();
-  const centre = fifths + (mode === 'minor' ? 3 : 2);
+  const center = fifths + (mode === 'minor' ? 3 : 2);
   for (let i = 1; i < out.length; i++) {
     const a = out[i - 1] as Spelling;
     const b = out[i] as Spelling;
     if (a.step !== b.step || a.octave !== b.octave) continue;
-    // move whichever isn't fixed and lies further from the key, to the neighbouring letter
-    const moveB = !fixed[i] && (fixed[i - 1] || Math.abs(fifthsPos(b) - centre) >= Math.abs(fifthsPos(a) - centre));
+    // move whichever isn't fixed and lies further from the key, to the neighboring letter
+    const moveB = !fixed[i] && (fixed[i - 1] || Math.abs(fifthsPos(b) - center) >= Math.abs(fifthsPos(a) - center));
     const idx = moveB ? i : i - 1;
     if (fixed[idx]) continue;
     const s = out[idx] as Spelling;

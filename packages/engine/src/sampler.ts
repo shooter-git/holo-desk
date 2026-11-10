@@ -78,7 +78,7 @@ class SampleLayer {
       this.gl = gain * Math.min(1, 1 - pan);
       this.gr = gain * Math.min(1, 1 + pan);
     } else {
-      // a mono one: constant power, as loud as both sides in the centre
+      // a mono one: constant power, as loud as both sides in the center
       const theta = ((pan + 1) * Math.PI) / 4;
       this.gl = gain * Math.cos(theta) * Math.SQRT2;
       this.gr = gain * Math.sin(theta) * Math.SQRT2;
@@ -166,7 +166,7 @@ class SampleLayer {
         break;
       }
       const e = voice.e;
-      // (a loop that ends at the last frame goes round before it gets there)
+      // (a loop that ends at the last frame goes around before it gets there)
       if (this.pos >= len - 1 && !(looped && this.pos < loopEnd)) {
         this.ended = true;
         break;
@@ -234,7 +234,7 @@ class SampleLayer {
     let kr = gr * m;
     for (let k = 0; k < n; k++) {
       const e = env[k] as number;
-      // (a loop that ends at the last frame goes round before it gets there)
+      // (a loop that ends at the last frame goes around before it gets there)
       if (this.pos >= len - 1 && !(loops && this.pos < loopEnd)) {
         this.ended = true;
         break;

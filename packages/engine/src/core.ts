@@ -348,7 +348,7 @@ class Strip {
     this.num = spec.num;
     this.id = spec.id;
     this.vol.set(dbToGain(spec.volume));
-    // balance: the centre is unity; turning left fades the right side out, and the reverse
+    // balance: the center is unity; turning left fades the right side out, and the reverse
     this.panL.set(Math.min(1, 1 - spec.pan));
     this.panR.set(Math.min(1, 1 + spec.pan));
     this.mute = spec.mute;
@@ -647,7 +647,7 @@ interface PartRuntime {
   entries: { at: number; length: number; make: () => Sounding | null }[];
   next: number;
   voices: Sounding[];
-  /** The song frame it has played up to: a span that starts elsewhere has jumped (round a cycle). */
+  /** The song frame it has played up to: a span that starts elsewhere has jumped (around a cycle). */
   until: number;
 }
 
@@ -1265,7 +1265,7 @@ export class EngineCore implements Host {
       const out = this.spans[s * 3] as number;
       const song = this.spans[s * 3 + 1] as number;
       const count = this.spans[s * 3 + 2] as number;
-      // round a cycle's jump, the part goes on from its start (what's sounding rings on)
+      // around a cycle's jump, the part goes on from its start (what's sounding rings on)
       if (song !== part.until) {
         const keep = part.voices;
         this.seekPart(part, song, false);
@@ -2219,7 +2219,7 @@ export class EngineCore implements Host {
     this.readLive();
     const cyc = this.cycle;
     if (this.playing && cyc.on && cyc.end > cyc.start && this.pos === cyc.end) {
-      // the last block ended right on the cycle's end: round to its start before this one plays
+      // the last block ended right on the cycle's end: around to its start before this one plays
       for (const t of this.trackOrder) {
         if (!cyc.wrap && this.playsSong(t)) this.endSeqNotes(t, 0);
         this.seek(t, cyc.start, false);
@@ -2245,7 +2245,7 @@ export class EngineCore implements Host {
           for (const t of this.trackOrder) {
             const song = this.playsSong(t);
             if (!c.wrap && song) this.endSeqNotes(t, first);
-            // (a planned part goes round in playPart, where what's sounding rings on)
+            // (a planned part goes around in playPart, where what's sounding rings on)
             this.seek(t, c.start, false);
             if (song) this.gather(t, c.start, c.start + (n - first), first);
           }
@@ -2292,7 +2292,7 @@ export class EngineCore implements Host {
     this.advance(startPos, n);
   }
 
-  /** The playhead past this block (round the cycle), and the transport as it now stands. */
+  /** The playhead past this block (around the cycle), and the transport as it now stands. */
   private advance(startPos: number, n: number): void {
     if (this.playing) {
       this.pos = startPos + n;

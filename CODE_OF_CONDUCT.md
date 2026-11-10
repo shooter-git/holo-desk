@@ -8,7 +8,7 @@ issues, pull requests, discussions or anywhere else the project lives) is expect
 - welcome newcomers and questions of every level;
 - respect people's time, privacy and boundaries.
 
-Harassment, discrimination, personal attacks, sharing others' private information, and sexualised or
+Harassment, discrimination, personal attacks, sharing others' private information, and sexualized or
 violent content are not tolerated.
 
 If something happens that makes you uncomfortable, report it privately to the maintainers through

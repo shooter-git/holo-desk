@@ -15,7 +15,7 @@
  */
 import { type NumpyRandom, namedRandom } from './random.ts';
 
-/** Python's round(): halves go to the even neighbour. */
+/** Python's round(): halves go to the even neighbor. */
 export function roundHalfEven(x: number): number {
   const f = Math.floor(x);
   const d = x - f;
@@ -47,7 +47,7 @@ export interface PerfRow {
   loopRho?: number;
 }
 
-/** An instrument as the game defines it (hlaudio.sampler.Inst), with its measured samples in catalogue order. */
+/** An instrument as the game defines it (hlaudio.sampler.Inst), with its measured samples in catalog order. */
 export interface PerfInstrument {
   name: string;
   kind: 'sus' | 'short' | 'oneshot' | 'drum';
@@ -162,7 +162,7 @@ export interface NotePlan {
   ratio: number;
   cut: number;
   glide: GlideSpec | null;
-  /** The sample's levelling gain and the note's own (short notes: velocity; sustains: dynamics after). */
+  /** The sample's leveling gain and the note's own (short notes: velocity; sustains: dynamics after). */
   gain: number;
   // ---- short, one-shot and drum notes
   fadeIn: number;
@@ -450,7 +450,7 @@ interface NoteArgs {
   bend: [number, number][] | null;
   vib: Record<string, number> | null;
   nb: number;
-  /** The note's velocity after humanising (the dynamics offset uses it). */
+  /** The note's velocity after humanizing (the dynamics offset uses it). */
   playV: number;
 }
 

@@ -51,7 +51,7 @@ export class Viewport {
   /**
    * Keep the playhead in view while it plays, paging like Logic does when it reaches the right
    * edge. The user's own scrolling wins for a moment, and scrolling ahead of the playhead is never
-   * undone (a jump backwards, such as a cycle wrap, goes through `reveal`).
+   * undone (a jump backward, such as a cycle wrap, goes through `reveal`).
    */
   follow(tick: number, widthPx: number): void {
     if (performance.now() < this.userScrollUntil) return;

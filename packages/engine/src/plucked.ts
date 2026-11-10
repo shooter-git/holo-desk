@@ -11,7 +11,7 @@
  *   The pipa's held notes are played as a tremolo of quick plucks; the sitar has a set of
  *   sympathetic strings, tuned to the scale of the first note played, that ring along with it.
  * - Tanpura: a drone. Hold a key and it plays itself: the fifth below, the note twice, then the
- *   octave below, round and round, each string's buzz blooming as it rings.
+ *   octave below, around and around, each string's buzz blooming as it rings.
  *
  * Its six knobs (SYNTH_MACROS) move while it plays.
  */
@@ -181,7 +181,7 @@ class PString {
     this.line = new Float32Array(Math.ceil(sr / lowest) + 4);
   }
 
-  /** Tune to a frequency; the length changes without clearing what's travelling. */
+  /** Tune to a frequency; the length changes without clearing what's traveling. */
   tune(freq: number): void {
     this.freq = freq;
     const exact = Math.min(this.line.length - 3, Math.max(2, this.sr / freq - 0.5));
@@ -366,7 +366,7 @@ class PluckedVoice implements Voice {
             (strings[0] as PString).pluck(this.amp() * 0.55, p.position, this.noise, p.pick, 0.45);
           }
         }
-        // the tanpura's cycle: a pluck every 0.6 s, round the four strings
+        // the tanpura's cycle: a pluck every 0.6 s, around the four strings
         if (p.drone > 0 && !this.released && t >= this.nextAt) {
           const s = strings[this.next] as PString;
           s.pluck(this.amp() * (this.next === 3 ? 0.9 : 0.7), p.position, this.noise, p.pick);

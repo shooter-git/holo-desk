@@ -2,7 +2,7 @@
 import { Library as LibraryIcon, Music2, Piano, Redo2, Rows3, Settings, SlidersVertical, Undo2 } from 'lucide-react';
 import { lazy, Suspense, useEffect, useRef } from 'react';
 import { ensureAudio, redo, resolveConflict, undo } from '../app/actions.ts';
-import { isPhone, type Layout, useLayout } from '../app/layout.ts';
+import { clampEditorHeight, fitEditorHeight, isPhone, type Layout, useLayout } from '../app/layout.ts';
 import { otherStudioToDrive } from '../app/live.ts';
 import { type MobileTab, store, useApp } from '../app/store.ts';
 import { AudioEditor, AudioEditorBar } from './AudioEditor.tsx';
@@ -14,8 +14,9 @@ import { MenuHost } from './menu.tsx';
 import { Inspector, LibraryPanel } from './Panels.tsx';
 import { PianoRoll, PianoRollBar } from './PianoRoll.tsx';
 import { PlayPad } from './PlayPad.tsx';
-import { TracksArea } from './Tracks.tsx';
+import { spareTrackRoom, TracksArea } from './Tracks.tsx';
 import { ViewMenu } from './ViewMenu.tsx';
+import { DOUBLE_TAP_MS } from './view.ts';
 
 /** The selected track's editor: the Piano Roll, or the Audio Editor for an audio track. */
 function useAudioSelected(): boolean {
@@ -79,31 +80,39 @@ function NoteViewSwitch() {
   );
 }
 
-/** The editor never takes more than the window leaves for the tracks (a remembered height may be from a taller one). */
-function clampEditorHeight(h: number): number {
-  return Math.max(140, Math.min(window.innerHeight - 180, h));
-}
-
 function EditorPane() {
   const editor = useApp((s) => s.editor);
   const height = clampEditorHeight(useApp((s) => s.editorHeight));
   const audio = useAudioSelected();
   const score = useScoreShown();
+  const lastPress = useRef(0);
   if (!editor) return null;
   const editorName = audio ? 'Audio Editor' : score ? 'Score' : 'Piano Roll';
   return (
     <section className="editor-pane" style={{ height }} aria-label={editor === 'piano' ? editorName : 'Mixer'}>
       <div
         className="splitter"
-        title="Drag to resize"
+        title="Drag to resize, double-click to fit the tracks"
         onPointerDown={(e) => {
+          // a double-click (a finger's double tap too) fits the tracks: the room under the last one goes to the editor
+          const now = performance.now();
+          if (now - lastPress.current < DOUBLE_TAP_MS) {
+            lastPress.current = 0;
+            const fitted = fitEditorHeight(height, spareTrackRoom());
+            if (fitted !== null) store.set({ editorHeight: fitted });
+            return;
+          }
+          lastPress.current = now;
           const el = e.currentTarget;
           const id = e.pointerId;
           el.setPointerCapture(id);
+          const y0 = e.clientY;
           let h = height;
           let y = e.clientY;
           const move = (ev: PointerEvent) => {
             if (ev.pointerId !== id) return;
+            // a drag isn't the first click of a double-click
+            if (Math.abs(ev.clientY - y0) > 3) lastPress.current = 0;
             h = clampEditorHeight(h - (ev.clientY - y));
             y = ev.clientY;
             store.set({ editorHeight: Math.round(h) });

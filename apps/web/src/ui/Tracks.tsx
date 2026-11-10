@@ -237,6 +237,22 @@ function LaneSelect({ track }: { track: Track }) {
   );
 }
 
+/** Room under the last track, for the New track button: the list scrolls this far past it, and a fitted top keeps it. */
+const LIST_TAIL = 60;
+/** A track's height as drawn: rows are taller under a finger. */
+const rowHeight = (h: number) => (isTouch() ? Math.max(66, h) : h);
+/** The track list with every track in it. */
+const listHeight = (tracks: number, row: number) => tracks * row + LIST_TAIL;
+/** The track list on screen (there's one tracks area at a time), for spareTrackRoom. */
+let shownList: HTMLDivElement | null = null;
+
+/** The empty room under the last track, in pixels: 0 or less when the tracks fill the list (or there's none). */
+export function spareTrackRoom(): number {
+  const s = store.get();
+  if (!shownList || !s.project) return 0;
+  return shownList.clientHeight - listHeight(s.project.tracks.length, rowHeight(s.trackHeight));
+}
+
 interface TrackRowProps {
   track: Track;
   top: number;
@@ -816,7 +832,7 @@ export function TracksArea() {
   const project = useApp((s) => s.project);
   const selectedTrack = useApp((s) => s.selectedTrack);
   const selectedRegionsList = useApp((s) => s.selectedRegions);
-  const trackHeight = useApp((s) => (isTouch() ? Math.max(66, s.trackHeight) : s.trackHeight));
+  const trackHeight = useApp((s) => rowHeight(s.trackHeight));
   const tool = useApp((s) => s.tool);
   const automationView = useApp((s) => s.automationView);
   const autoParam = useApp((s) => s.autoParam);
@@ -901,7 +917,7 @@ export function TracksArea() {
     }
   }, [project]);
 
-  const maxScrollY = (p: Project) => Math.max(0, p.tracks.length * trackHeight - size.h + 60);
+  const maxScrollY = (p: Project) => Math.max(0, listHeight(p.tracks.length, trackHeight) - size.h);
 
   // the zoom is kept for the next launch, once the wheel or the fingers settle
   const persistZoom = (soon = false) => {
@@ -1571,7 +1587,13 @@ export function TracksArea() {
       >
         <canvas ref={rulerCanvas} />
       </div>
-      <div className="track-list" ref={listBox}>
+      <div
+        className="track-list"
+        ref={(el) => {
+          listBox.current = el;
+          shownList = el;
+        }}
+      >
         <div className="track-list-inner" ref={listInner}>
           {project.tracks.map((t, i) => (
             <TrackRow

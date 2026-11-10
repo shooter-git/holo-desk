@@ -148,6 +148,8 @@ export function PianoRoll() {
   const keysWidth = phone ? 44 : 66;
   const selected = useMemo(() => new Set(selectedNotes), [selectedNotes]);
   const lastTap = useRef(0);
+  /** When the lane's splitter was last pressed, for its double-click. */
+  const lastLanePress = useRef(0);
   const gesture = useRef<Gesture | null>(null);
   const menuAt = useRef<((ev: PointerEvent) => void) | null>(null);
   const pinch = useRef(new Pinch());
@@ -1092,12 +1094,24 @@ export function PianoRoll() {
       <div
         className="splitter"
         style={{ gridColumn: '1 / -1' }}
+        title="Drag to resize the lane, double-click for its usual height"
         onPointerDown={(e) => {
+          // a double-click (a finger's double tap too) puts the lane back to the layout's height: the notes
+          // above always have more to scroll to, so there's no empty room to fit as the tracks' bar does
+          const now = performance.now();
+          if (now - lastLanePress.current < DOUBLE_TAP_MS) {
+            lastLanePress.current = 0;
+            setLaneOverride(null);
+            return;
+          }
+          lastLanePress.current = now;
+          const y0 = e.clientY;
           let h = laneHeight;
           let ly = e.clientY;
           capture(e, {
             threshold: 0,
             onMove: (ev) => {
+              if (Math.abs(ev.clientY - y0) > 3) lastLanePress.current = 0;
               h = Math.max(40, Math.min(260, h - (ev.clientY - ly)));
               ly = ev.clientY;
               setLaneOverride(h);

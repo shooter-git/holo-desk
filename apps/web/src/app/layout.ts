@@ -48,3 +48,19 @@ export function useLayout(): Layout {
 
 export const isPhone = (l: Layout) => l === 'phone-portrait' || l === 'phone-landscape';
 export const isTouch = () => window.matchMedia('(pointer: coarse)').matches;
+
+/** The editor never takes more than the window leaves for the tracks (a remembered height may be from a taller one). */
+export function clampEditorHeight(h: number, windowHeight = window.innerHeight): number {
+  return Math.max(140, Math.min(windowHeight - 180, h));
+}
+
+/**
+ * The editor's height after a double-click on the bar above it: the empty room under the last track
+ * goes to the editor, so the tracks just fit. Null when there's none to give (the tracks fill the top
+ * already, or the editor is as tall as the window lets it be).
+ */
+export function fitEditorHeight(height: number, spare: number, windowHeight = window.innerHeight): number | null {
+  if (spare < 1) return null;
+  const h = clampEditorHeight(Math.round(height + spare), windowHeight);
+  return h > height ? h : null;
+}

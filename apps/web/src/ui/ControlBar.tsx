@@ -338,8 +338,8 @@ export function TransportButtons({ minimal = false }: { minimal?: boolean }) {
       <button
         type="button"
         className="btn"
-        title="Stop (Space). Again: back to the beginning"
-        aria-label="Stop (Space). Again: back to the beginning"
+        title="Stop (Space). Again: back to the beginning, all notes off"
+        aria-label="Stop (Space). Again: back to the beginning, all notes off"
         onClick={() => stop()}
       >
         <Square fill="currentColor" />

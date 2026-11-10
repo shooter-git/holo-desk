@@ -666,11 +666,25 @@ class TrackNode extends Strip {
   midiFx: MidiFxSlot[] = [];
   seq: Float64Array<ArrayBufferLike> = new Float64Array(0);
   cursor = 0;
-  /** Notes the song started and hasn't ended: ended on stop, locate or a cycle jump. */
-  readonly seqHeld = new Set<number>();
+  /**
+   * Notes the song started and hasn't ended, by the articulation that plays them (each has its own
+   * instrument, so a note's end goes where it started): ended on stop, locate or a cycle jump.
+   */
+  readonly seqHeld: Set<number>[] = [];
   readonly events = new EventList();
   readonly work = new EventList();
   spec: TrackSpec | null = null;
+
+  forgetHeld(): void {
+    for (const keys of this.seqHeld) keys?.clear();
+  }
+}
+
+/** The MIDI effects a track's notes go through, in order (a bypassed one isn't in the way). */
+function chainKey(slots: readonly MidiFxSlot[]): string {
+  let key = '';
+  for (const s of slots) if (!s.bypass) key += `${s.type}:${s.id} `;
+  return key;
 }
 
 /** What the engine says back: to the page's thread in the studio, to the caller elsewhere. */
@@ -1061,7 +1075,7 @@ export class EngineCore implements Host {
         for (const t of this.trackOrder) {
           for (const inst of t.instruments) inst?.allNotesOff(true);
           for (const m of t.midiFx) m.fx.reset();
-          t.seqHeld.clear();
+          t.forgetHeld();
         }
         // and what plugins play themselves (a Drum Replacer's hits)
         for (const s of this.allStrips) for (const ins of s.inserts) ins.effect.silence?.();
@@ -1080,12 +1094,15 @@ export class EngineCore implements Host {
       this.dormant = false;
       node.audible = !soloed || soloed.has(spec.id);
       this.buildInstruments(node, spec, false);
+      const chain = chainKey(node.midiFx);
       node.midiFx = spec.midiFx.flatMap((s): MidiFxSlot[] => {
         const json = JSON.stringify(s.params);
         const old = node.midiFx.find((x) => x.id === s.id && x.type === s.type);
         if (old) {
           if (old.json !== json) old.fx.setParams(s.params);
           old.json = json;
+          // bypassed, it starts afresh when it comes back (its notes are let go below)
+          if (s.bypass && !old.bypass) old.fx.reset();
           old.bypass = s.bypass;
           return [old];
         }
@@ -1094,6 +1111,10 @@ export class EngineCore implements Host {
         fx.setParams(s.params);
         return [{ id: s.id, type: s.type, bypass: s.bypass, fx, json }];
       });
+      // a MIDI effect in or out of the way (added, removed, bypassed): a note's end would now take
+      // another road than its start did and miss what it became (a harmony, a transposed note, an
+      // arpeggio's step) and that would ring on, so what's sounding is let go
+      if (chainKey(node.midiFx) !== chain) for (const i of node.instruments) i?.allNotesOff(false);
       node.spec = spec;
       next.set(spec.num, node);
       order.push(node);
@@ -1288,8 +1309,13 @@ export class EngineCore implements Host {
   }
 
   private endSeqNotes(t: TrackNode, offset: number): void {
-    for (const key of t.seqHeld) t.events.push(offset, EV_OFF, key, 0);
-    t.seqHeld.clear();
+    const held = t.seqHeld;
+    for (let art = 0; art < held.length; art++) {
+      const keys = held[art];
+      if (!keys) continue;
+      for (const key of keys) t.events.push(offset, EV_OFF, key, 0, art);
+      keys.clear();
+    }
     // controllers back to rest so a jump never leaves the pedal down
     t.events.push(offset, EV_CC, 64, 0);
     t.events.push(offset, EV_BEND, 0, 0);
@@ -1309,8 +1335,11 @@ export class EngineCore implements Host {
       const a = ev[i + 2] as number;
       const b = ev[i + 3] as number;
       const art = ev[i + 4] as number;
-      if (kind === EV_ON) t.seqHeld.add(a);
-      else if (kind === EV_OFF) t.seqHeld.delete(a);
+      if (kind === EV_ON) {
+        const keys = t.seqHeld[art];
+        if (keys) keys.add(a);
+        else t.seqHeld[art] = new Set([a]);
+      } else if (kind === EV_OFF) t.seqHeld[art]?.delete(a);
       t.events.push(base + Math.floor(frame - from), kind, a, b, art);
     }
   }
@@ -1845,7 +1874,7 @@ export class EngineCore implements Host {
     const t = s instanceof TrackNode ? s : null;
     if (was === ROLE_OWN && t) {
       for (const inst of t.instruments) inst?.allNotesOff(true);
-      t.seqHeld.clear();
+      t.forgetHeld();
       if (t.part) t.part.voices = [];
     }
     s.timed = 0;

@@ -54,6 +54,7 @@ import {
   importAudio,
   liveTakes,
   locate,
+  moveTrack,
   normalizeRegion,
   quantizeSelection,
   repeatRegions,
@@ -91,6 +92,7 @@ import {
   useWheel,
 } from './gesture.ts';
 import { type MenuEntry, openMenu, openMenuAt } from './menu.tsx';
+import { pressToReorder, type ReorderList } from './reorder.ts';
 import { DOUBLE_TAP_MS, gridStep, Viewport, WHEEL_ZOOM, ZOOM } from './view.ts';
 import { drawClipWave, drawFades, fadeTo, trimEnd, trimStart } from './wave.ts';
 
@@ -253,6 +255,16 @@ export function spareTrackRoom(): number {
   return shownList.clientHeight - listHeight(s.project.tracks.length, rowHeight(s.trackHeight));
 }
 
+/** Move up and Move down, for a track's menu (the keyboard's way to reorder, and a finger's without dragging). */
+function moveEntries(id: string): MenuEntry[] {
+  const tracks = store.get().project?.tracks ?? [];
+  const i = tracks.findIndex((t) => t.id === id);
+  return [
+    { label: 'Move up', disabled: i <= 0, onSelect: () => moveTrack(id, i - 1) },
+    { label: 'Move down', disabled: i < 0 || i >= tracks.length - 1, onSelect: () => moveTrack(id, i + 1) },
+  ];
+}
+
 interface TrackRowProps {
   track: Track;
   top: number;
@@ -291,33 +303,45 @@ const TrackRow = memo(function TrackRow({ track, top, height, selected, phone, m
         onSelect: () => updateTrack(track.id, { armed: !track.armed }, 'Arm'),
       },
       'sep',
+      ...moveEntries(track.id),
+      'sep',
       { label: 'Delete track', onSelect: () => deleteTrack(track.id) },
     ]);
-  // a finger on a header scrolls the list, selects on a tap, and opens the menu when held
+  // a mouse selects on the press and drags the track to a new place; a finger scrolls the list,
+  // selects on a tap, and when held opens the menu and can then drag the track
   const fingerDown = useRef(false);
   const onDown = (e: ReactPointerEvent<HTMLDivElement>) => {
+    const row = e.currentTarget;
+    const list: ReorderList = {
+      item: row,
+      items: () => [...(row.parentElement?.querySelectorAll<HTMLElement>(':scope > .track-row') ?? [])],
+      axis: 'y',
+      box: row.closest<HTMLElement>('.track-list') ?? row,
+      scroll: { get: () => tracksView.y, by: (d) => tracksView.scrollBy(0, d, maxScrollY) },
+      onDrop: (index) => moveTrack(track.id, index),
+    };
     if (e.pointerType !== 'touch') {
       selectTrack(track.id);
+      // the name being typed, or the automation lane's picker, keep their own presses
+      const field = e.target instanceof Element && e.target.closest('input, select, textarea, button');
+      if (e.button === 0 && !isMenuPress(e) && !field) pressToReorder(e, list);
       return;
     }
     fingerDown.current = true;
     let ly = e.clientY;
-    capture(e, {
-      onMove: (ev, g) => {
-        if (!g.moved) return;
+    pressToReorder(e, {
+      ...list,
+      onSwipe: (ev) => {
         tracksView.scrollBy(0, ly - ev.clientY, maxScrollY);
         ly = ev.clientY;
       },
-      onUp: (_ev, g) => {
-        fingerDown.current = false;
-        if (!g.moved) selectTrack(track.id);
-      },
-      onAbort: () => {
-        fingerDown.current = false;
-      },
-      onLongPress: (ev) => {
+      onTap: () => selectTrack(track.id),
+      onHold: (ev) => {
         selectTrack(track.id);
         menu(ev.clientX, ev.clientY);
+      },
+      onEnd: () => {
+        fingerDown.current = false;
       },
     });
   };

@@ -1035,6 +1035,15 @@ export function defaultName(i: Instrument): string {
   return 'Instrument';
 }
 
+/** Move a track to a new place in the list (and the mixer): one undo step. */
+export function moveTrack(id: string, index: number): void {
+  const p = store.get().project;
+  const from = p?.tracks.findIndex((t) => t.id === id) ?? -1;
+  if (!p || from < 0) return;
+  const to = Math.max(0, Math.min(p.tracks.length - 1, index));
+  if (to !== from) apply([{ op: 'moveTrack', track: id, index: to }], 'Move Track');
+}
+
 export function deleteTrack(id: string): void {
   const p = store.get().project;
   if (!p) return;

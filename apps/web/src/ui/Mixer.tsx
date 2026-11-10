@@ -35,6 +35,7 @@ import {
   endGesture,
   gestureChange,
   hitsToMidi,
+  moveTrack,
   selectTrack,
   setInstrument,
   updateChannel,
@@ -46,7 +47,9 @@ import { engine } from '../audio/engine.ts';
 import { library, type PackSummary, samplerKnobDefs } from '../audio/samples.ts';
 import { Fader, formatDb, Knob, Meter, PanKnob, startDrag, TAP } from './controls.tsx';
 import { prepare, useFrame, useSize } from './frame.ts';
+import { isMenuPress } from './gesture.ts';
 import { openMenu, openMenuAt } from './menu.tsx';
+import { pressToReorder, useNoScrollWhileDragging } from './reorder.ts';
 import { inputLabel, instrumentLabel, instrumentMenu } from './Tracks.tsx';
 
 function pluginsOf(kind: 'audio' | 'midi'): PluginDef[] {
@@ -134,6 +137,8 @@ interface StripProps {
   channel: Channel;
   track?: Track;
   selected?: boolean;
+  /** In the mixer, a track's strip can be dragged by its name to move the track. */
+  movable?: boolean;
 }
 
 const NO_BUSES: Bus[] = [];
@@ -142,7 +147,7 @@ const NO_BUSES: Bus[] = [];
  * One channel strip. Memoized: a song's edits leave the other strips' channel and track
  * objects as they were, so only the strip that changed is drawn again.
  */
-export const Strip = memo(function Strip({ id, kind, name, color, channel, track, selected }: StripProps) {
+export const Strip = memo(function Strip({ id, kind, name, color, channel, track, selected, movable }: StripProps) {
   const buses = useApp((s) => s.project?.buses ?? NO_BUSES);
   const show = useApp((s) => s.show);
   // (a kit's knobs show once the library knows it)
@@ -156,6 +161,9 @@ export const Strip = memo(function Strip({ id, kind, name, color, channel, track
   const faderHeight = Math.max(56, useSize(faderBox).h - 2);
   // a tap on the strip selects its track; a scroll, a fader drag or a right-click doesn't
   const press = useRef<{ x: number; y: number } | null>(null);
+  // in the mixer, a track strip's name is its handle: drag it (a finger holds it first) to move the track
+  const nameBar = useRef<HTMLDivElement>(null);
+  useNoScrollWhileDragging(nameBar);
   return (
     <section
       className={`strip ${kind}${selected ? ' selected' : ''}`}
@@ -467,7 +475,36 @@ export const Strip = memo(function Strip({ id, kind, name, color, channel, track
           </button>
         )}
       </div>
-      <div className="strip-name" style={{ background: color }} title={name}>
+      <div
+        ref={nameBar}
+        className={`strip-name${movable ? ' movable' : ''}`}
+        style={{ background: color }}
+        title={movable ? `${name}: drag to move the track` : name}
+        onPointerDown={(e) => {
+          if (!movable || (e.pointerType !== 'touch' && (e.button !== 0 || isMenuPress(e)))) return;
+          const strip = e.currentTarget.closest<HTMLElement>('.strip');
+          const mixer = strip?.parentElement;
+          if (!strip || !mixer) return;
+          pressToReorder(e, {
+            item: strip,
+            items: () => [...mixer.querySelectorAll<HTMLElement>(':scope > .strip.track')],
+            axis: 'x',
+            box: mixer,
+            scroll: {
+              get: () => mixer.scrollLeft,
+              by: (d) => {
+                mixer.scrollLeft += d;
+              },
+            },
+            onLift: () => selectTrack(id),
+            onDrop: (index) => moveTrack(id, index),
+          });
+        }}
+        // a finger's long press is the drag here, not the browser's menu
+        onContextMenu={(e) => {
+          if (movable) e.preventDefault();
+        }}
+      >
         {name}
       </div>
     </section>
@@ -502,6 +539,7 @@ export function Mixer() {
           channel={t.channel}
           track={t}
           selected={t.id === selected}
+          movable
         />
       ))}
       {buses.map((b) => (

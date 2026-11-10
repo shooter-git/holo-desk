@@ -41,6 +41,11 @@ export interface Gesture {
 export interface GestureOptions {
   /** Pixels the pointer may wander before it counts as a drag: 10 for a finger, 3 for a mouse. */
   threshold?: number;
+  /**
+   * Take the pointer only once it has moved past the threshold, so a click or double-click still
+   * lands on what was pressed (a captured pointer's click goes to the element holding it).
+   */
+  lazy?: boolean;
   edgeScroll?: 'x' | 'xy';
   onMove?: (ev: PointerEvent, g: Gesture) => void;
   onUp?: (ev: PointerEvent, g: Gesture) => void;
@@ -73,12 +78,21 @@ export function capture(e: ReactPointerEvent, o: GestureOptions): Gesture {
       o.onAbort?.();
     },
   };
+  // until it holds the pointer, a lazy gesture hears it wherever it goes
+  const on: HTMLElement | Window = o.lazy ? window : el;
+  const take = () => {
+    try {
+      el.setPointerCapture(id);
+    } catch {
+      // the pointer may already be gone
+    }
+  };
   const finish = () => {
     done = true;
     window.clearTimeout(timer);
-    el.removeEventListener('pointermove', move);
-    el.removeEventListener('pointerup', up);
-    el.removeEventListener('pointercancel', cancel);
+    on.removeEventListener('pointermove', move as EventListener);
+    on.removeEventListener('pointerup', up as EventListener);
+    on.removeEventListener('pointercancel', cancel as EventListener);
     try {
       if (el.hasPointerCapture(id)) el.releasePointerCapture(id);
     } catch {
@@ -91,6 +105,7 @@ export function capture(e: ReactPointerEvent, o: GestureOptions): Gesture {
     if (!g.moved && Math.hypot(ev.clientX - x0, ev.clientY - y0) >= threshold) {
       g.moved = true;
       window.clearTimeout(timer);
+      if (o.lazy) take();
     }
     o.onMove?.(ev, g);
   };
@@ -104,10 +119,10 @@ export function capture(e: ReactPointerEvent, o: GestureOptions): Gesture {
     if (ev.pointerId !== id) return;
     g.abort();
   };
-  el.setPointerCapture(id);
-  el.addEventListener('pointermove', move);
-  el.addEventListener('pointerup', up);
-  el.addEventListener('pointercancel', cancel);
+  if (!o.lazy) take();
+  on.addEventListener('pointermove', move as EventListener);
+  on.addEventListener('pointerup', up as EventListener);
+  on.addEventListener('pointercancel', cancel as EventListener);
   if (touch && o.onLongPress) {
     timer = window.setTimeout(() => {
       if (done || g.moved) return;

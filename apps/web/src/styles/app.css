@@ -1424,6 +1424,43 @@ a.btn {
   color: #0e1013;
 }
 
+/* a track strip's name is its handle for moving it along the mixer */
+.strip-name.movable {
+  cursor: grab;
+  -webkit-touch-callout: none;
+}
+
+/* a track dragged to a new place (in the list or the mixer), and the ones making room for it */
+.track-row[data-reorder="lift"],
+.strip[data-reorder="lift"] {
+  z-index: 3;
+  cursor: grabbing;
+  box-shadow:
+    0 8px 22px rgba(0, 0, 0, 0.6),
+    inset 0 1px 0 var(--hi);
+  outline: 1px solid rgb(var(--accent-rgb) / 0.45);
+  outline-offset: -1px;
+}
+
+[data-reorder="lift"] .strip-name {
+  cursor: grabbing;
+}
+
+[data-reorder="shift"] {
+  transition: translate 150ms ease;
+}
+
+[data-reorder="settle"] {
+  transition: translate 120ms ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  [data-reorder="shift"],
+  [data-reorder="settle"] {
+    transition: none;
+  }
+}
+
 .db-readout {
   height: 18px;
   border-radius: 3px;

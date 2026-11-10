@@ -11,6 +11,20 @@ export const LONG_PRESS_MS = 500;
 /** How close to an edge a drag starts scrolling the view. */
 const EDGE_PX = 24;
 
+/** On a Mac, Control-click is the right click (a one-button mouse, or a trackpad set up that way). */
+const MAC =
+  typeof navigator !== 'undefined' &&
+  /mac/i.test(
+    (navigator as Navigator & { userAgentData?: { platform?: string } }).userAgentData?.platform ??
+      navigator.platform ??
+      '',
+  );
+
+/** A press that asks for the menu, not a click or a drag: the right button, or Control-click on a Mac. */
+export function isMenuPress(e: { button: number; ctrlKey: boolean; pointerType: string }, mac = MAC): boolean {
+  return e.button === 2 || (mac && e.button === 0 && e.ctrlKey && e.pointerType !== 'touch');
+}
+
 export interface Gesture {
   /** The last pointer event seen (where the pointer rests while the view scrolls under it). */
   last: PointerEvent;

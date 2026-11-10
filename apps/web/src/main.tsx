@@ -7,6 +7,7 @@ import { findCompanion, startup } from './app/actions.ts';
 import { installKeys } from './app/keys.ts';
 import { connectLive, device } from './app/live.ts';
 import { connectRemote } from './app/remote.ts';
+import { installRightClick } from './app/right-click.ts';
 
 // the studio and the remote are files of their own, so a phone loads only the remote's
 const App = lazy(() => import('./ui/App.tsx').then((m) => ({ default: m.App })));
@@ -14,6 +15,8 @@ const Remote = lazy(() => import('./ui/Remote.tsx').then((m) => ({ default: m.Re
 
 // /remote is HO[LO] Remote (a phone driving the studio on another device); anything else, the studio
 const isRemote = /^\/remote\/?$/.test(location.pathname);
+
+installRightClick();
 
 const root = document.getElementById('root');
 if (root) {

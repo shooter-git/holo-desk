@@ -80,7 +80,16 @@ import {
   targetOf,
 } from './automation.ts';
 import { alpha, prepare, roundRect, useFrame, useSize } from './frame.ts';
-import { capture, edgeScroll, type Gesture, type GestureOptions, Pinch, screenDpr, useWheel } from './gesture.ts';
+import {
+  capture,
+  edgeScroll,
+  type Gesture,
+  type GestureOptions,
+  isMenuPress,
+  Pinch,
+  screenDpr,
+  useWheel,
+} from './gesture.ts';
 import { type MenuEntry, openMenu, openMenuAt } from './menu.tsx';
 import { DOUBLE_TAP_MS, gridStep, Viewport, WHEEL_ZOOM, ZOOM } from './view.ts';
 import { drawClipWave, drawFades, fadeTo, trimEnd, trimStart } from './wave.ts';
@@ -1110,7 +1119,7 @@ export function TracksArea() {
       onLane(e, x, y, h.track, h.index, doubleTap);
       return;
     }
-    if (e.button === 2) {
+    if (isMenuPress(e)) {
       if (h?.region) {
         if (!selectedRegions.has(h.region.id)) store.set({ selectedRegions: [h.region.id], selectedTrack: h.track.id });
         regionMenu(e.clientX, e.clientY, h.region, h.track);
@@ -1190,7 +1199,7 @@ export function TracksArea() {
           onSelect: () => commit([], 'Clear Automation'),
         },
       ]);
-    if (e.button === 2) {
+    if (isMenuPress(e)) {
       menu(e.clientX, e.clientY);
       return;
     }

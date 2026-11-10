@@ -1018,7 +1018,7 @@ function RemoteDialog() {
   );
 }
 
-/** About HO[LO] Desk: what it is, its version and licence, and where it lives. */
+/** About HO[LO] Desk: what it is, its version and license, and where it lives. */
 function AboutDialog() {
   const [version, setVersion] = useState<string | null>(null);
   useEffect(() => {
@@ -1038,7 +1038,7 @@ function AboutDialog() {
         <p className="about-tag">Headphones On [Lights Out]</p>
         <p className="muted">{version ? `Version ${version}` : ''}</p>
         <p className="muted about-small">
-          Free software under the MIT licence. Sample libraries are their authors’ work, credited in CREDITS.md. Not
+          Free software under the MIT license. Sample libraries are their authors’ work, credited in CREDITS.md. Not
           affiliated with Apple or Avid.
         </p>
         <div className="hstack" style={{ gap: 8, justifyContent: 'center', flexWrap: 'wrap' }}>

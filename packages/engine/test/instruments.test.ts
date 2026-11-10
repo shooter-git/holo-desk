@@ -225,7 +225,7 @@ describe('the sampler, played', () => {
     for (const [name, zones, extra, key] of cases) {
       const s = new Sampler(SR, base(zones, extra));
       s.noteOn(key, 127);
-      // a second: ten times round the loop and more
+      // a second: ten times around the loop and more
       const l = new Float32Array(SR);
       const r = new Float32Array(SR);
       for (let f = 0; f < SR; f += 128) s.render(l, r, f, Math.min(SR, f + 128));
@@ -351,7 +351,7 @@ describe('the sampler, with microphones', () => {
     mics,
     ...extra,
   });
-  /** A snare's two takes on three microphones, each its own level (the overheads' listed the other way round). */
+  /** A snare's two takes on three microphones, each its own level (the overheads' listed the other way around). */
   const snare = [
     take(38, 'close', 1, 0.1),
     take(38, 'close', 2, 0.2),

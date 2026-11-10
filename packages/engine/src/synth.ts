@@ -1,5 +1,5 @@
 /**
- * The built-in synthesiser: two band-limited oscillators (polyBLEP) or a two-operator FM pair, a
+ * The built-in synthesizer: two band-limited oscillators (polyBLEP) or a two-operator FM pair, a
  * resonant state-variable filter with its own envelope, and an amp envelope. Presets cover keys,
  * pads, basses, leads and bells, so there is always something to play.
  */

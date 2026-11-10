@@ -78,7 +78,7 @@ export class Softener implements Effect {
 
 /**
  * Stereo width: the side scaled against the mid; a position that moves the image at constant power
- * (unity in the centre, a side up to +3 dB as it turns towards it); and the lows below a frequency
+ * (unity in the center, a side up to +3 dB as it turns toward it); and the lows below a frequency
  * summed to mono (a 12 dB/octave low pass splits them off).
  */
 export class StereoWidth implements Effect {
@@ -143,7 +143,7 @@ export class StereoWidth implements Effect {
 }
 
 /**
- * Tape warmth: tanh saturation with a touch of even harmonics, normalised so a full-scale peak stays
+ * Tape warmth: tanh saturation with a touch of even harmonics, normalized so a full-scale peak stays
  * at full scale (`tanh(drive · (x + even · x²)) / tanh(drive)`), mixed with the dry sound; the input
  * level sets where it bites (and is given back after); then a little low-mid body (a bell at 180 Hz)
  * and a rounded top (a shelf at 9.5 kHz). DC Block takes the offset the even harmonics lean the
@@ -163,9 +163,9 @@ export class TapeWarmth implements Effect {
   private useTop = false;
   private dcBlock = true;
   private dcR = 0.9993;
-  /** The saturated sound's average over a whole loop, taken away (as a creation that centres it does). */
-  private centreL = 0;
-  private centreR = 0;
+  /** The saturated sound's average over a whole loop, taken away (as a creation that centers it does). */
+  private centerL = 0;
+  private centerR = 0;
   private xl = 0;
   private yl = 0;
   private xr = 0;
@@ -176,9 +176,11 @@ export class TapeWarmth implements Effect {
   }
   setParams(p: Record<string, number>, settings?: Record<string, string>): void {
     const v = (id: string) => paramValue('tape', p, id);
-    const [cl = 0, cr = cl] = (settings?.centre ?? '').split(',').filter(Boolean).map(Number);
-    this.centreL = Number.isFinite(cl) ? cl : 0;
-    this.centreR = Number.isFinite(cr) ? cr : 0;
+    // (older songs and creations name it `centre`)
+    const center = settings?.center ?? settings?.centre ?? '';
+    const [cl = 0, cr = cl] = center.split(',').filter(Boolean).map(Number);
+    this.centerL = Number.isFinite(cl) ? cl : 0;
+    this.centerR = Number.isFinite(cr) ? cr : 0;
     const sr = this.host.sr;
     this.drive = v('drive');
     this.norm = 1 / Math.tanh(this.drive);
@@ -193,16 +195,16 @@ export class TapeWarmth implements Effect {
     this.dcR = 1 - (2 * Math.PI * 5) / sr;
   }
   process(l: Float32Array, r: Float32Array, n: number): void {
-    const { drive, norm, even, mix, input, dcBlock, centreL, centreR } = this;
+    const { drive, norm, even, mix, input, dcBlock, centerL, centerR } = this;
     const dcR = dcBlock ? this.dcR : 0;
     const back = 1 / input;
     let { xl, yl, xr, yr } = this;
     for (let i = 0; i < n; i++) {
       const a = (l[i] as number) * input;
       const b = (r[i] as number) * input;
-      const sa = Math.tanh(drive * (a + even * a * a)) * norm - centreL;
-      const sb = Math.tanh(drive * (b + even * b * b)) * norm - centreR;
-      // the DC blocker, on the saturated sound only (its even harmonics lean it off centre)
+      const sa = Math.tanh(drive * (a + even * a * a)) * norm - centerL;
+      const sb = Math.tanh(drive * (b + even * b * b)) * norm - centerR;
+      // the DC blocker, on the saturated sound only (its even harmonics lean it off center)
       if (dcBlock) {
         yl = sa - xl + dcR * yl;
         xl = sa;
@@ -258,7 +260,7 @@ class SmoothRandom {
 }
 
 const WOW_SIZE = 16384;
-/** How long the delay's drift is remembered (it leaks back towards its centre over this time). */
+/** How long the delay's drift is remembered (it leaks back toward its center over this time). */
 const WOW_LEAK_S = 2;
 
 /**
@@ -359,7 +361,7 @@ export class WowFlutter implements Effect {
       this.flutterPhase += fInc;
       if (this.flutterPhase >= 1) this.flutterPhase -= 1;
       this.d = Math.max(-bound, Math.min(bound, this.d * leak + dev));
-      // a changed setting moves the centre slowly (at most 0.05% of pitch), so it never jumps
+      // a changed setting moves the center slowly (at most 0.05% of pitch), so it never jumps
       if (this.base !== this.baseTarget) {
         const step = this.baseTarget - this.base;
         this.base += Math.abs(step) < 0.0005 ? step : Math.sign(step) * 0.0005;

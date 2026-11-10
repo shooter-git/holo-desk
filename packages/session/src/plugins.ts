@@ -510,7 +510,7 @@ export const PLUGINS: PluginDef[] = [
     kind: 'audio',
     category: 'Imaging',
     description:
-      'Narrows or widens the image (mid and side), places it left or right at constant power, and can ease the lows towards mono.',
+      'Narrows or widens the image (mid and side), places it left or right at constant power, and can ease the lows toward mono.',
     params: [
       pct('width', 'Width', 100, 300),
       { id: 'position', name: 'Position', min: -100, max: 100, default: 0, unit: 'LR' },
@@ -641,7 +641,7 @@ export const PLUGINS: PluginDef[] = [
     name: 'Velocity Processor',
     kind: 'midi',
     category: 'MIDI FX',
-    description: 'Scales, offsets, randomises and limits how hard notes play.',
+    description: 'Scales, offsets, randomizes and limits how hard notes play.',
     params: [
       pct('scale', 'Scale', 100, 200),
       { id: 'offset', name: 'Offset', min: -64, max: 64, default: 0, step: 1 },
@@ -729,7 +729,7 @@ export function formatParam(p: ParamDef, v: number): string {
   if (p.unit === 'ms') return v < 10 ? `${v.toFixed(1)} ms` : `${Math.round(v)} ms`;
   if (p.unit === 's') return `${v.toFixed(v < 10 ? 2 : 1)} s`;
   if (p.unit === '%') return v !== 0 && Math.abs(v) < 1 ? `${v.toFixed(2)}%` : `${Math.round(v)}%`;
-  if (p.unit === 'LR') return Math.abs(v) < 0.5 ? 'Centre' : `${v < 0 ? 'L' : 'R'} ${Math.round(Math.abs(v))}`;
+  if (p.unit === 'LR') return Math.abs(v) < 0.5 ? 'Center' : `${v < 0 ? 'L' : 'R'} ${Math.round(Math.abs(v))}`;
   if (p.unit === ':1') return `${v.toFixed(1)}:1`;
   if (p.unit === 'st') return `${v > 0 ? '+' : ''}${v.toFixed(1)} st`;
   if (p.unit) return `${Math.round(v * 100) / 100} ${p.unit}`;

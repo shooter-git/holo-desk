@@ -172,7 +172,7 @@ export class Bzip2Reader {
   private block(): Uint8Array {
     const b = this.bits;
     const crc = b.u32();
-    if (b.bits(1)) throw new Error('A randomised bzip2 block (bzip2 0.9.0) isn’t read here');
+    if (b.bits(1)) throw new Error('A randomized bzip2 block (bzip2 0.9.0) isn’t read here');
     const origPtr = b.bits(24);
     // the bytes the block uses
     const used: number[] = [];

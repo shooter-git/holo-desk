@@ -90,7 +90,7 @@ export function Lcd({ compact = false }: { compact?: boolean }) {
   const time = useRef<HTMLSpanElement>(null);
   const [editingTempo, setEditingTempo] = useState(false);
   // Escape leaves the tempo as it was: the field's blur, as it goes, must not commit what was typed
-  const cancelled = useRef(false);
+  const canceled = useRef(false);
   // the click that opens the tempo field is the first tap; clicks after it, in time, set the tempo as they go
   const taps = useRef(tapTempo());
   const tapping = useRef(false);
@@ -177,11 +177,11 @@ export function Lcd({ compact = false }: { compact?: boolean }) {
               v += (dx - dy) * (ev.shiftKey ? 0.05 : 0.5);
               gestureChange(setBpm(v));
             },
-            onEnd: (wasCancelled) => {
+            onEnd: (wasCanceled) => {
               endGesture();
               // a click (a tap) without a drag opens the field
-              if (!moved && !wasCancelled) {
-                cancelled.current = false;
+              if (!moved && !wasCanceled) {
+                canceled.current = false;
                 tapping.current = false;
                 setEditingTempo(true);
               }
@@ -201,7 +201,7 @@ export function Lcd({ compact = false }: { compact?: boolean }) {
             onKeyDown={(e) => {
               if (e.key === 'Enter') e.currentTarget.blur();
               if (e.key === 'Escape') {
-                cancelled.current = true;
+                canceled.current = true;
                 if (tapping.current) {
                   tapping.current = false;
                   cancelGesture();
@@ -210,7 +210,7 @@ export function Lcd({ compact = false }: { compact?: boolean }) {
               }
             }}
             onBlur={(e) => {
-              if (!cancelled.current) {
+              if (!canceled.current) {
                 const v = Number(e.currentTarget.value);
                 const typed = v > 0 && v !== bpm;
                 if (tapping.current) {
@@ -641,7 +641,7 @@ export function ControlBar() {
           </div>
         )}
       </div>
-      <div className="hstack cb-centre">
+      <div className="hstack cb-center">
         <TransportButtons minimal={!show.barNav} />
         <Lcd compact={narrow} />
         {show.barMetronome && <MetronomeButton className="btn icon cb-metro" title="Metronome (K)" />}

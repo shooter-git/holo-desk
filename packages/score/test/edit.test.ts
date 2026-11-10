@@ -172,7 +172,7 @@ describe('places on a staff', () => {
     // a D.S. where the D.C. was replaces it
     q = applyOps(q, setForm(q, 3 * bar, 4 * bar, 'dsCoda'));
     expect(q.form?.filter((f) => f.tick === 4 * bar)).toEqual([{ tick: 4 * bar, k: 'ds', al: 'coda' }]);
-    // the bar's own signs go; its neighbours' stay
+    // the bar's own signs go; its neighbors' stay
     q = applyOps(q, setForm(q, 2 * bar, 3 * bar, null));
     expect(q.form?.map((f) => [f.tick / bar, f.k])).toEqual([
       [1, 'start'],

@@ -7,7 +7,7 @@ description: Work in HO[LO] Desk, the user's browser studio, live while it is op
 
 HO[LO] Desk is the user's studio in the browser (Logic-style: tracks, Piano Roll, Mixer). You work in it
 through the `holo` command. When a studio is open, every change you make appears there at once as one
-undo step labelled `AI: …`, and saves; with no studio open, changes go straight to the saved song.
+undo step labeled `AI: …`, and saves; with no studio open, changes go straight to the saved song.
 
 ## Start every session with
 

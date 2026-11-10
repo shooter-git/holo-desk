@@ -1,7 +1,7 @@
 /**
  * MIDI effects: they sit before an instrument and change the notes on their way in. They are
- * what makes live harmonising possible: the AI (or you) sets a key, a scale and the voices, and
- * every note you play is harmonised in the audio thread, with no delay.
+ * what makes live harmonizing possible: the AI (or you) sets a key, a scale and the voices, and
+ * every note you play is harmonized in the audio thread, with no delay.
  */
 import { GROOVES, type Groove, paramValue, SCALES } from '@holo/session';
 import { EV_OFF, EV_ON } from './protocol.ts';
@@ -318,7 +318,7 @@ class Arpeggiator implements MidiEffect {
     const beatsPerFrame = 1 / (beatSec * sr);
     const beat1 = beat0 + n * beatsPerFrame;
     if (!playing) this.freeBeat = beat1;
-    // the song started, stopped or jumped (a locate, a cycle going round): the clock changed under
+    // the song started, stopped or jumped (a locate, a cycle going around): the clock changed under
     // what's sounding (its end was due by the old one), so it ends here, and the steps start again
     // from where this clock is. A stop also lets a latched pattern go: Stop is silence.
     if (
@@ -431,7 +431,7 @@ const RIDE_BELL = 53;
 const TOMS = [50, 48, 45, 43];
 /** Percussion's keys, by its option: none, tambourine, shaker, cowbell, clap. */
 const PERC_KEYS = [0, 54, 70, 56, 39];
-/** Parts, for the humanising draws. */
+/** Parts, for the humanizing draws. */
 const P_KICK = 1;
 const P_SNARE = 2;
 const P_CYMBAL = 3;
@@ -508,7 +508,7 @@ class SessionDrummer implements MidiEffect {
     const bpf = 1 / (host.beatSeconds() * host.sr);
     const beat0 = host.beatAt();
     const beat1 = beat0 + n * bpf;
-    // the song jumped (a locate, a cycle going round): what's sounding ends, and it plays on from here
+    // the song jumped (a locate, a cycle going around): what's sounding ends, and it plays on from here
     if (Number.isNaN(this.done) || beat0 < this.done - 1e-6 || beat0 > this.done + n * bpf + 1e-6) {
       this.endAll(output, 0);
       this.done = beat0;

@@ -105,7 +105,7 @@ describe('the Arpeggiator when the song stops or jumps', () => {
     expect(a.sounding()).toBe(0);
   });
 
-  it('ends what sounds when a cycle goes round, and plays on from its start', () => {
+  it('ends what sounds when a cycle goes around, and plays on from its start', () => {
     const a = arpeggiate(SIXTEENTHS);
     a.clock.beat = 32;
     a.block({ on: CHORD });
@@ -194,7 +194,7 @@ function song(...tracks: Track[]): Project {
   return p;
 }
 
-describe('notes the song holds when it stops or goes round', () => {
+describe('notes the song holds when it stops or goes around', () => {
   it('lets go of notes on an articulation at Stop', () => {
     const t = padTrack();
     t.regions = [
@@ -209,7 +209,7 @@ describe('notes the song holds when it stops or goes round', () => {
     expect(s.sounding()).toBe(0);
   });
 
-  it('lets go of notes on an articulation when a cycle goes round, so they never pile up', () => {
+  it('lets go of notes on an articulation when a cycle goes around, so they never pile up', () => {
     const t = padTrack();
     // the chord outlasts the one-bar cycle: each turn starts it again
     t.regions = [

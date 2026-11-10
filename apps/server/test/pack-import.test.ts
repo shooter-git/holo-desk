@@ -85,7 +85,7 @@ function slots(zones: Zone[], key: number): Map<string, Zone[]> {
   return out;
 }
 
-/** A hit's microphones summed (mono, in the centre) and measured as the importer measures them. */
+/** A hit's microphones summed (mono, in the center) and measured as the importer measures them. */
 function measure(files: string[]): { level: number; peak: number } {
   const decoded = files.map((f) => decodeInput(new Uint8Array(readFileSync(f))));
   const length = Math.max(...decoded.map((d) => d.channels[0]?.length ?? 0));
@@ -107,7 +107,7 @@ describe('pack import', () => {
     expect(noteNumber('h2')).toBeNull();
   });
 
-  it('maps an SFZ instrument: keys, centre, tuning, loop mode', () => {
+  it('maps an SFZ instrument: keys, center, tuning, loop mode', () => {
     const dir = join(work, 'sfz');
     wav(join(dir, 'samples', 'a.wav'));
     wav(join(dir, 'samples', 'b.wav'), 8820, 48000);

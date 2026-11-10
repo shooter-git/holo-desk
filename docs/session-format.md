@@ -191,9 +191,9 @@ lists them. A plugin may also carry text `settings`:
 - Wow & Flutter can follow a drift curve instead of making its own: `"settings": { "curve": "aud_…" }`
   names one of the song's files, mono, whose every sample is the delay in seconds at that frame of the
   song. A creation hands over its own wobble this way, to be played exactly.
-- Tape Warmth can take away a fixed centre from its saturated sound: `"settings": { "centre": "0.0012,-0.0004" }`
-  (left, right). A creation whose saturation centres itself on the whole loop's average hands that
-  average over this way.
+- Tape Warmth can take away a fixed center from its saturated sound: `"settings": { "center": "0.0012,-0.0004" }`
+  (left, right). A creation whose saturation centers itself on the whole loop's average hands that
+  average over this way. (Songs saved before it was spelled `center` say `centre`, which is still read.)
 - A Drum Replacer's kit is `"settings": { "kit": "drums/Studio Kit" }` (a pack's instrument, loaded
   with the song's instruments), `"synth:Analog Machine"` (a drum machine), or absent for the Drum Synth.
 
@@ -232,7 +232,7 @@ straight line. Volume, pan, sends and distance move every sample; plugin paramet
 at 9 kHz, glue compression (about 2 dB on the loud parts at 1.8:1), then the gain that lands the
 integrated loudness on `lufs` (EBU R128) through a look-ahead limiter on the true peak (4×
 interpolated) under `ceiling`. `loop` makes renders play the song from `start` to `end` (ticks) turn
-after turn until everything that rings past the end has come round into the start (its longest
+after turn until everything that rings past the end has come around into the start (its longest
 note, even one longer than the loop, and its halls after it), keep the last turn (finished as a
 loop: its filters and dynamics see its end before its start), and add `tail` seconds of its start
 after it. Notes still sounding at the end carry on into the start. In a loop render Shimmer's

@@ -16,7 +16,7 @@ import { renderScore } from './verovio.ts';
 type Page = NonNullable<ScoreSettings['page']>;
 type Size = NonNullable<Page['size']>;
 
-/** Paper in millimetres, portrait. */
+/** Paper in millimeters, portrait. */
 const PAPER: Record<Size, [number, number, string]> = {
   letter: [215.9, 279.4, 'Letter'],
   a4: [210, 297, 'A4'],
@@ -43,7 +43,7 @@ const setupOf = (p: Project): Setup => ({
   staff: p.score?.page?.staff ?? 7,
 });
 
-/** Verovio's page, in its units (tenths of a millimetre at 100%). */
+/** Verovio's page, in its units (tenths of a millimeter at 100%). */
 function options(setup: Setup, names: boolean): Record<string, unknown> {
   const [w, h] = PAPER[setup.size];
   const [pw, ph] = setup.landscape ? [h, w] : [w, h];

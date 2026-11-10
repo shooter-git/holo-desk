@@ -1,5 +1,5 @@
 /**
- * Drum Machine: four synthesised kits in the manner of the classic analog drum machines, laid out
+ * Drum Machine: four synthesized kits in the manner of the classic analog drum machines, laid out
  * on the General MIDI drum keys like every kit here.
  *
  * - Analog Machine: a long, booming sine kick that falls in pitch, a snare of two tuned bodies and
@@ -71,7 +71,7 @@ interface Piece {
   /** Noise and click levels against the body. */
   noise: number;
   click: number;
-  /** A band for the noise or metal: centre (hertz) and how narrow (0..1). */
+  /** A band for the noise or metal: center (hertz) and how narrow (0..1). */
   band: number;
   q: number;
   level: number;

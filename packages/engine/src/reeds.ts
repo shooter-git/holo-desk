@@ -162,7 +162,7 @@ class ReedVoice implements Voice {
         x += readTable(tables[this.lv2] as Float32Array, d) * p.fifth;
       }
       if (p.friction > 0) {
-        // the wet finger on the glass: a faint band of noise round the note
+        // the wet finger on the glass: a faint band of noise around the note
         noise.step();
         this.fric += (noise.value - this.fric) * 0.08;
         this.fric2 += (this.fric - this.fric2) * 0.08;

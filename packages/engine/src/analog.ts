@@ -1,6 +1,6 @@
 /**
- * Fat: a synthesiser in the manner of the classic American monosynths. Three oscillators (two saws a
- * few cents apart and a square or saw an octave down, each drifting a little, as an analogue's do) are
+ * Fat: a synthesizer in the manner of the classic American monosynths. Three oscillators (two saws a
+ * few cents apart and a square or saw an octave down, each drifting a little, as an analog's do) are
  * mixed hot into a four-pole transistor-ladder low-pass: solved with no delay in its feedback (so it
  * stays in tune and stable up to self-oscillation), its input saturating like the transistors, and
  * its resonance thinning the bass as the real one does (a little made up). A snappy filter contour
@@ -123,7 +123,7 @@ export class Env {
     this.sr = sr;
   }
   set(a: number, d: number, s: number, r: number): void {
-    // an analogue attack: charging toward a little past full, so it arrives with a snap
+    // an analog attack: charging toward a little past full, so it arrives with a snap
     this.attack = 1 - Math.exp(-1 / Math.max(1, a * this.sr * 0.6));
     this.decay = Math.exp(-4.6 / Math.max(1, d * this.sr));
     this.releaseCoef = Math.exp(-6.9 / Math.max(1, r * this.sr));

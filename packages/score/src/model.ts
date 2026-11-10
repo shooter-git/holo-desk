@@ -122,7 +122,7 @@ export interface ChordEvent extends EventBase {
 
 export interface RestEvent extends EventBase {
   kind: 'rest';
-  /** A whole-bar rest (drawn centred, whatever the meter). */
+  /** A whole-bar rest (drawn centered, whatever the meter). */
   full?: boolean;
 }
 

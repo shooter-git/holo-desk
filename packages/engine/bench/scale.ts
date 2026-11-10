@@ -109,7 +109,7 @@ const INSERTS = [
   'replacer',
 ];
 // the synths the reference numbers (docs/architecture.md) were measured with, so they stay comparable;
-// the heavier families (organ, wavetable, modelled instruments with halls) cost about twice a voice
+// the heavier families (organ, wavetable, modeled instruments with halls) cost about twice a voice
 const PRESETS = [
   'Soft Keys',
   'Electric Piano',

@@ -304,7 +304,7 @@ Experiences (a new project whose music is made here and built by the project its
                                       pin this HO[LO]'s engine and the packs the songs play, rebuild every
                                       song, say how far each moved
 
-Every change is one undo step in the studio, labelled "${AUTHOR}: …". --song ID picks a song other than the open one.
+Every change is one undo step in the studio, labeled "${AUTHOR}: …". --song ID picks a song other than the open one.
 Note names are scientific (middle C = C4 = MIDI 60) unless --names logic (middle C = C3).`;
 
 async function main(): Promise<void> {

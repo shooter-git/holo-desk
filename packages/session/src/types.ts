@@ -105,7 +105,7 @@ export interface ScoreSettings {
   groups?: [string, string, 'bracket' | 'brace' | 'line'][];
   /** Where a new system or page starts (ticks), when not left to the layout. */
   breaks?: [number, 'system' | 'page'][];
-  /** Paper and size: `staff` is the staff height in millimetres (7 is usual). */
+  /** Paper and size: `staff` is the staff height in millimeters (7 is usual). */
   page?: { size?: 'letter' | 'a4' | 'a3' | 'tabloid'; landscape?: boolean; staff?: number };
   /** Show transposing instruments at sounding pitch (a concert score). */
   concert?: boolean;

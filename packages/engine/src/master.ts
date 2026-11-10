@@ -6,7 +6,7 @@
  *
  * It is Hallowed Lanterns' mastering (hlaudio.master) as the same arithmetic: its K-weighting, its
  * gating, scipy's 4× polyphase interpolation for true peak (a Kaiser-windowed 81-tap filter), its
- * centred moving averages and minimums, edges and all. A loop is finished as a loop: filters and
+ * centered moving averages and minimums, edges and all. A loop is finished as a loop: filters and
  * dynamics see its end before its start.
  */
 
@@ -201,7 +201,7 @@ function truePeakEnv(x: Float64Array[]): Float64Array {
   return env;
 }
 
-// ---- the filters the dynamics are made of (scipy.ndimage's, centred, with their edges) ----
+// ---- the filters the dynamics are made of (scipy.ndimage's, centered, with their edges) ----
 
 type Edge = 'reflect' | 'nearest';
 const at = (x: Float64Array, i: number, edge: Edge): number => {

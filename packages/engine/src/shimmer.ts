@@ -24,7 +24,7 @@ const GRAIN_R = 4096 + 256;
 const MAX_GENERATIONS = 4;
 
 /**
- * The Butterworth run forwards and then backwards (zero phase), as one symmetric kernel: its impulse
+ * The Butterworth run forward and then backward (zero phase), as one symmetric kernel: its impulse
  * response's autocorrelation, kept while it matters (to a millionth of a millionth).
  */
 function zeroPhaseKernel(freq: number, sr: number): Float64Array {
@@ -126,7 +126,7 @@ class OctaveUp {
    * In a loop, the game low-passes each turn on its own (scipy's sosfiltfilt over the turn: its ends
    * padded, each pass started as if what it first meets had sounded for ever), so a turn's first and
    * last frames come out a little otherwise than the sound running on would have them. These follow
-   * the turn's sound forwards (as the game's forward pass meets it), and hold what the kernel's value
+   * the turn's sound forward (as the game's forward pass meets it), and hold what the kernel's value
    * at a turn's ends becomes: added to it at the start, in place of it at the end.
    */
   private readonly fwd: Cascade;
@@ -175,7 +175,7 @@ class OctaveUp {
 
   /**
    * A turn's first frames, once the kernel's reach of them is in (frame t is the turn's K-th): the game's
-   * forward pass from its padded start, less the running one, run backwards, is what its start adds.
+   * forward pass from its padded start, less the running one, run backward, is what its start adds.
    */
   private turnStart(t: number, K: number): void {
     const { raw, rawMask, side, back, delta, fwdOut } = this;
@@ -243,7 +243,7 @@ class OctaveUp {
         if (r0 === K && this.inOrder(t, K, K)) this.turnStart(t, K);
         else if (r0 === turn - 1 && this.inOrder(t, K + PAD, turn - 1)) this.turnEnd(t, K);
       }
-      // the low pass, centred K frames back: the filtered sound at u = t − K (the history's upper
+      // the low pass, centered K frames back: the filtered sound at u = t − K (the history's upper
       // copy reaches back a length from frame t, so its 2K + 1 frames around u lie in order)
       const c = (t & rawMask) + rawLen - K;
       let v = (kernel[0] as number) * (raw[c] as number);

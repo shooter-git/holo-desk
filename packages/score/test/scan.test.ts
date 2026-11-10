@@ -140,7 +140,7 @@ describe('finding the music on a page', () => {
   });
 });
 
-/** A photo of a page: the page seen in perspective on a grey table, a shadow over part of it. */
+/** A photo of a page: the page seen in perspective on a gray table, a shadow over part of it. */
 function photograph(paper: Gray, quad: [number, number][], w: number, h: number): Gray {
   // the page's corners land on the quad: for each pixel of the photo, where on the page it is
   const H = homography(

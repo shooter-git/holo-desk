@@ -145,7 +145,7 @@ function notice(credits: string): string {
   return (
     `# Notices\n\n${RENDERER} is HO[LO] Desk's engine (MIT, LICENSE beside this file). It carries code that ` +
     `follows other projects:\n\n${code ?? '(none)'}\n\nThe sample libraries it fetches, their authors and ` +
-    `licences are in ${PACKS} (each library's "credit" and "license").\n`
+    `licenses are in ${PACKS} (each library's "credit" and "license").\n`
   );
 }
 

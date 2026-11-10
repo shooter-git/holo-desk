@@ -51,7 +51,7 @@ if (args.includes('--capture')) {
       }),
     );
   });
-  // a link to the bar puts the playhead there; the Piano Roll opens around it, centred on its notes
+  // a link to the bar puts the playhead there; the Piano Roll opens around it, centered on its notes
   await page.goto(`${web}/?project=${song}&at=${bar}`);
   await page.getByText('Start the studio').click();
   await page

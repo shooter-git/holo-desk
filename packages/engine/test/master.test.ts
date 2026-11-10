@@ -40,7 +40,7 @@ describe('finish', () => {
 });
 
 describe('a loop', () => {
-  it('renders as it plays forever: what rings past the end comes round into the start', async () => {
+  it('renders as it plays forever: what rings past the end comes around into the start', async () => {
     const p = newProject('Loop');
     p.sampleRate = SR;
     p.tempo = [{ tick: 0, bpm: 120 }];
@@ -180,7 +180,7 @@ describe('a loop', () => {
     expect(worst).toBeLessThan(1e-5);
   }, 60_000);
 
-  it('comes round as often as its longest voice needs: a voice longer than a turn sounds over itself', async () => {
+  it('comes around as often as its longest voice needs: a voice longer than a turn sounds over itself', async () => {
     // a 30 s loop, and a note near its end that rings for over a minute (well past the halls' settling)
     const p = newProject('Long voice');
     p.sampleRate = SR;

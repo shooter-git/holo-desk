@@ -3,7 +3,7 @@
  * hit, or recordings of one note layered into a section), each lined up where its sound starts and
  * resampled if its rate isn't the file's, mixed at fixed gains, trimmed to the stretch that sounds,
  * faded at its ends and written as a PCM WAV. Every step is plain arithmetic on the decoded samples
- * (no library maths, no dither: even the resampler's sines are summed out by hand), so the same
+ * (no library math, no dither: even the resampler's sines are summed out by hand), so the same
  * downloads make the same bytes on any computer, and each file's sha256 is pinned like any other.
  */
 import { decodeWav } from '@holo/engine';

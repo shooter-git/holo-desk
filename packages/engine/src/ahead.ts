@@ -280,7 +280,7 @@ export function aheadPlan(graph: GraphSpec, owners: readonly number[]): AheadPla
 
 /**
  * The synths that cost about twice the others a voice (measured: the organ's nine wheels and rotor,
- * the modelled keys, and those carrying their own hall: wavetable, drone, wind, strings, reeds,
+ * the modeled keys, and those carrying their own hall: wavetable, drone, wind, strings, reeds,
  * choir, struck).
  */
 const HEAVY_SYNTHS =

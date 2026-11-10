@@ -5,7 +5,7 @@
  * a slow tremolo; glass_line sings phrases, sliding from note to note. Their random choices are the
  * game's own draws, so they sound the same here.
  *
- * A note's breath is levelled by its own loudness over the whole note, so a note is planned (its
+ * A note's breath is leveled by its own loudness over the whole note, so a note is planned (its
  * noise run once and measured) where the song is compiled; its voice then plays it sample by sample.
  */
 import { roundHalfEven } from './performance.ts';
@@ -476,7 +476,7 @@ export function planGlassLine(notes: GlassNote[], o: GlassLineOptions, sr: numbe
 }
 
 /**
- * A phrase's pitch and level at each sample: each note glides in over `glide` seconds, centred on
+ * A phrase's pitch and level at each sample: each note glides in over `glide` seconds, centered on
  * its time. at(i) leaves the semitone, level and frequency in fields (a call that returns a double
  * boxes it unless inlined; a tuple would be an allocation).
  */

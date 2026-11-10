@@ -163,7 +163,7 @@ function dynamicsOf(p: Record<string, number>): Dynamics {
   return { threshold: v('threshold'), power: 2 ** (v('curve') / 50), dynamics: v('dynamics') / 100 };
 }
 
-/** A hit's velocity (1–127) from its level: how far above the threshold it was, towards full scale, through the curve. */
+/** A hit's velocity (1–127) from its level: how far above the threshold it was, toward full scale, through the curve. */
 function velocityOf(level: number, d: Dynamics): number {
   const db = level > 1e-9 ? 20 * Math.log10(level) : -180;
   const u = Math.min(1, Math.max(0, (db - d.threshold) / Math.max(1, -d.threshold)));

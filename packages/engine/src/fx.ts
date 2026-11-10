@@ -729,7 +729,7 @@ class Saturator implements Effect {
     }
     copy(this.dry, l, n);
     copy(this.dryR, r, n);
-    // soft clipping, normalised so a quiet signal keeps its level
+    // soft clipping, normalized so a quiet signal keeps its level
     const drive = this.drive;
     const norm = 1 / Math.tanh(drive);
     const level = Math.min(norm, 1 / drive + 0.5);

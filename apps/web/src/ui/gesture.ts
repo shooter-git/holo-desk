@@ -1,7 +1,7 @@
 /**
  * Pointer gestures on the editors' canvases, shared by the tracks area, the piano roll and the
  * audio editor: one capture for a drag that ends cleanly however the pointer leaves (lifted,
- * cancelled, joined by a second finger, or held still for a menu), the two-finger pinch, scrolling
+ * canceled, joined by a second finger, or held still for a menu), the two-finger pinch, scrolling
  * when a drag reaches an edge, and the wheel.
  */
 import { type PointerEvent as ReactPointerEvent, type RefObject, useEffect, useRef } from 'react';
@@ -28,7 +28,7 @@ export function isMenuPress(e: { button: number; ctrlKey: boolean; pointerType: 
 export interface Gesture {
   /** The last pointer event seen (where the pointer rests while the view scrolls under it). */
   last: PointerEvent;
-  /** Whether the pointer has travelled past the threshold (a tap is not a drag). */
+  /** Whether the pointer has traveled past the threshold (a tap is not a drag). */
   moved: boolean;
   /** Which way the view may scroll when the pointer nears an edge. */
   edgeScroll?: 'x' | 'xy';

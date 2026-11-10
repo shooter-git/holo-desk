@@ -21,7 +21,7 @@ export function newId(prefix: string): string {
   return `${prefix}_${n.toString(36).padStart(10, '0').slice(-10)}`;
 }
 
-/** Track colours, in the order new tracks take them. */
+/** Track colors, in the order new tracks take them. */
 export const TRACK_COLORS = [
   '#3fa7d6',
   '#59c3a1',

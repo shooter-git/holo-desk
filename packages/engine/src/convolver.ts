@@ -289,7 +289,7 @@ class Segment {
     const lr = d.lr;
     const crossed = rl !== null && lr !== null;
     const cross = crossed ? this.cross : 0;
-    // the newest input's slot onwards pairs with the response's parts from 0; then the older slots wrap
+    // the newest input's slot onward pairs with the response's parts from 0; then the older slots wrap
     const first = parts - this.newest;
     for (let k = this.jobBin; k < end; k++) {
       const base = k * parts * 2;

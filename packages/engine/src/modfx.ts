@@ -58,7 +58,7 @@ function valve(x: number, pre: number, bias: number, biasOut: number, norm: numb
  * Rotary speaker. The sound goes through a valve preamp, then a crossover at 800 Hz: the highs to a
  * horn and the lows to a drum, each turning at its own speed and taking its own time to get there
  * (the light horn in about a second, the heavy drum in several; Brake lets both stop where they are).
- * Two microphones either side hear each rotor come and go: its pitch moving as it turns towards and
+ * Two microphones either side hear each rotor come and go: its pitch moving as it turns toward and
  * away (a delay that sweeps), its level dipping and its top dulling facing away. Further off, the
  * microphones hear less of the swing and more of each other.
  */
@@ -107,7 +107,7 @@ export class RotarySpeaker implements Effect {
   constructor(host: Host) {
     this.host = host;
     const sr = host.sr;
-    // the horn's mouth swings about 15 cm towards and away; the drum's baffle less, for the lows
+    // the horn's mouth swings about 15 cm toward and away; the drum's baffle less, for the lows
     this.hornSwing = 0.0009 * sr;
     this.drumSwing = 0.0005 * sr;
     this.horn = new Line(this.hornSwing + 8);

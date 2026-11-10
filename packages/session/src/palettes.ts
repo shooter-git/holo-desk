@@ -65,7 +65,7 @@ export interface PackSound {
   inserts?: SoundEffect[];
   /** Its room; none sends to the song's first bus as a new track does, and null keeps it dry. */
   space?: SoundSpace | null;
-  /** The track's fader, in dB: a palette's sounds are levelled to sit together. */
+  /** The track's fader, in dB: a palette's sounds are leveled to sit together. */
   volume?: number;
   /** −1 (left) to 1 (right). */
   pan?: number;

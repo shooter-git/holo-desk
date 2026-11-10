@@ -66,7 +66,7 @@ const LANES: [string, string, string][] = [
 const BLACK = new Set([1, 3, 6, 8, 10]);
 const isBlack = (p: number) => BLACK.has(((p % 12) + 12) % 12);
 
-// the velocity colours are mixed once per velocity, not per note per frame
+// the velocity colors are mixed once per velocity, not per note per frame
 const velColors = new Map<number, string>();
 function velColor(v: number): string {
   let c = velColors.get(v);
@@ -198,7 +198,7 @@ export function PianoRoll() {
   useEffect(() => setLaneOverride(null), [layout]);
 
   // when a track opens (and only then): show it from the playhead, or its selected or first region,
-  // centred on the notes in view
+  // centered on the notes in view
   // biome-ignore lint/correctness/useExhaustiveDependencies: runs when the track changes, not on every edit
   useLayoutEffect(() => {
     if (!track || !size.h) return;

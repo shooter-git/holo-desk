@@ -2,7 +2,7 @@
  * numpy's random numbers, drawn the same way: a SeedSequence's seeding, the PCG64 generator, and the
  * Generator's uniform, normal (ziggurat) and integer draws. A creation whose music is Python and
  * numpy (Hallowed Lanterns) and HO[LO] draw the very same numbers from the same seed, so a note's
- * humanised timing, its sample's start and its round robin come out the same in both.
+ * humanized timing, its sample's start and its round robin come out the same in both.
  *
  * After numpy (BSD-3-Clause): numpy/random/bit_generator.pyx (SeedSequence), src/pcg64 (PCG64, by
  * Melissa O'Neill), src/distributions/distributions.c (the draws) and ziggurat_constants.h (the tables).

@@ -1,6 +1,6 @@
 import type { ParamDef } from './plugins.ts';
 
-/** The built-in synthesiser's presets: always there, before any sample pack is installed. */
+/** The built-in synthesizer's presets: always there, before any sample pack is installed. */
 export const SYNTH_PRESETS = [
   'Soft Keys',
   'Electric Piano',
@@ -499,7 +499,7 @@ export const SYNTH_NOTES: Record<string, string> = {
   'Lo-fi Machine':
     'The analog machine through a few bits and a low sample rate, its top rolled off: dusty and warm. Tone opens it up a little.',
   'Hand Machine':
-    'Synthesised hand percussion: congas, bongos, claves, wood blocks, shakers and a soft low drum, spread wide.',
+    'Synthesized hand percussion: congas, bongos, claves, wood blocks, shakers and a soft low drum, spread wide.',
   Shakuhachi:
     'An end-blown bamboo flute: hollow and breathy, each note scooping up into pitch, the vibrato arriving once it settles. Breath is how much air; Overblow pushes it up toward its octave.',
   Bansuri: 'A side-blown bamboo flute: sweet and soft with a wide, gentle vibrato.',
@@ -552,7 +552,7 @@ export interface SampleMic {
   name: string;
   /** dB it starts at (0 when absent): at MIC_OFF or below it's off. */
   level?: number;
-  /** Where its mono samples sit, -1 (left) to 1 (right), unless a zone says (the centre when absent). */
+  /** Where its mono samples sit, -1 (left) to 1 (right), unless a zone says (the center when absent). */
   pan?: number;
 }
 

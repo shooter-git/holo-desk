@@ -22,8 +22,8 @@ export const formatDb = (db: number): string => (db <= -144 ? '-∞' : `${db > 0
 interface DragOptions {
   onStart?: () => void;
   onMove: (dx: number, dy: number, e: PointerEvent) => void;
-  /** Always called, so a gesture ends even when the browser took the pointer for a scroll (`cancelled`). */
-  onEnd?: (cancelled: boolean) => void;
+  /** Always called, so a gesture ends even when the browser took the pointer for a scroll (`canceled`). */
+  onEnd?: (canceled: boolean) => void;
 }
 
 /** Pointer drag with capture: works with a mouse, a pen and a finger. */
@@ -127,7 +127,7 @@ interface KnobProps {
   color?: string;
   label?: string;
   compact?: boolean;
-  /** Snap a drag to the default while it is within this much of it (a pan's centre). */
+  /** Snap a drag to the default while it is within this much of it (a pan's center). */
   detent?: number;
 }
 
@@ -249,7 +249,7 @@ export function Knob({
   );
 }
 
-/** Pan, as the mixer counts it: 64 steps each side of the centre, with a detent there (as HO[LO] Remote has). */
+/** Pan, as the mixer counts it: 64 steps each side of the center, with a detent there (as HO[LO] Remote has). */
 const PAN: ParamDef = { id: 'pan', name: 'Pan', min: -64, max: 64, default: 0, step: 1, unit: 'LR' };
 
 export function PanKnob({

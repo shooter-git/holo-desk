@@ -85,12 +85,12 @@ describe('Stereo Width', () => {
     const [a, b] = through(effect('width', { width: 0 }), l, r);
     expect(Array.from(a)).toEqual(Array.from(b));
   });
-  it('keeps the centre at unity and turns at constant power', () => {
+  it('keeps the center at unity and turns at constant power', () => {
     const [a, b] = through(effect('width', { position: -100 }), l, r);
     expect(rms(b)).toBeLessThan(1e-6);
     expect(rms(a) / rms(l)).toBeCloseTo(Math.SQRT2, 3);
   });
-  it('eases the lows towards mono and leaves the highs', () => {
+  it('eases the lows toward mono and leaves the highs', () => {
     const lo = new Float32Array(SR).map((_, i) => Math.sin((2 * Math.PI * 30 * i) / SR));
     const hi = new Float32Array(SR).map((_, i) => Math.sin((2 * Math.PI * 4000 * i) / SR));
     const [a, b] = through(
@@ -126,15 +126,24 @@ describe('Tape Warmth', () => {
     expect(Math.abs(mean / (SR / 2))).toBeLessThan(0.01);
   });
 
-  it("takes a creation's centre away from its saturated sound (in step with its mix)", () => {
+  it("takes a creation's center away from its saturated sound (in step with its mix)", () => {
     const x = new Float32Array(SR / 10).map((_, i) => Math.sin((2 * Math.PI * 100 * i) / SR) * 0.5);
     const params = { drive: 1.4, even: 8, mix: 50, input: 0, body: 0, top: 0, dcBlock: 0 };
     const [a, b] = through(effect('tape', params), x);
-    const [c, d] = through(effect('tape', params, host(), { centre: '0.01,-0.02' }), x);
+    const [c, d] = through(effect('tape', params, host(), { center: '0.01,-0.02' }), x);
     for (let i = 0; i < x.length; i += 97) {
       expect(c[i]).toBeCloseTo((a[i] as number) - 0.5 * 0.01, 6);
       expect(d[i]).toBeCloseTo((b[i] as number) + 0.5 * 0.02, 6);
     }
+  });
+
+  it('still reads the center from songs saved with `centre`', () => {
+    const x = new Float32Array(SR / 10).map((_, i) => Math.sin((2 * Math.PI * 100 * i) / SR) * 0.5);
+    const params = { drive: 1.4, even: 8, mix: 50, input: 0, body: 0, top: 0, dcBlock: 0 };
+    const [a, b] = through(effect('tape', params, host(), { center: '0.01,-0.02' }), x);
+    const [c, d] = through(effect('tape', params, host(), { centre: '0.01,-0.02' }), x);
+    expect([...c]).toEqual([...a]);
+    expect([...d]).toEqual([...b]);
   });
 });
 

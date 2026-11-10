@@ -251,7 +251,11 @@ class Arpeggiator implements MidiEffect {
   private sounding: number[] = [];
   private offAt = -1;
   private nextBeat = -1;
+  /** The clock while the song is stopped (the song's beats while it plays). */
   private freeBeat = 0;
+  /** The beat the last block ended on, by the clock it kept (NaN: none yet), and whether that was the song's. */
+  private lastBeat = Number.NaN;
+  private wasPlaying = false;
   private seed = 99;
   private readonly host: MidiHost;
   constructor(host: MidiHost) {
@@ -307,7 +311,6 @@ class Arpeggiator implements MidiEffect {
         held.length = kept;
       }
     }
-    const notes = this.pattern();
     const sr = this.host.sr;
     const beatSec = this.host.beatSeconds();
     const playing = this.host.playing();
@@ -315,6 +318,27 @@ class Arpeggiator implements MidiEffect {
     const beatsPerFrame = 1 / (beatSec * sr);
     const beat1 = beat0 + n * beatsPerFrame;
     if (!playing) this.freeBeat = beat1;
+    // the song started, stopped or jumped (a locate, a cycle going round): the clock changed under
+    // what's sounding (its end was due by the old one), so it ends here, and the steps start again
+    // from where this clock is. A stop also lets a latched pattern go: Stop is silence.
+    if (
+      playing !== this.wasPlaying ||
+      Number.isNaN(this.lastBeat) ||
+      beat0 < this.lastBeat - 1e-6 ||
+      beat0 > this.lastBeat + n * beatsPerFrame + 1e-6
+    ) {
+      for (const k of this.sounding) output.push(0, EV_OFF, k, 0);
+      this.sounding = [];
+      this.offAt = -1;
+      this.nextBeat = -1;
+      if (this.wasPlaying && !playing && this.latched.length) {
+        this.latched = [];
+        this.stale = true;
+      }
+    }
+    this.wasPlaying = playing;
+    this.lastBeat = beat1;
+    const notes = this.pattern();
     // note-offs due in this block
     if (this.offAt >= 0 && this.offAt < beat1) {
       const off = Math.max(0, Math.min(n - 1, Math.round((this.offAt - beat0) / beatsPerFrame)));
@@ -365,7 +389,9 @@ class Arpeggiator implements MidiEffect {
     this.latched = [];
     this.sounding = [];
     this.physical = 0;
+    this.offAt = -1;
     this.nextBeat = -1;
+    this.lastBeat = Number.NaN;
     this.stale = true;
   }
   busy(): boolean {

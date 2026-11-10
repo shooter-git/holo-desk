@@ -49,7 +49,8 @@ per quarter note.
   pentatonic, 11 Chromatic), `voice1..3` scale steps from the played note (2 = a third above, 4 = a
   fifth, −3 = a fourth below, 0 = off), `velocity` %, `original` 0/1.
 - `arpeggiator`: `mode` (0 up, 1 down, 2 up/down, 3 as played, 4 random, 5 chord), `rate` (0 1/4, 1
-  1/8, 2 1/8T, 3 1/16, 4 1/16T, 5 1/32), `octaves` 1–4, `gate` %, `latch` 0/1, `swing` %.
+  1/8, 2 1/8T, 3 1/16, 4 1/16T, 5 1/32), `octaves` 1–4, `gate` %, `latch` 0/1 (a latched pattern
+  plays on after the keys are let go, until the song stops), `swing` %.
 - `scale`: `transpose` semitones, `key`, `scale`, `quantize` 0/1.
 - `velocity`: `scale` %, `offset`, `random`, `min`, `max`.
 - `drummer` (Session Drummer; put it on a kit: Drum Synth, a drum machine or a pack kit): plays along

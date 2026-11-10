@@ -336,7 +336,12 @@ function RemoteTransport() {
       <button type="button" className="btn" title="Forward a bar" onClick={() => command('forward')}>
         <FastForward />
       </button>
-      <button type="button" className="btn" title="Stop (twice: to the beginning)" onClick={() => command('stop')}>
+      <button
+        type="button"
+        className="btn"
+        title="Stop (twice: to the beginning, all notes off)"
+        onClick={() => command('stop')}
+      >
         <Square />
       </button>
       <button

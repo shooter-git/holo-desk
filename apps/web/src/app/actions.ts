@@ -557,6 +557,9 @@ export function play(record: boolean): void {
 export function stop(): void {
   const s = store.get();
   if (!s.playing) {
+    // stopped already: back to the beginning, and every note still sounding stops (a latched
+    // arpeggio, a key held on a keyboard that came loose, a Drum Replacer's hit)
+    engine.panic();
     locate(0);
     return;
   }

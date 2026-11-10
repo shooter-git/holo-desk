@@ -34,7 +34,16 @@ import { store, useApp } from '../app/store.ts';
 import { engine } from '../audio/engine.ts';
 import { midi } from '../audio/midi.ts';
 import { alpha, prepare, roundRect, useFrame, useSize, velocityColor } from './frame.ts';
-import { capture, edgeScroll, type Gesture, type GestureOptions, Pinch, screenDpr, useWheel } from './gesture.ts';
+import {
+  capture,
+  edgeScroll,
+  type Gesture,
+  type GestureOptions,
+  isMenuPress,
+  Pinch,
+  screenDpr,
+  useWheel,
+} from './gesture.ts';
 import { openMenu } from './menu.tsx';
 import { DOUBLE_TAP_MS, gridStep, Viewport, WHEEL_ZOOM, ZOOM } from './view.ts';
 
@@ -668,7 +677,7 @@ export function PianoRoll() {
     lastTap.current = now;
     menuAt.current = null;
     const h = hitNote(x, y, touch);
-    if (e.button === 2) {
+    if (isMenuPress(e)) {
       if (h) noteMenu(e.clientX, e.clientY, h.ref.note);
       return;
     }

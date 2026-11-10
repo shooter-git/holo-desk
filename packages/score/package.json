@@ -1,7 +1,7 @@
 {
   "name": "@holo/score",
   "private": true,
-  "version": "0.6.7",
+  "version": "0.6.8",
   "license": "MIT",
   "type": "module",
   "description": "HO[LO]'s scores: a song's notes laid out as notation (bars, voices, rhythms, spellings), drawn through MEI, and written as text the AI reads and writes.",

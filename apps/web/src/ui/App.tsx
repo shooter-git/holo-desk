@@ -138,31 +138,8 @@ function EditorPane() {
             <span className="grow" />
           </>
         )}
-        <div className="seg">
-          <button
-            type="button"
-            className={`btn${editor === 'piano' && !score ? ' on' : ''}`}
-            onClick={() => store.set({ editor: 'piano', noteView: 'roll' })}
-          >
-            {audio ? 'Audio Editor' : 'Piano Roll'}
-          </button>
-          {!audio && (
-            <button
-              type="button"
-              className={`btn${editor === 'piano' && score ? ' on' : ''}`}
-              onClick={() => store.set({ editor: 'piano', noteView: 'score' })}
-            >
-              Score
-            </button>
-          )}
-          <button
-            type="button"
-            className={`btn${editor === 'mixer' ? ' on' : ''}`}
-            onClick={() => store.set({ editor: 'mixer' })}
-          >
-            Mixer
-          </button>
-        </div>
+        {/* how the notes are shown; the Piano Roll and the Mixer themselves are opened at the top right */}
+        {editor === 'piano' && !audio && <NoteViewSwitch />}
       </div>
       {editor === 'piano' ? (
         audio ? (

@@ -9,17 +9,14 @@
  * spelling), on a link (open it in a new tab) and on selected words (copy).
  */
 
-/** Inputs whose words are typed: the rest (sliders, checkboxes, colours) have nothing to paste. */
-const TYPED = new Set(['', 'text', 'search', 'url', 'email', 'password', 'number', 'tel']);
+import { typesWords } from './fields.ts';
 
 /** Whether a right-click on `target` should get the browser's own menu. */
 export function browserMenuWanted(target: EventTarget | null, onSelectedWords: boolean): boolean {
   if (onSelectedWords) return true;
+  if (typesWords(target)) return true;
   const el = target as HTMLElement | null;
-  if (!el?.closest) return false;
-  if (el.isContentEditable || el.tagName === 'TEXTAREA') return true;
-  if (el.tagName === 'INPUT') return TYPED.has(((el as HTMLInputElement).type ?? '').toLowerCase());
-  return !!el.closest('a[href]');
+  return !!el?.closest?.('a[href]');
 }
 
 /** Keep the browser's menu to the places above, on every page (the studio and the remote alike). */

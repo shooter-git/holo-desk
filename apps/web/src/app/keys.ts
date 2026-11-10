@@ -27,6 +27,7 @@ import {
   undo,
   updateChannel,
 } from './actions.ts';
+import { spaceIsTransport } from './fields.ts';
 import { store } from './store.ts';
 
 export interface KeyCommand {
@@ -147,7 +148,7 @@ function inPopup(target: EventTarget | null): boolean {
   return !!el?.closest?.('[role="dialog"], [role="menu"], .view-menu');
 }
 
-/** A button reached with the keyboard (it shows its focus ring): Enter and Space are its, not the transport's. */
+/** A button reached with the keyboard (it shows its focus ring): Enter is its, not the transport's (Space never is). */
 function keyboardFocusedButton(target: EventTarget | null): boolean {
   const el = target as HTMLElement | null;
   if (!el || (el.tagName !== 'BUTTON' && el.tagName !== 'A')) return false;
@@ -172,15 +173,22 @@ function selectedTrackId(): string | null {
 }
 
 function onKeyDown(e: KeyboardEvent): void {
+  if (spaceIsTransport(e, !!store.get().dialog)) {
+    // the browser's own Space (pressing the focused button, ticking a box, opening a list) is held back,
+    // and a held Space plays or stops once
+    e.preventDefault();
+    if (!e.repeat) void togglePlay();
+    return;
+  }
   if (editing(e.target)) return;
   const s = store.get();
   const ctrl = e.ctrlKey || e.metaKey;
   const key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
   // a menu or dialog is up: only Escape, ? (the key commands, so it toggles off) and undo/redo reach the
-  // studio behind it; Space would play, Delete would delete, Enter would cancel the button being pressed
+  // studio behind it; Delete would delete, Enter would cancel the button being pressed
   if (inPopup(e.target) || s.dialog) {
     if (key !== 'Escape' && key !== '?' && !(ctrl && (key === 'z' || key === 'y'))) return;
-  } else if ((key === 'Enter' || e.code === 'Space') && keyboardFocusedButton(e.target)) return;
+  } else if (key === 'Enter' && keyboardFocusedButton(e.target)) return;
   if (scope && !inPopup(e.target) && !s.dialog && scope(e)) {
     e.preventDefault();
     return;
@@ -253,6 +261,11 @@ function onKeyDown(e: KeyboardEvent): void {
 }
 
 function onKeyUp(e: KeyboardEvent): void {
+  // a button or a box acts as Space comes up: it was the transport's, so they don't
+  if (spaceIsTransport(e, !!store.get().dialog)) {
+    e.preventDefault();
+    return;
+  }
   if (typingKey(e, false)) e.preventDefault();
 }
 

@@ -6,6 +6,7 @@ import { clampEditorHeight, fitEditorHeight, isPhone, type Layout, useLayout } f
 import { otherStudioToDrive } from '../app/live.ts';
 import { type MobileTab, store, useApp } from '../app/store.ts';
 import { AudioEditor, AudioEditorBar } from './AudioEditor.tsx';
+import { Bar } from './Bar.tsx';
 import { ControlBar, Lcd, SaveDot, TransportButtons } from './ControlBar.tsx';
 import { Wordmark } from './controls.tsx';
 import { Dialogs } from './Dialogs.tsx';
@@ -513,6 +514,8 @@ export function App() {
       <Dialogs />
       <Scanning />
       <Printing />
+      {/* outside the studio's frame, so a dialog making the studio inert leaves the bar working over it */}
+      <Bar />
       <MenuHost />
       <Toasts />
       <BounceStatus />

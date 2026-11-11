@@ -14,6 +14,7 @@ import {
   Play,
   Repeat,
   Rewind,
+  Search,
   Settings,
   SkipBack,
   SlidersVertical,
@@ -38,7 +39,7 @@ import {
 } from '../app/actions.ts';
 import { TYPING_PORT } from '../app/keys.ts';
 import { isPhone, useLayout } from '../app/layout.ts';
-import { store, useApp, useShow } from '../app/store.ts';
+import { openBar, store, useApp, useShow } from '../app/store.ts';
 import { engine } from '../audio/engine.ts';
 import { midi } from '../audio/midi.ts';
 import { startDrag, TAP, Wordmark } from './controls.tsx';
@@ -690,6 +691,17 @@ export function ControlBar() {
             {full ? <Minimize2 /> : <Maximize2 />}
           </button>
         )}
+        {/* the bar: every command, track and marker, found by name; always here, as it reaches what's hidden */}
+        <button
+          type="button"
+          className="btn icon ghost cb-bar"
+          title="Commands (Ctrl /)"
+          aria-label="Commands (Ctrl /)"
+          aria-haspopup="dialog"
+          onClick={openBar}
+        >
+          <Search />
+        </button>
         <ViewMenu />
         <button
           type="button"

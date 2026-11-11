@@ -28,7 +28,7 @@ import {
   updateChannel,
 } from './actions.ts';
 import { spaceIsTransport } from './fields.ts';
-import { store } from './store.ts';
+import { closeBar, openBar, store } from './store.ts';
 
 export interface KeyCommand {
   keys: string;
@@ -57,6 +57,7 @@ export const KEY_COMMANDS: KeyCommand[] = [
   { keys: 'Ctrl Shift F', what: 'Full screen', group: 'Windows' },
   { keys: 'I', what: 'Inspector', group: 'Windows' },
   { keys: 'Y', what: 'Library', group: 'Windows' },
+  { keys: 'Ctrl /', what: 'Commands', group: 'Windows' },
   { keys: 'Ctrl K', what: 'Musical Typing', group: 'Windows' },
   { keys: '?', what: 'Key commands', group: 'Windows' },
   { keys: 'Ctrl Z / Ctrl Shift Z', what: 'Undo / Redo', group: 'Edit' },
@@ -99,6 +100,13 @@ const TYPING: Record<string, number> = {
 
 const held = new Map<string, number>();
 export const TYPING_PORT = 'Musical Typing';
+
+/** Musical Typing on or off (Ctrl K, its button, the bar). */
+export function toggleTyping(): void {
+  const on = !store.get().typing;
+  store.set({ typing: on });
+  if (on) midi.addVirtualPort(TYPING_PORT, 'typing');
+}
 
 function typingKey(e: KeyboardEvent, down: boolean): boolean {
   const s = store.get();
@@ -172,7 +180,27 @@ function selectedTrackId(): string | null {
   return store.get().selectedTrack;
 }
 
+/** The bar from the keyboard: open (not over the start screen) or closed. */
+function toggleBar(): void {
+  const s = store.get();
+  if (s.bar) closeBar();
+  else if (s.audioReady) openBar();
+}
+
 function onKeyDown(e: KeyboardEvent): void {
+  // the bar: Ctrl / (⌘ / on a Mac) from anywhere, a field or a menu included, and from the bar's own
+  // field to close it. By the key, not its code: on some layouts the key coded Slash types "-". Not
+  // with Alt, which with Ctrl is AltGr, typing a "/" of its own on some layouts
+  if ((e.ctrlKey || e.metaKey) && !e.altKey && e.key === '/') {
+    e.preventDefault();
+    if (!e.repeat) toggleBar();
+    return;
+  }
+  // the bar keeps the keys while it's open: the studio's shortcuts (Space, Delete, the letters) wait
+  if (store.get().bar) {
+    if (e.key === 'Escape') closeBar();
+    return;
+  }
   if (spaceIsTransport(e, !!store.get().dialog)) {
     // the browser's own Space (pressing the focused button, ticking a box, opening a list) is held back,
     // and a held Space plays or stops once
@@ -207,10 +235,8 @@ function onKeyDown(e: KeyboardEvent): void {
   else if (ctrl && key === 'a') selectAll();
   else if (ctrl && key === 't') splitAtPlayhead();
   else if (ctrl && key === 'r') repeatRegions();
-  else if (ctrl && key === 'k') {
-    store.set({ typing: !s.typing });
-    if (!s.typing) midi.addVirtualPort(TYPING_PORT, 'typing');
-  } else if (ctrl) handled = false;
+  else if (ctrl && key === 'k') toggleTyping();
+  else if (ctrl) handled = false;
   else if (e.code === 'Space') void togglePlay();
   else if (key === 'r') void toggleRecord();
   else if (key === 'c') toggleCycle();

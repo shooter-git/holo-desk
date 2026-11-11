@@ -138,6 +138,10 @@ export interface AppState {
   bouncing: string | null;
   /** Which parts of the studio show (the View menu): everything, until you hide some. */
   show: Record<ShowKey, boolean>;
+  /** The bar is open (Ctrl /): the studio's commands, tracks and markers, found by name. Never remembered. */
+  bar: boolean;
+  /** Words for the Library's search to show (the bar asked it to find a sound); null once it has them. */
+  librarySearch: string | null;
 }
 
 /** The parts of the studio the View menu shows or hides, all shown at first. */
@@ -241,6 +245,8 @@ const initial: AppState = {
   connection: 'connecting',
   toasts: [],
   bouncing: null,
+  bar: false,
+  librarySearch: null,
   ...stored,
   // parts added since this device last saved its view start shown
   show: { ...SHOW_DEFAULTS, ...(stored.show ?? {}) },
@@ -316,6 +322,15 @@ export function toast(text: string, kind: Toast['kind'] = 'info', ms = 3500, act
   const id = ++toastId;
   store.set((s) => ({ toasts: [...s.toasts, { id, text, kind, ...(action ? { action } : {}) }] }));
   window.setTimeout(() => store.set((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) })), ms);
+}
+
+/** Open the bar (Ctrl /, the search button, or a swipe down on a phone's top bar). */
+export function openBar(): void {
+  if (!state.bar) store.set({ bar: true });
+}
+
+export function closeBar(): void {
+  if (state.bar) store.set({ bar: false });
 }
 
 /** Whether a part of the studio shows (the View menu). */

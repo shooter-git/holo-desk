@@ -178,6 +178,8 @@ describe('listening', () => {
     const res = heard.value as Awaited<ReturnType<typeof tool>>;
     expect(res.json()).toEqual({
       done: true,
+      part: 1,
+      pending: 0,
       notes: [
         { tick: null, time: expect.any(Number), pitch: 60, velocity: 100, length: expect.any(Number), port: 'Keys' },
         { tick: null, time: expect.any(Number), pitch: 62, velocity: 80, length: expect.any(Number), port: 'Keys' },
@@ -211,25 +213,40 @@ describe('listening', () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     const part = () => pending(tool(job, jobToken, 'POST', '/listen', { maxMs: 2000, quietMs: 1000 }));
 
-    const first = part();
+    const first = await part();
     await until(() => desk.got('agent-listen').length > 0);
     await vi.advanceTimersByTimeAsync(2000);
     await until(() => first.done);
-    expect((first.value as Awaited<ReturnType<typeof tool>>).json()).toEqual({ notes: [], done: false });
+    expect((first.value as Awaited<ReturnType<typeof tool>>).json()).toEqual({
+      notes: [],
+      done: false,
+      part: 1,
+      pending: 0,
+    });
     // still listening, as far as the studio shows
     expect(desk.got('agent-listen').map((m) => m.state)).toEqual(['on']);
 
-    const second = part();
+    const second = await part();
     await vi.advanceTimersByTimeAsync(10);
     expect(desk.got('agent-listen').map((m) => m.state)).toEqual(['on']);
     await vi.advanceTimersByTimeAsync(2000);
     await until(() => second.done);
-    expect((second.value as Awaited<ReturnType<typeof tool>>).json()).toEqual({ notes: [], done: false });
+    expect((second.value as Awaited<ReturnType<typeof tool>>).json()).toEqual({
+      notes: [],
+      done: false,
+      part: 2,
+      pending: 0,
+    });
     // Done between two parts: the next one ends at once
     await app.inject({ method: 'POST', url: `/api/agent/jobs/${job}/done-listening`, headers: auth(token) });
     const third = part();
     await until(() => third.done);
-    expect((third.value as Awaited<ReturnType<typeof tool>>).json()).toEqual({ notes: [], done: true });
+    expect((third.value as Awaited<ReturnType<typeof tool>>).json()).toEqual({
+      notes: [],
+      done: true,
+      part: 3,
+      pending: 0,
+    });
     expect(desk.got('agent-listen').map((m) => m.state)).toEqual(['on', 'off']);
 
     // no next part: after a few seconds the studio stops showing it
@@ -237,7 +254,9 @@ describe('listening', () => {
     await until(() => desk.got('agent-listen').length === 3);
     await vi.advanceTimersByTimeAsync(2000);
     await until(() => fourth.done);
-    await vi.advanceTimersByTimeAsync(4999);
+    // (a listen of its own: the one before ended)
+    expect((fourth.value as Awaited<ReturnType<typeof tool>>).json()).toMatchObject({ done: false, part: 1 });
+    await vi.advanceTimersByTimeAsync(14_999);
     expect(desk.got('agent-listen').map((m) => m.state)).toEqual(['on', 'off', 'on']);
     await vi.advanceTimersByTimeAsync(1);
     expect(desk.got('agent-listen').map((m) => m.state)).toEqual(['on', 'off', 'on', 'off']);
@@ -250,9 +269,142 @@ describe('listening', () => {
     await until(() => desk.got('agent-listen').length > 0);
     run.say({ type: 'agent-failed', job, error: 'Cursor stopped' });
     await until(() => heard.done);
-    expect((heard.value as Awaited<ReturnType<typeof tool>>).json()).toEqual({ notes: [], done: true });
+    expect((heard.value as Awaited<ReturnType<typeof tool>>).json()).toEqual({
+      notes: [],
+      done: true,
+      part: 1,
+      pending: 0,
+    });
     expect(desk.got('agent-listen').at(-1)).toEqual({ type: 'agent-listen', job, state: 'off' });
     expect(status(desk, job)).toMatchObject({ state: 'failed' });
+  });
+
+  describe('across parts', () => {
+    /** A listen's parts, two seconds each (a quiet spell long enough not to end one), on fake time. */
+    async function parts() {
+      const w = await setup();
+      const { job, token: jobToken } = await w.start({ project: w.s.id, text: 'Write down what I play' });
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+      /** A part asked for, once the server has it (the call takes a few turns of the event loop to arrive). */
+      const part = async (body: Msg = {}) => {
+        const p = pending(w.tool(job, jobToken, 'POST', '/listen', { maxMs: 2000, quietMs: 5000, ...body }));
+        for (let i = 0; i < 100; i++) await new Promise((r) => setImmediate(r));
+        return p;
+      };
+      const answer = async (p: Awaited<ReturnType<typeof part>>) => {
+        await until(() => p.done);
+        return (p.value as Awaited<ReturnType<typeof w.tool>>).json() as {
+          notes: { pitch: number; time: number; length: number | null }[];
+          done: boolean;
+          part: number;
+          pending: number;
+        };
+      };
+      /** A key down at `at` ms from now, up `length` ms later. */
+      const play = async (pitch: number, at: number, length: number) => {
+        await vi.advanceTimersByTimeAsync(at);
+        w.desk.say({ type: 'played', events: [note(pitch, true)] });
+        await vi.advanceTimersByTimeAsync(length);
+        w.desk.say({ type: 'played', events: [note(pitch, false)] });
+      };
+      const states = () => w.desk.got('agent-listen').map((m) => m.state);
+      return { ...w, job, part, answer, play, states };
+    }
+    const brief = (notes: { pitch: number; time: number; length: number | null }[]) =>
+      notes.map((n) => [n.pitch, n.time, n.length]);
+
+    it('hands what was played between two parts to the next, its times running on from the first', async () => {
+      const { part, answer, play, states } = await parts();
+      const first = await part();
+      await until(() => states().length > 0);
+      await play(60, 500, 300);
+      await vi.advanceTimersByTimeAsync(1200);
+      const one = await answer(first);
+      expect(one).toMatchObject({ done: false, part: 1, pending: 0 });
+      expect(brief(one.notes)).toEqual([[60, 500, 300]]);
+      // between the parts (the model is reading the answer): still heard
+      await play(62, 500, 200);
+      await vi.advanceTimersByTimeAsync(300);
+      const second = await part();
+      await play(64, 200, 200);
+      await vi.advanceTimersByTimeAsync(1600);
+      const two = await answer(second);
+      expect(two).toMatchObject({ done: false, part: 2, pending: 0 });
+      expect(brief(two.notes)).toEqual([
+        [62, 2500, 200],
+        [64, 3200, 200],
+      ]);
+      // the studio showed it listening throughout
+      expect(states()).toEqual(['on']);
+    });
+
+    it('keeps a note held over the end of a part whole: a later part hands it on', async () => {
+      const { part, answer, play, desk } = await parts();
+      const first = await part();
+      await play(60, 200, 200);
+      await vi.advanceTimersByTimeAsync(1100);
+      desk.say({ type: 'played', events: [note(67, true)] });
+      await vi.advanceTimersByTimeAsync(500);
+      // the part ends with the key down: nothing handed out yet, two notes kept
+      expect(await answer(first)).toEqual({ notes: [], done: false, part: 1, pending: 2 });
+      await vi.advanceTimersByTimeAsync(400);
+      desk.say({ type: 'played', events: [note(67, false)] });
+      const second = await part({ last: true });
+      await vi.advanceTimersByTimeAsync(2000);
+      const two = await answer(second);
+      expect(two).toMatchObject({ done: true, part: 2, pending: 0 });
+      expect(brief(two.notes)).toEqual([
+        [60, 200, 200],
+        [67, 1500, 900],
+      ]);
+    });
+
+    it('lets what came after a part go when no next part comes within the grace', async () => {
+      const { part, answer, play, states } = await parts();
+      const first = await part();
+      await play(60, 500, 300);
+      await vi.advanceTimersByTimeAsync(1200);
+      expect(brief((await answer(first)).notes)).toEqual([[60, 500, 300]]);
+      await play(62, 1000, 200);
+      await vi.advanceTimersByTimeAsync(13_800);
+      expect(states()).toEqual(['on', 'off']);
+      // the next call is a listen of its own: the note played after the last part is gone
+      const again = await part();
+      await play(64, 100, 100);
+      await vi.advanceTimersByTimeAsync(1800);
+      const two = await answer(again);
+      expect(two).toMatchObject({ done: false, part: 1 });
+      expect(brief(two.notes)).toEqual([[64, 100, 100]]);
+      expect(states()).toEqual(['on', 'off', 'on']);
+    });
+
+    it('ends the next part at once when Done is pressed between two, with what was played up to Done', async () => {
+      const { part, answer, play, app, job, token, desk, states } = await parts();
+      const first = await part();
+      await play(60, 500, 300);
+      await vi.advanceTimersByTimeAsync(1200);
+      await answer(first);
+      await play(62, 500, 200);
+      await app.inject({ method: 'POST', url: `/api/agent/jobs/${job}/done-listening`, headers: auth(token) });
+      // after Done: not part of the listen
+      desk.say({ type: 'played', events: [note(64, true), note(64, false)] });
+      await vi.advanceTimersByTimeAsync(1000);
+      const two = await answer(await part());
+      expect(two).toMatchObject({ done: true, part: 2, pending: 0 });
+      expect(brief(two.notes)).toEqual([[62, 2500, 200]]);
+      expect(states()).toEqual(['on', 'off']);
+    });
+
+    it('ends the part the tool says is the last when its time is up, as done', async () => {
+      const { part, answer, play, states } = await parts();
+      const first = await part({ last: true });
+      await play(60, 500, 300);
+      await vi.advanceTimersByTimeAsync(1200);
+      const one = await answer(first);
+      expect(one).toMatchObject({ done: true, part: 1, pending: 0 });
+      expect(brief(one.notes)).toEqual([[60, 500, 300]]);
+      expect(states()).toEqual(['on', 'off']);
+    });
   });
 });
 

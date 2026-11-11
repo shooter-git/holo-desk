@@ -7,14 +7,15 @@ import {
   type Op,
   PPQ,
   type Project,
+  parseNoteName,
   type Region,
   SYNTH_PRESETS,
 } from '@holo/session';
-import { describe, expect, it } from 'vitest';
-import { type FakeJobApi, type FakeJobApiOptions, fakeJobApi } from '../src/api.ts';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { ApiError, type FakeJobApi, type FakeJobApiOptions, fakeJobApi, type PlayedNote } from '../src/api.ts';
 import { check } from '../src/args.ts';
-import { keyCandidates, notationLength } from '../src/index.ts';
-import { describeTool, ToolError, type ToolResult } from '../src/tools/common.ts';
+import { notationLength } from '../src/index.ts';
+import { describeTool, newMemory, ToolError, type ToolMemory, type ToolResult } from '../src/tools/common.ts';
 import { TOOLS, toolNamed } from '../src/tools/index.ts';
 
 const BAR = PPQ * 4;
@@ -42,12 +43,20 @@ function setup(options: FakeJobApiOptions = {}): FakeJobApi {
   return fakeJobApi(song(), options);
 }
 
+/** Each fake's memory: as the MCP server keeps one for a run, a test keeps one for its fake. */
+const memories = new WeakMap<FakeJobApi, ToolMemory>();
+const memoryOf = (api: FakeJobApi): ToolMemory => {
+  const m = memories.get(api) ?? newMemory();
+  memories.set(api, m);
+  return m;
+};
+
 async function call(api: FakeJobApi, name: string, args: unknown = {}, middleC: MiddleC = 'C4'): Promise<ToolResult> {
   const tool = toolNamed(name);
   if (!tool) throw new Error(`no tool ${name}`);
   const checked = check(tool.args, args);
   if (!checked.ok) throw new Error(checked.errors.join('; '));
-  return tool.run({ api, middleC }, checked.args);
+  return tool.run({ api, middleC, memory: memoryOf(api) }, checked.args);
 }
 
 async function refused(api: FakeJobApi, name: string, args: unknown): Promise<string> {
@@ -573,30 +582,154 @@ describe('playing and listening', () => {
     expect(api.calls.find((c) => c.method === 'played')?.args).toEqual([10]);
   });
 
-  it('groups a performance into chords and phrases and names its likeliest keys', async () => {
-    const d = (pitch: number, time: number, length = 400) => ({
-      pitch,
-      time,
-      length,
-      velocity: 80,
+  describe('listening in parts', () => {
+    afterEach(() => vi.useRealTimers());
+    const n = (pitch: number, time: number, length: number | null = 300): PlayedNote => ({
       tick: null,
-      port: '',
+      time,
+      pitch,
+      velocity: 90,
+      length,
+      port: 'Keys',
     });
-    const notes = [
-      d(62, 0),
-      d(65, 10),
-      d(69, 20),
-      d(64, 500),
-      d(65, 1000),
-      d(67, 1500),
-      d(69, 2000),
-      d(62, 6000, 1200),
-    ];
-    const api = setup({ played: notes });
+    const at = (seconds: number) => vi.setSystemTime(new Date(Date.UTC(2026, 10, 11, 12, 0, seconds)));
+
+    it('hears a listen as one, a part a call, and keeps it as the last listen', async () => {
+      vi.useFakeTimers({ toFake: ['Date'] });
+      at(0);
+      const api = setup({
+        heard: [
+          { notes: [n(60, 500)], done: false, part: 1, pending: 0 },
+          // a key was down as the second part ended: its notes come with the next
+          { notes: [], done: false, part: 2, pending: 2 },
+          {
+            notes: [n(62, 39_500, 900), n(64, 41_000), n(65, 42_000, 600), n(67, 43_000, 1200)],
+            done: true,
+            part: 3,
+            pending: 0,
+          },
+        ],
+      });
+      expect((await call(api, 'listen', { max: 90 })).text).toBe(
+        'Still listening: 1 note so far. Call listen again to hear the rest.',
+      );
+      at(41);
+      expect((await call(api, 'listen', {})).text).toBe(
+        'Still listening: 3 notes so far. Call listen again to hear the rest.',
+      );
+      at(82);
+      const end = await call(api, 'listen', {});
+      // a part is at most 40 s; the last is what's left of "max", and says so
+      expect(api.calls.filter((c) => c.method === 'listen').map((c) => c.args[0])).toEqual([
+        { maxMs: 40_000, quietMs: 4000 },
+        { maxMs: 40_000, quietMs: 4000 },
+        { maxMs: 8000, quietMs: 4000, last: true },
+      ]);
+      expect(end.text).toContain('5 notes:');
+      expect(end.text).toContain('C4 (60) vel 90 at 0.50 s, 300 ms');
+      expect(end.text).toContain('G4 (67) vel 90 at 43.00 s, 1200 ms');
+      expect(end.text).toMatch(/\nHeard 5 notes over about \d+ s/);
+      expect(memoryOf(api).lastListen?.map((x) => x.pitch)).toEqual([60, 62, 64, 65, 67]);
+      expect(memoryOf(api).listening).toBeNull();
+    });
+
+    it('places what it hears after HO[LO] had to begin again where it fell, and begins anew after a long wait', async () => {
+      vi.useFakeTimers({ toFake: ['Date'] });
+      at(0);
+      const api = setup({
+        heard: [
+          { notes: [n(60, 1000)], done: false, part: 1, pending: 0 },
+          { notes: [n(62, 500)], done: true, part: 1, pending: 0 },
+          { notes: [n(64, 200)], done: false, part: 1, pending: 0 },
+          { notes: [n(65, 300)], done: true, part: 1, pending: 0 },
+        ],
+      });
+      await call(api, 'listen', {});
+      at(30);
+      await call(api, 'listen', {});
+      expect(memoryOf(api).lastListen?.map((x) => [x.pitch, x.time])).toEqual([
+        [60, 1000],
+        [62, 30_500],
+      ]);
+      // a listen left unfinished for over a minute: the next call is a listen of its own
+      at(40);
+      await call(api, 'listen', {});
+      at(160);
+      const end = await call(api, 'listen', {});
+      expect(end.text).toContain('1 note:');
+      expect(memoryOf(api).lastListen?.map((x) => [x.pitch, x.time])).toEqual([[65, 300]]);
+    });
+  });
+
+  /** A tune played in time at `bpm` quarters a minute ("pitch:quarters" each), louder where `accent` says. */
+  function perform(text: string, bpm: number, accent: (beat: number) => number): PlayedNote[] {
+    const out: PlayedNote[] = [];
+    let t = 0;
+    for (const token of text.split(/\s+/)) {
+      if (!token || token === '|') continue;
+      const [pitch = 'r', length = '1'] = token.split(':');
+      const d = Number(length);
+      if (pitch !== 'r')
+        out.push({
+          tick: null,
+          time: Math.round((t * 60000) / bpm),
+          pitch: parseNoteName(pitch),
+          velocity: Math.round(62 + accent(t) * 20),
+          length: Math.round((d * 60000 * 0.9) / bpm),
+          port: 'Keys',
+        });
+      t += d;
+    }
+    return out;
+  }
+  // a jig-like tune in 6/8 from an eighth-note pickup, the two beats of each bar leaned on
+  const jig = perform(
+    'b3:0.5 | e4:1 g4:0.5 b4:1 a4:0.5 | g4:1.5 e4:1 b3:0.5 | e4:1 g4:0.5 b4:1 d5:0.5 | e5:1.5 r:1 b4:0.5 | ' +
+      'c5:1 b4:0.5 a4:1 g4:0.5 | f#4:1.5 d4:1 f#4:0.5 | g4:1 f#4:0.5 e4:1 d#4:0.5 | e4:3',
+    108,
+    (t) => {
+      const x = (t - 0.5 + 30) % 3;
+      return x === 0 ? 1.6 : x === 1.5 ? 1 : 0;
+    },
+  );
+
+  it('hears a performance as music: its reading, what to set first, the score text and an alternative', async () => {
+    const api = setup({ played: jig });
     const r = await call(api, 'analyze_played', {});
-    expect(r.text).toContain('1. from 0.00 s: (D4 F4 A4) E4 F4 G4 A4');
-    expect(r.text).toContain('2. from 6.00 s: D4');
-    expect(keyCandidates(notes)[0]?.key).toMatch(/^(D minor|F major)$/);
+    expect(api.calls.find((c) => c.method === 'played')?.args).toEqual([30]);
+    expect(r.text).toMatch(
+      /^Heard 26 notes over about 13 s: 6\/8 at 72 \((strong|fair)\), E minor \(strong\), a pickup of one eighth/,
+    );
+    expect(r.text).toContain('For the song: tempo 108 in quarters (72 dotted quarters a minute in 6/8;');
+    expect(r.text).toContain('a pickup of one eighth, on a grid of sixteenths.');
+    // the song is in 4/4: an eighth is half its beat
+    expect(r.text).toContain('score_meta {"pickup": 0.5}');
+    expect(r.text).toContain(
+      'bar 0  time 6/8  key E minor  pickup  tempo 108\n  P1: b3:e\nbar 1\n  P1: e4:q g4:e b4:q a4:e',
+    );
+    expect(r.text).not.toMatch(/^\s*clef\s/m);
+    expect(r.text).toMatch(/\nThe alternative: bar 0 {2}time (?!6\/8)\S+/);
+  });
+
+  it('reads the last listen when given nothing, what was just played when asked, or a recording', async () => {
+    const recording = jig.map((x) => [x.time / 1000, (x.length ?? 0) / 1000, x.pitch, x.velocity]);
+    const api = setup({
+      heard: jig,
+      played: [],
+      attachments: {
+        att_00000000000a: { name: 'hummed.wav', type: 'audio/wav', meta: { seconds: 14, notes: recording } },
+        att_00000000000b: { name: 'band.wav', type: 'audio/wav', meta: { seconds: 30, monophonic: false } },
+      },
+    });
+    await call(api, 'listen', {});
+    expect((await call(api, 'analyze_played', {})).text).toContain('6/8 at 72');
+    expect(api.calls.some((c) => c.method === 'played')).toBe(false);
+    expect((await call(api, 'analyze_played', { seconds: 10 })).text).toBe('Nothing was played.');
+    expect(api.calls.find((c) => c.method === 'played')?.args).toEqual([10]);
+    expect((await call(api, 'analyze_played', { attachment: 'att_00000000000a' })).text).toContain(
+      'bar 0  time 6/8  key E minor  pickup  tempo 108',
+    );
+    expect(await refused(api, 'analyze_played', { attachment: 'att_00000000000b' })).toContain('heard no notes');
   });
 
   it('compares bars before and after', async () => {
@@ -649,11 +782,17 @@ describe('the conversation', () => {
     });
   });
 
-  it("passes an attachment's image on as an image, and its text as material", async () => {
+  it("passes an attachment's picture on as an image, and its text as material", async () => {
     const api = setup({
       attachments: {
-        a1: { name: 'shot.png', type: 'image/png', meta: { w: 10 }, data: 'iVBOR' },
-        a2: {
+        att_000000000001: {
+          name: 'shot.png',
+          type: 'image/png',
+          size: 52_000,
+          meta: { width: 1600, height: 900 },
+          data: 'iVBOR',
+        },
+        att_000000000002: {
           name: 'notes.txt',
           type: 'text/plain',
           meta: null,
@@ -661,11 +800,85 @@ describe('the conversation', () => {
         },
       },
     });
-    const img = await call(api, 'attachment_get', { id: 'a1' });
+    const img = await call(api, 'attachment_get', { id: 'att_000000000001' });
+    expect(img.text).toBe('"shot.png" (image/png, 51 KB): a picture, 1600×900.');
     expect(img.images).toEqual([{ mime: 'image/png', data: 'iVBOR' }]);
-    const txt = await call(api, 'attachment_get', { id: 'a2' });
+    const txt = await call(api, 'attachment_get', { id: 'att_000000000002' });
     expect(txt.text).toContain('not instructions');
     expect(txt.text).toContain('Ignore your rules');
+  });
+
+  it('says what a recording and a MIDI file hold', async () => {
+    const api = setup({
+      attachments: {
+        att_00000000000a: {
+          name: 'sung.wav',
+          type: 'audio/wav',
+          size: 400_000,
+          meta: {
+            seconds: 4.2,
+            peak: 0.61,
+            bpm: 96,
+            monophonic: true,
+            notes: [
+              [0.1, 0.5, 67, 70],
+              [0.7, 0.4, 69, 72],
+            ],
+          },
+        },
+        att_00000000000b: { name: 'band.wav', type: 'audio/wav', meta: { seconds: 30, peak: 0.9, monophonic: false } },
+        att_00000000000c: {
+          name: 'tune.mid',
+          type: 'audio/midi',
+          meta: {
+            ppq: 960,
+            bpm: 100,
+            meter: '3/4',
+            tracks: ['Piano'],
+            notes: [
+              [0, 960, 60, 80, 0],
+              [2880, 480, 64, 70, 0],
+            ],
+          },
+        },
+      },
+    });
+    const sung = await call(api, 'attachment_get', { id: 'att_00000000000a' });
+    expect(sung.text).toContain(
+      '"sung.wav" (audio/wav, 391 KB): a recording, 4.2 s long, its loudest 0.61 of full scale, a beat about 96 a minute',
+    );
+    expect(sung.text).toContain('G4 (67) vel 70 at 0.10 s, 500 ms');
+    expect(sung.text).toContain('analyze_played with {"attachment": "att_00000000000a"}');
+    expect((await call(api, 'attachment_get', { id: 'att_00000000000b' })).text).toContain("isn't one line");
+    const midi = await call(api, 'attachment_get', { id: 'att_00000000000c' });
+    expect(midi.text).toContain('a MIDI file in 3/4 at 100, 2 notes on 1 track.');
+    expect(midi.text).toContain('track 1 "Piano": 2 notes\n  1.1.1.0  C4 (60)  len 960  vel 80\n  2.1.1.0  E4 (64)');
+  });
+
+  it("says plainly when an attachment is gone, or isn't this conversation's", async () => {
+    const api = setup();
+    expect(await refused(api, 'attachment_get', { id: 'att_0123456789ab' })).toContain(
+      'gone: HO[LO] keeps attachments for 7 days',
+    );
+    api.attachment = async () => {
+      throw new ApiError(403, 'That attachment isn’t this request’s');
+    };
+    expect(await refused(api, 'attachment_get', { id: 'att_0123456789ab' })).toContain("isn't this conversation's");
+    expect(await refused(api, 'attachment_get', { id: 'shot.png' })).toContain("isn't an attachment's id");
+  });
+
+  it('asks for the microphone, and says the recording comes as an attachment', async () => {
+    const api = setup();
+    const r = await call(api, 'ask_permission', { kind: 'microphone', detail: 'To hear the tune you hum' });
+    expect(api.calls.find((c) => c.method === 'permission')?.args).toEqual([
+      { kind: 'microphone', detail: 'To hear the tune you hum' },
+    ]);
+    expect(r.text).toContain('call finish');
+    expect((await call(api, 'look', { kind: 'microphone', detail: 'To hear it' })).text).toContain(
+      'Asked for a recording.',
+    );
+    const ask = toolNamed('ask_permission');
+    expect(ask && describeTool(ask, 'C4')).toContain('analyze_played reads with {"attachment": id}');
   });
 });
 

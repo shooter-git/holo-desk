@@ -466,7 +466,7 @@ export function agentRoutes(app: FastifyInstance, o: AgentOptions): { jobs: Jobs
   const askPermission = async (req: FastifyRequest, job: AgentJob) => {
     const b = body(req);
     if (!PERMISSION_KINDS.includes(b.kind as PermissionKind))
-      throw bad('kind is install-pack, send-creation, screen or photo');
+      throw bad('kind is install-pack, send-creation, screen, photo or microphone');
     const kind = b.kind as PermissionKind;
     const detail = line(b.detail, 'detail', 300);
     let pack: string | undefined;
@@ -489,7 +489,7 @@ export function agentRoutes(app: FastifyInstance, o: AgentOptions): { jobs: Jobs
       const b = body(r);
       if (typeof b.grant !== 'boolean') throw bad('grant is true or false');
       const result = text(b.result, 'result', 1000, true);
-      // a screenshot or a photo the click took comes as an attachment
+      // a screenshot, a photo or a recording the click took comes as an attachment
       const ids = attachmentIds(b.attachments);
       const next = await theJobs.permit(device, (r.params as Params).job ?? '', b.grant, result, ids);
       return next ? { ok: true, job: next } : { ok: true };
@@ -646,7 +646,13 @@ export function agentRoutes(app: FastifyInstance, o: AgentOptions): { jobs: Jobs
     `${J}/listen`,
     forJob(async (req, _reply, job) => {
       const b = body(req);
-      return theJobs.listen(job, int(b.maxMs, 'maxMs', 100, 45_000), int(b.quietMs, 'quietMs', 500, 10_000));
+      if (b.last !== undefined && typeof b.last !== 'boolean') throw bad('last is true or false');
+      return theJobs.listen(
+        job,
+        int(b.maxMs, 'maxMs', 100, 45_000),
+        int(b.quietMs, 'quietMs', 500, 10_000),
+        b.last === true,
+      );
     }, true),
   );
   app.get(

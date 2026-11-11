@@ -18,7 +18,7 @@ import { format } from 'node:util';
 import type { MiddleC } from '@holo/session';
 import { ApiError, httpJobApi } from './api.ts';
 import { check, toJsonSchema } from './args.ts';
-import { describeTool, type Tool, type ToolContext, ToolError, type ToolResult } from './tools/common.ts';
+import { describeTool, newMemory, type Tool, type ToolContext, ToolError, type ToolResult } from './tools/common.ts';
 import { TOOLS } from './tools/index.ts';
 
 /**
@@ -235,7 +235,9 @@ async function main(): Promise<void> {
     err(`can't read the job token: ${e instanceof Error ? e.message : String(e)}`);
     process.exit(2);
   }
-  await serveStdio({ tools: TOOLS, ctx: { api, middleC }, version: VERSION, log: err, write: (t) => void protocol(t) });
+  // one memory for the run: a listen in parts is heard as one, and the last one is kept
+  const ctx: ToolContext = { api, middleC, memory: newMemory() };
+  await serveStdio({ tools: TOOLS, ctx, version: VERSION, log: err, write: (t) => void protocol(t) });
   protocol('', () => process.exit(0));
 }
 

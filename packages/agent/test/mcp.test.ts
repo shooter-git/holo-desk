@@ -8,6 +8,7 @@ import { applyOps, describeProject, newProject, type Op, type Project } from '@h
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { fakeJobApi } from '../src/api.ts';
 import { createServer as createMcp } from '../src/mcp.ts';
+import { newMemory } from '../src/tools/common.ts';
 import { TOOLS } from '../src/tools/index.ts';
 
 const TOKEN = 'job-token-for-the-test';
@@ -371,7 +372,7 @@ describe('the MCP server in process', () => {
       order.push(`end ${label}`);
       return r;
     };
-    const server = createMcp({ tools: TOOLS, ctx: { api, middleC: 'C4' } });
+    const server = createMcp({ tools: TOOLS, ctx: { api, middleC: 'C4', memory: newMemory() } });
     const ask = (id: number, name: string, args: unknown) =>
       server.handle(JSON.stringify({ jsonrpc: '2.0', id, method: 'tools/call', params: { name, arguments: args } }));
     const first = ask(1, 'notes_write', { track: 'Keys', at: '1', notes: 'C4:1' });
@@ -395,7 +396,10 @@ describe('the MCP server in process', () => {
   });
 
   it('answers a batch of requests together', async () => {
-    const server = createMcp({ tools: TOOLS, ctx: { api: fakeJobApi(newProject('B')), middleC: 'C4' } });
+    const server = createMcp({
+      tools: TOOLS,
+      ctx: { api: fakeJobApi(newProject('B')), middleC: 'C4', memory: newMemory() },
+    });
     const answers = await server.handle(
       JSON.stringify([
         { jsonrpc: '2.0', id: 'a', method: 'ping' },

@@ -27,7 +27,7 @@ export interface StudioState {
 export interface PlayedNote {
   /** Song tick when played (null when the song wasn't playing). */
   tick: number | null;
-  /** ms from the start of what's returned. */
+  /** ms from the start of what's returned: a listen's start (its first part), or the stretch asked for. */
   time: number;
   pitch: number;
   velocity: number;
@@ -98,16 +98,36 @@ export interface InstrumentInfo {
   [key: string]: unknown;
 }
 
+/** An attachment, as `GET …/attachments/:id` gives it. */
 export interface Attachment {
   name: string;
+  /** One of the types HO[LO] takes (apps/server/src/agent/attachments.ts). */
   type: string;
-  /** What the browser measured (tempo, key, notes, frames…). */
+  /** Its size in bytes. */
+  size?: number;
+  /**
+   * What the studio measured of it: a picture's {width, height}; a recording's {seconds, peak, bpm,
+   * monophonic, notes?: [start s, length s, MIDI pitch, velocity][]}; a MIDI file's {ppq, bpm, meter,
+   * tracks, notes: [tick, length, pitch, velocity, track][]} (null: nothing).
+   */
   meta: unknown;
-  /** base64, for images (at most 1568 px) and text. */
+  /** base64: the file itself, for pictures (as the studio drew them: at most 2048 px), text, and MusicXML up to 1 MB. */
   data?: string;
 }
 
-export type PermissionKind = 'install-pack' | 'send-creation' | 'screen' | 'photo';
+export type PermissionKind = 'install-pack' | 'send-creation' | 'screen' | 'photo' | 'microphone';
+
+/** One part of a listen (docs/agent.md: POST …/listen). */
+export interface ListenPart {
+  /** The notes this part hands out, their times in ms from the start of the whole listen: parts concatenate. */
+  notes: PlayedNote[];
+  /** The listen is over (quiet, Done, the last part, the job ending); not: ask for the next part soon. */
+  done: boolean;
+  /** Which part of its listen this was: 1 began a listen (the last one ended, or waited too long for this). */
+  part: number;
+  /** Notes heard but held over to a later part (a key was down as this one ended). */
+  pending: number;
+}
 
 export interface Image {
   mime: string;
@@ -128,8 +148,11 @@ export interface JobApi {
   transport(body: { action: 'play' | 'stop' | 'locate'; bar?: number }): Promise<{ ok: boolean }>;
   /** POST …/audition: MIDI events [delay ms, status, data1, data2] played now, not recorded. */
   audition(body: { track?: string; events: [number, number, number, number][] }): Promise<{ ok: boolean }>;
-  /** POST …/listen: what the user plays, until quiet, Done, or maxMs (at most 180 s). */
-  listen(body: { maxMs: number; quietMs: number }): Promise<{ notes: PlayedNote[] }>;
+  /**
+   * POST …/listen: one part of a listen to what the user plays (at most 45 s: a harness cuts a tool call
+   * at 60 s), until quiet, Done, or maxMs. `last`: the listen ends with this part.
+   */
+  listen(body: { maxMs: number; quietMs: number; last?: boolean }): Promise<ListenPart>;
   /** GET …/played?seconds=: what was just played (at most 60 s back). */
   played(seconds: number): Promise<{ notes: PlayedNote[] }>;
   /** POST …/compare: the song before the job, then as it is now, over bars `from` to `to` (bar numbers, `to` not played). */
@@ -172,9 +195,10 @@ export class ApiError extends Error {
   }
 }
 
-/** How long a call may take before it's given up: the studio has 60 s to apply ops; listening up to 180 s. */
+/** How long a call may take before it's given up: the studio has 60 s to apply ops; a part of a listen up to 45 s. */
 const TIMEOUT_MS = 30_000;
 const OPS_TIMEOUT_MS = 75_000;
+const LISTEN_MAX_MS = 45_000;
 
 /**
  * The job API over HTTP. The token is read once from its file (it's never in argv or the
@@ -229,7 +253,7 @@ export function httpJobApi(base: string, job: string, tokenFile: string): JobApi
     ops: (ops, label, batch) => json('POST', '/ops', { ops, label, batch }, OPS_TIMEOUT_MS),
     transport: (body) => json('POST', '/transport', body),
     audition: (body) => json('POST', '/audition', body),
-    listen: (body) => json('POST', '/listen', body, Math.min(180_000, body.maxMs) + 20_000),
+    listen: (body) => json('POST', '/listen', body, Math.min(LISTEN_MAX_MS, body.maxMs) + 10_000),
     played: (seconds) => json('GET', `/played?seconds=${seconds}`),
     compare: (body) => json('POST', '/compare', body),
     packs: () => json('GET', '/packs'),
@@ -260,7 +284,8 @@ export interface FakeJobApiOptions {
   scans?: Record<string, Scan>;
   strips?: Record<string, Image>;
   played?: PlayedNote[];
-  heard?: PlayedNote[];
+  /** What listening hears: each part, in turn (the last given again once they run out). */
+  heard?: PlayedNote[] | ListenPart[];
   attachments?: Record<string, Attachment>;
 }
 
@@ -321,7 +346,13 @@ export function fakeJobApi(project: Project, options: FakeJobApiOptions = {}): F
     },
     async listen(body) {
       log('listen', body);
-      return { notes: options.heard ?? [] };
+      const heard = options.heard ?? [];
+      // notes alone: a listen of one part
+      if (!heard.length || 'pitch' in (heard[0] as object))
+        return { notes: heard as PlayedNote[], done: true, part: 1, pending: 0 };
+      const parts = heard as ListenPart[];
+      const i = calls.filter((c) => c.method === 'listen').length - 1;
+      return parts[Math.min(i, parts.length - 1)] as ListenPart;
     },
     async played(seconds) {
       log('played', seconds);

@@ -95,13 +95,52 @@ export interface AgentJob {
   ending: boolean;
   /** The attachments its request carried (its tools may read these, and earlier ones on its thread). */
   attachments: string[];
-  /** A listen under way (its tool waits on it), and whether the studio shows it's listening. */
+  /** A part of a listen under way (its tool waits on it), and whether the studio shows it's listening. */
   listen: { finish: (done: boolean) => void } | null;
   listenOn: boolean;
+  /** A listen, from its first part to its last: what it has heard, through the pauses between parts. */
+  hearing: Hearing | null;
   /** Between two parts of one listen: the studio stops showing it unless the next part comes soon. */
   listenOff: NodeJS.Timeout | null;
   /** Done was pressed between two parts of a listen: the next part ends at once. */
   doneListening: boolean;
+}
+
+/**
+ * A listen, heard as one: its notes are collected from its first part to its last, the pauses between
+ * parts included, and their times count from its start. A collector is swapped for a fresh one only
+ * at the end of a part when no key is held, so no note is ever split between two: a part that ends
+ * while a key is down hands its notes on to a later part, with their lengths whole.
+ */
+interface Hearing {
+  /** When it began (Date.now()). */
+  start: number;
+  /** How many parts have begun, and how many notes have been handed out. */
+  parts: number;
+  given: number;
+  /** The collector running now (null once Done between two parts stopped it), and when it began, from `start`. */
+  stop: (() => PlayedNote[]) | null;
+  from: number;
+  /** As the collector last said: the notes it has, and the keys held; and when it last heard anything. */
+  count: number;
+  held: number;
+  heardAt: number;
+  /** What was heard before Done was pressed between two parts: the next part hands it out. */
+  kept: PlayedNote[];
+  /** The part under way, told when a note starts or ends. */
+  onHeard: (() => void) | null;
+}
+
+/** What one part of a listen gives back. */
+export interface ListenPart {
+  /** The notes this part hands out, their times in ms from the start of the whole listen: parts concatenate. */
+  notes: PlayedNote[];
+  /** The listen is over (quiet, Done, its last part, or the job ending); not: ask for the next part. */
+  done: boolean;
+  /** Which part this was (1: it began a listen). */
+  part: number;
+  /** Notes heard but held over to a later part (a key was down when this one ended). */
+  pending: number;
 }
 
 /** A refusal: the HTTP status, the words the studio (or the agent) shows, and a reason it can act on. */
@@ -130,7 +169,10 @@ export interface Limits {
   /** How long the studio has to save, and to apply a batch of changes. */
   flushMs: number;
   opsMs: number;
-  /** How long the studio keeps showing it's listening between two parts of a listen. */
+  /**
+   * How long a listen waits for its next part (the studio keeps showing it's listening, and what's
+   * played meanwhile goes to that part); past it, the listen is over and what came after it is let go.
+   */
   listenGraceMs: number;
   /** How long the studio has to say what was just played, and to start A/B. */
   playedMs: number;
@@ -143,7 +185,8 @@ export const LIMITS: Limits = {
   droppedMs: 15_000,
   flushMs: 10_000,
   opsMs: 60_000,
-  listenGraceMs: 5_000,
+  // (the model reads a part's answer and calls again: with reasoning on, that can take a while)
+  listenGraceMs: 15_000,
   playedMs: 3_000,
   compareMs: 50_000,
 };
@@ -389,6 +432,7 @@ export class Jobs implements AgentHooks {
         attachments: [...attachments],
         listen: null,
         listenOn: false,
+        hearing: null,
         listenOff: null,
         doneListening: false,
       };
@@ -498,7 +542,7 @@ export class Jobs implements AgentHooks {
       this.tell(job);
       return null;
     }
-    // what the click brought (a screenshot, a photo) goes to the follow-up
+    // what the click brought (a screenshot, a photo, a recording) goes to the follow-up
     const attachments = this.attachments(device, job.view.project, attachmentIds);
     const thread = this.o.threads.get(job.thread);
     if (!thread) throw new Refusal(409, 'That conversation was started over');
@@ -931,59 +975,132 @@ export class Jobs implements AgentHooks {
   }
 
   /**
-   * Listen to what the requester's studio plays (only it: not other studios, not the network) for one
-   * part of a listen: until `quietMs` of silence follows a note (done), until the user presses Done
-   * (done), or for `maxMs` (not done: the tool asks again, and the studio keeps showing it listens).
+   * One part of a listen to what the requester's studio plays (only it: not other studios, not the
+   * network). A listen is heard as one from its first part to its last: what's played between two
+   * parts goes to the next, and every note's time counts from the listen's start. A part ends when
+   * `quietMs` of silence follows a note (done), when the user presses Done (done), at the end of the
+   * part the tool says is its `last` (done), or after `maxMs` (not done: the tool asks for the next
+   * part, and the studio keeps showing it listens for a grace; with no next part by then, the listen
+   * is over and what came after the last part is let go).
    */
-  listen(job: AgentJob, maxMs: number, quietMs: number): Promise<{ notes: PlayedNote[]; done: boolean }> {
+  listen(job: AgentJob, maxMs: number, quietMs: number, last = false): Promise<ListenPart> {
     if (!this.studio(job)) throw new Refusal(403, 'The song isn’t open in the studio that asked');
     if (job.listen) throw new Refusal(409, 'Already listening');
-    if (job.doneListening) {
-      job.doneListening = false;
-      this.listenState(job, 'off');
-      return Promise.resolve({ notes: [], done: true });
+    if (!job.hearing) {
+      const now = Date.now();
+      job.hearing = {
+        start: now,
+        parts: 0,
+        given: 0,
+        stop: null,
+        from: 0,
+        count: 0,
+        held: 0,
+        heardAt: now,
+        kept: [],
+        onHeard: null,
+      };
+      this.collect(job, job.hearing);
     }
-    const { device, project } = job.view;
+    const h = job.hearing;
+    const part = ++h.parts;
+    // Done was pressed between two parts: this one ends at once, with what was played before it
+    if (job.doneListening) return Promise.resolve(this.endHearing(job, part));
     return new Promise((resolve) => {
       let quiet: NodeJS.Timeout | null = null;
+      // quiet once nothing's held, after at least one note of the listen (a quiet spell carries on from the part before)
+      const listenFor = () => {
+        if (quiet) clearTimeout(quiet);
+        quiet =
+          h.held === 0 && h.given + h.count > 0
+            ? setTimeout(() => session.finish(true), Math.max(0, quietMs - (Date.now() - h.heardAt)))
+            : null;
+      };
       const session = {
         finish: (done: boolean) => {
           if (job.listen !== session) return;
           job.listen = null;
           clearTimeout(max);
           if (quiet) clearTimeout(quiet);
-          const notes = stop();
-          this.listenState(job, done ? 'off' : 'pause');
-          resolve({ notes, done });
+          h.onHeard = null;
+          resolve(done || last ? this.endHearing(job, part) : this.pauseHearing(job, part));
         },
       };
-      const stop = this.o.live.collect(
-        (c) => c.device === device && c.state?.project === project,
-        (held, notes) => {
-          if (quiet) clearTimeout(quiet);
-          // quiet once nothing's held, after at least one note
-          quiet = held === 0 && notes > 0 ? setTimeout(() => session.finish(true), quietMs) : null;
-        },
-      );
       const max = setTimeout(() => session.finish(false), maxMs);
       job.listen = session;
+      h.onHeard = listenFor;
+      listenFor();
       this.listenState(job, 'on');
     });
   }
 
-  /** The user pressed Done: the listen ends now (or the next part does, between two). */
+  /** Collect what the requester's studio plays, for a listen, from now on. */
+  private collect(job: AgentJob, h: Hearing): void {
+    const { device, project } = job.view;
+    h.from = Date.now() - h.start;
+    h.count = 0;
+    h.held = 0;
+    h.stop = this.o.live.collect(
+      (c) => c.device === device && c.state?.project === project,
+      (held, notes) => {
+        h.held = held;
+        h.count = notes;
+        h.heardAt = Date.now();
+        h.onHeard?.();
+      },
+    );
+  }
+
+  /** What a listen's collector has, its times from the listen's start; the collector stops. */
+  private take(h: Hearing): PlayedNote[] {
+    const raw = h.stop?.() ?? [];
+    h.stop = null;
+    h.count = 0;
+    h.held = 0;
+    h.given += raw.length;
+    return raw.map((n) => ({ ...n, time: n.time + h.from }));
+  }
+
+  /** A part ended and the listen goes on: what's whole is handed out, and the studio waits for the next part. */
+  private pauseHearing(job: AgentJob, part: number): ListenPart {
+    const h = job.hearing as Hearing;
+    let notes: PlayedNote[] = [];
+    // with a key down, the collector carries on, so that note's length is whole: a later part has them
+    if (h.stop && h.held === 0) {
+      notes = this.take(h);
+      this.collect(job, h);
+    }
+    this.listenState(job, 'pause');
+    return { notes, done: false, part, pending: h.count };
+  }
+
+  /** The listen is over: every note not handed out yet. */
+  private endHearing(job: AgentJob, part: number): ListenPart {
+    const h = job.hearing as Hearing;
+    job.hearing = null;
+    const notes = [...h.kept, ...this.take(h)];
+    this.listenState(job, 'off');
+    return { notes, done: true, part, pending: 0 };
+  }
+
+  /** The user pressed Done: the listen ends now (or, between two parts, the next part ends at once). */
   doneListening(device: string, id: string): void {
     const job = this.jobs.get(id);
     if (!job) throw new Refusal(404, 'No such job');
     if (job.view.device !== device) throw new Refusal(403, 'Only the device that asked can say');
     if (!isLive(job)) throw new Refusal(409, 'That job has ended');
     if (job.listen) job.listen.finish(true);
-    else if (job.listenOn) job.doneListening = true;
+    else if (job.listenOn) {
+      job.doneListening = true;
+      // what was played up to Done goes to that part; nothing after it
+      const h = job.hearing;
+      if (h?.stop) h.kept.push(...this.take(h));
+    }
   }
 
   /**
    * What the studio shows: listening (`on`), not (`off`), or between two parts of a listen (`pause`:
-   * it stays on unless the next part doesn't come soon).
+   * it stays on unless the next part doesn't come within the grace). Off, the listen is over.
    */
   private listenState(job: AgentJob, state: 'on' | 'off' | 'pause'): void {
     if (job.listenOff) clearTimeout(job.listenOff);
@@ -993,6 +1110,11 @@ export class Jobs implements AgentHooks {
       job.listenOff = setTimeout(() => this.listenState(job, 'off'), this.limits.listenGraceMs);
       job.listenOff.unref?.();
       return;
+    }
+    if (state === 'off' && job.hearing) {
+      // no next part came: what was heard since the last one is let go
+      job.hearing.stop?.();
+      job.hearing = null;
     }
     if (job.listenOn === (state === 'on')) return;
     job.listenOn = state === 'on';
@@ -1160,4 +1282,10 @@ export function parseHarnessEvent(msg: Record<string, unknown>): Record<string, 
   return out;
 }
 
-export const PERMISSION_KINDS: readonly PermissionKind[] = ['install-pack', 'send-creation', 'screen', 'photo'];
+export const PERMISSION_KINDS: readonly PermissionKind[] = [
+  'install-pack',
+  'send-creation',
+  'screen',
+  'photo',
+  'microphone',
+];

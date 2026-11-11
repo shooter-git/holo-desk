@@ -8,5 +8,5 @@ export { createServer, PROTOCOL_VERSIONS, type Server, type ServerOptions, serve
 export * from './tools/common.ts';
 export { TOOLS, toolNamed } from './tools/index.ts';
 export { notationLength, placeNotes } from './tools/notes.ts';
-export { analyzePlayed, keyCandidates, playedText } from './tools/play.ts';
+export { analysisText, analyzePlayed, playedText, recordedNotes } from './tools/play.ts';
 export { instrumentRef } from './tools/tracks.ts';

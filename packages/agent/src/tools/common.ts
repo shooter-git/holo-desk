@@ -17,15 +17,41 @@ import {
   type Track,
   tickToBarBeat,
 } from '@holo/session';
-import type { Image, JobApi } from '../api.ts';
+import { ApiError, type Attachment, type Image, type JobApi, type PlayedNote } from '../api.ts';
 import type { ArgDef, Args } from '../args.ts';
 
 export type ToolKind = 'see' | 'change' | 'play' | 'ask';
+
+/** A listen under way, a part (one tool call) at a time. */
+export interface Listening {
+  /** When it began, on this process's clock; how long it may last in all, and the quiet that ends it (ms). */
+  started: number;
+  maxMs: number;
+  quietMs: number;
+  /** Its notes so far, their times in ms from its start. */
+  notes: PlayedNote[];
+  /** How many parts came back, and when the last did. */
+  parts: number;
+  lastPart: number;
+  /** Added to the times HO[LO] gives: past zero once it had to begin listening again (it waited too long). */
+  offset: number;
+}
+
+/** What the tools keep from one call to the next: the MCP server lives as long as the harness's run. */
+export interface ToolMemory {
+  listening: Listening | null;
+  /** The notes of the last listen that ended. */
+  lastListen: PlayedNote[] | null;
+}
+
+export const newMemory = (): ToolMemory => ({ listening: null, lastListen: null });
 
 export interface ToolContext {
   api: JobApi;
   /** How the studio names middle C (MIDI 60): the agent reads and writes note names the same way. */
   middleC: MiddleC;
+  /** Made once per run (mcp.ts), so a listen in parts is heard as one. */
+  memory: ToolMemory;
 }
 
 export interface ToolResult {
@@ -69,6 +95,30 @@ export function need(a: Args, k: string): string {
 }
 
 export const plural = (n: number, word: string, many = `${word}s`) => `${n} ${n === 1 ? word : many}`;
+
+// ---- what the user attached ----
+
+/** An attachment's id, as HO[LO] makes them. */
+const ATTACHMENT_ID = /^att_[0-9a-f]{12}$/;
+
+/** An attachment of this conversation's, or a plain reason it can't be read. */
+export async function getAttachment(ctx: ToolContext, id: string): Promise<Attachment> {
+  if (!ATTACHMENT_ID.test(id))
+    throw new ToolError(`"${id}" isn't an attachment's id: they look like att_0123456789ab, as the request lists them`);
+  try {
+    return await ctx.api.attachment(id);
+  } catch (err) {
+    if (err instanceof ApiError && err.status === 404)
+      throw new ToolError(
+        `Attachment ${id} is gone: HO[LO] keeps attachments for 7 days (or there was never one with that id). Ask the user to attach it again if you need it.`,
+      );
+    if (err instanceof ApiError && err.status === 403 && /attachment/i.test(err.message))
+      throw new ToolError(
+        `Attachment ${id} isn't this conversation's: you can read only what was attached to this song's requests in it.`,
+      );
+    throw err;
+  }
+}
 
 // ---- the song's references ----
 

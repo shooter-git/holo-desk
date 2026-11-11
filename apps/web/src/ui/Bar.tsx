@@ -4,6 +4,10 @@
  * top (the same glass, rows, blue highlight and key hints), so nothing looks bolted on. While it's open
  * the field has the keys: Up and Down choose, Enter runs, Escape closes, and the studio's shortcuts
  * wait. The song plays on.
+ *
+ * With the agent on for this device, the field takes requests too: what's typed can be sent ("Ask the
+ * agent"), and under the field is the song's last exchange, the request then the reply, with at most
+ * the one button it needs (Stop, a permission, Copy brief, Done). Nothing else in the studio shows it.
  */
 import { Search } from 'lucide-react';
 import { type KeyboardEvent, useEffect, useId, useRef, useState } from 'react';
@@ -20,6 +24,7 @@ import {
   saveNow,
   selectAll,
   selectTrack,
+  sendToCreation,
   splitAtPlayhead,
   stop,
   toggleCycle,
@@ -31,10 +36,27 @@ import {
   undo,
   updateChannel,
 } from '../app/actions.ts';
-import { type Actions, barRows, type Command, selectionHint } from '../app/commands.ts';
+import {
+  agent,
+  ask,
+  doneListening,
+  type Exchange,
+  exchange,
+  isLive,
+  isOn,
+  loadThread,
+  newConversation,
+  type Permission,
+  permit,
+  requestContext,
+  stopJob,
+  useAgent,
+} from '../app/agent.ts';
+import { type Actions, barRows, type Command, type Extra, selectionHint } from '../app/commands.ts';
 import { toggleTyping } from '../app/keys.ts';
 import { isPhone, useLayout } from '../app/layout.ts';
 import { closeBar, openBar, store, useApp } from '../app/store.ts';
+import { installs, useInstalls } from '../audio/installs.ts';
 import { closeMenu } from './menu.tsx';
 
 /** What the bar's commands do: the same actions the keys and buttons use. */
@@ -108,13 +130,138 @@ function useSwipeDown(): void {
   }, []);
 }
 
-function run(c: Command): void {
-  closeBar();
-  c.run();
+/** What a permission's one button says. */
+const ALLOW: Record<Permission['kind'], string> = {
+  'install-pack': 'Install it',
+  'send-creation': 'Send it',
+  screen: 'Share the screen',
+  photo: 'Take a photo',
+};
+
+/**
+ * The one button a job's permission needs: a click runs the studio's own code (the Library's install
+ * queue, sending the song to its creation), then the host hears what happened and the agent carries on.
+ */
+function PermissionButton({ job, permission }: { job: string; permission: Permission }) {
+  const [busy, setBusy] = useState(false);
+  const install = useInstalls();
+  const [failed, setFailed] = useState('');
+  const run = async () => {
+    setBusy(true);
+    setFailed('');
+    try {
+      if (permission.kind === 'install-pack' && permission.pack) {
+        if (!install.packs) await installs.load();
+        const name = installs.pack(permission.pack)?.name ?? permission.pack;
+        // (named, so the Library shows it in its queue, and no toast says it's in: the reply will)
+        const ok = await installs.install([permission.pack], name);
+        await permit(job, true, ok ? `Installed ${name}` : `${name} couldn’t be installed`);
+      } else if (permission.kind === 'send-creation') {
+        const sent = await sendToCreation(true);
+        await permit(
+          job,
+          true,
+          sent ? sent.text : 'This song didn’t come from a creation, so there’s none to send it to',
+        );
+      } else {
+        // TODO(C13): capture the screen (getDisplayMedia) or take a photo, preview it, upload it as an
+        // attachment of the job's, and grant with its id. Until then the agent hears it can't have one.
+        await permit(job, false, 'not available yet');
+      }
+    } catch (err) {
+      setFailed(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+  const installing = busy && permission.kind === 'install-pack' ? install.job?.line : null;
+  return (
+    <>
+      {installing && <span className="muted grow bar-line">{installing}</span>}
+      {failed && <span className="agent-error grow bar-line">{failed}</span>}
+      <button type="button" className="btn" disabled={busy} onClick={() => void run()}>
+        {busy ? (permission.kind === 'install-pack' ? 'Installing…' : 'Sending…') : ALLOW[permission.kind]}
+      </button>
+    </>
+  );
+}
+
+/** A brief for the user's own harness, in full: the lines that run something or link somewhere are marked. */
+function Brief({ text, flagged }: { text: string; flagged: Exchange['flagged'] }) {
+  return (
+    <div className="brief" role="document" aria-label="Brief">
+      {text.split('\n').map((line, i) => {
+        const flag = flagged.get(i);
+        return (
+          <div key={i} className={flag ? 'flag' : undefined}>
+            {line || '\u00a0'}
+            {flag && <span className="why">{flag === 'url' ? 'a link: check where it goes' : 'runs a command'}</span>}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function CopyBrief({ text }: { text: string }) {
+  const [said, setSaid] = useState('');
+  return (
+    <button
+      type="button"
+      className="btn"
+      onClick={() =>
+        void navigator.clipboard
+          ?.writeText(text)
+          .then(() => setSaid('Copied'))
+          // (a page served over plain http on the network may not write to the clipboard)
+          .catch(() => setSaid('Select it above to copy'))
+      }
+    >
+      {said || 'Copy brief'}
+    </button>
+  );
+}
+
+/** The song's last exchange under the field: the request, then the work going on or the reply, then its button. */
+function Talk({ ex }: { ex: Exchange }) {
+  const buttons = [
+    ex.listening && ex.job && ex.mine && (
+      <button key="done" type="button" className="btn primary" onClick={() => void doneListening(ex.job as string)}>
+        Done
+      </button>
+    ),
+    ex.permission && ex.job && ex.mine && <PermissionButton key="allow" job={ex.job} permission={ex.permission} />,
+    ex.brief && <CopyBrief key="brief" text={ex.brief} />,
+  ].filter(Boolean);
+  return (
+    <div className="talk" aria-live="polite">
+      <div className="you">{ex.request}</div>
+      {ex.working ? (
+        <div className="status">
+          <span className="ring" aria-hidden="true" />
+          <span className="grow bar-line">{ex.line ?? 'Working on it'}</span>
+          {ex.job && (
+            <button
+              type="button"
+              className="btn ghost small"
+              onClick={() => void stopJob(ex.job as string).catch(() => undefined)}
+            >
+              Stop
+            </button>
+          )}
+        </div>
+      ) : (
+        ex.reply && <div className="reply">{ex.reply}</div>
+      )}
+      {ex.brief && <Brief text={ex.brief} flagged={ex.flagged} />}
+      {buttons.length > 0 && <div className="btns">{buttons}</div>}
+    </div>
+  );
 }
 
 function BarPanel() {
   const app = useApp((s) => s);
+  const a = useAgent((x) => x);
   const layout = useLayout();
   const phone = isPhone(layout);
   const [query, setQuery] = useState('');
@@ -122,16 +269,59 @@ function BarPanel() {
   const field = useRef<HTMLInputElement>(null);
   const list = useRef<HTMLDivElement>(null);
   const id = useId();
-  const state = { ...app, playhead: playheadTick(), phone };
-  const rows = barRows(query, state, ACTIONS);
+  const playhead = playheadTick();
+  const state = { ...app, playhead, phone };
+  const project = app.project?.id ?? null;
+  const on = isOn(a);
+  const ex = exchange(a, project);
+  const typed = query.trim() !== '';
+  // with nothing typed, the song's last exchange stands in for the list
+  const talking = on && ex !== null && !typed;
+  const extra: Extra =
+    on && project
+      ? {
+          ask: (text) => ({
+            id: 'ask',
+            title: 'Ask the agent',
+            group: 'Agent',
+            keys: '↵',
+            keepOpen: true,
+            run: () => void ask(text, project, requestContext(app, playhead, phone)),
+          }),
+          commands: [
+            {
+              id: 'agent-new',
+              title: 'Start a new conversation with the agent',
+              group: 'Agent',
+              also: 'start over reset clear forget',
+              available: () => !Object.values(a.jobs).some((j) => j.project === project && isLive(j.state)),
+              run: () => void newConversation(project).catch(() => undefined),
+            },
+          ],
+        }
+      : {};
+  const rows = talking ? [] : barRows(query, state, ACTIONS, extra);
   const at = Math.max(0, Math.min(active, rows.length - 1));
-  const hint = selectionHint(state);
+  const hint = talking ? '' : selectionHint(state);
+
+  const run = (c: Command) => {
+    if (!c.keepOpen) closeBar();
+    c.run();
+    if (c.keepOpen) {
+      setQuery('');
+      setActive(0);
+    }
+  };
 
   useEffect(() => {
     // a menu left open would keep the arrow keys; the keyboard comes back to where it was when the bar closes
     closeMenu();
     const was = document.activeElement;
     field.current?.focus({ preventScroll: true });
+    // the reply that came while it was closed has been seen; the song's conversation is read afresh
+    agent.dispatch({ type: 'seen' });
+    const song = store.get().project?.id;
+    if (song) void loadThread(song);
     return () => {
       if (was instanceof HTMLElement && was.isConnected) was.focus({ preventScroll: true });
     };
@@ -151,11 +341,21 @@ function BarPanel() {
       const row = rows[at];
       if (row) run(row);
     } else if (e.key === 'Escape') closeBar();
-    // the keyboard stays in the field (there's nothing else in the bar to reach)
-    else if (e.key !== 'Tab') return;
+    // the keyboard stays in the field, unless the exchange under it has a button to reach
+    else if (e.key !== 'Tab' || talking) return;
     e.preventDefault();
     e.stopPropagation();
   };
+
+  const placeholder = !on
+    ? layout === 'phone-portrait'
+      ? 'Search commands, tracks…'
+      : 'Search commands, tracks, markers, sounds'
+    : ex
+      ? 'Reply…'
+      : layout === 'phone-portrait'
+        ? 'Ask, or type a command'
+        : 'Ask anything, or type a command';
 
   return (
     // a press outside closes the bar and goes no further, as a menu's does
@@ -167,15 +367,13 @@ function BarPanel() {
             ref={field}
             type="text"
             role="combobox"
-            aria-label="Search commands"
+            aria-label={on ? 'Ask, or search commands' : 'Search commands'}
             aria-expanded={rows.length > 0}
             aria-controls={`${id}-list`}
             aria-activedescendant={rows.length ? `${id}-${at}` : undefined}
             aria-autocomplete="list"
             // a phone held upright has room for the start of it beside the selection's words
-            placeholder={
-              layout === 'phone-portrait' ? 'Search commands, tracks…' : 'Search commands, tracks, markers, sounds'
-            }
+            placeholder={placeholder}
             autoComplete="off"
             autoCorrect="off"
             autoCapitalize="off"
@@ -189,6 +387,7 @@ function BarPanel() {
           />
           {hint && <span className="ctx">{hint}</span>}
         </div>
+        {talking && ex && <Talk ex={ex} />}
         <div ref={list} className="list" role="listbox" id={`${id}-list`} aria-label="Commands">
           {rows.map((c, i) => (
             <div

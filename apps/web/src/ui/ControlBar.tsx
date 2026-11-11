@@ -37,6 +37,7 @@ import {
   togglePlay,
   toggleRecord,
 } from '../app/actions.ts';
+import { barSign, useAgent } from '../app/agent.ts';
 import { TYPING_PORT } from '../app/keys.ts';
 import { isPhone, useLayout } from '../app/layout.ts';
 import { openBar, store, useApp, useShow } from '../app/store.ts';
@@ -499,6 +500,9 @@ export function ControlBar() {
   const agent = useApp((s) => s.peers.some((p) => p.role === 'agent'));
   const remotes = useApp((s) => s.peers.filter((p) => p.role === 'remote').length);
   const show = useApp((s) => s.show);
+  const project = useApp((s) => s.project?.id ?? null);
+  // the agent's only sign outside the bar: a ring on its button while it works, a dot once it's replied
+  const sign = useAgent((a) => barSign(a, project));
   const narrow = useMedia(NARROW_BAR);
   const [full, setFull] = useState(() => document.fullscreenElement !== null);
   useEffect(() => {
@@ -694,13 +698,20 @@ export function ControlBar() {
         {/* the bar: every command, track and marker, found by name; always here, as it reaches what's hidden */}
         <button
           type="button"
-          className="btn icon ghost cb-bar"
+          className={`btn icon ghost cb-bar${sign ? ` ${sign}` : ''}`}
           title="Commands (Ctrl /)"
-          aria-label="Commands (Ctrl /)"
+          aria-label={
+            sign === 'busy'
+              ? 'Commands (Ctrl /): working on your request'
+              : sign === 'done'
+                ? 'Commands (Ctrl /): a reply is waiting'
+                : 'Commands (Ctrl /)'
+          }
           aria-haspopup="dialog"
           onClick={openBar}
         >
-          <Search />
+          {sign === 'busy' ? <span className="ring" aria-hidden="true" /> : <Search />}
+          {sign === 'done' && <span className="cb-dot" aria-hidden="true" />}
         </button>
         <ViewMenu />
         <button

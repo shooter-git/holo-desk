@@ -80,8 +80,21 @@ export interface Command {
   available?: (s: BarState) => boolean;
   /** Whether it's about what's selected: those come first, before anything is typed. */
   fits?: (s: BarState) => boolean;
+  /** The bar stays open after it runs: what it starts shows there. */
+  keepOpen?: boolean;
   run: () => void;
 }
+
+/** What the bar offers besides the studio's commands (the agent's, while it's on for this device). */
+export interface Extra {
+  /** Commands found by name like the others (never offered before anything is typed). */
+  commands?: Command[];
+  /** A row that sends what was typed as a request: last, or first when no command fits the words well. */
+  ask?: (text: string) => Command;
+}
+
+/** How well a command must match what's typed to come before the request row: its title's words, typed. */
+const WELL = 0.9;
 
 /** The most rows the bar lists: a short list to read at a glance, not a menu to scroll. */
 export const MAX_ROWS = 8;
@@ -467,15 +480,33 @@ export function typedPosition(meter: Project['meter'], text: string): { tick: nu
   return { tick: parsePosition(meter, parts.join('.')), title };
 }
 
-/** Where each selected note is, by the song's ticks, and on which track. */
-function notesAt(p: Project, notes: readonly Note[]): { track: string; start: number; end: number }[] {
-  const wanted = new Set(notes);
-  const found: { track: string; start: number; end: number }[] = [];
-  for (const t of p.tracks)
-    for (const r of t.regions)
-      for (const n of r.notes)
-        if (wanted.has(n)) found.push({ track: t.name, start: r.start + n.t, end: r.start + n.t + n.d });
-  return found;
+/**
+ * What's selected, by the song's ticks: the selected notes, or else the selected regions, and the
+ * tracks they're on. Null when neither is.
+ */
+export function selectionSpan(
+  p: Project,
+  notes: readonly Note[],
+  regions: readonly string[],
+): { tracks: string[]; start: number; end: number } | null {
+  const tracks = new Set<string>();
+  let start = Number.POSITIVE_INFINITY;
+  let end = 0;
+  const take = (track: string, from: number, to: number) => {
+    tracks.add(track);
+    start = Math.min(start, from);
+    end = Math.max(end, to);
+  };
+  if (notes.length) {
+    const wanted = new Set(notes);
+    for (const t of p.tracks)
+      for (const r of t.regions)
+        for (const n of r.notes) if (wanted.has(n)) take(t.name, r.start + n.t, r.start + n.t + n.d);
+  } else if (regions.length) {
+    for (const t of p.tracks)
+      for (const r of t.regions) if (regions.includes(r.id)) take(t.name, r.start, r.start + r.length);
+  }
+  return tracks.size ? { tracks: [...tracks], start, end } : null;
 }
 
 /**
@@ -486,27 +517,12 @@ function notesAt(p: Project, notes: readonly Note[]): { track: string; start: nu
 export function selectionHint(s: BarState): string {
   const p = s.project;
   if (!p) return '';
-  let spans: { track: string; start: number; end: number }[] = [];
-  if (s.selectedNotes.length) spans = notesAt(p, s.selectedNotes);
-  else if (s.selectedRegions.length)
-    spans = p.tracks.flatMap((t) =>
-      t.regions
-        .filter((r) => s.selectedRegions.includes(r.id))
-        .map((r) => ({ track: t.name, start: r.start, end: r.start + r.length })),
-    );
-  if (!spans.length) return selected(s)?.name ?? '';
-  const tracks = [...new Set(spans.map((x) => x.track))];
-  const name = tracks.length === 1 ? tracks[0] : `${tracks.length} tracks`;
-  // (a loop, not Math.min(...): a selection can be thousands of notes)
-  let start = Number.POSITIVE_INFINITY;
-  let end = 0;
-  for (const x of spans) {
-    start = Math.min(start, x.start);
-    end = Math.max(end, x.end);
-  }
-  const from = tickToBarBeat(p.meter, start).bar;
+  const span = selectionSpan(p, s.selectedNotes, s.selectedRegions);
+  if (!span) return selected(s)?.name ?? '';
+  const name = span.tracks.length === 1 ? span.tracks[0] : `${span.tracks.length} tracks`;
+  const from = tickToBarBeat(p.meter, span.start).bar;
   // the last bar the selection reaches into: a note ending on a bar line doesn't reach the next bar
-  const to = tickToBarBeat(p.meter, Math.max(start, end - 1)).bar;
+  const to = tickToBarBeat(p.meter, Math.max(span.start, span.end - 1)).bar;
   return `${name} · ${from === to ? `bar ${from}` : `bars ${from}–${to}`}`;
 }
 
@@ -519,10 +535,11 @@ const fields = (c: Command): Field[] => [
 /**
  * What the bar lists for what's typed, best first, at most `max` rows.
  *  - Nothing typed: the commands that fit the selection, the next marker, then a few common ones.
- *  - A position ("17", "17.3"): going there.
- *  - Words: the commands they name; and last, finding them among the Library's sounds.
+ *  - A position ("17", "17.3"): going there (and asking, with `extra.ask`).
+ *  - Words: the commands they name; then finding them among the Library's sounds; and with
+ *    `extra.ask`, sending them as a request, last, or first when no command fits them well.
  */
-export function barRows(query: string, s: BarState, act: Actions, max = MAX_ROWS): Command[] {
+export function barRows(query: string, s: BarState, act: Actions, extra: Extra = {}, max = MAX_ROWS): Command[] {
   const table = commandTable(s, act).filter((c) => c.available?.(s) ?? true);
   const q = words(query);
   if (!q.length) {
@@ -537,22 +554,31 @@ export function barRows(query: string, s: BarState, act: Actions, max = MAX_ROWS
     ];
     return rows.filter((c, i) => rows.indexOf(c) === i).slice(0, max);
   }
+  const text = query.trim();
+  const ask = extra.ask?.(text);
   if (s.project) {
     const at = typedPosition(s.project.meter, query);
-    if (at) return [{ id: 'go-to-position', title: at.title, group: 'Transport', run: () => act.locate(at.tick) }];
+    if (at) {
+      const go: Command = { id: 'go-to-position', title: at.title, group: 'Transport', run: () => act.locate(at.tick) };
+      return ask ? [go, ask] : [go];
+    }
   }
-  const text = query.trim();
-  const found = rank(q, table, fields)
-    .slice(0, max - 1)
-    .map((r) => r.item);
-  return [
-    ...found,
-    {
-      id: 'find-sound',
-      title: `Find “${text}” in the Library`,
-      group: 'Sounds',
-      run: () =>
-        act.set(s.phone ? { mobileTab: 'library', librarySearch: text } : { library: true, librarySearch: text }),
-    },
-  ];
+  const ranked = rank(q, [...table, ...(extra.commands ?? []).filter((c) => c.available?.(s) ?? true)], fields);
+  // a request in a sentence isn't a sound's name: the Library is offered for a word or two
+  const library: Command[] =
+    ask && q.length > 2
+      ? []
+      : [
+          {
+            id: 'find-sound',
+            title: `Find “${text}” in the Library`,
+            group: 'Sounds',
+            run: () =>
+              act.set(s.phone ? { mobileTab: 'library', librarySearch: text } : { library: true, librarySearch: text }),
+          },
+        ];
+  const room = max - library.length - (ask ? 1 : 0);
+  const found = ranked.slice(0, room).map((r) => r.item);
+  if (!ask) return [...found, ...library];
+  return (ranked[0]?.score ?? 0) >= WELL ? [...found, ...library, ask] : [ask, ...found, ...library];
 }

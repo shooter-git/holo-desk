@@ -21,10 +21,12 @@ import {
   openProject,
   play,
   redo,
+  relabelJob,
   saveNow,
   saveSoon,
   selectTrack,
   setCycle,
+  setJobRunning,
   stop,
   toggleCycle,
   toggleMetronome,
@@ -33,6 +35,7 @@ import {
   updateChannel,
   updateTrack,
 } from './actions.ts';
+import { agentMessage, helloFields, onTokenChange, refreshAgent, viewName } from './agent.ts';
 import { type AiJobStatus, store, toast } from './store.ts';
 
 /** Scans this studio has heard of (so a phone's new one is offered once). */
@@ -136,6 +139,9 @@ function report(): void {
     master: p ? { volume: p.master.volume } : null,
     tempo: p?.tempo ?? [],
     meter: p?.meter ?? [],
+    // what the agent's request is about: the view, and the scan open in it
+    view: viewName(s, document.documentElement.dataset.layout?.startsWith('phone') ?? false),
+    scan: s.scanView?.id ?? null,
   };
   // (the one text is both the comparison and what's sent)
   const json = JSON.stringify({ type: 'state', state });
@@ -157,7 +163,8 @@ async function onMessage(msg: Record<string, unknown>): Promise<void> {
       }
       const author = String(msg.author ?? 'AI');
       const label = String(msg.label ?? 'Changes');
-      const next = apply(msg.ops as Op[], `${author}: ${label}`);
+      // (the command line's: not the user's own step)
+      const next = apply(msg.ops as Op[], `${author}: ${label}`, false);
       if (!next) {
         ack(false, { error: 'The changes did not apply' });
         return;
@@ -310,6 +317,21 @@ async function onMessage(msg: Record<string, unknown>): Promise<void> {
       store.set({ aiJob: job });
       if (job.state === 'done' && was?.state !== 'done') toast(`AI: ${job.summary || 'done'}`, 'ai', 8000);
       if (job.state === 'failed' && was?.state !== 'failed') toast(`The AI stopped: ${job.error ?? ''}`, 'error', 8000);
+      return;
+    }
+    case 'agent-status':
+    case 'agent-listen':
+    case 'agent-harness':
+    case 'agent-devices':
+    case 'agent-removed':
+    case 'agent-look':
+    case 'agent-compare': {
+      const r = agentMessage(msg);
+      // this device's job: its changes merge into one step while it runs, and the step takes its name after
+      if (r.effects) {
+        setJobRunning(r.effects.job, r.effects.running);
+        if (r.effects.label) relabelJob(r.effects.job, r.effects.label);
+      }
       return;
     }
     case 'render-status': {
@@ -509,15 +531,26 @@ function offerRemote(peers: { role: string; name: string }[]): void {
   );
 }
 
-/** Tell the host the user undid or redid a step (the agent hears of it before its next request). */
-export function reportHistory(action: 'undo' | 'redo', label: string, job?: string): void {
+/**
+ * Tell the host the user undid or redid a step, or made one of their own while this device's request
+ * runs (the agent hears of it before its next reply).
+ */
+export function reportHistory(action: 'undo' | 'redo' | 'step', label: string, job?: string): void {
   send({ type: 'history', action, label, job });
 }
+
+/** Who this studio is: each hello carries the agent's token too, or the host takes it as no longer allowed. */
+function hello(): void {
+  send({ type: 'hello', role: 'editor', name: device(), ...helloFields() });
+}
+
+// the token came or went (paired, approved, removed): the host hears at once
+onTokenChange(hello);
 
 /** Rename this device (the others see it at once). */
 export function renameDevice(name: string): void {
   store.set({ deviceName: name.trim().slice(0, 40) });
-  send({ type: 'hello', role: 'editor', name: device() });
+  hello();
 }
 
 /** Send MIDI to the studios open on other devices (they hear it as a network device). */
@@ -585,8 +618,10 @@ export function connectLive(): void {
     lastSent = '';
     store.set({ connection: 'online' });
     void checkBuild();
-    send({ type: 'hello', role: 'editor', name: device() });
+    hello();
     report();
+    // how the agent stands now (turned on or off, this device let go, while away)
+    void refreshAgent();
   };
   ws.onmessage = (e) => {
     try {

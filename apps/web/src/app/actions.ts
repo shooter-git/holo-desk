@@ -70,8 +70,11 @@ import { type Step, store, toast } from './store.ts';
 
 // ---- editing ----
 
-/** Apply operations as one undo step. Returns the new song, or null if they didn't apply. */
-export function apply(ops: Op[], label: string): Project | null {
+/**
+ * Apply operations as one undo step. Returns the new song, or null if they didn't apply. `own` is
+ * false for changes made from the command line (the agent hears only of the user's own).
+ */
+export function apply(ops: Op[], label: string, own = true): Project | null {
   const s = store.get();
   if (!s.project || ops.length === 0) return null;
   let next: Project;
@@ -83,7 +86,17 @@ export function apply(ops: Op[], label: string): Project | null {
   }
   store.set({ project: next, ...history.push(s, { project: s.project, label }), saveState: 'dirty' });
   changed(next);
+  if (own) userStep(label);
   return next;
+}
+
+/**
+ * A step of the user's own while this device's request runs: the host is told, so the agent hears
+ * of it before its next reply (and the job's changes after it go in a step of their own).
+ */
+function userStep(label: string): void {
+  const s = store.get();
+  if (s.agentReport && Object.values(s.agentJobs).some(Boolean)) reportHistory('step', label);
 }
 
 function changed(project: Project): void {
@@ -1215,6 +1228,7 @@ export function endGesture(): void {
   if (g && s.project && g.before !== s.project) {
     store.set(history.push(s, { project: g.before, label: g.label }));
     changed(s.project);
+    userStep(g.label);
   }
   // the agent's changes that waited go in now, after the gesture's step
   g?.release();
@@ -1484,20 +1498,29 @@ export async function renderInCreation(): Promise<void> {
   }
 }
 
-export async function sendToCreation(): Promise<void> {
+/**
+ * Send the song to the creation it came from: whether it went, and what to say of it (null when the
+ * song has no creation). `quiet` when the bar asked: the agent's reply says how it went, so no toast
+ * says it as well.
+ */
+export async function sendToCreation(quiet = false): Promise<{ ok: boolean; text: string } | null> {
   const p = store.get().project;
-  if (!p?.origin) return;
+  if (!p?.origin) return null;
   await saveNow();
   try {
     const r = await api.send(p.id);
     const sent = r.edited.length
       ? `Sent to ${p.origin.creation}: ${r.edited.length} edited track${r.edited.length === 1 ? '' : 's'} (${r.path})`
       : `Sent to ${p.origin.creation} (${r.path})`;
+    const text = r.note ? `${sent}. ${r.note}` : sent;
     // what its pinned packs did: a pack it can't play yet is worth reading
     const cant = r.packs?.missing.some((m) => m.why !== 'imported') ?? false;
-    toast(r.note ? `${sent}. ${r.note}` : sent, cant ? 'error' : undefined, r.note ? 12000 : undefined);
+    if (!quiet) toast(text, cant ? 'error' : undefined, r.note ? 12000 : undefined);
+    return { ok: true, text };
   } catch (err) {
-    toast(err instanceof Error ? err.message : String(err), 'error', 8000);
+    const text = err instanceof Error ? err.message : String(err);
+    if (!quiet) toast(text, 'error', 8000);
+    return { ok: false, text };
   }
 }
 

@@ -93,7 +93,7 @@ import {
 } from './gesture.ts';
 import { type MenuEntry, openMenu, openMenuAt } from './menu.tsx';
 import { pressToReorder, type ReorderList } from './reorder.ts';
-import { DOUBLE_TAP_MS, gridStep, Viewport, WHEEL_ZOOM, ZOOM } from './view.ts';
+import { DOUBLE_TAP_MS, gridStep, TouchPan, Viewport, WHEEL_ZOOM, ZOOM } from './view.ts';
 import { drawClipWave, drawFades, fadeTo, trimEnd, trimStart } from './wave.ts';
 
 export const tracksView = new Viewport(store.get().zoom);
@@ -328,20 +328,22 @@ const TrackRow = memo(function TrackRow({ track, top, height, selected, phone, m
       return;
     }
     fingerDown.current = true;
-    let ly = e.clientY;
+    // a finger that catches the list coasting from a flick stops it, and isn't a tap
+    const caught = tracksView.stopFling();
+    const pan = new TouchPan(tracksView, 'y', () => maxScrollY, e);
     pressToReorder(e, {
       ...list,
-      onSwipe: (ev) => {
-        tracksView.scrollBy(0, ly - ev.clientY, maxScrollY);
-        ly = ev.clientY;
+      onSwipe: (ev) => pan.move(ev),
+      onTap: () => {
+        if (!caught) selectTrack(track.id);
       },
-      onTap: () => selectTrack(track.id),
       onHold: (ev) => {
         selectTrack(track.id);
         menu(ev.clientX, ev.clientY);
       },
-      onEnd: () => {
+      onEnd: (ev) => {
         fingerDown.current = false;
+        if (ev) pan.end(ev.timeStamp);
       },
     });
   };
@@ -1150,6 +1152,13 @@ export function TracksArea() {
     const x = e.clientX - rect.left;
     const y = e.clientY - rect.top;
     const touch = e.pointerType === 'touch';
+    // a finger landing while the view still coasts from a flick catches it, as on a page: it
+    // scrolls on from there and selects nothing
+    if (tracksView.stopFling() && touch) {
+      lastTap.current = 0;
+      panDrag(e);
+      return;
+    }
     const h = hit(x, y, touch);
     const now = performance.now();
     const doubleTap = now - lastTap.current < DOUBLE_TAP_MS;
@@ -1294,16 +1303,13 @@ export function TracksArea() {
     });
   };
 
+  /** A finger scrolling the timeline, as a phone scrolls a page (TouchPan): a flick carries on after it lifts. */
   const panDrag = (e: ReactPointerEvent) => {
-    let lx = e.clientX;
-    let ly = e.clientY;
+    const pan = new TouchPan(tracksView, 'xy', () => maxScrollY(project), e);
     start(e, {
       threshold: 0,
-      onMove: (ev) => {
-        tracksView.scrollBy(lx - ev.clientX, ly - ev.clientY, maxScrollY(project));
-        lx = ev.clientX;
-        ly = ev.clientY;
-      },
+      onMove: (ev) => pan.move(ev),
+      onUp: (ev) => pan.end(ev.timeStamp),
     });
   };
 

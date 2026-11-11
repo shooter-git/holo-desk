@@ -144,6 +144,22 @@ export class Store {
     return saved;
   }
 
+  /**
+   * A restore point now: the song as saved, kept in its history whatever the last one was (before the
+   * agent changes it, say). A revision already kept is the same song, so it's left as it is.
+   */
+  snapshotNow(id: string, author: string): number | null {
+    const row = this.db.prepare('SELECT revision, modified, doc FROM projects WHERE id = ? AND deleted = 0').get(id) as
+      | { revision: number; modified: string; doc: string }
+      | undefined;
+    if (!row) return null;
+    this.db
+      .prepare('INSERT OR IGNORE INTO revisions (project, revision, saved, author, doc) VALUES (?, ?, ?, ?, ?)')
+      .run(id, row.revision, new Date().toISOString(), author, row.doc);
+    this.trim(id);
+    return row.revision;
+  }
+
   private snapshot(project: Project, doc: string, author: string): void {
     const last = this.db
       .prepare('SELECT saved, author FROM revisions WHERE project = ? ORDER BY revision DESC LIMIT 1')
@@ -153,12 +169,17 @@ export class Store {
     this.db
       .prepare('INSERT OR REPLACE INTO revisions (project, revision, saved, author, doc) VALUES (?, ?, ?, ?, ?)')
       .run(project.id, project.revision, project.modified, author, doc);
+    this.trim(project.id);
+  }
+
+  /** Only the latest few hundred versions are kept. */
+  private trim(id: string): void {
     this.db
       .prepare(
         `DELETE FROM revisions WHERE project = ? AND revision NOT IN
          (SELECT revision FROM revisions WHERE project = ? ORDER BY revision DESC LIMIT ?)`,
       )
-      .run(project.id, project.id, KEEP_SNAPSHOTS);
+      .run(id, id, KEEP_SNAPSHOTS);
   }
 
   history(id: string): HistoryRow[] {
@@ -193,6 +214,11 @@ export class Store {
   /** Into the bin: hidden from the list, still on disk. */
   remove(id: string): boolean {
     return Number(this.db.prepare('UPDATE projects SET deleted = 1 WHERE id = ?').run(id).changes) > 0;
+  }
+
+  /** The database itself, for the parts of the server that keep tables of their own (the agent's: agent/store.ts). */
+  get database(): DatabaseSync {
+    return this.db;
   }
 
   setting(key: string): string | null {

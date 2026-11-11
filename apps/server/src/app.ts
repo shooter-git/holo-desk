@@ -39,6 +39,7 @@ import {
 } from '@holo/session';
 import Fastify, { type FastifyInstance, type FastifyReply } from 'fastify';
 import { runnerKey } from './agent/keys.ts';
+import { agentRoutes } from './agent/routes.ts';
 import type { Config } from './config.ts';
 import { Creations, sessionText } from './creations.ts';
 import { type SongDetails, Store } from './db.ts';
@@ -208,6 +209,19 @@ export async function buildApp(config: Config): Promise<{ app: FastifyInstance; 
     scan: scans.get,
     save: scans.save,
     project: (id) => store.get(id),
+  });
+
+  // the in-app agent: devices, settings, requests and their jobs, and the routes its tools call
+  const agent = agentRoutes(app, {
+    store,
+    live,
+    repoDir: config.repoDir,
+    scans,
+    // the tools run on this computer, beside the runner: they reach the server here
+    base: () => {
+      const address = app.server.address();
+      return `http://127.0.0.1:${address && typeof address === 'object' ? address.port : config.port}`;
+    },
   });
 
   // the AI buttons: your own Claude Code, through the runner on the host (HO[LO] holds no key)
@@ -992,6 +1006,7 @@ export async function buildApp(config: Config): Promise<{ app: FastifyInstance; 
   }));
 
   app.addHook('onClose', async () => {
+    agent.close();
     networkMidi?.close();
     store.close();
   });

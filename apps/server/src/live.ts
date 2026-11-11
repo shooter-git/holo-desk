@@ -71,13 +71,15 @@ export interface AiJob {
   error: string | null;
 }
 
-/** What a runner can do: renders, and the AI buttons (when Claude Code is on its computer). */
+/** What a runner can do: renders, the AI buttons (when Claude Code is on its computer), the agent's jobs. */
 export interface RunnerCaps {
   render: boolean;
   ai: { claude: string | null; version: string | null; skill: boolean } | null;
+  /** It runs the in-app agent's jobs (it says which harnesses it has in a `harnesses` message). */
+  agent: boolean;
 }
 
-interface Client {
+export interface LiveClient {
   ws: WebSocket;
   role: 'editor' | 'remote' | 'agent' | 'runner';
   caps?: RunnerCaps;
@@ -87,13 +89,47 @@ interface Client {
   state: EditorState | null;
   /** The song this studio was last brought up to date about (on joining, or opening another). */
   caughtUp: string | null;
+  /** A studio on a device allowed to use the agent (its hello carried the device's token): that device. */
+  device: string | null;
+}
+type Client = LiveClient;
+
+/**
+ * The agent's part of the live channel (agent/jobs.ts): the devices' studios, and the runners that
+ * run its jobs. Set once the agent is set up; until then nothing of the agent's is accepted.
+ */
+export interface AgentHooks {
+  /** The device an agent token belongs to (null: no device, or not allowed). */
+  device(token: string): string | null;
+  /** A message for the agent: from a runner (`harnesses`, `agent-*`) or a studio (`history`). */
+  message(client: LiveClient, msg: Record<string, unknown>): void;
+  /** A studio on an allowed device reported its state; `was` is the song it had open before. */
+  state(client: LiveClient, was: string | null): void;
+  /** A connection closed. */
+  gone(client: LiveClient): void;
 }
 
+/** The messages of the agent's that the live channel hands to it. */
+const AGENT_MESSAGES = new Set([
+  'harnesses',
+  'agent-progress',
+  'agent-session',
+  'agent-done',
+  'agent-failed',
+  'agent-harness',
+  'history',
+]);
+
 export type Answer = { ok: boolean; revision?: number; error?: string } & Record<string, unknown>;
+
+/** What `request` answers when the studio doesn't in time. */
+export const NO_ANSWER = 'The studio did not answer in time';
 
 interface Pending {
   resolve: (v: Answer) => void;
   timer: NodeJS.Timeout;
+  /** Only the connection asked may answer. */
+  client: Client;
 }
 
 interface Listener {
@@ -130,6 +166,8 @@ export class Live {
    * opens another song, so a dropped connection never leaves it showing an old version.
    */
   latestRevision: (project: string) => number | null = () => null;
+  /** The in-app agent (agent/jobs.ts), once it's set up. */
+  agent: AgentHooks | null = null;
 
   constructor(options: LiveOptions = {}) {
     this.key = options.key ?? null;
@@ -137,7 +175,7 @@ export class Live {
   }
 
   attach(ws: WebSocket): void {
-    const client: Client = { ws, role: 'remote', name: 'device', state: null, caughtUp: null };
+    const client: Client = { ws, role: 'remote', name: 'device', state: null, caughtUp: null, device: null };
     this.clients.add(client);
     ws.on('message', (raw: Buffer) => {
       let msg: Record<string, unknown>;
@@ -152,6 +190,7 @@ export class Live {
       this.clients.delete(client);
       if (client.role === 'editor') this.toRemotes({ type: 'studio-gone', name: client.name });
       if (client.role === 'runner') this.runnerGone(client);
+      this.agent?.gone(client);
       this.broadcastPeers();
     });
   }
@@ -168,6 +207,11 @@ export class Live {
           client.caps = runnerCaps(msg.caps);
           client.keyed = this.keyed(msg.key);
         } else client.keyed = false;
+        // a studio on a device allowed to use the agent (each hello says it again, or it's no longer one)
+        client.device =
+          client.role === 'editor' && typeof msg.agentToken === 'string' && msg.agentToken.length <= 200
+            ? (this.agent?.device(msg.agentToken) ?? null)
+            : null;
         this.broadcastPeers();
         // a remote arriving sees every open studio at once
         if (client.role === 'remote') {
@@ -178,7 +222,9 @@ export class Live {
         break;
       case 'state':
         if (client.role === 'editor') {
+          const was = client.state?.project ?? null;
           client.state = { ...(msg.state as EditorState), updated: Date.now() };
+          if (client.device) this.agent?.state(client, was);
           this.toRemotes({ type: 'studio', name: client.name, state: client.state });
           const project = client.state.project;
           if (project && client.caughtUp !== project) {
@@ -213,7 +259,7 @@ export class Live {
       }
       case 'ack': {
         const p = this.pending.get(String(msg.id));
-        if (p) {
+        if (p && p.client === client) {
           clearTimeout(p.timer);
           this.pending.delete(String(msg.id));
           const { type: _t, id: _i, ...rest } = msg;
@@ -281,6 +327,8 @@ export class Live {
         // a studio reports what was played on its own device; notes from the network are counted below
         if (client.role === 'editor' && Array.isArray(msg.events)) this.recordPlayed(msg.events as unknown[]);
         break;
+      default:
+        if (typeof msg.type === 'string' && AGENT_MESSAGES.has(msg.type)) this.agent?.message(client, msg);
     }
   }
 
@@ -315,6 +363,55 @@ export class Live {
 
   private send(c: Client, msg: unknown): void {
     if (c.ws.readyState === c.ws.OPEN) c.ws.send(JSON.stringify(msg));
+  }
+
+  /** Send one connection a message (the agent's: a runner its job, a studio its status). */
+  sendTo(c: Client, msg: Record<string, unknown>): void {
+    this.send(c, msg);
+  }
+
+  /** The studios open on an allowed device (its connections that said its token). */
+  studiosOf(device: string): Client[] {
+    return [...this.clients].filter((c) => c.role === 'editor' && c.device === device);
+  }
+
+  /** The device's studio with a song open (the most recently active one if several are), or null. */
+  studioFor(device: string, project: string): Client | null {
+    let best: Client | null = null;
+    for (const c of this.studiosOf(device)) {
+      if (c.state?.project !== project) continue;
+      if (!best || (c.state?.updated ?? 0) > (best.state?.updated ?? 0)) best = c;
+    }
+    return best;
+  }
+
+  /** Tell the studios on allowed devices something (those `which` picks, or all). */
+  toDevices(msg: Record<string, unknown>, which: (c: Client) => boolean = () => true): number {
+    let n = 0;
+    for (const c of this.clients) {
+      if (c.role !== 'editor' || !c.device || !which(c)) continue;
+      this.send(c, msg);
+      n++;
+    }
+    return n;
+  }
+
+  /** A device was removed: its studios lose the agent at once, and hear so. */
+  downgrade(device: string): void {
+    for (const c of this.studiosOf(device)) {
+      c.device = null;
+      this.send(c, { type: 'agent-removed' });
+    }
+  }
+
+  /** Whether a runner is connected, and whether one said the key. */
+  runners(): { connected: boolean; keyed: boolean } {
+    return { connected: this.runner(), keyed: this.keyedRunners().length > 0 };
+  }
+
+  /** The runners the agent's jobs may go to: keyed ones that run them. */
+  agentRunners(): Client[] {
+    return this.keyedRunners().filter((c) => c.caps?.agent);
   }
 
   private broadcastPeers(): void {
@@ -352,9 +449,9 @@ export class Live {
     return new Promise<Answer>((resolve) => {
       const timer = setTimeout(() => {
         this.pending.delete(id);
-        resolve({ ok: false, error: 'The studio did not answer in time' });
+        resolve({ ok: false, error: NO_ANSWER });
       }, timeoutMs);
-      this.pending.set(id, { resolve, timer });
+      this.pending.set(id, { resolve, timer, client: editor });
       this.send(editor, { ...msg, id });
     });
   }
@@ -401,7 +498,7 @@ export class Live {
   }
 
   /** The runners that may be handed the AI's and the agent's jobs. */
-  private keyedRunners(): Client[] {
+  keyedRunners(): Client[] {
     return [...this.clients].filter((c) => c.role === 'runner' && c.keyed);
   }
 
@@ -491,5 +588,6 @@ function runnerCaps(v: unknown): RunnerCaps {
           skill: ai.skill === true,
         }
       : null,
+    agent: caps.agent === true,
   };
 }

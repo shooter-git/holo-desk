@@ -805,6 +805,19 @@ export class Jobs implements AgentHooks {
   }
 
   /**
+   * A runner with the key joined: if the agent is on, it looks for the harnesses. With the agent off,
+   * a runner runs no harness and fetches nothing.
+   */
+  runner(client: LiveClient): void {
+    if (this.o.agentStore.settings().enabled) this.o.live.sendTo(client, { type: 'agent-on' });
+  }
+
+  /** The agent was turned on: the runners look for the harnesses. */
+  turnedOn(): void {
+    for (const runner of this.o.live.agentRunners()) this.o.live.sendTo(runner, { type: 'agent-on' });
+  }
+
+  /**
    * Tell the studios the settings changed: allowed devices hear all of them (as GET /settings
    * answers); the others only whether the agent is on, and only when that changed.
    */

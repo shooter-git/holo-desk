@@ -308,7 +308,10 @@ export function agentRoutes(app: FastifyInstance, o: AgentOptions): { jobs: Jobs
       if (!r.ok) return reply.code(r.status).send({ error: r.error });
       const was = agentStore.settings().enabled;
       agentStore.setSettings({ enabled: true });
-      if (!was) theJobs.announce(true);
+      if (!was) {
+        theJobs.announce(true);
+        theJobs.turnedOn();
+      }
       return { token: r.token, device: r.device };
     }),
   );
@@ -385,6 +388,7 @@ export function agentRoutes(app: FastifyInstance, o: AgentOptions): { jobs: Jobs
       const before = agentStore.settings();
       const after = agentStore.setSettings(patch);
       if (before.enabled && !after.enabled) theJobs.stopAll('The agent was turned off');
+      if (!before.enabled && after.enabled) theJobs.turnedOn();
       // the studios hear of it: whether it's on, and (allowed devices) the rest
       const enabledChanged = before.enabled !== after.enabled;
       if (

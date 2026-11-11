@@ -46,7 +46,7 @@ export interface AgentRunnerOptions {
 export interface AgentRunner {
   /** What the runner says it can do in its hello. */
   caps: { agent: true };
-  /** The socket is open and the hello sent: look for the harnesses (without waiting) and say what's here. */
+  /** The socket is open and the hello sent: say what's known of the harnesses (they're looked for on agent-on). */
   connected(): void;
   /** A message from the server: true when it was one of the agent's. */
   handle(msg: Record<string, unknown>): boolean;
@@ -302,12 +302,9 @@ export function startAgentRunner(o: AgentRunnerOptions): AgentRunner {
     caps: { agent: true },
 
     connected() {
-      // what's known goes at once (a reconnection); a fresh look follows only the first time
+      // what's known goes at once (a reconnection); nothing is looked for until the server says the
+      // agent is on (agent-on): with it off, no harness is run and nothing is fetched
       if (known) report(known);
-      else
-        void detect(false).catch((err: unknown) =>
-          log(`Looking for agent harnesses failed: ${err instanceof Error ? err.message : String(err)}`),
-        );
     },
 
     handle(msg) {
@@ -356,6 +353,13 @@ export function startAgentRunner(o: AgentRunnerOptions): AgentRunner {
         }
         case 'agent-update':
           if (HARNESS_IDS.includes(msg.harness as HarnessId)) void update(msg.harness as HarnessId);
+          return true;
+        case 'agent-on':
+          // the agent is on (it was turned on, or this runner joined while it is): look, from memory
+          // where it's fresh, the first time and after
+          void detect(false).catch((err: unknown) =>
+            log(`Looking for agent harnesses failed: ${err instanceof Error ? err.message : String(err)}`),
+          );
           return true;
         case 'agent-refresh':
           void detect(true).then((list) => {

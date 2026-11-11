@@ -91,7 +91,7 @@ exit 0`,
     root: s.root,
     repo: REPO,
     fetchText: async (url) => {
-      if (url === 'https://downloads.claude.ai/claude-code-releases/latest') return '2.1.400\n';
+      if (url === 'https://downloads.claude.ai/claude-code-releases/stable') return '2.1.400\n';
       throw new Error(`unexpected ${url}`);
     },
   });

@@ -337,6 +337,30 @@ describe('the clock', () => {
 });
 
 describe('harnesses', () => {
+  it('has a runner look for them only while the agent is on', async () => {
+    const { app, token, run, runner, connect } = await setup();
+    // pairing turned the agent on: the runner there was told
+    expect(run.got('agent-on')).toHaveLength(1);
+    // a runner with the key joining while it's on is told at once; one without the key never is
+    const late = runner([CLAUDE], 'late runner');
+    const unkeyed = connect({ role: 'runner', name: 'old runner', caps: { render: true, agent: true } });
+    expect(late.got('agent-on')).toHaveLength(1);
+    expect(unkeyed.got('agent-on')).toEqual([]);
+    // off: a runner joining isn't told, and no runner is told again
+    const set = (enabled: boolean) =>
+      app.inject({ method: 'PUT', url: '/api/agent/settings', headers: auth(token), payload: { enabled } });
+    expect((await set(false)).statusCode).toBe(200);
+    const meanwhile = runner([CLAUDE], 'runner while off');
+    expect(meanwhile.got('agent-on')).toEqual([]);
+    expect(run.got('agent-on')).toHaveLength(1);
+    // on again: every runner with the key is told, once
+    expect((await set(true)).statusCode).toBe(200);
+    expect(run.got('agent-on')).toHaveLength(2);
+    expect(late.got('agent-on')).toHaveLength(2);
+    expect(meanwhile.got('agent-on')).toHaveLength(1);
+    expect(unkeyed.got('agent-on')).toEqual([]);
+  });
+
   it('relays sign-in, codes and updates to the runner that has the harness, and its progress back', async () => {
     const { app, token, desk, runner, run, start, s } = await setup();
     const signin = (id: string) =>

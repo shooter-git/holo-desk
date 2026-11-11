@@ -231,15 +231,17 @@ export function claudeSpec(): Spec {
       return [...CLAUDE_EFFORTS];
     },
     async latest(ctx) {
-      // an npm install updates from npm; the native one from Anthropic's release channel
+      // an npm install updates from npm; the native one from Anthropic's release channels. The stable
+      // channel is the one read: an install on either channel can reach what it names, so Update never
+      // offers a version `claude update` won't install (one on `latest` updates itself sooner anyway)
       const npm = ctx.bin.path.includes('node_modules') || ctx.bin.prefix.some((p) => p.includes('node_modules'));
       if (npm) {
-        const d = JSON.parse(await ctx.fetchText('https://registry.npmjs.org/@anthropic-ai/claude-code/latest')) as {
+        const d = JSON.parse(await ctx.fetchText('https://registry.npmjs.org/@anthropic-ai/claude-code/stable')) as {
           version?: string;
         };
         return d.version ? { latest: d.version } : null;
       }
-      const text = (await ctx.fetchText('https://downloads.claude.ai/claude-code-releases/latest')).trim();
+      const text = (await ctx.fetchText('https://downloads.claude.ai/claude-code-releases/stable')).trim();
       return /^\d+\.\d+\.\d+[\w.-]*$/.test(text) ? { latest: text } : null;
     },
     login: {

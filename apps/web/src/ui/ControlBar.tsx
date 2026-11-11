@@ -710,8 +710,8 @@ export function ControlBar() {
         <button
           type="button"
           className="btn icon ghost cb-settings"
-          title="Audio & MIDI settings"
-          aria-label="Audio & MIDI settings"
+          title="Settings"
+          aria-label="Settings"
           onClick={() => store.set({ dialog: 'settings' })}
         >
           <Settings />

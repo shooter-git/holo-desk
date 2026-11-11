@@ -92,6 +92,8 @@ export interface AgentHooks {
   message(client: LiveClient, msg: Record<string, unknown>): void;
   /** A studio on an allowed device reported its state; `was` is the song it had open before. */
   state(client: LiveClient, was: string | null): void;
+  /** A runner with the key, able to run the agent's jobs, said hello. */
+  runner(client: LiveClient): void;
   /** A connection closed. */
   gone(client: LiveClient): void;
 }
@@ -200,6 +202,7 @@ export class Live {
             ? (this.agent?.device(msg.agentToken) ?? null)
             : null;
         this.broadcastPeers();
+        if (client.role === 'runner' && client.keyed && client.caps?.agent) this.agent?.runner(client);
         // a remote arriving sees every open studio at once
         if (client.role === 'remote') {
           for (const c of this.clients) {

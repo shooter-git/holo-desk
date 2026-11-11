@@ -108,11 +108,16 @@ describe('the agent runner', () => {
     expect(r.handle({ type: 'render', id: 'x' })).toBe(false);
   });
 
-  it('says which harnesses are here without holding up the socket, and again from memory on reconnecting', async () => {
+  it('looks for the harnesses only once the agent is on, without holding up the socket, and says it again from memory on reconnecting', async () => {
     s = sandbox();
     const { r, sent, claude } = runner({ delayInfo: 50 });
+    // connected with the agent off: no harness is run, nothing is fetched or said
     r.connected();
-    // nothing yet: the look goes on in the background
+    await new Promise((done) => setTimeout(done, 80));
+    expect(sent).toEqual([]);
+    expect(claude.infoCalls()).toBe(0);
+    // the server says the agent is on: nothing yet, the look goes on in the background
+    expect(r.handle({ type: 'agent-on' })).toBe(true);
     expect(sent).toEqual([]);
     await until(() => sent.length > 0);
     expect(sent[0]).toMatchObject({ type: 'harnesses', list: [{ id: 'claude' }, { id: 'codex' }, { id: 'cursor' }] });

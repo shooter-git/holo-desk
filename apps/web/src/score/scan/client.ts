@@ -3,7 +3,7 @@
  * systems found in a worker, and the scan sent to the host, to be read in: by you, the recognition
  * engines, or the agent (from the bar).
  */
-import type { FoundSystem, Point, Scan } from '@holo/score';
+import type { FoundSystem, Point, Scan, SystemState } from '@holo/score';
 import type { Op } from '@holo/session';
 import type { PrepReply, PrepRequest } from './prep.worker.ts';
 import PrepWorker from './prep.worker.ts?worker';
@@ -153,10 +153,20 @@ export async function preparePage(p: PickedPage, enhance: boolean): Promise<Prep
   return r;
 }
 
+/** A refusal from the host: what it said, and why in a word when it gave one. */
+class Refused extends Error {
+  constructor(
+    message: string,
+    readonly reason: string | null,
+  ) {
+    super(message);
+  }
+}
+
 async function call<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(path, init);
-  const body = (await res.json().catch(() => ({}))) as T & { error?: string };
-  if (!res.ok) throw new Error(body.error ?? `${res.status}`);
+  const body = (await res.json().catch(() => ({}))) as T & { error?: string; reason?: string };
+  if (!res.ok) throw new Refused(body.error ?? `${res.status}`, typeof body.reason === 'string' ? body.reason : null);
   return body;
 }
 
@@ -222,10 +232,43 @@ export const omrStatus = () => call<{ available: boolean; engines: string[] }>('
 export const compareEngines = (id: string) =>
   call<{ summary: string[]; flagged: number }>(`/api/scans/${id}/engines`, { method: 'POST' });
 
-/** What the recognition engines read of a scan, as changes to its song, and the bars each system became. */
+/**
+ * What the recognition engines read of a scan's systems not read yet, worked out from the song as the
+ * host has it saved: `ops` to apply as one undo step labelled `label`, then each system's new state to
+ * set (only once they're applied). Nothing on the host changes until then.
+ */
 export interface EngineReading {
   ops: Op[];
-  systems: { page: number; system: number; written: [number, number] }[];
+  label: string;
+  /** The song's saved revision it was worked out from. */
+  revision: number;
+  systems: { page: number; system: number; state: SystemState; written?: [number, number]; flags?: string[] }[];
+  pages: { page: number; engine: string; others: string[] }[];
+  written: number[];
+  errors: string[];
+  warnings: string[];
 }
 
-export const readWithEngines = (id: string) => call<EngineReading>(`/api/scans/${id}/engines/reading`);
+const reading = (id: string) => call<EngineReading>(`/api/scans/${id}/engines/reading`);
+
+/**
+ * The engines' reading of a scan. When they haven't read its pages yet, they read them first (as
+ * Compare with the engines has them do), and `running` is told.
+ */
+export async function readWithEngines(id: string, running?: () => void): Promise<EngineReading> {
+  try {
+    return await reading(id);
+  } catch (e) {
+    if (!(e instanceof Refused) || e.reason !== 'no-readings') throw e;
+  }
+  running?.();
+  const ran = await compareEngines(id);
+  try {
+    return await reading(id);
+  } catch (e) {
+    // they ran but read nothing: what they said is why
+    const said = ran.summary.filter((line) => !/ read it$/.test(line));
+    if (e instanceof Refused && e.reason === 'no-readings' && said.length) throw new Error(said.join('; '));
+    throw e;
+  }
+}

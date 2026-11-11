@@ -104,17 +104,23 @@ describe('scans', () => {
     expect(text.statusCode).toBeGreaterThanOrEqual(400);
   });
 
-  it('says the AI isn’t there without a runner, and refuses its jobs', async () => {
-    expect((await app.inject({ method: 'GET', url: '/api/ai' })).json()).toEqual({
-      available: false,
-      reason: 'no-runner',
-    });
+  it('says Scan’s old AI buttons moved to the bar, and runs nothing', async () => {
     const scan = (await app.inject({ method: 'POST', url: '/api/scans', payload: { project } })).json() as Scan;
-    const read = await app.inject({ method: 'POST', url: `/api/scans/${scan.id}/ai`, payload: { task: 'read' } });
-    expect(read.statusCode).toBe(409);
-    expect(read.json()).toMatchObject({ reason: 'no-runner' });
-    const odd = await app.inject({ method: 'POST', url: `/api/scans/${scan.id}/ai`, payload: { task: 'rm -rf' } });
-    expect(odd.statusCode).toBe(400);
+    const gone = { error: 'Reading scans with AI moved to the bar (Ctrl /)' };
+    for (const [method, url, payload] of [
+      ['GET', '/api/ai', undefined],
+      ['GET', `/api/ai/jobs?project=${project}`, undefined],
+      ['POST', `/api/scans/${scan.id}/ai`, { task: 'read' }],
+      ['POST', `/api/scans/${scan.id}/ai`, { task: 'rm -rf' }],
+      ['POST', '/api/scans/scn_nope00/ai', { task: 'read' }],
+      ['POST', '/api/ai/jobs/job_abc123def/cancel', undefined],
+    ] as const) {
+      const res = await app.inject({ method, url, ...(payload ? { payload } : {}) });
+      expect([url, res.statusCode]).toEqual([url, 410]);
+      expect(res.json()).toEqual(gone);
+    }
+    // and the scan is as it was
+    expect((await app.inject({ method: 'GET', url: `/api/scans/${scan.id}` })).json()).toEqual(scan);
   });
 
   it('goes when its song does', async () => {

@@ -1,7 +1,7 @@
 import { EventEmitter } from 'node:events';
 import { describe, expect, it } from 'vitest';
 import type { WebSocket } from 'ws';
-import { type AiJob, Live, type RenderJob } from '../src/live.ts';
+import { Live, type RenderJob } from '../src/live.ts';
 
 const KEY = 'ab'.repeat(32);
 
@@ -25,7 +25,9 @@ class FakeSocket extends EventEmitter {
   }
 }
 
-const caps = { render: true, ai: { claude: '/usr/bin/claude', version: '2.0.0', skill: true } };
+const caps = { render: true, agent: true };
+/** What a runner from before the agent bar said it could do: Scan's old AI buttons too. */
+const oldCaps = { render: true, ai: { claude: '/usr/bin/claude', version: '2.0.0', skill: true }, agent: true };
 
 function setup(key: string | null = KEY) {
   const lines: string[] = [];
@@ -36,7 +38,8 @@ function setup(key: string | null = KEY) {
     ws.say({ type: 'hello', ...hello });
     return ws;
   };
-  const runner = (name: string, key?: string) => connect({ role: 'runner', name, caps, ...(key ? { key } : {}) });
+  const runner = (name: string, key?: string, says: Record<string, unknown> = caps) =>
+    connect({ role: 'runner', name, caps: says, ...(key ? { key } : {}) });
   // a studio with the song open, to hear how jobs go
   const studio = connect({ role: 'editor', name: 'studio' });
   studio.say({ type: 'state', state: { project: 'prj_song', revision: 1 } });
@@ -44,18 +47,6 @@ function setup(key: string | null = KEY) {
 }
 
 let n = 0;
-const aiJob = (): AiJob => ({
-  id: `job_${++n}`,
-  task: 'read',
-  scan: 'scn_0a1b2c3d4e5f',
-  project: 'prj_song',
-  state: 'waiting',
-  started: Date.now(),
-  finished: null,
-  lines: [],
-  summary: null,
-  error: null,
-});
 const renderJob = (): RenderJob => ({
   id: `rnd_${++n}`,
   project: 'prj_song',
@@ -69,8 +60,10 @@ const renderJob = (): RenderJob => ({
   error: null,
 });
 
+const names = (clients: { name: string }[]) => clients.map((c) => c.name);
+
 describe('runners and the runner key', () => {
-  it('still hands a runner without the key its renders, but no AI job', () => {
+  it('still hands a runner without the key its renders, but no agent job', () => {
     const { live, lines, runner } = setup();
     const old = runner('old runner');
     expect(live.runner()).toBe(true);
@@ -85,97 +78,75 @@ describe('runners and the runner key', () => {
     old.say({ type: 'render-done', id: render.id });
     expect(render.state).toBe('done');
 
-    expect(live.aiStatus()).toEqual({ available: false, reason: 'no-runner' });
-    const job = aiJob();
-    expect(live.ai(job)).toBe(false);
-    expect(old.got('ai')).toEqual([]);
+    expect(live.runners()).toEqual({ connected: true, keyed: false });
+    expect(live.agentRunners()).toEqual([]);
     // the server says why, once
     runner('another old runner');
     expect(lines).toEqual(['A runner without the key connected: restart it with the current HO[LO] to use the agent']);
   });
 
-  it('hands the AI job to a runner with the key, not to one without', () => {
+  it('trusts a runner with the key, not one without', () => {
     const { live, lines, runner } = setup();
-    const old = runner('old runner');
-    const keyed = runner('keyed runner', KEY);
-    expect(live.aiStatus()).toEqual({ available: true, version: '2.0.0' });
-
-    const job = aiJob();
-    expect(live.ai(job)).toBe(true);
-    expect(keyed.got('ai')).toEqual([{ type: 'ai', id: job.id, task: 'read', scan: job.scan, project: 'prj_song' }]);
-    expect(old.got('ai')).toEqual([]);
+    runner('old runner');
+    runner('keyed runner', KEY);
+    expect(live.runners()).toEqual({ connected: true, keyed: true });
+    expect(names(live.keyedRunners())).toEqual(['keyed runner']);
+    expect(names(live.agentRunners())).toEqual(['keyed runner']);
     expect(lines).toHaveLength(1);
-
-    // a cancel goes to that runner alone
-    expect(live.aiCancel(job.id)).toBe(true);
-    expect(keyed.got('ai-cancel')).toEqual([{ type: 'ai-cancel', id: job.id }]);
-    expect(old.got('ai-cancel')).toEqual([]);
   });
 
   it('treats a wrong key as none, and with no key of its own trusts no runner', () => {
     const wrong = setup();
     wrong.runner('stale runner', 'cd'.repeat(32));
-    expect(wrong.live.aiStatus()).toEqual({ available: false, reason: 'no-runner' });
+    expect(wrong.live.keyedRunners()).toEqual([]);
     expect(wrong.lines[0]).toMatch(/wrong key/);
 
     const keyless = setup(null);
     keyless.runner('runner', KEY);
-    expect(keyless.live.aiStatus()).toEqual({ available: false, reason: 'no-runner' });
-    expect(keyless.live.ai(aiJob())).toBe(false);
+    expect(keyless.live.runners()).toEqual({ connected: true, keyed: false });
+    expect(keyless.live.agentRunners()).toEqual([]);
   });
 
-  it('takes a job’s progress and its end only from the runner it was handed to', () => {
-    const { live, runner, connect, studio } = setup();
-    const assigned = runner('keyed runner', KEY);
-    const job = aiJob();
-    expect(live.ai(job)).toBe(true);
-
-    // another runner, even one with the key, a runner without it, and a page posing as one
-    const other = runner('other keyed runner', KEY);
-    const old = runner('old runner');
-    const studioAsRunner = connect({ role: 'editor', name: 'impostor' });
-    for (const ws of [other, old, studioAsRunner]) {
-      ws.say({ type: 'job-progress', id: job.id, line: 'spoofed' });
-      ws.say({ type: 'job-done', id: job.id, summary: 'spoofed' });
-      ws.say({ type: 'job-failed', id: job.id, error: 'spoofed' });
-    }
-    expect(job).toMatchObject({ state: 'waiting', lines: [], summary: null, error: null, finished: null });
-    const told = studio.got('ai-status').length;
-
-    assigned.say({ type: 'job-progress', id: job.id, line: 'reading system 1' });
-    expect(job).toMatchObject({ state: 'running', lines: ['reading system 1'] });
-    assigned.say({ type: 'job-done', id: job.id, summary: 'Read 4 systems' });
-    expect(job).toMatchObject({ state: 'done', summary: 'Read 4 systems' });
-    expect(studio.got('ai-status').length).toBe(told + 2);
-  });
-
-  it('reports the AI as available only while a runner with the key is connected', () => {
-    const { live, runner, connect, studio } = setup();
-    expect(live.aiStatus()).toEqual({ available: false, reason: 'no-runner' });
-    runner('old runner');
-    expect(live.aiStatus()).toEqual({ available: false, reason: 'no-runner' });
-
+  it('counts a keyed runner only while it is connected', () => {
+    const { live, runner, connect } = setup();
     const keyed = runner('keyed runner', KEY);
-    expect(live.aiStatus().available).toBe(true);
-    const job = aiJob();
-    expect(live.ai(job)).toBe(true);
-
-    // gone: its job can't finish, and the studio hears so
+    expect(live.runners().keyed).toBe(true);
     keyed.close();
-    expect(live.aiStatus()).toEqual({ available: false, reason: 'no-runner' });
-    expect(job).toMatchObject({ state: 'failed', error: 'The runner disconnected' });
-    expect(studio.got('ai-status').at(-1)).toMatchObject({ job: { id: job.id, state: 'failed' } });
+    expect(live.runners()).toEqual({ connected: false, keyed: false });
 
-    // one with the key but no Claude Code: there's a runner, Claude is what's missing
+    // one with the key that doesn't run the agent's jobs: keyed, but no agent runner
     connect({ role: 'runner', name: 'bare runner', key: KEY, caps: { render: true } });
-    expect(live.aiStatus()).toEqual({ available: false, reason: 'no-claude' });
+    expect(names(live.keyedRunners())).toEqual(['bare runner']);
+    expect(live.agentRunners()).toEqual([]);
   });
 
   it('forgets the key when a connection says hello again as something else', () => {
     const { live, connect } = setup();
     const ws = connect({ role: 'runner', name: 'runner', caps, key: KEY });
-    expect(live.aiStatus().available).toBe(true);
+    expect(live.runners().keyed).toBe(true);
     ws.say({ type: 'hello', role: 'remote', name: 'phone' });
-    expect(live.aiStatus()).toEqual({ available: false, reason: 'no-runner' });
+    expect(live.runners()).toEqual({ connected: false, keyed: false });
+  });
+
+  it('ignores what an older runner says of Scan’s old AI buttons', () => {
+    const { live, runner, studio } = setup();
+    const old = runner('older runner', KEY, oldCaps);
+    // its other caps still count; its word on Claude Code is left out
+    expect(names(live.agentRunners())).toEqual(['older runner']);
+    expect(live.keyedRunners()[0]?.caps).toEqual({ render: true, agent: true });
+
+    const before = studio.sent.length;
+    for (const type of ['job-progress', 'job-done', 'job-failed', 'ai', 'ai-cancel', 'ai-status']) {
+      expect(() => old.say({ type, id: 'job_abc123def', line: 'reading', summary: 'done', error: 'no' })).not.toThrow();
+    }
+    // nothing reached the studio, and the runner still renders
+    expect(studio.sent.length).toBe(before);
+    expect(studio.got('ai-status')).toEqual([]);
+    const render = renderJob();
+    expect(live.render(render)).toBe(true);
+    old.say({ type: 'render-done', id: render.id });
+    expect(render.state).toBe('done');
+    old.close();
+    expect(studio.got('ai-status')).toEqual([]);
   });
 });

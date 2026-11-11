@@ -56,25 +56,12 @@ export interface RenderJob {
   error: string | null;
 }
 
-/** An AI job: the runner's Claude Code reading a scan into a song, checking it, or fixing what was flagged. */
-export interface AiJob {
-  id: string;
-  task: 'read' | 'check' | 'fix';
-  scan: string;
-  project: string;
-  state: 'waiting' | 'running' | 'done' | 'failed';
-  started: number;
-  finished: number | null;
-  /** What it's doing, its last few steps. */
-  lines: string[];
-  summary: string | null;
-  error: string | null;
-}
-
-/** What a runner can do: renders, the AI buttons (when Claude Code is on its computer), the agent's jobs. */
+/**
+ * What a runner can do: renders, the agent's jobs. (An older runner also says what it had for Scan's
+ * old AI buttons, `ai`: that's left out.)
+ */
 export interface RunnerCaps {
   render: boolean;
-  ai: { claude: string | null; version: string | null; skill: boolean } | null;
   /** It runs the in-app agent's jobs (it says which harnesses it has in a `harnesses` message). */
   agent: boolean;
 }
@@ -83,7 +70,7 @@ export interface LiveClient {
   ws: WebSocket;
   role: 'editor' | 'remote' | 'agent' | 'runner';
   caps?: RunnerCaps;
-  /** A runner that said the runner key: the only kind handed the AI's and the agent's jobs. */
+  /** A runner that said the runner key: the only kind handed the agent's jobs. */
   keyed?: boolean;
   name: string;
   state: EditorState | null;
@@ -146,7 +133,7 @@ interface Listener {
 }
 
 export interface LiveOptions {
-  /** The runner key (agent/keys.ts); with none, no runner is handed the AI's jobs. */
+  /** The runner key (agent/keys.ts); with none, no runner is handed the agent's jobs. */
   key?: string | null;
   /** Where the server's own notices go (a runner without the key, say). */
   log?: (line: string) => void;
@@ -161,13 +148,7 @@ export class Live {
   private readonly log: (line: string) => void;
   /** Notices already given (each once). */
   private told = new Set<string>();
-  /**
-   * The runner each job was handed to: only it may say how the job goes. Kept beside the job, not on
-   * it, since jobs go to the studios as JSON.
-   */
-  private assigned = new WeakMap<object, Client>();
   readonly renders = new Map<string, RenderJob>();
-  readonly aiJobs = new Map<string, AiJob>();
   /**
    * What a studio missed while it wasn't connected (a newer save of its song): asked when it joins or
    * opens another song, so a dropped connection never leaves it showing an old version.
@@ -196,7 +177,6 @@ export class Live {
     ws.on('close', () => {
       this.clients.delete(client);
       if (client.role === 'editor') this.toRemotes({ type: 'studio-gone', name: client.name });
-      if (client.role === 'runner') this.runnerGone(client);
       this.agent?.gone(client);
       this.broadcastPeers();
     });
@@ -311,30 +291,12 @@ export class Live {
         this.tell({ type: 'render-status', job }, job.project);
         break;
       }
-      case 'job-progress':
-      case 'job-done':
-      case 'job-failed': {
-        if (client.role !== 'runner' || !client.keyed) break;
-        const job = this.aiJobs.get(String(msg.id));
-        // only from the runner it was handed to
-        if (!job || this.assigned.get(job) !== client) break;
-        if (msg.type === 'job-progress') {
-          job.state = 'running';
-          job.lines = [...job.lines, String(msg.line ?? '').slice(0, 200)].slice(-12);
-        } else {
-          job.state = msg.type === 'job-done' ? 'done' : 'failed';
-          job.finished = Date.now();
-          if (msg.type === 'job-done') job.summary = String(msg.summary ?? '').slice(0, 500);
-          else job.error = String(msg.error ?? 'The AI stopped').slice(0, 500);
-        }
-        this.tell({ type: 'ai-status', job }, job.project);
-        break;
-      }
       case 'played':
         // a studio reports what was played on its own device; notes from the network are counted below
         if (client.role === 'editor' && Array.isArray(msg.events)) this.recordPlayed(msg.events as unknown[], client);
         break;
       default:
+        // (anything else goes unheard: an old runner's word on Scan's AI jobs, `job-*`, among it)
         if (typeof msg.type === 'string' && AGENT_MESSAGES.has(msg.type)) this.agent?.message(client, msg);
     }
   }
@@ -496,7 +458,7 @@ export class Live {
 
   /**
    * Whether a runner's hello carries the runner key. One without it still renders; the server says
-   * once why it gets no AI or agent jobs.
+   * once why it gets no agent jobs.
    */
   private keyed(given: unknown): boolean {
     if (this.key !== null && typeof given === 'string' && given.length <= 256 && sameKey(given, this.key)) return true;
@@ -514,54 +476,9 @@ export class Live {
     this.log(line);
   }
 
-  /** The runners that may be handed the AI's and the agent's jobs. */
+  /** The runners that may be handed the agent's jobs. */
   keyedRunners(): Client[] {
     return [...this.clients].filter((c) => c.role === 'runner' && c.keyed);
-  }
-
-  /** A runner gone: the jobs it was running can't finish (nothing else may report on them). */
-  private runnerGone(client: Client): void {
-    for (const job of this.aiJobs.values()) {
-      if (this.assigned.get(job) !== client || job.state === 'done' || job.state === 'failed') continue;
-      job.state = 'failed';
-      job.finished = Date.now();
-      job.error = 'The runner disconnected';
-      this.tell({ type: 'ai-status', job }, job.project);
-    }
-  }
-
-  /** Whether the AI buttons can work, and if not, what's missing. */
-  aiStatus(): { available: boolean; reason?: 'no-runner' | 'no-claude' | 'no-skill'; version?: string } {
-    const runners = this.keyedRunners();
-    if (!runners.length) return { available: false, reason: 'no-runner' };
-    const able = runners.find((c) => c.caps?.ai?.claude && c.caps.ai.skill);
-    if (able) return { available: true, ...(able.caps?.ai?.version ? { version: able.caps.ai.version } : {}) };
-    return { available: false, reason: runners.some((c) => c.caps?.ai?.claude) ? 'no-skill' : 'no-claude' };
-  }
-
-  /** Hand an AI job to a keyed runner that has Claude Code; the studio hears how it goes. */
-  ai(job: AiJob): boolean {
-    const runner = this.keyedRunners().find((c) => c.caps?.ai?.claude && c.caps.ai.skill);
-    if (!runner) return false;
-    this.assigned.set(job, runner);
-    this.aiJobs.set(job.id, job);
-    for (const id of [...this.aiJobs.keys()].slice(0, -20)) this.aiJobs.delete(id);
-    this.send(runner, { type: 'ai', id: job.id, task: job.task, scan: job.scan, project: job.project });
-    this.tell({ type: 'ai-status', job }, job.project);
-    return true;
-  }
-
-  /** Stop an AI job. */
-  aiCancel(id: string): boolean {
-    const job = this.aiJobs.get(id);
-    if (!job || job.state === 'done' || job.state === 'failed') return false;
-    const runner = this.assigned.get(job);
-    if (runner) this.send(runner, { type: 'ai-cancel', id });
-    return true;
-  }
-
-  aiJobsFor(project: string): AiJob[] {
-    return [...this.aiJobs.values()].filter((j) => j.project === project);
   }
 
   /** Whether a creation runner is connected (only it can run a creation's renderer). */
@@ -606,19 +523,8 @@ export class Live {
   }
 }
 
-/** A runner's word on what it can do, checked. */
+/** A runner's word on what it can do, checked (anything else it says, an old runner's `ai`, is left out). */
 function runnerCaps(v: unknown): RunnerCaps {
   const caps = (typeof v === 'object' && v !== null ? v : {}) as Record<string, unknown>;
-  const ai = (typeof caps.ai === 'object' && caps.ai !== null ? caps.ai : null) as Record<string, unknown> | null;
-  return {
-    render: caps.render !== false,
-    ai: ai
-      ? {
-          claude: typeof ai.claude === 'string' ? ai.claude.slice(0, 300) : null,
-          version: typeof ai.version === 'string' ? ai.version.slice(0, 80) : null,
-          skill: ai.skill === true,
-        }
-      : null,
-    agent: caps.agent === true,
-  };
+  return { render: caps.render !== false, agent: caps.agent === true };
 }

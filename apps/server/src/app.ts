@@ -3,7 +3,7 @@
  * bridge to your creations. It has no accounts and no passwords: it listens on this machine only,
  * and your own devices reach it through Tailscale.
  */
-import { createHash, randomBytes } from 'node:crypto';
+import { createHash } from 'node:crypto';
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import { constants as zlib } from 'node:zlib';
@@ -89,13 +89,13 @@ export async function buildApp(config: Config): Promise<{ app: FastifyInstance; 
     .catch((err: unknown) =>
       console.warn(`The packs' maps couldn't be checked (${err instanceof Error ? err.message : String(err)})`),
     );
-  // the key a runner on this computer says, so only it is handed the AI's and the agent's jobs
+  // the key a runner on this computer says, so only it is handed the agent's jobs
   let key: string | null = null;
   try {
     key = runnerKey(config.dataDir);
   } catch (err) {
     console.warn(
-      `The runner key couldn't be made in ${config.dataDir} (${err instanceof Error ? err.message : String(err)}): renders work, the AI's jobs wait for it`,
+      `The runner key couldn't be made in ${config.dataDir} (${err instanceof Error ? err.message : String(err)}): renders work, the agent's jobs wait for it`,
     );
   }
   const live = new Live({ key });
@@ -225,37 +225,13 @@ export async function buildApp(config: Config): Promise<{ app: FastifyInstance; 
     },
   });
 
-  // the AI buttons: your own Claude Code, through the runner on the host (HO[LO] holds no key)
-  app.get('/api/ai', async () => live.aiStatus());
-  app.get<{ Querystring: { project?: string } }>('/api/ai/jobs', async (req) =>
-    live.aiJobsFor(String(req.query.project ?? '')),
-  );
-  app.post<{ Params: { id: string }; Body: { task?: string } }>('/api/scans/:id/ai', async (req, reply) => {
-    const scan = scans.get(req.params.id);
-    if (!scan) return reply.code(404).send({ error: 'No such scan' });
-    const task = req.body?.task;
-    if (task !== 'read' && task !== 'check' && task !== 'fix')
-      return reply.code(400).send({ error: 'The task is read, check or fix' });
-    const status = live.aiStatus();
-    if (!status.available) return reply.code(409).send({ error: 'The AI isn’t available', reason: status.reason });
-    const job = {
-      id: `job_${randomBytes(6).toString('hex')}`,
-      task: task as 'read' | 'check' | 'fix',
-      scan: scan.id,
-      project: scan.project,
-      state: 'waiting' as const,
-      started: Date.now(),
-      finished: null,
-      lines: [],
-      summary: null,
-      error: null,
-    };
-    if (!live.ai(job)) return reply.code(409).send({ error: 'The AI isn’t available', reason: 'no-runner' });
-    return reply.code(202).send(job);
-  });
-  app.post<{ Params: { id: string } }>('/api/ai/jobs/:id/cancel', async (req, reply) =>
-    live.aiCancel(req.params.id) ? { ok: true } : reply.code(404).send({ error: 'No such job running' }),
-  );
+  // Scan's old AI buttons: reading a scan with AI is the agent's now, from the bar
+  const moved = async (_req: unknown, reply: FastifyReply) =>
+    reply.code(410).send({ error: 'Reading scans with AI moved to the bar (Ctrl /)' });
+  app.get('/api/ai', moved);
+  app.get('/api/ai/jobs', moved);
+  app.post('/api/scans/:id/ai', moved);
+  app.post('/api/ai/jobs/:id/cancel', moved);
 
   app.delete<{ Params: { id: string } }>('/api/projects/:id', async (req, reply) => {
     if (!store.remove(req.params.id)) return reply.code(404).send({ error: 'No such project' });

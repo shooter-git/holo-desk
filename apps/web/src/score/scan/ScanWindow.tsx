@@ -7,7 +7,7 @@
 import { notate, type Scan, type ScanSystem, toMEI } from '@holo/score';
 import { Check, Play, X } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
-import { apply, locate, togglePlay } from '../../app/actions.ts';
+import { apply, locate, saveSoon, togglePlay } from '../../app/actions.ts';
 import { store, toast, useApp } from '../../app/store.ts';
 import { renderEach } from '../verovio.ts';
 import { compareEngines, getScan, omrStatus, readWithEngines, setSystem } from './client.ts';
@@ -56,7 +56,8 @@ function Review({ id }: { id: string }) {
   const [scan, setScan] = useState<Scan | null>(null);
   const [engines, setEngines] = useState<string[]>([]);
   const [comparing, setComparing] = useState(false);
-  const [reading, setReading] = useState(false);
+  /** While the engines' reading is on its way: what's happening. */
+  const [reading, setReading] = useState<string | null>(null);
   const [drawn, setDrawn] = useState<string[]>([]);
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: read again whenever the host says it changed
@@ -113,32 +114,58 @@ function Review({ id }: { id: string }) {
   if (!scan) return <p className="scan-busy">Opening the scan…</p>;
   const counts: Record<string, number> = {};
   for (const { s } of systems) counts[s.state] = (counts[s.state] ?? 0) + 1;
-  // the engines' reading of every page, written into the song as one undo step, each system marked read
+  // the engines' reading of the systems not read yet, written into the song as one undo step; only
+  // then is each system marked as far as it got
   const readIn = async () => {
     if (scan.project !== store.get().project?.id) {
       toast('Open this scan’s song first', 'error');
       return;
     }
-    setReading(true);
+    if (store.get().saveState === 'conflict') {
+      toast('Choose which version of the song to keep first', 'error');
+      return;
+    }
+    setReading('Reading…');
     try {
-      const r = await readWithEngines(scan.id);
-      if (!r.ops.length) {
-        toast('The engines found nothing to write in', 'info', 6000);
+      // the host works it out from the song as saved: what's here is saved first
+      if ((await saveSoon(0)) === null) {
+        toast('The song couldn’t be saved, so nothing was read in', 'error');
         return;
       }
-      if (!apply(r.ops, 'Read with the recognition engines')) return;
-      for (const sys of r.systems)
-        await setSystem(scan.id, sys.page, sys.system, { state: 'read', written: sys.written });
-      const n = r.systems.length;
+      const before = store.get().project;
+      const r = await readWithEngines(scan.id, () => setReading('The engines are reading…'));
+      if (!r.ops.length) {
+        const why = r.errors[0] ?? r.warnings[0];
+        toast(why ? `The engines found nothing to write in (${why})` : 'Every system is read already', 'info', 8000);
+        return;
+      }
+      const now = store.get();
+      if (now.project !== before || now.serverRevision !== r.revision) {
+        toast('The song changed while the engines read it: read it in again', 'error', 8000);
+        return;
+      }
+      if (!apply(r.ops, r.label)) return;
+      for (const sys of r.systems) {
+        await setSystem(scan.id, sys.page, sys.system, {
+          state: sys.state,
+          ...(sys.written ? { written: sys.written } : {}),
+          flags: sys.flags ?? [],
+        });
+      }
+      const read = r.systems.filter((x) => x.state === 'read').length;
+      const left = r.systems.length - read;
       toast(
-        `Read ${n} system${n === 1 ? '' : 's'} into the song: listen, then check them against the page`,
+        `Read ${read} system${read === 1 ? '' : 's'} into the song${
+          left ? ` (${left} not: see the flags)` : ''
+        }: listen, then check them against the page`,
         'info',
         8000,
       );
+      if (r.warnings.length) toast(r.warnings.join('; '), 'info', 10_000);
     } catch (e) {
       toast(e instanceof Error ? e.message : String(e), 'error');
     } finally {
-      setReading(false);
+      setReading(null);
     }
   };
   const goTo = (s: ScanSystem) => {
@@ -163,16 +190,16 @@ function Review({ id }: { id: string }) {
             <button
               type="button"
               className="btn primary"
-              disabled={reading || comparing}
-              title={`${engines.join(' and ')} read each page, and what they read is written into the song (one undo step)`}
+              disabled={reading !== null || comparing || !counts.new}
+              title={`${engines.join(' and ')} read each page, and what they read of the systems not read yet is written into the song (one undo step)`}
               onClick={() => void readIn()}
             >
-              {reading ? 'Reading…' : 'Read with the recognition engines'}
+              {reading ?? 'Read with the recognition engines'}
             </button>
             <button
               type="button"
               className="btn"
-              disabled={comparing || reading || !counts.read}
+              disabled={comparing || reading !== null || !counts.read}
               title={`Read each page with ${engines.join(' and ')} too, and flag the bars they read differently`}
               onClick={() => {
                 setComparing(true);

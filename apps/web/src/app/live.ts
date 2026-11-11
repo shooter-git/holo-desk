@@ -10,6 +10,7 @@ import { library, type PackSummary } from '../audio/samples.ts';
 import { inputLabel, instrumentLabel } from '../ui/Tracks.tsx';
 import {
   apply,
+  applyJob,
   beginGesture,
   bounceSong,
   endGesture,
@@ -165,6 +166,34 @@ async function onMessage(msg: Record<string, unknown>): Promise<void> {
       // (a burst of changes is saved as one, and each is answered with that save's revision)
       const revision = await saveSoon();
       ack(true, revision === null ? {} : { revision });
+      return;
+    }
+    case 'agent-ops': {
+      // the in-app agent's changes: one undo step per request, answered as soon as they're in the song
+      const s = store.get();
+      if (!s.project || s.project.id !== msg.project) {
+        ack(false, { error: 'That song is not open in the studio' });
+        return;
+      }
+      const job = typeof msg.job === 'string' ? msg.job : '';
+      const batch = typeof msg.batch === 'string' ? msg.batch : '';
+      // (a batch is applied once by its id: without one, a second would pass for the first)
+      if (!job || !batch) {
+        ack(false, { error: 'The changes came without their job and batch' });
+        return;
+      }
+      const ops = Array.isArray(msg.ops) ? (msg.ops as Op[]) : [];
+      const r = await applyJob(ops, job, batch, String(msg.label ?? 'Changes'));
+      if (r.ok) ack(true, { revision: store.get().serverRevision });
+      else ack(false, { error: r.error ?? 'The changes did not apply' });
+      return;
+    }
+    case 'agent-flush': {
+      // the agent's turn is over: the host reads the song once it's saved (a save already going
+      // on is waited for, and the song as it is now saved after it)
+      const revision = await saveSoon(0);
+      if (revision === null) ack(false, { error: 'The studio could not save the song' });
+      else ack(true, { revision });
       return;
     }
     case 'transport': {
@@ -478,6 +507,11 @@ function offerRemote(peers: { role: string; name: string }[]): void {
     12_000,
     { label: 'Open Remote', run: () => location.assign('/remote') },
   );
+}
+
+/** Tell the host the user undid or redid a step (the agent hears of it before its next request). */
+export function reportHistory(action: 'undo' | 'redo', label: string, job?: string): void {
+  send({ type: 'history', action, label, job });
 }
 
 /** Rename this device (the others see it at once). */

@@ -11,6 +11,8 @@ import type { MidiStatus, PortInfo } from '../audio/midi.ts';
 export interface Step {
   project: Project;
   label: string;
+  /** The agent's job whose changes this step holds (they merge into one step while it runs). */
+  job?: string;
 }
 
 export type SaveState = 'saved' | 'dirty' | 'saving' | 'offline' | 'conflict' | 'error';
@@ -50,6 +52,10 @@ export interface AppState {
   undo: Step[];
   redo: Step[];
   saveState: SaveState;
+  /** The agent's jobs this studio has had changes from: true while one runs. */
+  agentJobs: Record<string, boolean>;
+  /** Undo and Redo are reported to the host (the agent is on and this device is allowed). */
+  agentReport: boolean;
 
   selectedTrack: string | null;
   selectedRegions: string[];
@@ -177,6 +183,8 @@ const initial: AppState = {
   undo: [],
   redo: [],
   saveState: 'saved',
+  agentJobs: {},
+  agentReport: false,
   selectedTrack: null,
   selectedRegions: [],
   selectedNotes: [],

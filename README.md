@@ -9,12 +9,12 @@
 - **Write and edit.** Tracks and regions on a timeline. A Piano Roll with the keyboard down the left: drag notes to new pitches and times, stretch them, set velocities, and draw any controller (mod wheel, expression, sustain, pitch bend, aftertouch, any CC). Quantize, transpose, split, repeat, undo everything.
 - **Play it live.** USB MIDI keyboards and drum pads through Web MIDI, delivered to the audio engine through shared memory: a key you press sounds in the next 128-frame block. You can also play the computer keyboard (Musical Typing) or the touch keyboard and drum pads on a phone. Record with count-in, cycle and metronome (right-click the metronome for its sound and volume). For the shortest time from key to ear, run [HO[LO] Engine](#play-it-in-a-few-milliseconds-holo-engine) on the computer you play on.
 - **Scores.** Any track as notation (press <kbd>N</kbd>): the score and the Piano Roll are the same notes, so an edit in either shows in both. Write by typing letters and note values, playing a MIDI keyboard, or clicking on a staff; add dynamics, articulations, slurs, lyrics, chord symbols, repeats and endings, D.C. and D.S. jumps, guitar tab and drum parts. Markings sound as they read, and playback follows the repeats. MusicXML goes in and out (MuseScore, Sibelius, Finale, Dorico), and the full score or each part prints, or saves as a PDF.
-- **Scan sheet music.** Photograph a page with your phone or open an image or a PDF: HO[LO] straightens it and finds the systems, then reads it into the song with your own signed-in Claude Code (no API key) and shows each line of the page above the bars it became, for a quick review. Optional open-source recognition engines (Audiveris and homr, `pnpm omr on`) read it a second time and flag the bars where the readings differ.
+- **Scan sheet music.** Photograph a page with your phone or open an image or a PDF: HO[LO] straightens it, finds the systems and shows each line of the page above the bars it became, for a quick review. Optional open-source recognition engines (Audiveris and homr, `pnpm omr on`) read it into the song as one undo step, and read it again to flag the bars where they differ from what's written. The agent, if you turn it on, can read it too.
 - **Record and edit audio.** Audio tracks record a microphone or an instrument through an audio interface (lined up with what you heard, using this device's measured round trip), or take WAV, FLAC, MP3, Ogg and AIFF files dropped on the tracks. Trim from either edge, drag fades, set gain, normalize, and time-stretch without changing pitch (Alt-drag a region's end, as in Logic) in the tracks area or the Audio Editor.
 - **Mix and automate.** Channel strips with instruments, MIDI effects, audio effects, sends, buses, pan, faders and meters. Put a channel on a **Stage**: a near seat and a far seat, each with its own rooms and depth, and a Distance that moves it between them. Automation lanes (press <kbd>A</kbd>) draw how volume, pan, mute, sends, distance and any plugin parameter move through the song, in straight lines or smooth curves, sample-accurately.
 - **Bounce.** <kbd>Ctrl B</kbd> renders the song (or the cycle) to a 24-bit WAV with the same engine, faster than real time, and keeps a copy with the song. The stock plugins are Channel EQ, Parametric EQ (eight free bands), Compressor, Noise Gate, Transient Softener, Limiter, Space Designer (convolution with generated rooms, halls and cathedrals, or any impulse response), Shimmer, Space Reverb, Tape Delay, Chorus, Wow & Flutter, Rotary Speaker, Phaser, Tremolo (or auto-pan), String Resonance (a grand's strings ringing in sympathy, with an extended grand's bass strings), Stereo Width, Tape Warmth, Saturation, Lo-fi, Drum Replacer (each hit on a drum track played again on any kit, and turned into notes), Arpeggiator, Harmonizer, Scale Quantizer, Velocity Processor and Session Drummer (a drummer that plays along in ten styles, with fills). Plugins that look ahead (the limiter, Shimmer, the Drum Replacer) are delay-compensated: everything else waits for them, so it all arrives together. A song can carry its **finish** (mastering to a loudness under a true-peak ceiling, with glue) and be marked a **loop**, so a game's music renders as it plays forever, its end ringing into its start.
 - **Real instruments.** Free sample libraries (VSCO 2 Community Edition, the Versilian Community Sample Library, Karoryfer's Meatbass, a FreePats guitar, a Steinway Model D, and rock, prog and jazz drum kits) with every sample measured for its true pitch, level and loop. **Performance** instruments play a whole part as a real player would (dynamic layers, round robins, legato hand-overs, re-bowing, attacks that land on the beat), and **Glass** is a bowed-glass voice. There are about sixty built-in synths in eight families, so something always plays, with no download: **Fat Mono** and **Fat Poly** (three drifting oscillators driven into a transistor-ladder filter), **Ethereal Pad** and **Ethereal Keys** (a wide supersaw in a shimmering hall of its own), a **tonewheel organ** with its rotating speaker, modeled **tine, reed and clav** electric keys, a four-operator **FM** synth, a morphing **wavetable** synth, evolving **drones**, an analog-style **drum machine** (four kits on the General MIDI drum keys), modeled **flutes, pipes, zithers, lutes, free reeds, a glass harmonica, a choir, taiko and war drums, gongs and an anvil**. Each has six knobs in its window (the button on its instrument slot). **Import your own packs** as SFZ or folders of WAV files.
-- **An AI collaborator.** A [Claude Code](https://claude.com/claude-code) skill that reads the open session and writes into it as undoable steps. It harmonizes, writes counter-melodies and bass lines, sets up a live harmonizer that follows your playing, and listens to what you play and answers it.
+- **An AI collaborator.** A [Claude Code](https://claude.com/claude-code) skill that reads the open session and writes into it as undoable steps. It harmonizes, writes counter-melodies and bass lines, sets up a live harmonizer that follows your playing, and listens to what you play and answers it. The studio's command bar can take the same kind of request too, carried out by your own Claude Code, Codex or Cursor, once you turn that on.
 - **Round trips with your own projects.** A game or an app whose music is code can send a piece into HO[LO] and get your edits back, and render the song itself so you can compare its own sound with the studio's, edits and all ([how](docs/creations.md)).
 - **Music for your next project.** `holo init` gives a new game or app ("an experience") its songs folder and a pinned copy of HO[LO]'s engine, so the project builds its own music, sample for sample as the studio renders it, with or without HO[LO] Desk; `holo update-engine` moves it on when you choose ([how](docs/creations.md#music-for-a-new-project-an-experience)).
 - **Everywhere.** Desktop, tablet and phone (portrait and landscape), installable as an app, in Docker, reached by your own devices over HTTPS on your tailnet.
@@ -147,11 +147,42 @@ Then ask Claude things like *"harmonize the melody in bars 9 to 16 with a counte
 or *"put a live harmonizer on my keys in A lydian, thirds and fifths"*. Each change appears in the
 open studio as one step you can undo. See [skills/holo/SKILL.md](skills/holo/SKILL.md).
 
-Claude reads and writes notation too (`holo score show`, `holo score write`), and the Scan window's
-**Read with AI**, **Check with AI** and **Fix flagged** buttons run your own Claude Code in the
-background through the runner (`pnpm runner`), sealed off so it can only read the page and write the
-score. Install the Claude Code CLI on that computer and sign in once (`claude`, then `/login`); the
-buttons say what's missing if anything is.
+Claude reads and writes notation too (`holo score show`, `holo score write`).
+
+### The agent in the studio
+
+The studio can take requests in plain words too, in its bar (<kbd>Ctrl /</kbd>). This is off until you
+turn it on in **Settings › Agent**, and while it's off nothing in the studio mentions it. The agent runs
+your own Claude Code, Codex or Cursor on the host, signed in as you, so install one there and keep the
+runner going (`pnpm runner`, the one that also renders [creations](docs/creations.md)).
+
+The first device pairs with a 6-digit code the runner prints; the code works once, for 10 minutes. A
+later device asks to join, and a device already allowed approves it in its own Settings › Agent, where
+any device can also be removed, at once. The harness, its model and effort, its sign-in and its updates
+are there too. An update runs only when you click it, and it updates the same harness your terminal
+uses.
+
+Type a request and press Enter. A picture, a recording, a MIDI or MusicXML file or a text file dropped
+or pasted on the bar goes with it (a picture is redrawn on your device first, without its location
+data). The reply is a sentence or two under the field, with a button only when the agent needs your
+click: to install a pack, send the song to its creation, share the screen, take a photo or record from
+the microphone. Close the bar and the work goes on: the bar's button shows a turning ring while the
+agent works, then a dot until you open the bar again. The agent works on the open song and nothing else:
+
+- its notes, score, tracks, instruments, effects, mix, automation, tempo, key, meter, markers and cycle;
+- playing to you, listening as you play, and reading what you just played (its tempo, meter, key and
+  pickup);
+- finding sounds, and installing a HO[LO] Pack once you've clicked;
+- playing the bars it changed as they were, then as they are;
+- with the Scan window open, **Read this scan**, **Check it** and **Fix flagged**.
+
+Everything it changes for one request is one undo step, "Agent: …", and before your next request it's
+told what you undid or changed since. It can't change HO[LO]'s code, its packs, a creation's code or
+any file: asked to, it writes a brief for you to copy into your own coding agent in that repository.
+Its harness runs with HO[LO]'s tools and nothing else: no shell, files or web, and none of your own
+settings, skills or MCP servers. [docs/agent.md](docs/agent.md) has how it works.
+
+The `holo` command and the skill work as they always have, with the agent on or off.
 
 ## Sample packs
 
@@ -240,8 +271,10 @@ inventory is what the mapping will be written from.
 They follow Logic's (Ctrl in place of ⌘): Space play/stop, R record, C cycle, K metronome, X mixer,
 P Piano Roll, I Inspector, Y Library, Q quantize, Ctrl T split, Ctrl R repeat, Ctrl Z undo, Ctrl K
 Musical Typing, A automation, Ctrl B bounce. N shows the Score and Shift N writes in it: letters for
-notes, 1–7 for values (as in MuseScore), Shift L lyrics, Shift Q chord symbols. Press <kbd>?</kbd> in
-the studio for the whole list.
+notes, 1–7 for values (as in MuseScore), Shift L lyrics, Shift Q chord symbols. Ctrl / opens the bar,
+where every command, track and marker is found by name (the search button in the control bar, or on a
+phone View › Commands or a swipe down on the top bar). Press <kbd>?</kbd> in the studio for the whole
+list.
 
 ## Development
 
@@ -262,22 +295,25 @@ pnpm lint       # Biome
 | `packages/session` | the session format, operations, notation, MIDI files |
 | `packages/music` | an experience's build: the pinned renderer a project carries, its sample fetching and checks |
 | `packages/cli` | the `holo` command |
+| `packages/agent` | the agent in the studio: its tools (an MCP server), its instructions (`AGENT.md`) and how the runner starts each harness sealed |
 | `skills/holo` | the Claude Code skill |
 | `local/` | not in the repository (git ignores it): your own tools for your own creations, such as an importer |
 | `packs.lock.json` | the sample packs HO[LO] plays: a commit of [HO[LO] Packs](https://github.com/shooter-git/holo-packs) (their maps, sources and checksums; no audio) and every pack's hash |
 | `deploy` | Docker |
-| `docs` | [architecture](docs/architecture.md), [session format](docs/session-format.md), [creations](docs/creations.md), [latency](docs/latency-and-devices.md) |
+| `docs` | [architecture](docs/architecture.md), [session format](docs/session-format.md), [creations](docs/creations.md), [latency](docs/latency-and-devices.md), [the bar and the agent](docs/agent.md), [the agent's harnesses](docs/agent-harnesses.md) |
 
 The pre-commit hook (`git config core.hooksPath .githooks`) stops commits that would publish a
 secret, an email address or a home-folder path.
 
 ## Privacy and security
 
-HO[LO] has no accounts and sends nothing anywhere. The AI buttons run your own Claude Code, which sends
-what it reads (a scanned page, the score) to Anthropic as any Claude Code session does: only when you
-press one, and as you. It binds to `127.0.0.1`, and only devices on your own
-tailnet can reach it when you turn that on. HO[LO] Engine listens on `127.0.0.1:47830` only, and lets in
-a studio served from this computer, the local network or a tailnet (`--origin` names any other). Your songs and packs stay in `./data`. Read
+HO[LO] has no accounts and sends nothing anywhere. The agent is off unless you turn it on, and off, no
+harness is run and nothing is looked up for it. On, it runs your own Claude Code, Codex or Cursor, which sends what
+it reads (the song, a scanned page, a file you attached) to Anthropic, OpenAI or Cursor as any session
+of yours does, as you, and only the devices you've allowed can ask it anything. HO[LO] binds to
+`127.0.0.1`, and only devices on your own tailnet can reach it when you turn that on. HO[LO] Engine
+listens on `127.0.0.1:47830` only, and lets in a studio served from this computer, the local network or
+a tailnet (`--origin` names any other). Your songs and packs stay in `./data`. Read
 [SECURITY.md](SECURITY.md) before exposing it any other way.
 
 ## Made with HO[LO] Desk

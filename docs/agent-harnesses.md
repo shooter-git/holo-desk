@@ -23,6 +23,7 @@ server of ours as its only tools. The adapters in `packages/agent/src/harness/` 
 | Shell/read attempt | Nothing to call; with built-ins on, `dontAsk` denies at once | Nothing to call (`exec_command` gone); a forced write is refused | Denied by the workspace `cli.json`, no hang, no `--force` |
 | Tool calls run without a prompt | `--allowedTools=mcp__holo__*` | needs `default_tools_approval_mode="approve"` | `--approve-mcps` plus `allow: Mcp(holo:*)` |
 | Prompt on stdin | Yes (`-p`, no argument) | Yes (`-`) | Yes (`-p`, no argument) |
+| The agent's instructions | `--append-system-prompt-file` | the workspace's `AGENTS.md`, after the user's global `$CODEX_HOME/AGENTS.md` | the workspace's `AGENTS.md` |
 | Session id | `init.session_id` | `thread.started.thread_id` | `init.session_id` |
 | Resume | `--resume=<id>`: works | `exec resume … <id> -`: works; `--ephemeral` breaks it | `--resume=<id>`: works only with the same private `HOME` |
 | MCP image reaches the model | Yes (named the colour) | Yes | Yes |
@@ -30,7 +31,7 @@ server of ours as its only tools. The adapters in `packages/agent/src/harness/` 
 | Model / effort | `--model=<alias>` `--effort=<low…max>` | `--model=<id>` `-c model_reasoning_effort="…"` | effort is part of the model id |
 | Signed-in check | `claude auth status` (JSON, exit 0/1) | `codex login status` (stderr text, exit 0/1) | `cursor-agent status --format json` (exit 0 both) |
 | Sign-in without a TTY | URL printed, pasted `code#state` on stdin (source) | `codex login --device-auth`: URL + one-time code (source) | `NO_OPEN_BROWSER=1`: URL printed, then polls (source) |
-| Check for an update without installing | channel file on downloads.claude.ai | npm registry / GitHub releases | `cursor-agent about --format json` |
+| Check for an update without installing | the `stable` channel file on downloads.claude.ai | npm registry / GitHub releases | `cursor-agent about --format json` |
 | Updates itself during a run | not with `DISABLE_AUTOUPDATER=1` | not seen | **yes, unless `--disable-auto-update`** |
 | Startup to first event | 0.3–0.5 s | 0.06–0.5 s | 3–7 s warm, 15–34 s cold |
 | Stop | process-group SIGTERM: all gone | same | same; also needed after a normal exit (worker daemon) |
@@ -48,6 +49,7 @@ claude -p --output-format=stream-json --verbose
   --allowedTools=mcp__holo__*
   --permission-mode=dontAsk
   --setting-sources=project --settings=<ws>/settings.json
+  [--append-system-prompt-file=<ws>/instructions.md]
   --disable-slash-commands --no-chrome
   [--resume=<session id>]
 ```
@@ -154,6 +156,26 @@ process-group SIGTERM ended Claude (exit 143) and the MCP server, which got SIGT
   `clientDataCacheSlots`, `additionalModelOptionsAnsweredAt`). No project entry or setting changes. The user's
   own running Claude sessions write it too.
 
+**In the adapter** (`packages/agent/src/harness/claude.ts`):
+- The agent's instructions (`packages/agent/AGENT.md`) are written to `<ws>/instructions.md` and given with
+  `--append-system-prompt-file`. The runner takes them off the front of the prompt, so they aren't there twice.
+- Before Claude Code is offered, its `--help` (read once per version) must name every option a sealed run uses:
+  `--tools`, `--strict-mcp-config`, `--mcp-config`, `--allowedTools`, `--permission-mode`, `--setting-sources`,
+  `--settings`, `--disable-slash-commands`, `--append-system-prompt`, `--effort` and `--resume`. An older Claude
+  Code is listed as unavailable, with what it lacks.
+- Models: the aliases `--help` names for `--model`, plus `sonnet`, `opus` and `haiku`. An effort outside
+  `low…max` is left out of the run.
+- Sign-in status: `claude auth status --json`. `claude auth login` is offered only while it says signed out.
+- **The update check reads the `stable` channel**: `https://downloads.claude.ai/claude-code-releases/stable`,
+  whatever channel the install follows (`claude doctor` names it; on this machine it's `latest`). An install on
+  either channel can reach the version `stable` names, so Update never offers one `claude update` won't install;
+  an install on `latest` is usually ahead of it and updates itself. An npm install (its path has
+  `node_modules`) is checked against the `stable` tag, `https://registry.npmjs.org/@anthropic-ai/claude-code/stable`,
+  instead. The answer is kept for 6 hours, per version, in `<root>/.harnesses.json` (`<root>` is
+  `${XDG_CACHE_HOME:-~/.cache}/holo/agent`).
+- `claude update` runs only when the user clicks Update in Settings › Agent, with `DISABLE_AUTOUPDATER` left out
+  of its environment.
+
 ## Codex
 
 **Command** (prompt on stdin):
@@ -163,6 +185,7 @@ codex exec --json --skip-git-repo-check --ignore-user-config --ignore-rules
   --model=<id> -c model_reasoning_effort="<effort>"
   -c sandbox_mode="read-only" -c approval_policy="never" -c web_search="disabled"
   -c features.multi_agent_v2.disable_native_tools=true
+  -c check_for_update_on_startup=false -c project_root_markers=[]
   -c mcp_servers.holo.command="<node>" -c mcp_servers.holo.args=["<mcp.ts>"]
   -c mcp_servers.holo.env={NAME="value"}
   -c mcp_servers.holo.tool_timeout_sec=240 -c mcp_servers.holo.startup_timeout_sec=20
@@ -201,7 +224,24 @@ Values given with `-c` show in `ps`: never put the job token there. Our server r
   (`spawn_agent`…). `--disable multi_agent` alone only does that for v1 models such as `gpt-5.6-luna`.
 - **`default_tools_approval_mode="approve"`.** Without it every MCP call failed with
   `MCP tool call requires approval, but approval policy is never`. The valid values are `auto`, `prompt`,
-  `writes` and `approve`.
+  `writes` and `approve`. It's set on our server only (`mcp_servers.holo.…`).
+- **`check_for_update_on_startup=false`** (added in the adapter) keeps a run from looking for a newer Codex as
+  it starts. The runner looks for updates itself, and installs one only when the user clicks Update. (Codex
+  wasn't seen updating itself during a run either way.)
+- **`project_root_markers=[]`** (added in the adapter) has Codex take `AGENTS.md` from the workspace only, none
+  from the folders above it.
+- **The user's global `AGENTS.md` is still read.** Seen later with `codex debug prompt-input` (0.167.1, a
+  stand-in `CODEX_HOME` holding an `AGENTS.md`, and the run's `-c` and `--disable` switches):
+  - `$CODEX_HOME/AGENTS.md` comes first in the model's one "AGENTS.md instructions" message, then
+    `--- project-doc ---` and the workspace's `AGENTS.md`;
+  - `--ignore-user-config` skips only `config.toml` (its help says "auth still uses `CODEX_HOME`");
+  - `-c project_doc_max_bytes=0` drops the workspace's file but not the global one, and
+    `-c user_instructions=""` changes nothing.
+
+  A run can't have a `CODEX_HOME` of its own: the sign-in, and the sessions resume needs, are in the user's. So
+  the adapter leaves the file as it is (HO[LO] never reads or writes `~/.codex`). Its text reaches the model
+  before HO[LO]'s instructions, but it can't give the model a tool, and `AGENT.md` says that only the request
+  and HO[LO]'s instructions say what to do.
 - **`apply_patch` couldn't be removed.** `include_apply_patch_tool` and `tools.apply_patch` are ignored. A forced
   attempt was refused:
   `patch rejected: writing is blocked by read-only sandbox; rejected by user approval settings`. No file was
@@ -279,7 +319,23 @@ write tool left, `apply_patch`, is refused. The caveats:
 - the tripwire can't see refused non-MCP attempts in `--json`;
 - `features.multi_agent_v2.disable_native_tools` is an undocumented key that may change, so the adapter should
   check `codex debug prompt-input` once per Codex version and mark Codex unavailable if any tool beyond those
-  above appears.
+  above appears;
+- the user's global `$CODEX_HOME/AGENTS.md` reaches the model as instructions (text only).
+
+**In the adapter** (`packages/agent/src/harness/codex.ts`):
+- The agent's instructions are the workspace's `AGENTS.md` (mode 0600).
+- **The seal is checked once per version**, remembered in `<root>/.harnesses.json`: `codex debug prompt-input`
+  with the run's `-c` settings and `--disable` list, in an empty `CODEX_HOME` of its own (`<root>/.codex-probe`,
+  so none of the user's config or MCP servers is read or started). Codex is offered only when the model's tools
+  are code mode's own (`exec`, `wait`, `request_user_input`, `request_user_input_async`) and, reached through
+  `exec`, `apply_patch`, `clock__curr_time`, the three MCP resource tools and `mcp__holo__*`.
+- Models: those `codex debug models` lists as visible (`--bundled` when it can't fetch them), each with its
+  efforts, read once per version and every 6 hours. `ultra` isn't offered: it hands work to sub-agents, which a
+  sealed run doesn't have.
+- The tripwire also lets `error` items through, and Codex's top-level `error` events ("Reconnecting… 2/5") are
+  shown, not taken as a failure; `turn.failed` is.
+- Sign-in: `codex login --device-auth`, its link and one-time code relayed. Status: `codex login status`.
+- The update check is `https://registry.npmjs.org/@openai/codex/latest`. `codex update` runs only on a click.
 
 ## Cursor
 
@@ -298,6 +354,8 @@ cursor-agent -p --output-format=stream-json --workspace=<ws> --trust --approve-m
 - `HOME=<ws>/home`: a private home kept with the thread.
 - `XDG_CONFIG_HOME=<real home>/.config`: on Linux the sign-in is read from `$XDG_CONFIG_HOME/cursor/auth.json`.
 - `CURSOR_CONFIG_DIR=<ws>/home/.cursor`.
+- In the adapter, also `XDG_CACHE_HOME`, `XDG_DATA_HOME` and `XDG_STATE_HOME` inside the private home
+  (`<ws>/home/.cache`, `.local/share`, `.local/state`).
 
 `<ws>/.cursor/mcp.json`:
 
@@ -439,15 +497,34 @@ absent. The caveats:
 - tools must return within 60 s.
 
 The adapter should run the init-time checks (the `cli.json` read back, `mcp list` showing `holo`) and mark
-Cursor unavailable when they fail.
+Cursor unavailable when they fail. What it does instead is the flag probe below.
+
+**In the adapter** (`packages/agent/src/harness/cursor.ts`):
+- **Linux only, so far.** On macOS and Windows Cursor is listed as unavailable, since the sign-in's place there
+  hasn't been checked.
+- **The flag probe.** Before Cursor is offered (once per version, remembered in `<root>/.harnesses.json`), the
+  adapter runs `cursor-agent -p --output-format=stream-json --workspace=<probe> --trust --disable-auto-update
+  --allowed-tools=holo_probe`, with no prompt and a private home of its own (`<root>/.cursor-home`). An unknown
+  value makes Cursor list the valid ones before it does anything else. Cursor is offered only when that list has
+  `mcp_tool_call` and `get_mcp_tools_tool_call`, so a version that drops or renames the hidden flag isn't used.
+- **The sandbox fallback.** A run starts with `--sandbox=enabled`. If Cursor answers
+  `Sandbox mode is enabled but not available`, the adapter notes that for this version and runs the turn again
+  with `--sandbox=disabled`, as every later run of that version does. A new version tries the sandbox again.
+- The agent's instructions are the workspace's `AGENTS.md`.
+- Status (`status --format json`), models (`cursor-agent models`) and the update check (`about --format json`)
+  run with the probe's private home. Sign-in (`login`, with `NO_OPEN_BROWSER=1`) and `update` run with the user's
+  own home and config, so they sign in and update the Cursor the terminal uses, and only on a click.
+- The tripwire also stops a run when one of HO[LO]'s own calls is refused: Cursor's permissions aren't as set.
 
 ## Effects on `docs/agent.md` and the plan
 
 1. **Long tool calls.** Cursor kills any MCP call at 60 s. `POST …/listen {maxMs}` up to 180 s doesn't fit.
    Either cap every tool at about 50 s and let `listen` return `{notes, more:true}` so the agent calls it again,
    or split long waits into start and poll. Claude (per-server `timeout`) and Codex (`tool_timeout_sec`) can
-   be set to 240 s.
-2. **Cursor's sandbox** can't be required. Use "`--sandbox enabled` where it starts".
+   be set to 240 s. *Done:* a listen comes in parts of at most 40 s (`{notes, done, part, pending}`), heard
+   as one by the server; the tool says "call listen again" between parts.
+2. **Cursor's sandbox** can't be required. Use "`--sandbox enabled` where it starts" (the adapter tries it, and
+   falls back per version; see Cursor's "In the adapter").
 3. **Cursor's environment** isn't the shared allowlist. Add `HOME=<ws>/home`, `XDG_CONFIG_HOME` (the real one,
    Linux) and `CURSOR_CONFIG_DIR=<ws>/home/.cursor`, plus the hidden `--disable-auto-update` and
    `--allowed-tools`. The workspace layout gains `home/`, which must persist for resume.
@@ -467,12 +544,14 @@ Cursor unavailable when they fail.
 7. **Sign-in relays differ.** Only Claude needs the pasted code (`POST …/login/code` → stdin as `code#state`).
    Codex shows a URL and a one-time code (`--device-auth`). Cursor shows a URL and polls.
 8. **Update checks.**
-   - Claude: `downloads.claude.ai/claude-code-releases/<channel>`, with the channel from `claude doctor`.
-   - Codex: npm or GitHub.
+   - Claude: `downloads.claude.ai/claude-code-releases/<channel>`, with the channel from `claude doctor`. The
+     adapter reads the `stable` channel (npm's `stable` tag for an npm install), which an install on either
+     channel can reach.
+   - Codex: npm or GitHub. The adapter reads npm.
    - Cursor: `about --format json`.
 
    All three updaters run only on a click. `DISABLE_AUTOUPDATER=1` and `--disable-auto-update` keep agent runs
-   from updating.
+   from updating, and `check_for_update_on_startup=false` keeps a Codex run from looking.
 9. **Codex's `-c` values show in `ps`.** This confirms the plan: the job token stays in `.holo-job`.
 10. **The "checksums unchanged" check** applies to settings files. `~/.claude.json` is rewritten by Claude Code
     on every run (caches only), and transcripts in `~/.claude/projects` and `~/.codex/sessions` are how resume

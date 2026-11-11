@@ -56,7 +56,8 @@ is going; when it's done the creation's WAV is on its own audio track at the top
 as one undoable step (a newer render replaces it). Play to hear the creation's sound, unsolo it to hear
 the studio's mix, and solo it again to compare. HO[LO]'s server never runs commands itself (it may be
 in Docker, and every device on your network can reach it): only the runner does, and only the render
-command each creation declares, with the piece's name checked.
+command each creation declares, with the piece's name checked. (The runner also starts the agent's
+harness, sealed, when the agent is on: see [agent.md](agent.md).)
 
 ## Music for a new project (an experience)
 

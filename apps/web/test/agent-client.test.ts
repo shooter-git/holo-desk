@@ -343,3 +343,81 @@ function barState(): BarState {
     phone: false,
   };
 }
+
+describe('a scan’s tasks in the bar', () => {
+  const run = { scan: () => undefined, reset: () => undefined };
+  const ids = (rows: { id: string }[]) => rows.map((r) => r.id);
+
+  it('are offered only with the agent on and a scan open', () => {
+    expect(A.agentCommands({ on: false, project: 'prj_a', scan: 'scn_1', busy: false }, run)).toEqual({
+      suggest: [],
+      commands: [],
+    });
+    const noScan = A.agentCommands({ on: true, project: 'prj_a', scan: null, busy: false }, run);
+    expect(ids(noScan.suggest)).toEqual([]);
+    expect(ids(noScan.commands)).toEqual(['agent-new']);
+    const scan = A.agentCommands({ on: true, project: 'prj_a', scan: 'scn_1', busy: false }, run);
+    expect(scan.suggest.map((r) => r.title)).toEqual(['Read this scan', 'Check it', 'Fix flagged']);
+    expect(ids(scan.commands)).toEqual(['scan-read', 'scan-check', 'scan-fix', 'agent-new']);
+    // while the song's request runs, none (the host takes one at a time)
+    const busy = A.agentCommands({ on: true, project: 'prj_a', scan: 'scn_1', busy: true }, run);
+    expect(busy.suggest).toEqual([]);
+  });
+
+  it('come first in the bar before anything is typed, and are found by name', () => {
+    const act = new Proxy({} as Actions, { get: () => () => undefined });
+    const { suggest, commands } = A.agentCommands({ on: true, project: 'prj_a', scan: 'scn_1', busy: false }, run);
+    const rows = C.barRows('', barState(), act, { suggest, commands });
+    expect(rows.slice(0, 3).map((r) => r.title)).toEqual(['Read this scan', 'Check it', 'Fix flagged']);
+    expect(rows.length).toBeLessThanOrEqual(8);
+    expect(C.barRows('fix', barState(), act, { suggest, commands })[0]?.title).toBe('Fix flagged');
+  });
+
+  it('send the scan’s preset, not words', () => {
+    const asked: string[] = [];
+    const { suggest } = A.agentCommands(
+      { on: true, project: 'prj_a', scan: 'scn_1', busy: false },
+      { scan: (task, scan) => asked.push(`${task}:${scan}`), reset: () => undefined },
+    );
+    for (const r of suggest) r.run();
+    expect(asked).toEqual(['read:scn_1', 'check:scn_1', 'fix:scn_1']);
+  });
+});
+
+describe('the host’s word on the settings', () => {
+  it('turned off on another device: everything of it goes', () => {
+    let a = on();
+    a = A.reduce(a, { type: 'status', job: job({ state: 'running' }), barOpen: false });
+    a = A.reduce(a, { type: 'enabled', enabled: false });
+    expect(A.isOn(a)).toBe(false);
+    expect(a.jobs).toEqual({});
+    expect(A.barSign(a, 'prj_a')).toBeNull();
+    a = A.reduce(a, { type: 'enabled', enabled: true });
+    expect(A.isOn(a)).toBe(true);
+  });
+
+  it('brings back a waiting permission and a brief after a reload, from the conversation', () => {
+    let a = on();
+    a = A.reduce(a, {
+      type: 'thread',
+      project: 'prj_a',
+      turns: [
+        {
+          job: 'agj_00000000000a',
+          request: 'A darker flute',
+          reply: 'The closest is a download.',
+          label: 'Flute',
+          state: 'awaiting',
+          at: 10,
+          permission: { kind: 'install-pack', detail: 'Iowa Flute', pack: 'iowa-flute' },
+          brief: 'pnpm test',
+          briefWarnings: [{ line: 0, kind: 'command' }],
+        },
+      ],
+    });
+    const ex = A.exchange(a, 'prj_a');
+    expect(ex?.permission?.pack).toBe('iowa-flute');
+    expect(ex?.brief).toBe('pnpm test');
+    expect([...(ex?.flagged ?? [])]).toEqual([[0, 'command']]);
+  });
+});

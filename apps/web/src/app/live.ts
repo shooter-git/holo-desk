@@ -1,7 +1,8 @@
 /**
- * The studio's side of the live channel. It reports what the studio is doing (so the AI knows the
- * playhead, the selection and the song), applies the AI's changes as undo steps, follows transport
- * commands, plays the AI's notes and passes on notes from other devices.
+ * The studio's side of the live channel. It reports what the studio is doing (so the command line and
+ * the agent know the playhead, the selection and the song), applies their changes as undo steps,
+ * follows transport commands, plays the notes they send and passes on notes from other devices. It
+ * also remembers the last minute of what was played here, for the agent to ask about after the fact.
  */
 import { type ChannelPatch, formatBarBeat, newId, type Op, type Project, tickToSeconds } from '@holo/session';
 import { engine } from '../audio/engine.ts';
@@ -13,6 +14,7 @@ import {
   applyJob,
   beginGesture,
   bounceSong,
+  compareJob,
   endGesture,
   ensureAudio,
   gestureChange,
@@ -35,8 +37,9 @@ import {
   updateChannel,
   updateTrack,
 } from './actions.ts';
-import { agentMessage, helloFields, onTokenChange, refreshAgent, viewName } from './agent.ts';
-import { type AiJobStatus, store, toast } from './store.ts';
+import { agent, agentMessage, helloFields, onTokenChange, refreshAgent, viewName } from './agent.ts';
+import { PlayedMemory } from './played.ts';
+import { store, toast } from './store.ts';
 
 /** Scans this studio has heard of (so a phone's new one is offered once). */
 const seenScans = new Set<string>();
@@ -169,7 +172,7 @@ async function onMessage(msg: Record<string, unknown>): Promise<void> {
         ack(false, { error: 'The changes did not apply' });
         return;
       }
-      toast(`${author}: ${label}`, 'ai');
+      toast(`${author}: ${label}`);
       // (a burst of changes is saved as one, and each is answered with that save's revision)
       const revision = await saveSoon();
       ack(true, revision === null ? {} : { revision });
@@ -269,7 +272,7 @@ async function onMessage(msg: Record<string, unknown>): Promise<void> {
     }
     case 'listening':
       listening = Date.now() + Number(msg.ms ?? 0);
-      toast('The AI is listening: play something', 'ai', Number(msg.ms ?? 4000));
+      toast('The AI is listening: play something', 'info', Number(msg.ms ?? 4000));
       return;
     case 'saved': {
       const s = store.get();
@@ -311,21 +314,29 @@ async function onMessage(msg: Record<string, unknown>): Promise<void> {
       seenScans.add(id);
       return;
     }
-    case 'ai-status': {
-      const job = msg.job as AiJobStatus;
-      const was = store.get().aiJob;
-      store.set({ aiJob: job });
-      if (job.state === 'done' && was?.state !== 'done') toast(`AI: ${job.summary || 'done'}`, 'ai', 8000);
-      if (job.state === 'failed' && was?.state !== 'failed') toast(`The AI stopped: ${job.error ?? ''}`, 'error', 8000);
+    case 'agent-played': {
+      // what was just played here, for the agent: the last `seconds` (a minute at most)
+      const seconds = Math.max(0, Math.min(60, Number(msg.seconds) || 0));
+      ack(true, { notes: memory.played(seconds, performance.now()) });
+      return;
+    }
+    case 'agent-compare': {
+      // before and after: answered once it has started playing
+      if (!(await audioAllowed())) {
+        ack(false, { error: `The studio on ${device()} hasn't started its audio yet: click Start the studio there` });
+        return;
+      }
+      const r = compareJob(String(msg.job ?? ''), Number(msg.from), Number(msg.to));
+      ack(r.ok, r.ok ? {} : { error: r.error });
       return;
     }
     case 'agent-status':
     case 'agent-listen':
+    case 'agent-settings':
     case 'agent-harness':
     case 'agent-devices':
     case 'agent-removed':
-    case 'agent-look':
-    case 'agent-compare': {
+    case 'agent-look': {
       const r = agentMessage(msg);
       // this device's job: its changes merge into one step while it runs, and the step takes its name after
       if (r.effects) {
@@ -640,18 +651,19 @@ export function connectLive(): void {
   if (!stateTimer) stateTimer = window.setInterval(report, 250);
 }
 
-// what's played goes to the AI while it listens (and only then)
+/** The last minute of what was played here, every port: the agent may ask for it after the fact. */
+const memory = new PlayedMemory();
+
+// what's played goes to the host while the command line listens, or the agent's job does (only then)
 midi.onEvent((e) => {
-  if (Date.now() > listening) return;
-  // notes from other devices are reported by the server, which relayed them
-  if (midi.ports.some((p) => p.name === e.port && p.source === 'remote')) return;
-  played.push({
-    tick: store.get().playing ? Math.round(engine.heardTick(e.time, e.frame) ?? 0) : null,
-    status: e.status,
-    d1: e.d1,
-    d2: e.d2,
-    port: e.port,
-  });
+  const tick = store.get().playing ? Math.round(engine.heardTick(e.time, e.frame) ?? 0) : null;
+  memory.add({ at: e.time, status: e.status, d1: e.d1, d2: e.d2, port: e.port, tick });
+  const agentListens = agent.get().listening !== null;
+  if (Date.now() > listening && !agentListens) return;
+  // notes from other devices: for the command line, the host counts those it relayed itself; the agent
+  // hears only what this studio reports, so they come from here
+  if (!agentListens && midi.ports.some((p) => p.name === e.port && p.source === 'remote')) return;
+  played.push({ tick, status: e.status, d1: e.d1, d2: e.d2, port: e.port });
   queueMicrotask(() => {
     if (!played.length) return;
     send({ type: 'played', events: played.splice(0) });

@@ -1,8 +1,10 @@
 /**
  * Scanning from the studio (or a phone's Remote): photos or PDFs in, pages straightened and their
- * systems found in a worker, and the scan sent to the host, where the AI (or you) reads it in.
+ * systems found in a worker, and the scan sent to the host, to be read in: by you, the recognition
+ * engines, or the agent (from the bar).
  */
 import type { FoundSystem, Point, Scan } from '@holo/score';
+import type { Op } from '@holo/session';
 import type { PrepReply, PrepRequest } from './prep.worker.ts';
 import PrepWorker from './prep.worker.ts?worker';
 
@@ -215,11 +217,15 @@ export const listScans = (project: string) =>
   );
 export const setSystem = (id: string, page: number, k: number, body: Record<string, unknown>) =>
   call(`/api/scans/${id}/systems/${page}/${k}`, json('PATCH', body));
-export const aiStatus = () => call<{ available: boolean; reason?: string; version?: string }>('/api/ai');
-export const startAi = (id: string, task: 'read' | 'check' | 'fix') =>
-  call(`/api/scans/${id}/ai`, json('POST', { task }));
-export const stopAi = (job: string) => call(`/api/ai/jobs/${job}/cancel`, { method: 'POST' });
 export const deleteScan = (id: string) => call(`/api/scans/${id}`, { method: 'DELETE' });
 export const omrStatus = () => call<{ available: boolean; engines: string[] }>('/api/omr');
 export const compareEngines = (id: string) =>
   call<{ summary: string[]; flagged: number }>(`/api/scans/${id}/engines`, { method: 'POST' });
+
+/** What the recognition engines read of a scan, as changes to its song, and the bars each system became. */
+export interface EngineReading {
+  ops: Op[];
+  systems: { page: number; system: number; written: [number, number] }[];
+}
+
+export const readWithEngines = (id: string) => call<EngineReading>(`/api/scans/${id}/engines/reading`);

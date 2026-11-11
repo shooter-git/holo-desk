@@ -1,7 +1,6 @@
 /** The control bar: views, the transport, the display (position, time, tempo, signature, key) and status. */
 import { formatBarBeat, KEYS, type MeterPoint, performed, tickToSeconds } from '@holo/session';
 import {
-  Bot,
   Circle,
   FastForward,
   Keyboard,
@@ -497,7 +496,6 @@ export function ControlBar() {
   const library = useApp((s) => s.library);
   const typing = useApp((s) => s.typing);
   const ports = useApp((s) => s.midiPorts.filter((p) => p.source === 'device').length);
-  const agent = useApp((s) => s.peers.some((p) => p.role === 'agent'));
   const remotes = useApp((s) => s.peers.filter((p) => p.role === 'remote').length);
   const show = useApp((s) => s.show);
   const project = useApp((s) => s.project?.id ?? null);
@@ -667,11 +665,6 @@ export function ControlBar() {
           </button>
         )}
         {show.barDsp && <DspMeter />}
-        {agent && (
-          <span className="btn ghost icon ai" title="The AI is connected" role="img" aria-label="The AI is connected">
-            <Bot />
-          </span>
-        )}
         {show.barRemote && (
           <button
             type="button"

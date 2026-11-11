@@ -705,13 +705,13 @@ function SettingsDialog() {
               Also here:{' '}
               {peers
                 .filter((p) => p.name !== device())
-                .map((p) => `${p.name} (${p.role === 'editor' ? 'studio' : p.role === 'agent' ? 'AI' : 'device'})`)
+                .map((p) => `${p.name} (${p.role === 'editor' ? 'studio' : p.role === 'agent' ? 'agent' : 'device'})`)
                 .join(', ')}
             </span>
           )}
           <span className="muted">
-            The name other devices and the AI see for this one, and what its notes are called when it plays into another
-            studio.
+            The name other devices and the agent see for this one, and what its notes are called when it plays into
+            another studio.
           </span>
         </section>
         <section className="vstack">
@@ -809,7 +809,7 @@ function SettingsDialog() {
                       : p.source === 'typing'
                         ? 'computer keyboard'
                         : p.source === 'ai'
-                          ? 'the AI'
+                          ? 'the agent'
                           : 'network'}
                   </span>
                 </div>

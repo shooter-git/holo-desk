@@ -87,7 +87,9 @@ export interface Command {
 
 /** What the bar offers besides the studio's commands (the agent's, while it's on for this device). */
 export interface Extra {
-  /** Commands found by name like the others (never offered before anything is typed). */
+  /** Offered first before anything is typed (what fits the window open: a scan's tasks). */
+  suggest?: Command[];
+  /** Commands found by name like the others. */
   commands?: Command[];
   /** A row that sends what was typed as a request: last, or first when no command fits the words well. */
   ask?: (text: string) => Command;
@@ -547,6 +549,7 @@ export function barRows(query: string, s: BarState, act: Actions, extra: Extra =
     const ticks = [...(s.project?.markers ?? [])].sort((a, b) => a.tick - b.tick).map((m) => m.tick);
     const next = ticks.findIndex((t) => t > s.playhead);
     const rows = [
+      ...(extra.suggest ?? []).filter((c) => c.available?.(s) ?? true),
       ...table.filter((c) => c.fits?.(s)),
       // the next marker after the playhead, or the first when it's past the last
       ...(markers.length ? [markers[next < 0 ? 0 : next] as Command] : []),

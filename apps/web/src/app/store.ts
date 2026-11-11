@@ -23,24 +23,10 @@ export type NoteView = 'roll' | 'score';
 export type MobileTab = 'tracks' | 'editor' | 'mixer' | 'play' | 'library';
 export type Dialog = null | 'projects' | 'settings' | 'creations' | 'shortcuts' | 'about' | 'remote';
 
-/** An AI job on a scan (the server's AiJob). */
-export interface AiJobStatus {
-  id: string;
-  task: 'read' | 'check' | 'fix';
-  scan: string;
-  project: string;
-  state: 'waiting' | 'running' | 'done' | 'failed';
-  started: number;
-  finished: number | null;
-  lines: string[];
-  summary: string | null;
-  error: string | null;
-}
-
 export interface Toast {
   id: number;
   text: string;
-  kind: 'info' | 'error' | 'ai';
+  kind: 'info' | 'error';
   /** A button beside the words: what it says and does (the toast goes when it's pressed). */
   action?: { label: string; run: () => void };
 }
@@ -75,8 +61,6 @@ export interface AppState {
   printView: { what: string } | null;
   /** Goes up when the host says a scan changed (the review reads it again). */
   scanTick: number;
-  /** The AI's job on a scan, as the runner last told it. */
-  aiJob: AiJobStatus | null;
   editorHeight: number;
   inspector: boolean;
   library: boolean;
@@ -200,7 +184,6 @@ const initial: AppState = {
   scanView: null,
   printView: null,
   scanTick: 0,
-  aiJob: null,
   // the editor takes a good share of the window to start with; a remembered height stands over this
   editorHeight:
     typeof window === 'undefined' ? 300 : Math.max(260, Math.min(520, Math.round(window.innerHeight * 0.42))),

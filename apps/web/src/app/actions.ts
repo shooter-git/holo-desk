@@ -63,6 +63,7 @@ import { library } from '../audio/samples.ts';
 import { holdDuringDrags } from '../ui/gesture.ts';
 import { NOTE_EFFECTS, playsHits } from '../ui/pads.ts';
 import { ApiError, api } from './api.ts';
+import { comparePlan, type Pass } from './compare.ts';
 import * as history from './history.ts';
 // (live.ts imports this module too: neither uses the other while loading, so the cycle is harmless)
 import { reconnectSoon, reportHistory } from './live.ts';
@@ -212,6 +213,54 @@ export function relabelJob(job: string, label: string): void {
 /** A job's steps in the song as it is, oldest first: the first one's song is the song from before the job. */
 export function jobSteps(job: string): Step[] {
   return history.jobSteps(store.get(), job);
+}
+
+/** Before and after under way: how to stop it (the song is put back as it is). */
+let comparing: { end: () => void } | null = null;
+
+/**
+ * Before and after (the agent's A/B): bars `from` up to `to` as they were before the job, then the same
+ * bars as they are now; then the song is back as it is, the playhead where they began. Pressing Stop,
+ * or changing the song, ends it there. Says why not when the song from before is gone from the undo
+ * history.
+ */
+export function compareJob(job: string, from: number, to: number): { ok: true } | { ok: false; error: string } {
+  const s = store.get();
+  if (!s.project) return { ok: false, error: 'No song is open in the studio' };
+  const plan = comparePlan(jobSteps(job), s.project, from, to);
+  if ('error' in plan) return { ok: false, error: plan.error };
+  comparing?.end();
+  if (s.playing) stop();
+  const now = s.project;
+  let timer = 0;
+  const end = () => {
+    window.clearInterval(timer);
+    if (comparing?.end !== end) return;
+    comparing = null;
+    engine.stop();
+    store.set({ playing: false });
+    // the audio thread plays the song as it is again
+    const back = store.get().project;
+    if (back) engine.sync(back);
+    engine.locate(plan.after.from);
+    store.set({});
+  };
+  const pass = (p: Pass, then: () => void) => {
+    engine.sync(p.song);
+    engine.locate(p.from);
+    engine.play(p.from);
+    store.set({ playing: true });
+    window.clearInterval(timer);
+    timer = window.setInterval(() => {
+      const cur = store.get();
+      // stopped, or the song changed under it: it ends here
+      if (!cur.playing || cur.project !== now) return end();
+      if (engine.positionTick() >= p.to) then();
+    }, 30);
+  };
+  comparing = { end };
+  pass(plan.before, () => pass(plan.after, end));
+  return { ok: true };
 }
 
 // ---- saving ----

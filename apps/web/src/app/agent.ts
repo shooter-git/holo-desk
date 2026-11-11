@@ -7,7 +7,8 @@
  * own, and goes only to HO[LO]'s host: as the bearer of the agent's routes, and in each live hello.
  */
 import { useSyncExternalStore } from 'react';
-import { selectionSpan } from './commands.ts';
+import type { Ready } from './attach.ts';
+import { type Command, selectionSpan } from './commands.ts';
 import { type AppState, store as studio } from './store.ts';
 
 export type HarnessId = 'claude' | 'codex' | 'cursor';
@@ -45,7 +46,7 @@ export interface AgentInfo {
 }
 
 export type JobState = 'waiting' | 'running' | 'awaiting' | 'done' | 'failed' | 'cancelled';
-export type PermissionKind = 'install-pack' | 'send-creation' | 'screen' | 'photo';
+export type PermissionKind = 'install-pack' | 'send-creation' | 'screen' | 'photo' | 'microphone';
 
 export interface Permission {
   kind: PermissionKind;
@@ -71,7 +72,7 @@ export interface JobView {
   finished?: number;
 }
 
-/** A request and its reply, as the song's conversation keeps them. */
+/** A request and its reply, as the song's conversation keeps them (with what it asked, its brief, why it stopped). */
 export interface Turn {
   job: string;
   request: string;
@@ -79,6 +80,10 @@ export interface Turn {
   label: string | null;
   state: string;
   at: number;
+  permission?: Permission;
+  brief?: string;
+  briefWarnings?: { line: number; kind: 'command' | 'url' }[];
+  error?: string;
 }
 
 /** How a harness's sign-in, update or new look goes, from the runner (`agent-harness`). */
@@ -148,6 +153,7 @@ export type AgentEvent =
   | { type: 'info'; info: AgentInfo }
   | { type: 'me'; id: string | null }
   | { type: 'settings'; settings: AgentSettings }
+  | { type: 'enabled'; enabled: boolean }
   | { type: 'devices'; devices: DeviceList }
   | { type: 'harness'; event: HarnessEvent }
   | { type: 'status'; job: JobView; barOpen: boolean }
@@ -169,6 +175,9 @@ export function reduce(a: AgentState, e: AgentEvent): AgentState {
       return { ...a, me: e.id };
     case 'settings':
       return { ...a, settings: e.settings };
+    case 'enabled':
+      // turned on or off on some device: off, everything of it goes at once
+      return a.info ? reduce(a, { type: 'info', info: { ...a.info, enabled: e.enabled } }) : a;
     case 'devices': {
       const me = e.devices.devices.find((d) => d.current)?.id ?? a.me;
       return { ...a, devices: e.devices, me };
@@ -309,7 +318,11 @@ export function exchange(a: AgentState, project: string | null): Exchange | null
         request: last.request,
         working: isLive(last.state),
         line: null,
-        reply: isLive(last.state) ? null : (last.reply ?? endedWhy(last.state)),
+        reply: isLive(last.state) ? null : (last.reply ?? endedWhy(last.state, last.error)),
+        permission: last.state === 'awaiting' ? (last.permission ?? null) : null,
+        brief: last.brief ?? null,
+        flagged: new Map((last.briefWarnings ?? []).map((w) => [w.line, w.kind])),
+        // (the host answers a permission only from the device that asked)
         mine: true,
       }),
     });
@@ -385,6 +398,47 @@ export function requestContext(
     cycle: p ? { on: p.cycle.on, start: p.cycle.start, end: p.cycle.end } : { on: false, start: 0, end: 0 },
     ...(s.scanView?.id ? { scan: s.scanView.id } : {}),
   };
+}
+
+export type ScanTask = 'read' | 'check' | 'fix';
+
+/**
+ * What the bar offers of the agent's besides asking (only while it's on for this device): with a scan
+ * open, its three tasks (read it in, check what was written, fix what was flagged); and starting a new
+ * conversation on the song when nothing runs on it.
+ */
+export function agentCommands(
+  o: { on: boolean; project: string | null; scan: string | null; busy: boolean },
+  run: { scan: (task: ScanTask, scan: string) => void; reset: () => void },
+): { suggest: Command[]; commands: Command[] } {
+  if (!o.on || !o.project) return { suggest: [], commands: [] };
+  const { scan } = o;
+  const scanRows: Command[] = scan
+    ? (
+        [
+          ['read', 'Read this scan', 'read in write recognise'],
+          ['check', 'Check it', 'check compare proofread scan'],
+          ['fix', 'Fix flagged', 'fix flags scan'],
+        ] as const
+      ).map(([task, title, also]) => ({
+        id: `scan-${task}`,
+        title,
+        group: 'Scan',
+        also,
+        keepOpen: true,
+        available: () => !o.busy,
+        run: () => run.scan(task, scan),
+      }))
+    : [];
+  const reset: Command = {
+    id: 'agent-new',
+    title: 'Start a new conversation with the agent',
+    group: 'Agent',
+    also: 'start over reset clear forget',
+    available: () => !o.busy,
+    run: run.reset,
+  };
+  return { suggest: o.busy ? [] : scanRows, commands: [...scanRows, reset] };
 }
 
 // ---- the token: this device's, kept in its own key ----
@@ -486,12 +540,12 @@ export function useAgent<T>(selector: (a: AgentState) => T): T {
 
 /** A refusal from the host: its words, its status, and a reason the studio can act on. */
 export class AgentError extends Error {
-  constructor(
-    message: string,
-    readonly status: number,
-    readonly reason?: string,
-  ) {
+  readonly status: number;
+  readonly reason: string | undefined;
+  constructor(message: string, status: number, reason?: string) {
     super(message);
+    this.status = status;
+    this.reason = reason;
   }
 }
 
@@ -618,24 +672,79 @@ export async function lookForHarnesses(): Promise<void> {
 export async function loadThread(project: string): Promise<void> {
   if (!isOn(state)) return;
   try {
-    const r = await call<{ thread: { turns: Turn[] } | null }>(
+    const r = await call<{ thread: { turns: Turn[] } | null; job?: JobView | null }>(
       'GET',
       `/api/agent/threads/${encodeURIComponent(project)}`,
     );
     agent.dispatch({ type: 'thread', project, turns: r.thread?.turns ?? [] });
+    // the song's job that's working, or waiting for a click (after a reload, its button comes back)
+    if (r.job) agent.dispatch({ type: 'status', job: r.job, barOpen: true });
   } catch {
     // the bar shows what it has
   }
 }
 
-/** Send a request about the open song: the bar shows it, then the reply. */
-export async function ask(text: string, project: string, context: RequestContext): Promise<void> {
+/** Send a file that goes with a request (or a permission's answer): its id. What was measured of it follows. */
+export async function upload(file: Ready, project: string): Promise<string> {
+  const t = token();
+  const query = new URLSearchParams({ project, name: file.name.slice(0, 120), type: file.type });
+  const res = await fetch(`/api/agent/attachments?${query}`, {
+    method: 'POST',
+    headers: { 'content-type': file.type, ...(t ? { authorization: `Bearer ${t}` } : {}) },
+    body: file.blob,
+  });
+  const data = (await res.json().catch(() => ({}))) as { id?: string; error?: string };
+  if (!res.ok || !data.id)
+    throw new AgentError(data.error ?? `${file.name} couldn’t be sent (${res.status})`, res.status);
+  if (file.meta) await call('PUT', `/api/agent/attachments/${data.id}/meta`, file.meta);
+  return data.id;
+}
+
+/**
+ * Send a request about the open song, with the files that go with it (made ready while it was typed):
+ * the bar shows it, then the reply.
+ */
+export async function ask(
+  text: string,
+  project: string,
+  context: RequestContext,
+  files: readonly Promise<Ready>[] = [],
+): Promise<void> {
   const request = text.trim();
   if (!request || !isOn(state)) return;
   const at = Date.now();
   agent.dispatch({ type: 'sending', project, request, at });
   try {
-    const { job } = await call<{ job: string }>('POST', '/api/agent/requests', { project, text: request, context });
+    const attachments: string[] = [];
+    for (const f of files) attachments.push(await upload(await f, project));
+    const { job } = await call<{ job: string }>('POST', '/api/agent/requests', {
+      project,
+      text: request,
+      context,
+      ...(attachments.length ? { attachments } : {}),
+    });
+    agent.dispatch({
+      type: 'sent',
+      job: { id: job, project, device: state.me ?? '', state: 'waiting', request, started: at },
+    });
+  } catch (err) {
+    agent.dispatch({ type: 'refused', project, request, error: (err as Error).message, at });
+  }
+}
+
+/** A scan's task for the agent (read it in, check it, fix what was flagged), from its fixed words. */
+export async function askScan(task: ScanTask, scan: string, project: string, context: RequestContext): Promise<void> {
+  if (!isOn(state)) return;
+  const at = Date.now();
+  const request = task === 'read' ? 'Read this scan' : task === 'check' ? 'Check this scan' : 'Fix what was flagged';
+  agent.dispatch({ type: 'sending', project, request, at });
+  try {
+    const { job } = await call<{ job: string }>('POST', '/api/agent/requests', {
+      project,
+      text: '',
+      context,
+      preset: { kind: 'scan', task, scan },
+    });
     agent.dispatch({
       type: 'sent',
       job: { id: job, project, device: state.me ?? '', state: 'waiting', request, started: at },
@@ -649,9 +758,13 @@ export async function stopJob(job: string): Promise<void> {
   await call('POST', `/api/agent/jobs/${encodeURIComponent(job)}/cancel`);
 }
 
-/** The user's answer to what a job asked: allowed (with what happened), or not. */
-export async function permit(job: string, grant: boolean, result: string): Promise<void> {
-  await call('POST', `/api/agent/jobs/${encodeURIComponent(job)}/permission`, { grant, result });
+/** The user's answer to what a job asked: allowed (with what happened, and what it brought: a screenshot), or not. */
+export async function permit(job: string, grant: boolean, result: string, attachments: string[] = []): Promise<void> {
+  await call('POST', `/api/agent/jobs/${encodeURIComponent(job)}/permission`, {
+    grant,
+    result,
+    ...(attachments.length ? { attachments } : {}),
+  });
 }
 
 /** The user is done playing to the listening agent. */
@@ -690,8 +803,20 @@ export function agentMessage(msg: Record<string, unknown>): {
       return { handled: true, ...(fx ? { effects: { job: job.id, ...fx } } : {}) };
     }
     case 'agent-listen':
-      if (typeof msg.job === 'string') agent.dispatch({ type: 'listen', job: msg.job, on: msg.state === 'on' });
+      // (`pause`, between two parts of a listen, keeps it showing)
+      if (typeof msg.job === 'string' && msg.state !== 'pause')
+        agent.dispatch({ type: 'listen', job: msg.job, on: msg.state === 'on' });
       return { handled: true };
+    case 'agent-settings': {
+      // turned on or off, or (to allowed devices) its harness, model or effort changed, on some device
+      if (typeof msg.enabled !== 'boolean') return { handled: true };
+      if (!state.info) void refreshAgent();
+      else agent.dispatch({ type: 'enabled', enabled: msg.enabled });
+      if (Array.isArray(msg.harnesses)) agent.dispatch({ type: 'settings', settings: msg as unknown as AgentSettings });
+      // turned on: whether this device may use it is the host's to say
+      if (msg.enabled && !isOn(state)) void refreshAgent();
+      return { handled: true };
+    }
     case 'agent-harness': {
       const event = msg as unknown as HarnessEvent;
       agent.dispatch({ type: 'harness', event });
@@ -705,8 +830,7 @@ export function agentMessage(msg: Record<string, unknown>): {
       deviceRemoved();
       return { handled: true };
     case 'agent-look':
-    case 'agent-compare':
-      // a look at the screen or a photo (step C13), and A/B (step C14)
+      // (none to give unasked: the agent asks for a screenshot or a photo as a permission)
       return { handled: true };
   }
   return { handled: false };

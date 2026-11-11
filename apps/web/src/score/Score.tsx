@@ -17,6 +17,7 @@ import { store, useApp } from '../app/store.ts';
 import { engine } from '../audio/engine.ts';
 import { midi } from '../audio/midi.ts';
 import { useFrame, useSize } from '../ui/frame.ts';
+import { UndoRedo } from '../ui/UndoRedo.tsx';
 import { Entry } from './entry.ts';
 import { buildIndex, placeOf, type ScoreIndex, tickAt } from './layout-index.ts';
 import { Palette } from './Palette.tsx';
@@ -56,7 +57,7 @@ export function ScoreBar() {
     store.set({ scoreZoom: Math.round(Math.max(ZOOM_RANGE[0], Math.min(ZOOM_RANGE[1], zoom * f))) });
   return (
     <>
-      {!phone && <span className="title">Score</span>}
+      {!phone && <span className="title view-title">Score</span>}
       {!all && (
         <span className="muted" style={{ whiteSpace: 'nowrap' }}>
           {trackName}
@@ -137,6 +138,8 @@ export function ScoreBar() {
         </button>
       )}
       <span className="grow" />
+      {/* a phone has them in its control bar or side rail, on the same screen */}
+      {!phone && <UndoRedo group="seg" />}
       <button type="button" className="btn ghost icon" title="Smaller" onClick={() => zoomBy(0.85)}>
         <ZoomOut />
       </button>

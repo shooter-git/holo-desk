@@ -12,7 +12,6 @@ import {
   PanelLeft,
   Piano,
   Play,
-  Redo2,
   Repeat,
   Rewind,
   Settings,
@@ -20,7 +19,6 @@ import {
   SlidersVertical,
   Smartphone,
   Square,
-  Undo2,
   Usb,
 } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
@@ -32,13 +30,11 @@ import {
   gestureChange,
   locate,
   moveBars,
-  redo,
   stop,
   toggleCycle,
   toggleFullscreen,
   togglePlay,
   toggleRecord,
-  undo,
 } from '../app/actions.ts';
 import { TYPING_PORT } from '../app/keys.ts';
 import { isPhone, useLayout } from '../app/layout.ts';
@@ -50,6 +46,7 @@ import { useFrame, useMedia } from './frame.ts';
 import { MetronomeButton } from './Metronome.tsx';
 import { openMenuAt } from './menu.tsx';
 import { tapTempo } from './tap-tempo.ts';
+import { UndoRedo } from './UndoRedo.tsx';
 import { ViewMenu } from './ViewMenu.tsx';
 
 /** Where the bar is too narrow for the full display: the position shortens and the time goes (the CSS hides the rest). */
@@ -499,8 +496,6 @@ export function ControlBar() {
   const typing = useApp((s) => s.typing);
   const ports = useApp((s) => s.midiPorts.filter((p) => p.source === 'device').length);
   const agent = useApp((s) => s.peers.some((p) => p.role === 'agent'));
-  const canUndo = useApp((s) => s.undo.length > 0);
-  const canRedo = useApp((s) => s.redo.length > 0);
   const remotes = useApp((s) => s.peers.filter((p) => p.role === 'remote').length);
   const show = useApp((s) => s.show);
   const narrow = useMedia(NARROW_BAR);
@@ -536,26 +531,7 @@ export function ControlBar() {
           </div>
         </div>
         <div className="right">
-          <button
-            type="button"
-            className="btn ghost icon"
-            title="Undo"
-            aria-label="Undo"
-            disabled={!canUndo}
-            onClick={undo}
-          >
-            <Undo2 />
-          </button>
-          <button
-            type="button"
-            className="btn ghost icon"
-            title="Redo"
-            aria-label="Redo"
-            disabled={!canRedo}
-            onClick={redo}
-          >
-            <Redo2 />
-          </button>
+          <UndoRedo button="btn ghost icon" />
           <MetronomeButton className="btn ghost icon" title="Metronome" />
           <ViewMenu />
           <button
@@ -572,7 +548,6 @@ export function ControlBar() {
     );
   }
 
-  const touch = layout === 'tablet';
   return (
     <div className="control-bar">
       <div className="left">
@@ -616,30 +591,7 @@ export function ControlBar() {
         >
           <PanelLeft />
         </button>
-        {touch && (
-          <div className="seg cb-undo">
-            <button
-              type="button"
-              className="btn icon"
-              title="Undo"
-              aria-label="Undo"
-              disabled={!canUndo}
-              onClick={undo}
-            >
-              <Undo2 />
-            </button>
-            <button
-              type="button"
-              className="btn icon"
-              title="Redo"
-              aria-label="Redo"
-              disabled={!canRedo}
-              onClick={redo}
-            >
-              <Redo2 />
-            </button>
-          </div>
-        )}
+        <UndoRedo group="seg cb-undo" />
       </div>
       <div className="hstack cb-center">
         <TransportButtons minimal={!show.barNav} />

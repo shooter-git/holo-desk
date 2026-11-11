@@ -34,6 +34,7 @@ import { Knob } from './controls.tsx';
 import { alpha, prepare, useFrame, useSize } from './frame.ts';
 import { capture, edgeScroll, type Gesture, Pinch, screenDpr, useWheel } from './gesture.ts';
 import { chooseAudioFiles, inputLabel } from './Tracks.tsx';
+import { UndoRedo } from './UndoRedo.tsx';
 import { gridStep, Viewport, WHEEL_ZOOM, ZOOM } from './view.ts';
 import { drawClipWave, drawFades, fadeTo, fileSpan, setStretch, trimEnd, trimStart } from './wave.ts';
 
@@ -573,6 +574,8 @@ export function AudioEditorBar() {
         </>
       )}
       <span className="grow" />
+      {/* a phone has them in its control bar or side rail, on the same screen */}
+      {!phone && <UndoRedo group="seg" />}
       <button
         type="button"
         className="btn ghost icon"

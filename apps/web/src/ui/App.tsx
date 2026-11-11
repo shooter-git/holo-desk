@@ -1,7 +1,7 @@
 /** The studio's frame: the desktop layout, the tablet's, and the phone's (portrait and landscape). */
-import { Library as LibraryIcon, Music2, Piano, Redo2, Rows3, Settings, SlidersVertical, Undo2 } from 'lucide-react';
+import { Library as LibraryIcon, Music2, Piano, Rows3, Settings, SlidersVertical } from 'lucide-react';
 import { lazy, Suspense, useEffect, useRef } from 'react';
-import { ensureAudio, redo, resolveConflict, undo } from '../app/actions.ts';
+import { ensureAudio, resolveConflict } from '../app/actions.ts';
 import { clampEditorHeight, fitEditorHeight, isPhone, type Layout, useLayout } from '../app/layout.ts';
 import { otherStudioToDrive } from '../app/live.ts';
 import { type MobileTab, store, useApp } from '../app/store.ts';
@@ -15,6 +15,7 @@ import { Inspector, LibraryPanel } from './Panels.tsx';
 import { PianoRoll, PianoRollBar } from './PianoRoll.tsx';
 import { PlayPad } from './PlayPad.tsx';
 import { spareTrackRoom, TracksArea } from './Tracks.tsx';
+import { UndoRedo } from './UndoRedo.tsx';
 import { ViewMenu } from './ViewMenu.tsx';
 import { DOUBLE_TAP_MS } from './view.ts';
 
@@ -379,30 +380,9 @@ function SongTitle() {
 
 /** Undo, redo, settings and About, at the foot of the side rail: what the control bar holds elsewhere. */
 function RailTools() {
-  const canUndo = useApp((s) => s.undo.length > 0);
-  const canRedo = useApp((s) => s.redo.length > 0);
   return (
     <div className="rail-tools">
-      <button
-        type="button"
-        className="btn ghost icon"
-        title="Undo"
-        aria-label="Undo"
-        disabled={!canUndo}
-        onClick={undo}
-      >
-        <Undo2 />
-      </button>
-      <button
-        type="button"
-        className="btn ghost icon"
-        title="Redo"
-        aria-label="Redo"
-        disabled={!canRedo}
-        onClick={redo}
-      >
-        <Redo2 />
-      </button>
+      <UndoRedo button="btn ghost icon" />
       <button
         type="button"
         className="btn ghost icon"

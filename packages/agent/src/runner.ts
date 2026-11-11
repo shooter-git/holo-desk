@@ -223,7 +223,8 @@ export function startAgentRunner(o: AgentRunnerOptions): AgentRunner {
             break;
           case 'done':
             log(`${tag} done in ${Math.round((Date.now() - started) / 1000)} s`);
-            o.send({ type: 'agent-done', job: run.job });
+            // its last words stand as the reply if it never called finish
+            o.send({ type: 'agent-done', job: run.job, ...(e.reply ? { reply: e.reply.slice(0, 2000) } : {}) });
             break;
           case 'failed':
             log(`${tag} failed: ${e.error}`);

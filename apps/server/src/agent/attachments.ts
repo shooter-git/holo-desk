@@ -1,8 +1,9 @@
 /**
  * What a device attaches to a request: an image (a screenshot, a photo of a page), a recording, a MIDI
  * or MusicXML file, a text. Each is kept for a week in the data folder (`agent/attachments/<id>/`),
- * belongs to the device that sent it and the song it was sent for, and is read only by that device's
- * requests on that song and their jobs. What a file says it is must be what it is: its first bytes are
+ * belongs to the device that sent it and the song it was sent for. Only that device can attach it to a
+ * request; a job reads its own request's attachments and those of earlier requests on its conversation
+ * (the song's thread, which may carry other allowed devices' requests). What a file says it is must be what it is: its first bytes are
  * checked, and text must be UTF-8.
  */
 import { randomBytes } from 'node:crypto';

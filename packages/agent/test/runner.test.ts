@@ -157,13 +157,14 @@ describe('the agent runner', () => {
     expect(statSync(join(job.workspace, '.holo-job')).mode & 0o777).toBe(0o600);
     on({ type: 'session', session: 'sess-1' });
     on({ type: 'progress', line: 'x'.repeat(300) });
-    on({ type: 'done' });
+    // its last words go with done: the reply, if it never called finish
+    on({ type: 'done', reply: 'Wrote a counter-line.' });
     finish();
     await until(() => r.busy().running === 0);
     expect(sent.filter((m) => m.type !== 'harnesses')).toEqual([
       { type: 'agent-session', job: 'agj_000000000001', session: 'sess-1' },
       { type: 'agent-progress', job: 'agj_000000000001', line: 'x'.repeat(200) },
-      { type: 'agent-done', job: 'agj_000000000001' },
+      { type: 'agent-done', job: 'agj_000000000001', reply: 'Wrote a counter-line.' },
     ]);
     expect(existsSync(join(job.workspace, '.holo-job'))).toBe(false);
     // neither the token nor the request is ever printed

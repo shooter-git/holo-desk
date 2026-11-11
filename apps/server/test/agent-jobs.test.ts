@@ -662,6 +662,24 @@ describe('permissions', () => {
     expect(run.got('agent-run')).toHaveLength(2);
   });
 
+  it('isn’t carried on in a conversation started over since it asked', async () => {
+    const { start, tool, s, desk, run, status, token, app } = await setup();
+    const first = await start({ project: s.id, text: 'Strings under the chorus' });
+    await tool(first.job, first.token, 'POST', '/permission', { kind: 'screen', detail: 'To see the mixer' });
+    run.say({ type: 'agent-done', job: first.job });
+    await waitFor(() => status(desk, first.job)?.state === 'awaiting');
+    await app.inject({ method: 'POST', url: `/api/agent/threads/${s.id}/reset`, headers: auth(token) });
+    const granted = await app.inject({
+      method: 'POST',
+      url: `/api/agent/jobs/${first.job}/permission`,
+      headers: auth(token),
+      payload: { grant: true },
+    });
+    expect(granted.statusCode).toBe(409);
+    expect(granted.json()).toMatchObject({ error: 'That conversation was started over' });
+    expect(run.got('agent-run')).toHaveLength(1);
+  });
+
   it('flags the commands and links in a hand-off brief', async () => {
     const { start, tool, s, desk, status } = await setup();
     const { job, token: jobToken } = await start({ project: s.id, text: 'Make the mixer wider' });

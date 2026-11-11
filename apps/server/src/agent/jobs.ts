@@ -544,8 +544,10 @@ export class Jobs implements AgentHooks {
     }
     // what the click brought (a screenshot, a photo, a recording) goes to the follow-up
     const attachments = this.attachments(device, job.view.project, attachmentIds);
+    // "Start over" since it asked: the old conversation isn't carried on
     const thread = this.o.threads.get(job.thread);
-    if (!thread) throw new Refusal(409, 'That conversation was started over');
+    if (!thread || this.o.threads.current(job.view.project)?.id !== thread.id)
+      throw new Refusal(409, 'That conversation was started over');
     if (!this.o.live.studioFor(device, job.view.project))
       throw new Refusal(409, 'Open the song in this studio first', 'not-open');
     this.free(job.view.project);
@@ -1148,7 +1150,10 @@ export class Jobs implements AgentHooks {
     const studio = this.studio(job);
     if (!studio) throw new Refusal(403, 'The song isn’t open in the studio that asked');
     const answer = await this.o.live.request(studio, { type: 'agent-played', seconds }, this.limits.playedMs);
-    if (!answer.ok || !Array.isArray(answer.notes)) throw new Refusal(501, 'not available yet');
+    if (!answer.ok || !Array.isArray(answer.notes)) {
+      if (answer.error === NO_ANSWER) throw new Refusal(504, 'The studio didn’t say in time what was just played');
+      throw new Refusal(409, answer.error ?? 'The studio can’t say what was just played');
+    }
     return { notes: parsePlayed(answer.notes) };
   }
 

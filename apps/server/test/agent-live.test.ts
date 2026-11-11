@@ -440,15 +440,15 @@ describe('what was just played', () => {
     // a studio that can't say yet
     desk.answer = (msg) => (msg.type === 'agent-played' ? { ok: false, error: 'No memory' } : { ok: true });
     const none = await tool(job, jobToken, 'GET', '/played?seconds=5');
-    expect(none.statusCode).toBe(501);
-    expect(none.json()).toEqual({ error: 'not available yet' });
+    expect(none.statusCode).toBe(409);
+    expect(none.json()).toEqual({ error: 'No memory' });
     desk.answer = (msg) => (msg.type === 'agent-played' ? null : { ok: true });
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     const silent = pending(tool(job, jobToken, 'GET', '/played?seconds=5'));
     await until(() => desk.got('agent-played').length === 3);
     await vi.advanceTimersByTimeAsync(3000);
     await until(() => silent.done);
-    expect((silent.value as Awaited<ReturnType<typeof tool>>).statusCode).toBe(501);
+    expect((silent.value as Awaited<ReturnType<typeof tool>>).statusCode).toBe(504);
   });
 });
 

@@ -2,7 +2,7 @@
   "format": "holo-packs-lock",
   "version": 1,
   "repo": "shooter-git/holo-packs",
-  "commit": "4ffb241d0cdddbf522427994e69425899fed8be6",
+  "commit": "3c81b55526aa4f6f1c34c26afc2c3fea018b8d2f",
   "packs": {
     "angklung-khaen": "b58bbefa71cfbd51dbcd7107b83bf4c8b913fc23d69210f434514fd09667e252",
     "bear-sax": "f0b6f0f452cd5a50209f3c41671039a2f68292a08534308f502628d595db35fb",
@@ -57,6 +57,7 @@
     "minimal-ensemble": "bc0a2f288614530cfc59c3e3c61bfa13fff915200b1f8f0663cf5b181324f58c",
     "mtg-sax": "9912e533fad6f2c35c6c24b7cd24780cf6c37e2a34ac302a0f3d087e49bf4837",
     "naked-drums": "f417208dddcabed31627a6f5be183e6218055f084c2293dde5205f3b7eebf97e",
+    "neon-elegy": "4246160a19b3be33456bc70d0b8ca792667aaee3fa246d2b94f3e78a78c288f4",
     "nepal-bells": "f59f650d587b1f8e48ffedf3958f6ce24eb71befee2036ee583b22b2943983ae",
     "orchestral-sections": "2babd490e64c41285aa47c03d5a7c380fddb8b9b34b686beb3e0513c758ec56d",
     "pop-rock-kit": "28b6bf3232b56cf1c2a08969a31955fce518cb1bc1425918a00be43c5f0c2cd2",

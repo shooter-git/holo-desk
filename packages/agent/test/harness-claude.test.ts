@@ -326,6 +326,22 @@ sleep 300`,
         message: { content: [{ type: 'tool_use', name: 'Bash', input: { command: 'ls' } }] },
       }),
     ).toEqual([{ kind: 'trip', why: 'Claude Code tried Bash, which isn’t HO[LO]’s' }]);
+    // one of HO[LO]'s tools named without its prefix is a slip Claude Code refuses itself: no trip, and
+    // the run goes on; a bare name HO[LO] doesn't have still trips
+    const slip = claudeReader();
+    slip.event({ ...init, tools: ['mcp__holo__track_add', 'mcp__holo__finish'] });
+    expect(
+      slip.event({ type: 'assistant', message: { content: [{ type: 'tool_use', name: 'track_add', input: {} }] } }),
+    ).toEqual([]);
+    expect(
+      slip.event({
+        type: 'assistant',
+        message: { content: [{ type: 'tool_use', name: 'mcp__holo__track_add', input: {} }] },
+      }),
+    ).toEqual([{ kind: 'tool', name: 'track_add' }]);
+    expect(
+      slip.event({ type: 'assistant', message: { content: [{ type: 'tool_use', name: 'Read', input: {} }] } }),
+    ).toEqual([{ kind: 'trip', why: 'Claude Code tried Read, which isn’t HO[LO]’s' }]);
     // a tool before any init: not believed
     expect(claudeReader().event({ type: 'assistant', message: { content: [] } })[0]?.kind).toBe('trip');
   });

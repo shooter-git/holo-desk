@@ -200,6 +200,14 @@ process-group SIGTERM ended Claude (exit 143) and the MCP server, which got SIGT
   `${XDG_CACHE_HOME:-~/.cache}/holo/agent`).
 - `claude update` runs only when the user clicks Update in Settings › Agent, with `DISABLE_AUTOUPDATER` left out
   of its environment.
+- **A HO[LO] tool named without its prefix doesn't trip the run.** At low effort the model once called
+  `track_add` instead of `mcp__holo__track_add`. Claude Code has no tool by that name and answers "No such tool
+  available", and the model calls it again by its full name. So a bare name the `init` event offered with the
+  prefix is passed over; any other name still stops the run.
+- What a sealed run still does on its own (seen in a trace): it rewrites `~/.claude.json` (caches) and rotates
+  `~/.claude/backups`, keeps its session in `~/.claude/projects/<workspace>`, writes a plugin-store cache entry,
+  and runs `rg` and `git ls-files` in the workspace (which isn't a repository) and `ps`. No settings, skills,
+  hooks or credentials change.
 
 ## Codex
 
@@ -551,6 +559,10 @@ Cursor unavailable when they fail. What it does instead is the flag probe below.
   run with the probe's private home. Sign-in (`login`, with `NO_OPEN_BROWSER=1`) and `update` run with the user's
   own home and config, so they sign in and update the Cursor the terminal uses, and only on a click.
 - The tripwire also stops a run when one of HO[LO]'s own calls is refused: Cursor's permissions aren't as set.
+- What a sealed run still does on its own (seen in a trace): it fetches its plugins (`cursor/plugins` and a few
+  skills repositories) with `git fetch`, now over anonymous https with no ssh (see "Every harness's
+  environment"), and its worker starts a TypeScript language server with `npx -y typescript-language-server
+  --stdio`, which npm downloads into the private home on first use. Neither is offered to the model as a tool.
 
 ## Effects on `docs/agent.md` and the plan
 

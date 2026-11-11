@@ -74,6 +74,8 @@ const isObject = (v: unknown): v is Record<string, unknown> => typeof v === 'obj
 /** Reads Claude's stream-json. */
 export function claudeReader(): Reader {
   let init = false;
+  /** The tools Claude Code said it has (all HO[LO]'s, or the run was stopped). */
+  let offered = new Set<string>();
   return {
     event(e) {
       const out: Seen[] = [];
@@ -82,6 +84,7 @@ export function claudeReader(): Reader {
         if (typeof e.session_id === 'string') out.push({ kind: 'session', id: e.session_id });
         const tools = Array.isArray(e.tools) ? e.tools : [];
         const other = tools.find((t) => typeof t !== 'string' || !t.startsWith(PREFIX));
+        offered = new Set(tools.filter((t): t is string => typeof t === 'string'));
         if (other !== undefined) {
           out.push({ kind: 'trip', why: `Claude Code offered a tool other than HO[LO]’s (${String(other)})` });
           return out;
@@ -115,6 +118,10 @@ export function claudeReader(): Reader {
         for (const block of content) {
           if (block.type === 'tool_use') {
             const name = String(block.name ?? '');
+            // a HO[LO] tool named without its prefix is a slip, not a way out: Claude Code has no tool
+            // by that name and answers "No such tool available", and the model calls it again by its
+            // full name
+            if (!name.startsWith(PREFIX) && offered.has(`${PREFIX}${name}`)) continue;
             if (!name.startsWith(PREFIX)) {
               out.push({ kind: 'trip', why: `Claude Code tried ${name || 'a tool'}, which isn’t HO[LO]’s` });
               return out;

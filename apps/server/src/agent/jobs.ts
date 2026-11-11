@@ -14,7 +14,7 @@ import { randomBytes } from 'node:crypto';
 import { SCAN_ID, type Scan } from '@holo/score';
 import { applyOps, barToTick, type MiddleC, type Op, type Project, parseProject } from '@holo/session';
 import type { Store } from '../db.ts';
-import { type AgentHooks, type Live, type LiveClient, NO_ANSWER } from '../live.ts';
+import { type AgentHooks, type Live, type LiveClient, NO_ANSWER, type PlayedNote } from '../live.ts';
 import { hashToken, newToken, sameHash } from './auth.ts';
 import {
   type AttachmentInfo,
@@ -31,8 +31,8 @@ import {
   type ScanPreset,
   sinceLines,
 } from './prompt.ts';
-import { type AgentStore, HARNESSES, type HarnessId, type ThreadRow } from './store.ts';
-import type { Threads } from './threads.ts';
+import { type AgentStore, HARNESSES, type HarnessId, type ThreadRow, type TurnExtra } from './store.ts';
+import { parseExtra, type Threads } from './threads.ts';
 
 export type JobState = 'waiting' | 'running' | 'awaiting' | 'done' | 'failed' | 'cancelled';
 
@@ -93,6 +93,15 @@ export interface AgentJob {
   dropped: NodeJS.Timeout | null;
   /** Its turn is over: the studio is saving, and the song is being read. */
   ending: boolean;
+  /** The attachments its request carried (its tools may read these, and earlier ones on its thread). */
+  attachments: string[];
+  /** A listen under way (its tool waits on it), and whether the studio shows it's listening. */
+  listen: { finish: (done: boolean) => void } | null;
+  listenOn: boolean;
+  /** Between two parts of one listen: the studio stops showing it unless the next part comes soon. */
+  listenOff: NodeJS.Timeout | null;
+  /** Done was pressed between two parts of a listen: the next part ends at once. */
+  doneListening: boolean;
 }
 
 /** A refusal: the HTTP status, the words the studio (or the agent) shows, and a reason it can act on. */
@@ -121,6 +130,11 @@ export interface Limits {
   /** How long the studio has to save, and to apply a batch of changes. */
   flushMs: number;
   opsMs: number;
+  /** How long the studio keeps showing it's listening between two parts of a listen. */
+  listenGraceMs: number;
+  /** How long the studio has to say what was just played, and to start A/B. */
+  playedMs: number;
+  compareMs: number;
 }
 
 export const LIMITS: Limits = {
@@ -129,6 +143,9 @@ export const LIMITS: Limits = {
   droppedMs: 15_000,
   flushMs: 10_000,
   opsMs: 60_000,
+  listenGraceMs: 5_000,
+  playedMs: 3_000,
+  compareMs: 50_000,
 };
 
 export interface JobsOptions {
@@ -141,8 +158,8 @@ export interface JobsOptions {
   /** The URL the agent's tools reach this server at. */
   base: () => string;
   scan: (id: string) => Scan | null;
-  /** An attachment of a song's (step C13); none until then. */
-  attachment?: (id: string, project: string) => AttachmentInfo | null;
+  /** An attachment a device sent for a song (null: none, or not that device's for that song). */
+  attachment?: (id: string, project: string, device: string) => AttachmentInfo | null;
   /** The device an agent token belongs to, and whether a device is still allowed. */
   deviceFor: (token: string) => string | null;
   allowed: (device: string) => boolean;
@@ -284,17 +301,12 @@ export class Jobs implements AgentHooks {
       const scan = this.o.scan(req.context.scan);
       if (!scan || scan.project !== req.project) delete req.context.scan;
     }
-    const attachments: AttachmentInfo[] = [];
-    for (const id of req.attachments) {
-      const a = this.o.attachment?.(id, req.project) ?? null;
-      if (!a) throw new Refusal(400, `No such attachment: ${id}`);
-      attachments.push({ id, name: a.name, type: a.type });
-    }
+    const attachments = this.attachments(device, req.project, req.attachments);
     const settings = this.o.agentStore.settings();
     const { harness, runner } = this.pick(settings.harness);
     const thread = this.o.threads.forRequest(req.project, harness);
     const request = req.preset ? presetTitle(req.preset) : req.text;
-    return this.begin(device, req.project, thread, runner, request, req.preset, async (now) =>
+    return this.begin(device, req.project, thread, runner, request, req.preset, req.attachments, async (now) =>
       buildPrompt({
         rules: readRules(this.o.repoDir),
         since: this.since(thread.id, now),
@@ -303,6 +315,15 @@ export class Jobs implements AgentHooks {
         request: req.preset ? presetRequest(req.preset) : req.text,
       }),
     );
+  }
+
+  /** The attachments a request names: each the device's own, sent for that song (400 otherwise). */
+  private attachments(device: string, project: string, ids: readonly string[]): AttachmentInfo[] {
+    return ids.map((id) => {
+      const a = this.o.attachment?.(id, project, device) ?? null;
+      if (!a) throw new Refusal(400, `No such attachment: ${id}`);
+      return a;
+    });
   }
 
   /** There's no job running on a song (or being started), or a refusal. */
@@ -333,6 +354,7 @@ export class Jobs implements AgentHooks {
     runner: LiveClient,
     request: string,
     preset: ScanPreset | null,
+    attachments: readonly string[],
     prompt: (now: Project) => Promise<string>,
   ): Promise<string> {
     this.starting.add(project);
@@ -364,6 +386,11 @@ export class Jobs implements AgentHooks {
         clock: null,
         dropped: null,
         ending: false,
+        attachments: [...attachments],
+        listen: null,
+        listenOn: false,
+        listenOff: null,
+        doneListening: false,
       };
       // the runner may have gone while the studio saved
       if (!this.o.live.agentRunners().includes(runner))
@@ -378,6 +405,8 @@ export class Jobs implements AgentHooks {
         harness: thread.harness,
         model: settings.model,
         effort: settings.effort,
+        // how the studio names notes: the tools read and write them the same way
+        middleC: this.middleC(),
         prompt: text,
         token,
         ...(current?.session ? { session: current.session } : {}),
@@ -397,6 +426,7 @@ export class Jobs implements AgentHooks {
       label: null,
       state: job.view.state,
       at: job.view.started,
+      extra: turnExtra(job),
     });
     job.clock = setTimeout(
       () =>
@@ -413,7 +443,7 @@ export class Jobs implements AgentHooks {
     for (const other of this.jobs.values()) {
       if (other !== job && other.view.project === project && other.view.state === 'awaiting') {
         other.view.state = 'done';
-        this.o.agentStore.updateTurn(other.view.id, { state: 'done' });
+        this.saveTurn(other);
         this.tell(other);
       }
     }
@@ -436,7 +466,7 @@ export class Jobs implements AgentHooks {
     if (!job) throw new Refusal(404, 'No such job');
     if (job.view.state === 'awaiting') {
       job.view.state = 'cancelled';
-      this.o.agentStore.updateTurn(job.view.id, { state: 'cancelled' });
+      this.saveTurn(job);
       this.tell(job);
       return;
     }
@@ -448,7 +478,13 @@ export class Jobs implements AgentHooks {
    * The user's answer to what the job asked: allowed, the follow-up starts on the same thread (the
    * same harness session) with what happened; not, it ends with "Not now".
    */
-  async permit(device: string, id: string, grant: boolean, result: string): Promise<string | null> {
+  async permit(
+    device: string,
+    id: string,
+    grant: boolean,
+    result: string,
+    attachmentIds: readonly string[] = [],
+  ): Promise<string | null> {
     const job = this.jobs.get(id);
     if (!job) throw new Refusal(404, 'No such job');
     if (job.view.device !== device) throw new Refusal(403, 'Only the device that asked can answer');
@@ -458,10 +494,12 @@ export class Jobs implements AgentHooks {
       job.view.state = 'done';
       job.view.reply = 'Not now';
       this.o.threads.addEventTo(job.thread, { action: 'denied', label: permission.detail, at: Date.now() });
-      this.o.agentStore.updateTurn(job.view.id, { state: 'done', reply: job.view.reply });
+      this.saveTurn(job);
       this.tell(job);
       return null;
     }
+    // what the click brought (a screenshot, a photo) goes to the follow-up
+    const attachments = this.attachments(device, job.view.project, attachmentIds);
     const thread = this.o.threads.get(job.thread);
     if (!thread) throw new Refusal(409, 'That conversation was started over');
     if (!this.o.live.studioFor(device, job.view.project))
@@ -476,18 +514,19 @@ export class Jobs implements AgentHooks {
       found.runner,
       job.view.request,
       job.preset,
+      attachmentIds,
       async (now) =>
         buildPrompt({
           rules: readRules(this.o.repoDir),
           since: this.since(thread.id, now),
           context: [],
-          attachments: [],
+          attachments,
           request: permissionFollowUp(permission, result, job.view.request),
         }),
     );
     if (job.view.state === 'awaiting') {
       job.view.state = 'done';
-      this.o.agentStore.updateTurn(job.view.id, { state: 'done' });
+      this.saveTurn(job);
       this.tell(job);
     }
     return next;
@@ -500,6 +539,7 @@ export class Jobs implements AgentHooks {
       if (isLive(job)) this.end(job, 'cancelled', 'This device was removed', true);
       else if (job.view.state === 'awaiting') {
         job.view.state = 'cancelled';
+        this.saveTurn(job);
         this.tell(job);
       }
     }
@@ -511,6 +551,7 @@ export class Jobs implements AgentHooks {
       if (isLive(job)) this.end(job, 'cancelled', why, true);
       else if (job.view.state === 'awaiting') {
         job.view.state = 'cancelled';
+        this.saveTurn(job);
         this.tell(job);
       }
     }
@@ -518,7 +559,10 @@ export class Jobs implements AgentHooks {
 
   /** The server is closing: no clock keeps it up. */
   close(): void {
-    for (const job of this.jobs.values()) this.clearTimers(job);
+    for (const job of this.jobs.values()) {
+      this.clearTimers(job);
+      this.stopListening(job);
+    }
   }
 
   // ---- the end of a job ----
@@ -536,16 +580,13 @@ export class Jobs implements AgentHooks {
     job.view.state = state;
     job.view.error = oneLine(why, 500);
     job.view.finished = Date.now();
+    this.stopListening(job);
     this.o.threads.addEventTo(job.thread, {
       action: state === 'failed' ? 'failed' : 'stopped',
       label: job.view.error,
       at: Date.now(),
     });
-    this.o.agentStore.updateTurn(job.view.id, {
-      state,
-      reply: job.view.reply ?? null,
-      label: job.view.label ?? null,
-    });
+    this.saveTurn(job);
     this.tell(job);
   }
 
@@ -556,6 +597,7 @@ export class Jobs implements AgentHooks {
     // the harness has exited: its tools are done
     job.tokenHash = null;
     this.clearTimers(job);
+    this.stopListening(job);
     await this.flush(job.view.device, job.view.project);
     // (stopped while the studio saved)
     if (!isLive(job)) return;
@@ -564,12 +606,18 @@ export class Jobs implements AgentHooks {
     job.view.state = job.asked ? 'awaiting' : 'done';
     if (job.asked) job.view.permission = job.asked;
     job.view.finished = Date.now();
+    this.saveTurn(job);
+    this.tell(job);
+  }
+
+  /** The turn's row as the job now stands: its state, reply and label, and what it asked, wrote and attached. */
+  private saveTurn(job: AgentJob): void {
     this.o.agentStore.updateTurn(job.view.id, {
       state: job.view.state,
       reply: job.view.reply ?? null,
       label: job.view.label ?? null,
+      extra: turnExtra(job),
     });
-    this.tell(job);
   }
 
   private clearTimers(job: AgentJob): void {
@@ -608,6 +656,8 @@ export class Jobs implements AgentHooks {
     if (client.role !== 'runner' || !client.keyed) return;
     if (msg.type === 'harnesses') {
       this.reported.set(client, parseHarnesses(msg.list));
+      // Settings › Agent shows them as they are now
+      if (client.caps?.agent) this.announce(false);
       return;
     }
     if (msg.type === 'agent-harness') {
@@ -634,6 +684,10 @@ export class Jobs implements AgentHooks {
         }
         break;
       case 'agent-done':
+        // the harness's last words stand as the reply when the agent never called finish
+        if (job.view.reply === undefined && typeof msg.reply === 'string' && msg.reply.trim()) {
+          job.view.reply = oneLine(msg.reply, 600);
+        }
         void this.turnDone(job);
         break;
       case 'agent-failed':
@@ -681,11 +735,54 @@ export class Jobs implements AgentHooks {
 
   gone(client: LiveClient): void {
     if (client.role !== 'runner') return;
+    // its harnesses went with it
+    if (client.keyed && client.caps?.agent && this.reported.has(client)) {
+      this.reported.delete(client);
+      this.announce(false);
+    }
     for (const job of this.jobs.values()) {
       if (this.assigned.get(job) !== client || !isLive(job) || job.dropped) continue;
       job.dropped = setTimeout(() => this.end(job, 'failed', 'The runner disconnected', false), this.limits.droppedMs);
       job.dropped.unref?.();
     }
+  }
+
+  // ---- settings, and the song's conversation ----
+
+  /** The settings, as GET /api/agent/settings answers. */
+  settingsView(): {
+    enabled: boolean;
+    harness: HarnessId | null;
+    model: string;
+    effort: string;
+    harnesses: HarnessInfo[];
+  } {
+    return { ...this.o.agentStore.settings(), harnesses: this.harnesses() };
+  }
+
+  /**
+   * Tell the studios the settings changed: allowed devices hear all of them (as GET /settings
+   * answers); the others only whether the agent is on, and only when that changed.
+   */
+  announce(enabledChanged: boolean): void {
+    const view = this.settingsView();
+    for (const c of this.o.live.studios()) {
+      if (c.device) this.o.live.sendTo(c, { type: 'agent-settings', ...view });
+      else if (enabledChanged) this.o.live.sendTo(c, { type: 'agent-settings', enabled: view.enabled });
+    }
+  }
+
+  /**
+   * A song's conversation, as the bar shows it after a reload: each turn with what it asked, its brief
+   * and why it stopped, and the song's job that's running or waiting for a click, if there is one.
+   */
+  threadView(project: string): { thread: ReturnType<Threads['view']>; job: JobView | null } {
+    let job: AgentJob | null = this.running(project);
+    if (!job)
+      for (const j of this.jobs.values())
+        if (j.view.project === project && j.view.state === 'awaiting' && (!job || j.view.started > job.view.started))
+          job = j;
+    return { thread: this.o.threads.view(project), job: job?.view ?? null };
   }
 
   // ---- the job's tools (/api/agent/jobs/:job/*) ----
@@ -822,8 +919,154 @@ export class Jobs implements AgentHooks {
   finish(job: AgentJob, label: string, reply: string): void {
     job.view.label = label;
     job.view.reply = reply;
-    this.o.agentStore.updateTurn(job.view.id, { label, reply });
+    this.saveTurn(job);
   }
+
+  // ---- listening, what was just played, A/B ----
+
+  /** Whether a job may read an attachment: its request's, or an earlier request's on its thread. */
+  mayRead(job: AgentJob, id: string): boolean {
+    if (job.attachments.includes(id)) return true;
+    return this.o.agentStore.turns(job.thread).some((t) => (parseExtra(t.extra).attachments ?? []).includes(id));
+  }
+
+  /**
+   * Listen to what the requester's studio plays (only it: not other studios, not the network) for one
+   * part of a listen: until `quietMs` of silence follows a note (done), until the user presses Done
+   * (done), or for `maxMs` (not done: the tool asks again, and the studio keeps showing it listens).
+   */
+  listen(job: AgentJob, maxMs: number, quietMs: number): Promise<{ notes: PlayedNote[]; done: boolean }> {
+    if (!this.studio(job)) throw new Refusal(403, 'The song isn’t open in the studio that asked');
+    if (job.listen) throw new Refusal(409, 'Already listening');
+    if (job.doneListening) {
+      job.doneListening = false;
+      this.listenState(job, 'off');
+      return Promise.resolve({ notes: [], done: true });
+    }
+    const { device, project } = job.view;
+    return new Promise((resolve) => {
+      let quiet: NodeJS.Timeout | null = null;
+      const session = {
+        finish: (done: boolean) => {
+          if (job.listen !== session) return;
+          job.listen = null;
+          clearTimeout(max);
+          if (quiet) clearTimeout(quiet);
+          const notes = stop();
+          this.listenState(job, done ? 'off' : 'pause');
+          resolve({ notes, done });
+        },
+      };
+      const stop = this.o.live.collect(
+        (c) => c.device === device && c.state?.project === project,
+        (held, notes) => {
+          if (quiet) clearTimeout(quiet);
+          // quiet once nothing's held, after at least one note
+          quiet = held === 0 && notes > 0 ? setTimeout(() => session.finish(true), quietMs) : null;
+        },
+      );
+      const max = setTimeout(() => session.finish(false), maxMs);
+      job.listen = session;
+      this.listenState(job, 'on');
+    });
+  }
+
+  /** The user pressed Done: the listen ends now (or the next part does, between two). */
+  doneListening(device: string, id: string): void {
+    const job = this.jobs.get(id);
+    if (!job) throw new Refusal(404, 'No such job');
+    if (job.view.device !== device) throw new Refusal(403, 'Only the device that asked can say');
+    if (!isLive(job)) throw new Refusal(409, 'That job has ended');
+    if (job.listen) job.listen.finish(true);
+    else if (job.listenOn) job.doneListening = true;
+  }
+
+  /**
+   * What the studio shows: listening (`on`), not (`off`), or between two parts of a listen (`pause`:
+   * it stays on unless the next part doesn't come soon).
+   */
+  private listenState(job: AgentJob, state: 'on' | 'off' | 'pause'): void {
+    if (job.listenOff) clearTimeout(job.listenOff);
+    job.listenOff = null;
+    const { device, project } = job.view;
+    if (state === 'pause') {
+      job.listenOff = setTimeout(() => this.listenState(job, 'off'), this.limits.listenGraceMs);
+      job.listenOff.unref?.();
+      return;
+    }
+    if (job.listenOn === (state === 'on')) return;
+    job.listenOn = state === 'on';
+    if (state === 'off') job.doneListening = false;
+    this.o.live.toDevices({ type: 'agent-listen', job: job.view.id, state }, (c) =>
+      state === 'on' ? c.device === device && c.state?.project === project : c.device === device,
+    );
+  }
+
+  /** A job ended: so does its listening. */
+  private stopListening(job: AgentJob): void {
+    job.listen?.finish(true);
+    this.listenState(job, 'off');
+  }
+
+  /** What the requester's studio has just played (its memory of the last `seconds`, at most 60). */
+  async played(job: AgentJob, seconds: number): Promise<{ notes: PlayedNote[] }> {
+    const studio = this.studio(job);
+    if (!studio) throw new Refusal(403, 'The song isn’t open in the studio that asked');
+    const answer = await this.o.live.request(studio, { type: 'agent-played', seconds }, this.limits.playedMs);
+    if (!answer.ok || !Array.isArray(answer.notes)) throw new Refusal(501, 'not available yet');
+    return { notes: parsePlayed(answer.notes) };
+  }
+
+  /** A/B: the requester's studio plays bars `from` to `to` (not played) from before the job, then as they are now. */
+  async compare(job: AgentJob, from: number, to: number): Promise<{ ok: true }> {
+    const studio = this.studio(job);
+    if (!studio) throw new Refusal(403, 'The song isn’t open in the studio that asked');
+    const answer = await this.o.live.request(
+      studio,
+      { type: 'agent-compare', job: job.view.id, from, to },
+      this.limits.compareMs,
+    );
+    if (!answer.ok)
+      throw new Refusal(answer.error === NO_ANSWER ? 504 : 409, answer.error ?? 'The studio couldn’t play them');
+    return { ok: true };
+  }
+}
+
+/** What a turn keeps of its job besides its reply. */
+function turnExtra(job: AgentJob): string {
+  const v = job.view;
+  const extra: TurnExtra = {
+    ...(v.permission ? { permission: v.permission } : {}),
+    ...(v.brief ? { brief: v.brief } : {}),
+    ...(v.briefWarnings ? { briefWarnings: v.briefWarnings } : {}),
+    ...(v.error ? { error: v.error } : {}),
+    ...(job.attachments.length ? { attachments: job.attachments } : {}),
+  };
+  return JSON.stringify(extra);
+}
+
+/** Notes the studio says were played, checked. */
+function parsePlayed(list: unknown[]): PlayedNote[] {
+  const n = (v: unknown, lo: number, hi: number): number | null =>
+    typeof v === 'number' && Number.isFinite(v) && v >= lo && v <= hi ? v : null;
+  const out: PlayedNote[] = [];
+  for (const raw of list.slice(0, 5000)) {
+    if (typeof raw !== 'object' || raw === null) continue;
+    const e = raw as Record<string, unknown>;
+    const pitch = n(e.pitch, 0, 127);
+    const velocity = n(e.velocity, 0, 127);
+    const time = n(e.time, -1e9, 1e9);
+    if (pitch === null || velocity === null || time === null) continue;
+    out.push({
+      tick: n(e.tick, 0, 1e10),
+      time,
+      pitch: Math.round(pitch),
+      velocity: Math.round(velocity),
+      length: n(e.length, 0, 1e9),
+      port: typeof e.port === 'string' ? oneLine(e.port, 80) : '',
+    });
+  }
+  return out;
 }
 
 /** Which report of a harness says most: found, then sealed, then signed in. */
@@ -877,10 +1120,17 @@ export function parseHarnesses(list: unknown): HarnessInfo[] {
     }
     const reason = str(h.reason, 300);
     if (reason) info.reason = reason;
-    for (const key of ['models', 'efforts'] as const) {
+    // (a harness may list hundreds of models: Cursor lists nearly 300; each name is checked as settings check it)
+    for (const [key, most] of [
+      ['models', 500],
+      ['efforts', 50],
+    ] as const) {
       const values = h[key];
       if (Array.isArray(values))
-        info[key] = values.filter((m): m is string => typeof m === 'string' && MODEL.test(m)).slice(0, 50);
+        info[key] = values
+          .slice(0, most * 2)
+          .filter((m): m is string => typeof m === 'string' && MODEL.test(m))
+          .slice(0, most);
     }
     out.push(info);
   }

@@ -8,6 +8,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { newProject, type Project } from '@holo/session';
+import { expect } from 'vitest';
 import type { WebSocket } from 'ws';
 import { runnerKey } from '../src/agent/keys.ts';
 import { buildApp } from '../src/app.ts';
@@ -169,3 +170,61 @@ export async function waitFor(check: () => boolean, ms = 2000): Promise<void> {
     await new Promise((r) => setTimeout(r, 5));
   }
 }
+
+/** HO[LO] with a keyed runner that has Claude Code, a paired device, and a song open in its studio. */
+export async function agentWorld() {
+  const t = await agentApp();
+  const run = t.runner();
+  const { token, device } = await t.pair(run);
+  const s = await t.song();
+  const desk = t.studio(token, s.id, 'desk');
+  const ask = (body: Msg, as = token) =>
+    t.app.inject({ method: 'POST', url: '/api/agent/requests', headers: auth(as), payload: body });
+  /** Start a request: its job, and the agent-run the runner was sent for it. */
+  const start = async (body: Msg, as = token, runner: FakeSocket = run) => {
+    const res = await ask(body, as);
+    expect(res.statusCode, res.body).toBe(200);
+    const { job } = res.json() as { job: string };
+    const sent = runner.got('agent-run').find((m) => m.job === job) as Msg & { token: string; prompt: string };
+    expect(sent).toBeDefined();
+    return { job, token: sent.token, run: sent };
+  };
+  /** A call from the job's tools. */
+  const tool = (job: string, jobToken: string, method: 'GET' | 'POST' | 'PATCH', path: string, payload?: Msg) =>
+    t.app.inject({
+      method,
+      url: `/api/agent/jobs/${job}${path}`,
+      headers: auth(jobToken),
+      ...(payload ? { payload } : {}),
+    });
+  /** The song's current thread, as stored. */
+  const thread = (project: string) =>
+    t.services.store.database.prepare('SELECT * FROM agent_threads WHERE project = ? AND current = 1').get(project) as {
+      id: string;
+      session: string | null;
+      seen_doc: string | null;
+      seen_revision: number | null;
+    };
+  const status = (ws: FakeSocket, job: string) =>
+    ws
+      .got('agent-status')
+      .map((m) => m.job as Msg)
+      .filter((j) => j.id === job)
+      .at(-1);
+  return { ...t, run, token, device, s, desk, ask, start, tool, thread, status };
+}
+
+/** Wait until `check` holds, turn by turn of the event loop (it works while setTimeout is faked). */
+export async function until(check: () => boolean, turns = 500): Promise<void> {
+  for (let i = 0; i < turns && !check(); i++) await new Promise((r) => setImmediate(r));
+  if (!check()) throw new Error('Timed out waiting');
+}
+
+/** A note on and off as a studio reports them in a `played` message. */
+export const note = (pitch: number, on: boolean, velocity = 100) => ({
+  status: on ? 0x90 : 0x80,
+  d1: pitch,
+  d2: on ? velocity : 0,
+  tick: null,
+  port: 'Keys',
+});

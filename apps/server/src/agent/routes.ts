@@ -7,12 +7,27 @@
  * device's token (401 without one), or for the tools, the running job's token (403 when it isn't).
  * Every body is checked: its types, its lengths, and ids of the shapes HO[LO] makes. With the agent
  * off, only turning it on, Settings (to turn it on again) and removing devices answer.
+ *
+ * Attachments a device sends are kept a week, each the device's own for the song it was sent for;
+ * a job reads only those its request (or an earlier one on its thread) named.
  */
+import { join } from 'node:path';
 import { SCAN_ID, type Scan } from '@holo/score';
 import { describeProject, type Op } from '@holo/session';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { Store } from '../db.ts';
 import type { Live } from '../live.ts';
+import {
+  ATTACHMENT_ID,
+  ATTACHMENT_TYPES,
+  Attachments,
+  type AttachmentType,
+  MAX_ATTACHMENT,
+  MAX_META,
+  MAX_TEXT,
+  metaSummary,
+  sniff,
+} from './attachments.ts';
 import { Auth, bearer } from './auth.ts';
 import { type AgentJob, Jobs, type Limits, MODEL, PERMISSION_KINDS, Refusal } from './jobs.ts';
 import type { PermissionKind, RequestContext, ScanPreset } from './prompt.ts';
@@ -23,6 +38,8 @@ export interface AgentOptions {
   store: Store;
   live: Live;
   repoDir: string;
+  /** HO[LO]'s data folder (attachments are kept in agent/attachments there). */
+  dataDir: string;
   /** The URL the agent's tools reach this server at. */
   base: () => string;
   scans: { get: (id: string) => Scan | null };
@@ -31,7 +48,8 @@ export interface AgentOptions {
 
 const NOT_ALLOWED = 'This device isn’t allowed to use the agent';
 const OFF = 'The agent is off: turn it on in Settings › Agent';
-const NOT_YET = 'not yet';
+/** MusicXML is passed on whole (as text) up to this size; past it, only what was measured. */
+const MAX_XML_DATA = 1024 * 1024;
 
 type Body = Record<string, unknown>;
 type Params = Record<string, string>;
@@ -161,6 +179,8 @@ export function agentRoutes(app: FastifyInstance, o: AgentOptions): { jobs: Jobs
       live.downgrade(device);
     },
   });
+  const attachments = new Attachments(join(o.dataDir, 'agent', 'attachments'));
+  attachments.start();
   const theJobs = new Jobs({
     live,
     store,
@@ -169,6 +189,12 @@ export function agentRoutes(app: FastifyInstance, o: AgentOptions): { jobs: Jobs
     repoDir: o.repoDir,
     base: o.base,
     scan: o.scans.get,
+    attachment: (id, project, device) => {
+      const a = ATTACHMENT_ID.test(id) ? attachments.get(id) : null;
+      if (!a || a.project !== project || a.device !== device) return null;
+      const summary = metaSummary(a.meta);
+      return { id, name: a.name, type: a.type, size: a.size, ...(summary ? { summary } : {}) };
+    },
     deviceFor: (token) => auth.deviceFor(token)?.id ?? null,
     allowed: (device) => auth.allowed(device),
     ...(o.limits ? { limits: o.limits } : {}),
@@ -236,7 +262,15 @@ export function agentRoutes(app: FastifyInstance, o: AgentOptions): { jobs: Jobs
     return reply.code(res.statusCode).type('application/json; charset=utf-8').send(res.body);
   };
 
-  const settingsView = () => ({ ...agentStore.settings(), harnesses: theJobs.harnesses() });
+  const settingsView = () => theJobs.settingsView();
+
+  /** At most 10 attachments' ids, as HO[LO] makes them. */
+  const attachmentIds = (v: unknown): string[] => {
+    const ids = v ?? [];
+    if (!Array.isArray(ids) || ids.length > 10 || !ids.every((a) => typeof a === 'string' && ATTACHMENT_ID.test(a)))
+      throw bad('attachments are at most 10 attachments’ ids');
+    return ids as string[];
+  };
 
   // ---- open ----
 
@@ -272,7 +306,9 @@ export function agentRoutes(app: FastifyInstance, o: AgentOptions): { jobs: Jobs
       const name = line(b.name, 'name', 60);
       const r = auth.pair(b.code.trim(), name);
       if (!r.ok) return reply.code(r.status).send({ error: r.error });
+      const was = agentStore.settings().enabled;
       agentStore.setSettings({ enabled: true });
+      if (!was) theJobs.announce(true);
       return { token: r.token, device: r.device };
     }),
   );
@@ -346,9 +382,18 @@ export function agentRoutes(app: FastifyInstance, o: AgentOptions): { jobs: Jobs
           throw bad(`${key} is a name of letters, digits and . : - _ [ ] =, or empty for the harness's own`);
         patch[key] = v;
       }
-      const was = agentStore.settings().enabled;
-      agentStore.setSettings(patch);
-      if (was && patch.enabled === false) theJobs.stopAll('The agent was turned off');
+      const before = agentStore.settings();
+      const after = agentStore.setSettings(patch);
+      if (before.enabled && !after.enabled) theJobs.stopAll('The agent was turned off');
+      // the studios hear of it: whether it's on, and (allowed devices) the rest
+      const enabledChanged = before.enabled !== after.enabled;
+      if (
+        enabledChanged ||
+        before.harness !== after.harness ||
+        before.model !== after.model ||
+        before.effort !== after.effort
+      )
+        theJobs.announce(enabledChanged);
       return settingsView();
     }, true),
   );
@@ -397,18 +442,12 @@ export function agentRoutes(app: FastifyInstance, o: AgentOptions): { jobs: Jobs
       if (typeof b.project !== 'string' || !ID.test(b.project)) throw bad('project is a song’s id');
       const p = preset(b.preset);
       const request = p ? text(b.text, 'text', 4000, true) : text(b.text, 'text', 4000);
-      const attachments = b.attachments ?? [];
-      if (
-        !Array.isArray(attachments) ||
-        attachments.length > 10 ||
-        !attachments.every((a) => typeof a === 'string' && ID.test(a))
-      )
-        throw bad('attachments are at most 10 attachments’ ids');
+      const ids = attachmentIds(b.attachments);
       const ctx = context(b.context);
       const job = await theJobs.request(device, {
         project: b.project,
         text: request,
-        attachments: attachments as string[],
+        attachments: ids,
         preset: p,
         ...(ctx ? { context: ctx } : {}),
       });
@@ -450,20 +489,25 @@ export function agentRoutes(app: FastifyInstance, o: AgentOptions): { jobs: Jobs
       const b = body(r);
       if (typeof b.grant !== 'boolean') throw bad('grant is true or false');
       const result = text(b.result, 'result', 1000, true);
-      const next = await theJobs.permit(device, (r.params as Params).job ?? '', b.grant, result);
+      // a screenshot or a photo the click took comes as an attachment
+      const ids = attachmentIds(b.attachments);
+      const next = await theJobs.permit(device, (r.params as Params).job ?? '', b.grant, result, ids);
       return next ? { ok: true, job: next } : { ok: true };
     })(req, reply);
   });
 
-  // the user pressed Done while the agent listened (step C12)
+  // the user pressed Done while the agent listened
   app.post(
     '/api/agent/jobs/:job/done-listening',
-    forDevice(async (_req, reply) => reply.code(501).send({ error: NOT_YET })),
+    forDevice(async (req, _reply, device) => {
+      theJobs.doneListening(device, (req.params as Params).job ?? '');
+      return { ok: true };
+    }),
   );
 
   app.get(
     '/api/agent/threads/:project',
-    forDevice(async (req) => ({ thread: threads.view((req.params as Params).project ?? '') })),
+    forDevice(async (req) => theJobs.threadView((req.params as Params).project ?? '')),
   );
   app.post(
     '/api/agent/threads/:project/reset',
@@ -476,14 +520,56 @@ export function agentRoutes(app: FastifyInstance, o: AgentOptions): { jobs: Jobs
     }),
   );
 
-  // attachments (step C13)
-  app.post(
-    '/api/agent/attachments',
-    forDevice(async (_req, reply) => reply.code(501).send({ error: NOT_YET })),
-  );
+  // ---- attachments: what a device sends with a request ----
+
+  // any type comes in as bytes (the type it is is in the query, and checked against its first bytes);
+  // the device and the agent being on are checked before the body is read
+  app.register(async (scope) => {
+    scope.removeAllContentTypeParsers();
+    scope.addContentTypeParser('*', { parseAs: 'buffer', bodyLimit: MAX_ATTACHMENT }, (_req, data, done) =>
+      done(null, data),
+    );
+    scope.post(
+      '/api/agent/attachments',
+      {
+        bodyLimit: MAX_ATTACHMENT,
+        onRequest: async (req, reply) => {
+          if (!auth.device(req.headers.authorization)) return reply.code(401).send({ error: NOT_ALLOWED });
+          if (!agentStore.settings().enabled) return reply.code(409).send({ error: OFF, reason: 'off' });
+        },
+      },
+      forDevice(async (req, _reply, device) => {
+        const q = req.query as Record<string, unknown>;
+        if (typeof q.project !== 'string' || !ID.test(q.project)) throw bad('project is a song’s id');
+        if (!store.get(q.project)) throw new Refusal(404, 'No such song');
+        const name = line(q.name, 'name', 120);
+        if (!ATTACHMENT_TYPES.includes(q.type as AttachmentType))
+          throw new Refusal(415, `HO[LO] takes ${ATTACHMENT_TYPES.join(', ')}`);
+        const type = q.type as AttachmentType;
+        const data = Buffer.isBuffer(req.body) ? req.body : null;
+        if (!data?.length) throw bad('The file is the body, and it’s empty');
+        if (type === 'text/plain' && data.length > MAX_TEXT)
+          throw new Refusal(413, `A text is ${MAX_TEXT / 1024} KB at most`);
+        const wrong = sniff(type, data);
+        if (wrong) throw new Refusal(415, wrong);
+        const a = attachments.add(device, q.project, name, type, data);
+        return { id: a.id, name: a.name, type: a.type, size: a.size };
+      }),
+    );
+  });
+
   app.put(
     '/api/agent/attachments/:id/meta',
-    forDevice(async (_req, reply) => reply.code(501).send({ error: NOT_YET })),
+    { bodyLimit: MAX_META },
+    forDevice(async (req, _reply, device) => {
+      const id = (req.params as Params).id ?? '';
+      const a = ATTACHMENT_ID.test(id) ? attachments.get(id) : null;
+      if (!a) throw new Refusal(404, 'No such attachment');
+      if (a.device !== device) throw new Refusal(403, 'Not this device’s');
+      if (!isObj(req.body)) throw bad('What was measured is a JSON object');
+      attachments.setMeta(id, req.body);
+      return { ok: true };
+    }),
   );
 
   // ---- the job's tools ----
@@ -555,18 +641,31 @@ export function agentRoutes(app: FastifyInstance, o: AgentOptions): { jobs: Jobs
     }, true),
   );
 
-  // listening, what was just played, and A/B (steps C12 and C14)
+  // listening (a part at a time: a tool call is cut at 60 s by some harnesses), what was just played, A/B
   app.post(
     `${J}/listen`,
-    forJob(async (_req, reply) => reply.code(501).send({ error: NOT_YET }), true),
+    forJob(async (req, _reply, job) => {
+      const b = body(req);
+      return theJobs.listen(job, int(b.maxMs, 'maxMs', 100, 45_000), int(b.quietMs, 'quietMs', 500, 10_000));
+    }, true),
   );
   app.get(
     `${J}/played`,
-    forJob(async (_req, reply) => reply.code(501).send({ error: NOT_YET }), true),
+    forJob(async (req, _reply, job) => {
+      const raw = (req.query as Record<string, unknown>).seconds;
+      const seconds = typeof raw === 'string' && /^\d{1,3}(\.\d+)?$/.test(raw) ? Number(raw) : Number.NaN;
+      return theJobs.played(job, num(seconds, 'seconds', 1, 60));
+    }, true),
   );
   app.post(
     `${J}/compare`,
-    forJob(async (_req, reply) => reply.code(501).send({ error: NOT_YET }), true),
+    forJob(async (req, _reply, job) => {
+      const b = body(req);
+      const from = int(b.from, 'from', 1, 100_000);
+      const to = int(b.to, 'to', 2, 100_001);
+      if (to <= from) throw bad('to is after from (the bar it stops at, not played)');
+      return theJobs.compare(job, from, to);
+    }, true),
   );
 
   app.get(
@@ -641,7 +740,26 @@ export function agentRoutes(app: FastifyInstance, o: AgentOptions): { jobs: Jobs
 
   app.get(
     `${J}/attachments/:id`,
-    forJob(async (_req, reply) => reply.code(501).send({ error: NOT_YET })),
+    forJob(async (req, _reply, job) => {
+      const id = (req.params as Params).id ?? '';
+      const a = ATTACHMENT_ID.test(id) ? attachments.get(id) : null;
+      if (!a) throw new Refusal(404, 'No such attachment');
+      // only what this job's request (or an earlier one on its thread) named, for its song
+      if (a.project !== job.view.project || !theJobs.mayRead(job, id))
+        throw new Refusal(403, 'That attachment isn’t this request’s');
+      const whole =
+        a.type.startsWith('image/') ||
+        a.type === 'text/plain' ||
+        (a.type === 'application/vnd.recordare.musicxml+xml' && a.size <= MAX_XML_DATA);
+      const data = whole ? attachments.data(id) : null;
+      return {
+        name: a.name,
+        type: a.type,
+        size: a.size,
+        meta: a.meta ?? null,
+        ...(data ? { data: data.toString('base64') } : {}),
+      };
+    }),
   );
 
   app.post(
@@ -667,7 +785,14 @@ export function agentRoutes(app: FastifyInstance, o: AgentOptions): { jobs: Jobs
     }),
   );
 
-  return { jobs: theJobs, auth, close: () => theJobs.close() };
+  return {
+    jobs: theJobs,
+    auth,
+    close: () => {
+      theJobs.close();
+      attachments.stop();
+    },
+  };
 }
 
 /** A harness named in a body (400 if it isn't one). */

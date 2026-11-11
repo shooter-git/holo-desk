@@ -1,6 +1,6 @@
 import { describeChanges, type Project } from '@holo/session';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { agentApp, auth, CLAUDE, type FakeSocket, type Msg, settle, waitFor } from './agent-fakes.ts';
+import { agentApp, agentWorld, auth, CLAUDE, type Msg, settle, waitFor } from './agent-fakes.ts';
 
 let close: (() => Promise<void>) | null = null;
 afterEach(async () => {
@@ -11,46 +11,9 @@ afterEach(async () => {
 
 /** HO[LO] with a keyed runner that has Claude Code, a paired device, and a song open in its studio. */
 async function setup() {
-  const t = await agentApp();
-  close = t.close;
-  const run = t.runner();
-  const { token, device } = await t.pair(run);
-  const s = await t.song();
-  const desk = t.studio(token, s.id, 'desk');
-  const ask = (body: Msg, as = token) =>
-    t.app.inject({ method: 'POST', url: '/api/agent/requests', headers: auth(as), payload: body });
-  /** Start a request: its job, and the agent-run the runner was sent for it. */
-  const start = async (body: Msg, as = token, runner: FakeSocket = run) => {
-    const res = await ask(body, as);
-    expect(res.statusCode, res.body).toBe(200);
-    const { job } = res.json() as { job: string };
-    const sent = runner.got('agent-run').find((m) => m.job === job) as Msg & { token: string; prompt: string };
-    expect(sent).toBeDefined();
-    return { job, token: sent.token, run: sent };
-  };
-  /** A call from the job's tools. */
-  const tool = (job: string, jobToken: string, method: 'GET' | 'POST' | 'PATCH', path: string, payload?: Msg) =>
-    t.app.inject({
-      method,
-      url: `/api/agent/jobs/${job}${path}`,
-      headers: auth(jobToken),
-      ...(payload ? { payload } : {}),
-    });
-  /** The song's current thread, as stored. */
-  const thread = (project: string) =>
-    t.services.store.database.prepare('SELECT * FROM agent_threads WHERE project = ? AND current = 1').get(project) as {
-      id: string;
-      session: string | null;
-      seen_doc: string | null;
-      seen_revision: number | null;
-    };
-  const status = (ws: FakeSocket, job: string) =>
-    ws
-      .got('agent-status')
-      .map((m) => m.job as Msg)
-      .filter((j) => j.id === job)
-      .at(-1);
-  return { ...t, run, token, device, s, desk, ask, start, tool, thread, status };
+  const w = await agentWorld();
+  close = w.close;
+  return w;
 }
 
 describe('a request', () => {
@@ -73,7 +36,7 @@ describe('a request', () => {
     });
     expect(job).toMatch(/^agj_[0-9a-f]{12}$/);
     expect(Object.keys(sent).sort()).toEqual(
-      ['base', 'effort', 'harness', 'job', 'model', 'prompt', 'thread', 'token', 'type', 'workspace'].sort(),
+      ['base', 'effort', 'harness', 'job', 'middleC', 'model', 'prompt', 'thread', 'token', 'type', 'workspace'].sort(),
     );
     expect(sent).toMatchObject({
       type: 'agent-run',
@@ -82,6 +45,7 @@ describe('a request', () => {
       harness: 'claude',
       model: '',
       effort: '',
+      middleC: 'C3',
       token: expect.stringMatching(/^[A-Za-z0-9_-]{43}$/),
       workspace: sent.thread,
       base: 'http://127.0.0.1:47899',
@@ -173,9 +137,7 @@ describe('a job’s token', () => {
     };
     expect((await tool(one.job, one.token, 'GET', `/scans/${scan.id}`)).statusCode).toBe(403);
     expect((await tool(two.job, two.token, 'GET', `/scans/${scan.id}`)).json()).toMatchObject({ id: scan.id });
-    // not yet
-    expect((await tool(one.job, one.token, 'POST', '/listen', { maxMs: 1000, quietMs: 500 })).statusCode).toBe(501);
-    expect((await tool(one.job, one.token, 'GET', '/attachments/att_x')).statusCode).toBe(501);
+    expect((await tool(one.job, one.token, 'GET', '/attachments/att_000000000000')).statusCode).toBe(404);
 
     // once it's done
     run.say({ type: 'agent-done', job: one.job });
@@ -580,6 +542,7 @@ describe('since your last reply', () => {
           },
         ],
       },
+      job: null,
     });
 
     // the user undoes the agent's step, makes one of their own, and the song is slower
@@ -695,5 +658,56 @@ describe('permissions', () => {
       ],
     });
     expect((await tool(job, jobToken, 'POST', '/handoff', { brief: 'x'.repeat(4001) })).statusCode).toBe(400);
+  });
+});
+
+describe('what the harness step needs', () => {
+  it('tells the runner how the studio names middle C', async () => {
+    const { start, s, app, run } = await setup();
+    await app.inject({ method: 'PUT', url: '/api/settings', payload: { middleC: 'C4' } });
+    const { job } = await start({ project: s.id, text: 'A bass line' });
+    expect(run.got('agent-run').find((m) => m.job === job)).toMatchObject({ middleC: 'C4' });
+  });
+
+  it('keeps a long list of models (each name checked), up to 500', async () => {
+    const { runner, app, token } = await setup();
+    const models = Array.from({ length: 278 }, (_, i) => `model-${i}`);
+    runner(
+      [{ ...CLAUDE, id: 'cursor', name: 'Cursor', models: [...models, '--bad flag', 'x'.repeat(81), 42] }],
+      'cursor',
+    );
+    const settings = async () =>
+      (await app.inject({ method: 'GET', url: '/api/agent/settings', headers: auth(token) })).json() as {
+        harnesses: { id: string; models?: string[] }[];
+      };
+    expect((await settings()).harnesses.find((h) => h.id === 'cursor')?.models).toEqual(models);
+    runner(
+      [{ ...CLAUDE, id: 'codex', name: 'Codex', models: Array.from({ length: 700 }, (_, i) => `m${i}`) }],
+      'codex',
+    );
+    expect((await settings()).harnesses.find((h) => h.id === 'codex')?.models).toHaveLength(500);
+  });
+
+  it('takes the harness’s last words as the reply when the agent never called finish', async () => {
+    const { start, tool, s, song, studio, token, desk, run, status } = await setup();
+    const first = await start({ project: s.id, text: 'A bass line' });
+    run.say({ type: 'agent-done', job: first.job, reply: 'I wrote a bass line\nunder the verse.' });
+    await waitFor(() => status(desk, first.job)?.state === 'done');
+    expect(status(desk, first.job)).toMatchObject({ reply: 'I wrote a bass line under the verse.' });
+
+    // finish's reply stands
+    const second = await start({ project: s.id, text: 'Drums' });
+    await tool(second.job, second.token, 'POST', '/finish', { label: 'Drums', reply: 'Added drums.' });
+    run.say({ type: 'agent-done', job: second.job, reply: 'Something else' });
+    await waitFor(() => status(desk, second.job)?.state === 'done');
+    expect(status(desk, second.job)).toMatchObject({ reply: 'Added drums.' });
+
+    // at most 600 characters
+    const other = await song('Other');
+    studio(token, other.id, 'other tab');
+    const third = await start({ project: other.id, text: 'Strings' });
+    run.say({ type: 'agent-done', job: third.job, reply: 'y'.repeat(900) });
+    await waitFor(() => status(desk, third.job)?.state === 'done');
+    expect(String(status(desk, third.job)?.reply)).toHaveLength(600);
   });
 });

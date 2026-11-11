@@ -216,6 +216,7 @@ export async function buildApp(config: Config): Promise<{ app: FastifyInstance; 
     store,
     live,
     repoDir: config.repoDir,
+    dataDir: config.dataDir,
     scans,
     // the tools run on this computer, beside the runner: they reach the server here
     base: () => {

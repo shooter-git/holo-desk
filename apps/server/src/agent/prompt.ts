@@ -58,6 +58,16 @@ export interface AttachmentInfo {
   id: string;
   name: string;
   type: string;
+  size: number;
+  /** A few words of what the browser measured (tempo, key, how many notes…), if anything. */
+  summary?: string;
+}
+
+/** A size as people say it. */
+export function sizeText(bytes: number): string {
+  if (bytes < 1024) return `${bytes} bytes`;
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
+  return `${Math.round((bytes / (1024 * 1024)) * 10) / 10} MB`;
 }
 
 /** One line of text, as it may appear in the prompt: no line breaks or control characters, quotes plain. */
@@ -216,7 +226,10 @@ export function buildPrompt(parts: PromptParts): string {
   if (parts.attachments.length)
     out.push(
       `## Attachments (read them with attachment_get)\n${parts.attachments
-        .map((a) => `- ${a.id}: ${quoted(a.name)} (${a.type})`)
+        .map(
+          (a) =>
+            `- ${a.id}: ${quoted(a.name)} (${a.type}, ${sizeText(a.size)})${a.summary ? `; measured: ${oneLine(a.summary, 240)}` : ''}`,
+        )
         .join('\n')}`,
     );
   out.push(`## The request\n${parts.request.trim()}`);

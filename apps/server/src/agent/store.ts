@@ -63,6 +63,16 @@ export interface ThreadRow {
   current: number;
 }
 
+/** What a turn keeps besides its reply: what it asked, the brief it wrote, why it stopped, what was attached. */
+export interface TurnExtra {
+  permission?: { kind: string; detail: string; pack?: string };
+  brief?: string;
+  briefWarnings?: { line: number; kind: 'command' | 'url' }[];
+  error?: string;
+  /** The attachments its request carried (its job, and later ones on the thread, may read them). */
+  attachments?: string[];
+}
+
 export interface TurnRow {
   thread: string;
   job: string;
@@ -71,6 +81,8 @@ export interface TurnRow {
   label: string | null;
   state: string;
   at: number;
+  /** TurnExtra, as JSON. */
+  extra: string | null;
 }
 
 const KEEP_TURNS = 50;
@@ -128,6 +140,16 @@ export class AgentStore {
       );
       CREATE INDEX IF NOT EXISTS agent_turns_thread ON agent_turns (thread, at);
       INSERT OR IGNORE INTO agent_settings (id) VALUES (1);
+    `);
+    // added after the first version: turns keep what they asked, their brief, why they stopped
+    const columns = new Set(
+      (this.db.prepare('PRAGMA table_info(agent_turns)').all() as { name: string }[]).map((c) => c.name),
+    );
+    if (!columns.has('extra')) this.db.exec('ALTER TABLE agent_turns ADD COLUMN extra TEXT');
+    // jobs live in memory: a turn still running, or waiting for a click, when HO[LO] stopped can't go on
+    this.db.exec(`
+      UPDATE agent_turns SET state = 'failed' WHERE state IN ('waiting', 'running');
+      UPDATE agent_turns SET state = 'cancelled' WHERE state = 'awaiting';
     `);
   }
 
@@ -263,9 +285,9 @@ export class AgentStore {
   addTurn(t: TurnRow): void {
     this.db
       .prepare(
-        'INSERT OR REPLACE INTO agent_turns (job, thread, request, reply, label, state, at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+        'INSERT OR REPLACE INTO agent_turns (job, thread, request, reply, label, state, at, extra) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
       )
-      .run(t.job, t.thread, t.request, t.reply, t.label, t.state, t.at);
+      .run(t.job, t.thread, t.request, t.reply, t.label, t.state, t.at, t.extra);
     this.db
       .prepare(
         `DELETE FROM agent_turns WHERE thread = ? AND job NOT IN
@@ -274,21 +296,21 @@ export class AgentStore {
       .run(t.thread, t.thread, KEEP_TURNS);
   }
 
-  updateTurn(job: string, patch: Partial<Pick<TurnRow, 'reply' | 'label' | 'state'>>): void {
-    const row = this.db.prepare('SELECT reply, label, state FROM agent_turns WHERE job = ?').get(job) as
-      | Pick<TurnRow, 'reply' | 'label' | 'state'>
+  updateTurn(job: string, patch: Partial<Pick<TurnRow, 'reply' | 'label' | 'state' | 'extra'>>): void {
+    const row = this.db.prepare('SELECT reply, label, state, extra FROM agent_turns WHERE job = ?').get(job) as
+      | Pick<TurnRow, 'reply' | 'label' | 'state' | 'extra'>
       | undefined;
     if (!row) return;
     const next = { ...row, ...patch };
     this.db
-      .prepare('UPDATE agent_turns SET reply = ?, label = ?, state = ? WHERE job = ?')
-      .run(next.reply, next.label, next.state, job);
+      .prepare('UPDATE agent_turns SET reply = ?, label = ?, state = ?, extra = ? WHERE job = ?')
+      .run(next.reply, next.label, next.state, next.extra, job);
   }
 
   turns(thread: string): TurnRow[] {
     return this.db
       .prepare(
-        'SELECT thread, job, request, reply, label, state, at FROM agent_turns WHERE thread = ? ORDER BY at, rowid',
+        'SELECT thread, job, request, reply, label, state, at, extra FROM agent_turns WHERE thread = ? ORDER BY at, rowid',
       )
       .all(thread) as unknown as TurnRow[];
   }

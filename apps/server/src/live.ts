@@ -136,6 +136,13 @@ interface Listener {
   notes: PlayedNote[];
   start: number;
   held: Map<number, PlayedNote>;
+  /**
+   * Only what these studios report they played (the agent listens to the studio that asked); null:
+   * everything, from every studio and the network, as the holo command's listen hears it.
+   */
+  from: ((c: Client) => boolean) | null;
+  /** Told after each note on or off it took in: how many are held, and how many it has. */
+  heard: ((held: number, notes: number) => void) | null;
 }
 
 export interface LiveOptions {
@@ -325,19 +332,23 @@ export class Live {
       }
       case 'played':
         // a studio reports what was played on its own device; notes from the network are counted below
-        if (client.role === 'editor' && Array.isArray(msg.events)) this.recordPlayed(msg.events as unknown[]);
+        if (client.role === 'editor' && Array.isArray(msg.events)) this.recordPlayed(msg.events as unknown[], client);
         break;
       default:
         if (typeof msg.type === 'string' && AGENT_MESSAGES.has(msg.type)) this.agent?.message(client, msg);
     }
   }
 
-  private recordPlayed(events: unknown[]): void {
+  /** What was played, for those listening: `from` is the studio that reported it (null: from the network). */
+  private recordPlayed(events: unknown[], from: Client | null = null): void {
     if (!this.listeners.size) return;
+    const told = new Set<Listener>();
     for (const e of events) {
       const ev = e as { status: number; d1: number; d2: number; tick: number | null; port: string };
       const kind = ev.status & 0xf0;
       for (const l of this.listeners) {
+        if (l.from && (!from || !l.from(from))) continue;
+        if (l.heard) told.add(l);
         const now = Date.now() - l.start;
         if (kind === 0x90 && ev.d2 > 0) {
           const note: PlayedNote = {
@@ -359,6 +370,7 @@ export class Live {
         }
       }
     }
+    for (const l of told) l.heard?.(l.held.size, l.notes.length);
   }
 
   private send(c: Client, msg: unknown): void {
@@ -402,6 +414,11 @@ export class Live {
       c.device = null;
       this.send(c, { type: 'agent-removed' });
     }
+  }
+
+  /** The open studios (every device's, allowed to use the agent or not). */
+  studios(): Client[] {
+    return [...this.clients].filter((c) => c.role === 'editor');
   }
 
   /** Whether a runner is connected, and whether one said the key. */
@@ -564,9 +581,23 @@ export class Live {
     return true;
   }
 
+  /**
+   * Collect what some studios report they play (those `from` picks), until the returned function is
+   * called: it gives the notes. `heard` is told after each note on or off (the agent's listening ends
+   * on a quiet spell). Nothing is told to the studios: the agent says so itself.
+   */
+  collect(from: (c: Client) => boolean, heard: (held: number, notes: number) => void): () => PlayedNote[] {
+    const l: Listener = { notes: [], start: Date.now(), held: new Map(), from, heard };
+    this.listeners.add(l);
+    return () => {
+      this.listeners.delete(l);
+      return l.notes;
+    };
+  }
+
   /** Collect what is played in the studio for a while. */
   async listen(ms: number): Promise<PlayedNote[]> {
-    const l: Listener = { notes: [], start: Date.now(), held: new Map() };
+    const l: Listener = { notes: [], start: Date.now(), held: new Map(), from: null, heard: null };
     this.listeners.add(l);
     this.tell({ type: 'listening', ms });
     await new Promise((r) => setTimeout(r, ms));

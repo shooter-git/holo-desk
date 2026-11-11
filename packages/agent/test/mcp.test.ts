@@ -159,7 +159,7 @@ describe('the MCP server over stdio', () => {
     expect(a.result).toEqual({
       protocolVersion: '2025-03-26',
       capabilities: { tools: { listChanged: false } },
-      serverInfo: { name: 'holo', version: '0.6.12' },
+      serverInfo: { name: 'holo', version: '0.7.0' },
     });
     const b = await server.request('initialize', { protocolVersion: '2099-01-01' });
     expect((b.result as { protocolVersion: string }).protocolVersion).toBe('2025-11-25');

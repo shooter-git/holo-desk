@@ -2600,8 +2600,39 @@ html[data-layout="phone-landscape"] .bar .field input {
   min-width: 220px;
 }
 
-.agent-why {
-  display: block;
+/* a harness a row: its name and version, then its sign-in, its update and whether it's in use, each in
+   a column of its own so the rows line up; what's under way (a sign-in, an update) or why it can't be
+   used goes under it, full width */
+.agent-harness {
+  flex-wrap: wrap;
+  gap: 4px 10px;
+}
+
+.agent-harness .agent-cell {
+  display: inline-flex;
+  justify-content: flex-end;
+  min-width: 64px;
+}
+
+.agent-harness .agent-update {
+  min-width: 132px;
+}
+
+.agent-harness .agent-use {
+  min-width: 44px;
+}
+
+.agent-harness .agent-more {
+  flex-basis: 100%;
+  padding-bottom: 2px;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+/* "No allowed device at hand?": the quiet second way, the runner's code */
+.agent-alt {
+  gap: 2px;
+  flex-wrap: wrap;
 }
 
 .agent-join {
@@ -2649,6 +2680,13 @@ html[data-layout="phone-landscape"] .bar .field input {
   .agent-select {
     min-width: 0;
     width: 100%;
+  }
+  /* a phone: the name and version, then its states on a line of their own */
+  .agent-harness > .grow {
+    flex-basis: 100%;
+  }
+  .agent-harness .agent-cell {
+    min-width: 0;
   }
 }
 

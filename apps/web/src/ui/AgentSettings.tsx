@@ -1,17 +1,18 @@
 /**
- * Settings › Agent: Off or On, and, once this device is allowed, the harness, model and effort the
- * agent runs with, the harness's sign-in and update, what it asks first and never does, and the
- * devices allowed to use it. Off is the default, and then this section is all there is of it.
+ * Settings › Agent: Off or On, and, once this device is allowed, the harnesses found on the host (each
+ * with its version, sign-in and update, and the one the agent runs with), its model and effort, what
+ * it asks first and never does, and the devices allowed to use it. Off is the default, and then this
+ * section is all there is of it.
  *
  * Turning it on from a device that isn't allowed yet: the first device pairs with the code the runner
- * prints on the host; a later one asks to join, and a device that's allowed approves it.
+ * prints on the host; a later one asks to join, and a device that's allowed approves it. With no
+ * allowed device at hand, a later one can pair with the runner's code too.
  */
 import { useEffect, useState } from 'react';
 import {
   AgentError,
   answerRequest,
   askToJoin,
-  type HarnessId,
   type HarnessInfo,
   harnessAction,
   isOn,
@@ -29,13 +30,19 @@ import {
 } from '../app/agent.ts';
 import { device } from '../app/live.ts';
 
-/** Where turning it on has got to, on a device not allowed yet. */
+/**
+ * Where turning it on has got to, on a device not allowed yet. `code`: the runner's code is asked for
+ * (with the request to join it took the place of, withdrawn once paired). Only `code` and `asking` are
+ * on their way: the others light Off.
+ */
 type Step =
   | { kind: 'idle' }
-  | { kind: 'code' }
+  | { kind: 'code'; request?: string }
   | { kind: 'asking'; id: string; secret: string; code: string }
+  | { kind: 'off' }
   | { kind: 'denied' }
-  | { kind: 'lapsed' };
+  | { kind: 'lapsed' }
+  | { kind: 'lost' };
 
 const message = (err: unknown) => (err instanceof Error ? err.message : String(err));
 
@@ -59,22 +66,36 @@ export function AgentSettings() {
   useEffect(() => {
     if (!on) return;
     setStep({ kind: 'idle' });
+    setError('');
     void loadSettings().catch((err) => setError(message(err)));
     void loadDevices().catch(() => undefined);
   }, [on]);
 
-  // asking to join: the request is looked at every 2 s until it's answered or lapses
+  // asking to join: the request is looked at 2 s after each answer, until it's answered or lapses
   useEffect(() => {
     if (step.kind !== 'asking') return;
-    const timer = window.setInterval(() => {
-      pollJoin(step.id, step.secret)
-        .then((state) => {
-          if (state === 'denied' || state === 'lapsed') setStep({ kind: state });
-          else if (state === 'approved') setStep({ kind: 'idle' });
-        })
-        .catch(() => undefined);
-    }, 2000);
-    return () => window.clearInterval(timer);
+    let timer = 0;
+    let stopped = false;
+    const look = () => {
+      timer = window.setTimeout(async () => {
+        try {
+          const state = await pollJoin(step.id, step.secret);
+          if (stopped) return;
+          if (state !== 'pending') {
+            setStep(state === 'approved' ? { kind: 'idle' } : { kind: state });
+            return;
+          }
+        } catch {
+          // the host is away for a moment (or didn't say yet that this device is in): asked again
+        }
+        if (!stopped) look();
+      }, 2000);
+    };
+    look();
+    return () => {
+      stopped = true;
+      window.clearTimeout(timer);
+    };
   }, [step]);
 
   const doing = async (work: () => Promise<void>) => {
@@ -89,8 +110,10 @@ export function AgentSettings() {
     }
   };
 
-  const turnOn = () =>
-    doing(async () => {
+  const starting = step.kind === 'code' || step.kind === 'asking';
+  const turnOn = () => {
+    if (on || starting) return;
+    void doing(async () => {
       const info = await refreshAgent();
       if (!info) throw new Error('Can’t reach HO[LO]’s host');
       if (info.allowed) await setSettings({ enabled: true });
@@ -100,8 +123,9 @@ export function AgentSettings() {
       } else if (info.enabled) {
         const r = await askToJoin(device());
         setStep({ kind: 'asking', ...r });
-      } else throw new Error('The agent is off: turn it on from a device that’s allowed to use it');
+      } else setStep({ kind: 'off' });
     });
+  };
 
   const turnOff = () => {
     if (allowed) void doing(() => setSettings({ enabled: false }));
@@ -111,7 +135,6 @@ export function AgentSettings() {
     }
   };
 
-  const starting = step.kind !== 'idle';
   return (
     <section className="vstack agent-settings">
       <div className="label">Agent</div>
@@ -124,7 +147,7 @@ export function AgentSettings() {
             On
           </button>
         </div>
-        <span className="muted">Off: no agent, and nothing in HO[LO] mentions one.</span>
+        {!on && !starting && <span className="muted">Off: no agent, and nothing in HO[LO] mentions one.</span>}
       </div>
       {!on && <Joining step={step} setStep={setStep} doing={doing} busy={busy} />}
       {error && (
@@ -137,7 +160,10 @@ export function AgentSettings() {
   );
 }
 
-/** Turning it on from a device not allowed yet: the runner's code, or asking an allowed device. */
+/**
+ * Turning it on from a device not allowed yet: the runner's code, or asking an allowed device. With no
+ * allowed device at hand (waiting, lapsed, or the agent off), the runner's code is offered quietly too.
+ */
 function Joining({
   step,
   setStep,
@@ -150,8 +176,32 @@ function Joining({
   busy: boolean;
 }) {
   const [code, setCode] = useState('');
+  const codeLink = (request?: string) => (
+    <div className="hstack agent-alt">
+      <span className="muted">No allowed device at hand?</span>
+      <button
+        type="button"
+        className="btn ghost"
+        disabled={busy}
+        onClick={() =>
+          void doing(async () => {
+            await startPairing();
+            setCode('');
+            setStep(request ? { kind: 'code', request } : { kind: 'code' });
+          })
+        }
+      >
+        Use a code from the runner
+      </button>
+    </div>
+  );
   if (step.kind === 'code') {
-    const send = () => void doing(() => pair(code, device()));
+    const send = () =>
+      void doing(async () => {
+        await pair(code, device());
+        // paired instead: the request to join goes from the allowed devices' lists
+        if (step.request) await answerRequest(step.request, false).catch(() => undefined);
+      });
     return (
       <div className="agent-join">
         <label htmlFor="agent-code">Enter the code the runner printed on the host</label>
@@ -165,7 +215,7 @@ function Joining({
             value={code}
             onChange={(e) => setCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
             onKeyDown={(e) => {
-              if (e.key === 'Enter' && code.length === 6) send();
+              if (e.key === 'Enter' && code.length === 6 && !busy) send();
             }}
           />
           <button type="button" className="btn primary" disabled={busy || code.length !== 6} onClick={send}>
@@ -201,13 +251,26 @@ function Joining({
             Cancel
           </button>
         </div>
+        {codeLink(step.id)}
       </div>
     );
   }
   if (step.kind === 'denied') return <div className="agent-join muted">That device said no.</div>;
-  if (step.kind === 'lapsed')
-    return <div className="agent-join muted">The request lapsed: turn it on to ask again.</div>;
-  return null;
+  const why =
+    step.kind === 'off'
+      ? 'The agent is off: turn it on from a device that’s allowed to use it.'
+      : step.kind === 'lapsed'
+        ? 'The request lapsed: turn it on to ask again.'
+        : step.kind === 'lost'
+          ? 'It was approved, but the answer didn’t reach this device: turn it on to ask again.'
+          : null;
+  if (!why) return null;
+  return (
+    <div className="agent-join">
+      <span className="muted">{why}</span>
+      {codeLink()}
+    </div>
+  );
 }
 
 /** The agent on, for this device: how it runs, what it may do, and who may use it. */
@@ -223,7 +286,7 @@ function Allowed() {
       <div className="agent-grid">
         <span className="agent-key">Harness</span>
         {found.length ? (
-          <HarnessPicker found={found} current={current} />
+          <Harnesses found={found} current={current} />
         ) : (
           <div className="hstack" style={{ flexWrap: 'wrap' }}>
             <span className="muted">
@@ -244,7 +307,9 @@ function Allowed() {
         )}
         {current && <HarnessRows harness={current} model={settings.model} effort={settings.effort} />}
         <span className="agent-key">Asks first</span>
-        <span>Before downloading a pack, importing samples, or sending a song to its creation</span>
+        <span>
+          Before installing a pack, sending the song to its creation, or using the screen, the camera or the microphone
+        </span>
         <span className="agent-key">Never</span>
         <span>HO[LO] Desk’s code, holo-packs, or any other file on this computer</span>
         <span className="agent-key">Devices</span>
@@ -258,50 +323,153 @@ function Allowed() {
   );
 }
 
-function HarnessPicker({ found, current }: { found: HarnessInfo[]; current: HarnessInfo | null }) {
-  // the others that could run it; those that can't say why
-  const others = found.filter((h) => h !== current && h.sealed);
-  const unusable = found.filter((h) => !h.sealed);
+/** The harnesses found on the host, a row each: its version, sign-in and update, and the one the agent runs with. */
+function Harnesses({ found, current }: { found: HarnessInfo[]; current: HarnessInfo | null }) {
   return (
-    <div className="hstack" style={{ flexWrap: 'wrap', gap: 10 }}>
-      <select
-        className="select agent-select"
-        aria-label="Harness"
-        value={current?.id ?? ''}
-        onChange={(e) =>
-          // another harness takes its own models: theirs start from its default
-          void setSettings({ harness: e.target.value as HarnessId, model: '', effort: '' }).catch(() => undefined)
-        }
-      >
-        {found.map((h) => (
-          <option key={h.id} value={h.id} disabled={!h.sealed}>
-            {h.name}
-            {h.version ? ` ${h.version}` : ''}
-            {!h.sealed ? ' (unavailable)' : h.signedIn === false ? ' (signed out)' : ''}
-          </option>
-        ))}
-      </select>
-      <span className="muted">
-        {others.length > 0 && `Also here: ${others.map((h) => h.name).join(', ')}`}
-        {unusable.map((h) => (
-          <span key={h.id} className="agent-why">
-            {h.name} can’t be limited to HO[LO]’s tools{h.reason ? `: ${h.reason}` : ''}
-          </span>
-        ))}
-      </span>
+    <div className="list boxed agent-harnesses">
+      {found.map((h) => (
+        <HarnessRow key={h.id} harness={h} current={h === current} />
+      ))}
     </div>
   );
 }
 
-/** The harness's model and effort, its sign-in when it's signed out, and its update when there's one. */
-function HarnessRows({ harness: h, model, effort }: { harness: HarnessInfo; model: string; effort: string }) {
+/**
+ * A harness, plainly: its version, "Signed in" or Sign in, "Up to date" or Update to x.y, and "In use"
+ * or Use. Under it, a sign-in or an update under way, and why one that can't be limited to HO[LO]'s
+ * tools can't be used.
+ */
+function HarnessRow({ harness: h, current }: { harness: HarnessInfo; current: boolean }) {
   const event = useAgent((a) => a.harness[h.id]);
   const [confirm, setConfirm] = useState(false);
   const [code, setCode] = useState('');
-  const [typed, setTyped] = useState(model);
-  useEffect(() => setTyped(model), [model]);
   const login = event?.kind === 'login' ? event : null;
   const update = event?.kind === 'update' ? event : null;
+  return (
+    <div className="list-item still agent-harness">
+      <span className="strong">{h.name}</span>
+      {h.version && <span className="muted mono">{h.version}</span>}
+      <span className="grow" />
+      <span className="agent-cell">
+        {h.signedIn === true ? (
+          <span className="muted" title={h.account}>
+            Signed in
+          </span>
+        ) : h.signedIn === false ? (
+          <button
+            type="button"
+            className="btn"
+            disabled={login?.state === 'running'}
+            onClick={() => void harnessAction(h.id, 'login').catch(() => undefined)}
+          >
+            Sign in
+          </button>
+        ) : null}
+      </span>
+      <span className="agent-cell agent-update">
+        {h.update?.available ? (
+          <button
+            type="button"
+            className="btn"
+            disabled={update?.state === 'running' || confirm}
+            onClick={() => setConfirm(true)}
+          >
+            Update to {h.update.latest ?? 'the latest'}
+          </button>
+        ) : h.update ? (
+          <span className="muted">Up to date</span>
+        ) : null}
+      </span>
+      <span className="agent-cell agent-use">
+        {current ? (
+          <span className="muted">In use</span>
+        ) : h.sealed ? (
+          <button
+            type="button"
+            className="btn ghost"
+            aria-label={`Use ${h.name}`}
+            // another harness takes its own models: theirs start from its default
+            onClick={() => void setSettings({ harness: h.id, model: '', effort: '' }).catch(() => undefined)}
+          >
+            Use
+          </button>
+        ) : null}
+      </span>
+      {!h.sealed && (
+        <span className="agent-more muted">Can’t be limited to HO[LO]’s tools{h.reason ? `: ${h.reason}` : ''}</span>
+      )}
+      {confirm && (
+        <div className="agent-more hstack" role="alertdialog" aria-label={`Update ${h.name}?`}>
+          <span className="grow">This updates the {h.name} your terminal uses too.</span>
+          <button
+            type="button"
+            className="btn primary"
+            onClick={() => {
+              setConfirm(false);
+              void harnessAction(h.id, 'update').catch(() => undefined);
+            }}
+          >
+            Update
+          </button>
+          <button type="button" className="btn ghost" onClick={() => setConfirm(false)}>
+            Not now
+          </button>
+        </div>
+      )}
+      {update?.line && <span className="agent-more muted">{update.line}</span>}
+      {update?.state === 'failed' && (
+        <span className="agent-more agent-error">{update.error ?? 'The update failed'}</span>
+      )}
+      {login && h.signedIn === false && (
+        <div className="agent-more vstack">
+          {login.url && (
+            <span>
+              Open{' '}
+              <a href={login.url} target="_blank" rel="noopener noreferrer">
+                {login.url}
+              </a>{' '}
+              on any device to sign in{login.code ? ', with the code ' : '.'}
+              {login.code && <b className="mono">{login.code}</b>}
+            </span>
+          )}
+          {login.ask === 'code' && login.state === 'running' && (
+            <div className="hstack">
+              <input
+                className="input agent-select"
+                aria-label="The code the sign-in page showed"
+                placeholder="The code the page showed"
+                value={code}
+                onChange={(e) => setCode(e.target.value)}
+              />
+              <button
+                type="button"
+                className="btn primary"
+                disabled={!code.trim()}
+                onClick={() =>
+                  void sendLoginCode(h.id, code.trim()).then(
+                    () => setCode(''),
+                    () => undefined,
+                  )
+                }
+              >
+                Send
+              </button>
+            </div>
+          )}
+          {login.line && <span className="muted">{login.line}</span>}
+          {login.state === 'failed' && (
+            <span className="agent-error">{login.error ?? 'The sign-in didn’t finish'}</span>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** The model and effort the agent runs the harness with. */
+function HarnessRows({ harness: h, model, effort }: { harness: HarnessInfo; model: string; effort: string }) {
+  const [typed, setTyped] = useState(model);
+  useEffect(() => setTyped(model), [model]);
   return (
     <>
       <span className="agent-key">Model</span>
@@ -363,100 +531,6 @@ function HarnessRows({ harness: h, model, effort }: { harness: HarnessInfo; mode
           </div>
         </>
       ) : null}
-      {h.signedIn === false && (
-        <>
-          <span className="agent-key">Sign-in</span>
-          <div className="vstack">
-            <div className="hstack" style={{ flexWrap: 'wrap', gap: 10 }}>
-              <span>{h.name} is signed out on the host.</span>
-              <button
-                type="button"
-                className="btn"
-                disabled={login?.state === 'running'}
-                onClick={() => void harnessAction(h.id, 'login').catch(() => undefined)}
-              >
-                Sign in
-              </button>
-            </div>
-            {login?.url && (
-              <span>
-                Open{' '}
-                <a href={login.url} target="_blank" rel="noopener noreferrer">
-                  {login.url}
-                </a>{' '}
-                on any device to sign in{login.code ? ', with the code ' : '.'}
-                {login.code && <b className="mono">{login.code}</b>}
-              </span>
-            )}
-            {login?.ask === 'code' && login.state === 'running' && (
-              <div className="hstack">
-                <input
-                  className="input agent-select"
-                  aria-label="The code the sign-in page showed"
-                  placeholder="The code the page showed"
-                  value={code}
-                  onChange={(e) => setCode(e.target.value)}
-                />
-                <button
-                  type="button"
-                  className="btn primary"
-                  disabled={!code.trim()}
-                  onClick={() =>
-                    void sendLoginCode(h.id, code.trim()).then(
-                      () => setCode(''),
-                      () => undefined,
-                    )
-                  }
-                >
-                  Send
-                </button>
-              </div>
-            )}
-            {login?.line && <span className="muted">{login.line}</span>}
-            {login?.state === 'failed' && (
-              <span className="agent-error">{login.error ?? 'The sign-in didn’t finish'}</span>
-            )}
-          </div>
-        </>
-      )}
-      {h.update?.available && (
-        <>
-          <span className="agent-key">Update</span>
-          <div className="vstack">
-            {!confirm ? (
-              <div>
-                <button
-                  type="button"
-                  className="btn"
-                  disabled={update?.state === 'running'}
-                  onClick={() => setConfirm(true)}
-                >
-                  Update to {h.update.latest ?? 'the latest version'}
-                </button>
-              </div>
-            ) : (
-              <div className="hstack" role="alertdialog" aria-label={`Update ${h.name}?`} style={{ flexWrap: 'wrap' }}>
-                <span>This updates the {h.name} your terminal uses too.</span>
-                <button
-                  type="button"
-                  className="btn primary"
-                  onClick={() => {
-                    setConfirm(false);
-                    void harnessAction(h.id, 'update').catch(() => undefined);
-                  }}
-                >
-                  Update
-                </button>
-                <button type="button" className="btn ghost" onClick={() => setConfirm(false)}>
-                  Not now
-                </button>
-              </div>
-            )}
-            {update?.line && <span className="muted">{update.line}</span>}
-            {update?.state === 'failed' && <span className="agent-error">{update.error ?? 'The update failed'}</span>}
-          </div>
-        </>
-      )}
     </>
   );
 }

@@ -54,6 +54,9 @@ export interface Permission {
   pack?: string;
 }
 
+/** Why a line of a brief is flagged: it runs a command, holds a link, or asks for something secret (keys, `.env`…). */
+export type BriefWarning = 'command' | 'url' | 'secret';
+
 /** A job as the host tells it (`agent-status`). */
 export interface JobView {
   id: string;
@@ -66,7 +69,7 @@ export interface JobView {
   label?: string;
   permission?: Permission;
   brief?: string;
-  briefWarnings?: { line: number; kind: 'command' | 'url' }[];
+  briefWarnings?: { line: number; kind: BriefWarning }[];
   error?: string;
   started: number;
   finished?: number;
@@ -82,7 +85,7 @@ export interface Turn {
   at: number;
   permission?: Permission;
   brief?: string;
-  briefWarnings?: { line: number; kind: 'command' | 'url' }[];
+  briefWarnings?: { line: number; kind: BriefWarning }[];
   error?: string;
 }
 
@@ -253,7 +256,7 @@ export interface Exchange {
   reply: string | null;
   permission: Permission | null;
   brief: string | null;
-  flagged: Map<number, 'command' | 'url'>;
+  flagged: Map<number, BriefWarning>;
   /** Asked for here: only this device answers a permission. */
   mine: boolean;
   listening: boolean;
@@ -340,6 +343,36 @@ export function barSign(a: AgentState, project: string | null): 'busy' | 'done' 
     Object.values(a.jobs).some((j) => j.project === project && j.device === a.me && isLive(j.state));
   if (working) return 'busy';
   return a.unseen ? 'done' : null;
+}
+
+/** What a permission's one button says. */
+const ALLOW: Record<PermissionKind, string> = {
+  'install-pack': 'Install it',
+  'send-creation': 'Send it',
+  screen: 'Share the screen',
+  photo: 'Take a photo',
+  microphone: 'Record',
+};
+
+/** A download's size, as the Library says it ("131 MB"). */
+function diskSize(bytes: number): string {
+  if (bytes >= 1e9) return `${(bytes / 1e9).toFixed(1)} GB`;
+  if (bytes >= 1e6) return `${Math.round(bytes / 1e6)} MB`;
+  return `${Math.max(1, Math.round(bytes / 1e3))} KB`;
+}
+
+/**
+ * The permission's button: a pack's says what it downloads ("Install it (131 MB)"), or, when the
+ * catalog doesn't say, which pack it is ("Install Iowa Flute").
+ */
+export function allowLabel(
+  p: Pick<Permission, 'kind' | 'pack'>,
+  pack?: { name: string; bytes: number | null; installed?: boolean },
+): string {
+  if (p.kind !== 'install-pack') return ALLOW[p.kind];
+  if (pack?.bytes && !pack.installed) return `${ALLOW['install-pack']} (${diskSize(pack.bytes)})`;
+  const name = pack?.name ?? p.pack;
+  return name ? `Install ${name}` : ALLOW['install-pack'];
 }
 
 /** The studio's view, as a request says it ("tracks and piano roll", "mixer", "scan"). */
@@ -575,14 +608,18 @@ async function call<T>(method: 'GET' | 'POST' | 'PUT' | 'DELETE', path: string, 
 
 /** Ask the host how the agent stands (at start, on reconnecting, from Settings). */
 export async function refreshAgent(): Promise<AgentInfo | null> {
+  const asked = token();
   let info: AgentInfo;
   try {
     info = await call<AgentInfo>('GET', '/api/agent');
   } catch {
     return null;
   }
+  // a token came or went while it was asked (pairing answers after the host tells every studio the
+  // agent is on): the answer is about the old one, so ask again
+  if (token() !== asked) return refreshAgent();
   // a token the host no longer takes (the device was removed while away) is let go
-  if (token() && !info.allowed) {
+  if (asked && !info.allowed) {
     forgetToken();
     agent.dispatch({ type: 'me', id: null });
     tokenChanged();
@@ -606,16 +643,19 @@ export async function loadDevices(): Promise<void> {
   agent.dispatch({ type: 'devices', devices: await call<DeviceList>('GET', '/api/agent/devices') });
 }
 
-/** The first device: the runner prints a code on the host. */
+/** Pairing: the runner prints a code on the host (for the first device, or one with no allowed device at hand). */
 export async function startPairing(): Promise<number> {
   return (await call<{ expires: number }>('POST', '/api/agent/pairing')).expires;
 }
 
-/** Pair with the runner's code: this device is allowed, and the agent turns on. */
+/**
+ * Pair with the runner's code (any device, any time: the first, or one with no allowed device at hand):
+ * this device is allowed, and the agent turns on. It resolves only once the host says so.
+ */
 export async function pair(code: string, name: string): Promise<void> {
   const r = await call<{ token: string; device: { id: string } }>('POST', '/api/agent/pair', { code, name });
   allowedNow(r.token, r.device.id);
-  await refreshAgent();
+  await settle();
 }
 
 function allowedNow(t: string, device: string): void {
@@ -624,13 +664,36 @@ function allowedNow(t: string, device: string): void {
   tokenChanged();
 }
 
+const sleep = (ms: number) => new Promise<void>((ok) => setTimeout(ok, ms));
+
+/**
+ * A token just came: this device counts as allowed only once the host says so (asked again for a few
+ * seconds while it doesn't answer). One the host doesn't take is let go, and that's an error.
+ */
+async function settle(): Promise<void> {
+  for (let wait = 250; ; wait *= 2) {
+    const info = await refreshAgent();
+    if (info?.allowed) return;
+    if (info) throw new AgentError('The host didn’t take this device: try again', 401);
+    if (wait > 2000)
+      throw new AgentError('HO[LO]’s host stopped answering: this device shows as allowed once it’s back', 0);
+    await sleep(wait);
+  }
+}
+
 /** A later device asks to join: an allowed one approves it. */
 export async function askToJoin(name: string): Promise<{ id: string; secret: string; code: string }> {
   return call('POST', '/api/agent/devices/requests', { name });
 }
 
-/** How the request stands; once approved, this device is allowed. */
-export async function pollJoin(id: string, secret: string): Promise<'pending' | 'approved' | 'denied' | 'lapsed'> {
+/**
+ * How the request stands; once approved, this device is allowed (resolved once the host says so).
+ * `lost`: approved, but the answer that carried the token never arrived, so this device isn't allowed.
+ */
+export async function pollJoin(
+  id: string,
+  secret: string,
+): Promise<'pending' | 'approved' | 'denied' | 'lapsed' | 'lost'> {
   let r: { state: 'pending' | 'approved' | 'denied'; token?: string; device?: { id: string } };
   try {
     r = await call('GET', `/api/agent/devices/requests/${encodeURIComponent(id)}?secret=${encodeURIComponent(secret)}`);
@@ -638,11 +701,12 @@ export async function pollJoin(id: string, secret: string): Promise<'pending' | 
     if (err instanceof AgentError && err.status === 404) return 'lapsed';
     throw err;
   }
-  if (r.state === 'approved' && r.token && r.device) {
-    allowedNow(r.token, r.device.id);
-    await refreshAgent();
-  }
-  return r.state;
+  if (r.state !== 'approved') return r.state;
+  // the token comes with the first answer only (a later one finds it here, or never had it)
+  if (r.token && r.device) allowedNow(r.token, r.device.id);
+  else if (!token()) return 'lost';
+  await settle();
+  return 'approved';
 }
 
 export async function answerRequest(id: string, approve: boolean): Promise<void> {
@@ -790,10 +854,7 @@ function deviceRemoved(): void {
  * The agent's messages on the live channel. True when it was one; `effects` says what the studio
  * does about a job's status (whether it runs, its step's final name).
  */
-export function agentMessage(msg: Record<string, unknown>): {
-  handled: boolean;
-  effects?: { job: string; running: boolean; label?: string };
-} {
+export function agentMessage(msg: Record<string, unknown>): { handled: boolean; effects?: JobEffect } {
   switch (msg.type) {
     case 'agent-status': {
       const job = msg.job as JobView | undefined;
@@ -803,8 +864,8 @@ export function agentMessage(msg: Record<string, unknown>): {
       return { handled: true, ...(fx ? { effects: { job: job.id, ...fx } } : {}) };
     }
     case 'agent-listen':
-      // (`pause`, between two parts of a listen, keeps it showing)
-      if (typeof msg.job === 'string' && msg.state !== 'pause')
+      // `on` as a listen begins, `off` once it's over (nothing comes between two of its parts: it keeps showing)
+      if (typeof msg.job === 'string' && (msg.state === 'on' || msg.state === 'off'))
         agent.dispatch({ type: 'listen', job: msg.job, on: msg.state === 'on' });
       return { handled: true };
     case 'agent-settings': {
@@ -829,9 +890,70 @@ export function agentMessage(msg: Record<string, unknown>): {
     case 'agent-removed':
       deviceRemoved();
       return { handled: true };
-    case 'agent-look':
-      // (none to give unasked: the agent asks for a screenshot or a photo as a permission)
-      return { handled: true };
   }
   return { handled: false };
+}
+
+/** What the studio does about one of its jobs: whether it runs, and its step's final name. */
+export type JobEffect = { job: string; running: boolean; label?: string };
+
+/** How many runners the host's last list of who's connected had (null: none seen since the channel opened). */
+let runnersKnown: number | null = null;
+
+/**
+ * The host's list of who's connected (`peers`): when its runners change (the runner came back after
+ * the host restarted, or went), the host is asked how the agent stands, for Settings to say so.
+ */
+export function peersSeen(peers: readonly { role: string }[]): void {
+  const runners = peers.filter((p) => p.role === 'runner').length;
+  if (runners === runnersKnown) return;
+  runnersKnown = runners;
+  void refreshAgent();
+}
+
+/**
+ * The live channel is back (after the host restarted, say): how the agent stands, and for an allowed
+ * device its settings and devices, and the jobs this studio was following. A restart ends those; one
+ * may also have ended unheard while away. What the studio then does about its own jobs is returned.
+ */
+export async function catchUp(): Promise<JobEffect[]> {
+  runnersKnown = null;
+  const info = await refreshAgent();
+  if (!info?.allowed) return [];
+  await Promise.all([loadSettings(), loadDevices()]).catch(() => undefined);
+  if (!isOn(state)) return [];
+  const followed = Object.values(state.jobs).filter((j) => isLive(j.state) || j.state === 'awaiting');
+  const effects: JobEffect[] = [];
+  for (const project of new Set(followed.map((j) => j.project))) {
+    let r: { thread: { turns: Turn[] } | null; job?: JobView | null };
+    try {
+      r = await call('GET', `/api/agent/threads/${encodeURIComponent(project)}`);
+    } catch {
+      continue;
+    }
+    for (const j of followed.filter((x) => x.project === project)) {
+      const turn = r.thread?.turns.find((t) => t.job === j.id);
+      const now = r.job?.id === j.id ? r.job : asEnded(j, turn);
+      if (!now) continue;
+      agent.dispatch({ type: 'status', job: now, barOpen: studio.get().bar });
+      const fx = statusEffects(state, now);
+      if (fx) effects.push({ job: now.id, ...fx });
+    }
+  }
+  return effects;
+}
+
+/** A job the host no longer runs, as its conversation's turn tells it (none: it was lost, as failed). */
+function asEnded(j: JobView, turn: Turn | undefined): JobView | null {
+  // (a turn still under way while the host has no job for it: it's asked again next time)
+  if (turn && (isLive(turn.state) || turn.state === 'awaiting')) return null;
+  return {
+    ...j,
+    state: (turn?.state ?? 'failed') as JobState,
+    ...(turn?.reply ? { reply: turn.reply } : {}),
+    ...(turn?.label ? { label: turn.label } : {}),
+    ...(turn?.brief ? { brief: turn.brief, briefWarnings: turn.briefWarnings ?? [] } : {}),
+    ...(turn?.error ? { error: turn.error } : {}),
+    finished: Date.now(),
+  };
 }

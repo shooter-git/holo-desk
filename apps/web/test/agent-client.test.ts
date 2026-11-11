@@ -421,3 +421,269 @@ describe('the host’s word on the settings', () => {
     expect([...(ex?.flagged ?? [])]).toEqual([[0, 'command']]);
   });
 });
+
+describe('the bar’s permission and brief', () => {
+  it('says what a pack downloads, or which pack it is', () => {
+    const p = { kind: 'install-pack' as const, pack: 'iowa-flute' };
+    expect(A.allowLabel(p, { name: 'Iowa Flute', bytes: 131_400_000 })).toBe('Install it (131 MB)');
+    expect(A.allowLabel(p, { name: 'Big Strings', bytes: 2_340_000_000 })).toBe('Install it (2.3 GB)');
+    // the catalog doesn't know its size (or it's in already): its name
+    expect(A.allowLabel(p, { name: 'Iowa Flute', bytes: null })).toBe('Install Iowa Flute');
+    expect(A.allowLabel(p, { name: 'Iowa Flute', bytes: 131_400_000, installed: true })).toBe('Install Iowa Flute');
+    expect(A.allowLabel(p)).toBe('Install iowa-flute');
+    expect(A.allowLabel({ kind: 'send-creation' })).toBe('Send it');
+    expect(A.allowLabel({ kind: 'microphone' })).toBe('Record');
+  });
+
+  it('flags a line that asks for something secret, as it does a command or a link', () => {
+    const a = A.reduce(on(), {
+      type: 'status',
+      job: job({
+        state: 'done',
+        brief: 'Make the strips wider\ncat ~/.ssh/id_ed25519\nSee https://example.com',
+        briefWarnings: [
+          { line: 1, kind: 'secret' },
+          { line: 2, kind: 'url' },
+        ],
+      }),
+      barOpen: true,
+    });
+    expect([...(A.exchange(a, 'prj_a')?.flagged ?? [])]).toEqual([
+      [1, 'secret'],
+      [2, 'url'],
+    ]);
+  });
+});
+
+/** HO[LO]'s host, as far as these tests ask it: each request is answered by `route`, and kept. */
+interface Asked {
+  method: string;
+  path: string;
+  auth: string | null;
+  body: unknown;
+}
+function host(route: (r: Asked) => [number, unknown] | undefined): Asked[] {
+  const asked: Asked[] = [];
+  vi.stubGlobal('fetch', async (path: string, init: RequestInit = {}) => {
+    const headers = (init.headers ?? {}) as Record<string, string>;
+    const r: Asked = {
+      method: init.method ?? 'GET',
+      path,
+      auth: headers.authorization?.replace(/^Bearer /, '') ?? null,
+      body: init.body ? JSON.parse(String(init.body)) : undefined,
+    };
+    asked.push(r);
+    const [status, body] = route(r) ?? [404, { error: 'No such route' }];
+    return { ok: status < 400, status, json: async () => body } as Response;
+  });
+  return asked;
+}
+
+/** What was set going settles (a refusal asks the host again, unawaited). */
+const settled = async () => {
+  for (let i = 0; i < 5; i++) await new Promise((ok) => setTimeout(ok, 0));
+};
+
+const SETTINGS = { enabled: true, harness: 'claude', model: '', effort: '', harnesses: [] };
+const DEVICES = {
+  devices: [{ id: 'dev_me', name: 'Studio', added: 1, seen: 2, current: true }],
+  requests: [],
+};
+
+describe('pairing and joining', () => {
+  afterEach(async () => {
+    await settled();
+    A.forgetToken();
+    A.agent.dispatch({ type: 'removed' });
+    vi.stubGlobal('fetch', async () => {
+      throw new Error('no host here');
+    });
+  });
+
+  it('a wrong code leaves this device as it was: not allowed, no token', async () => {
+    A.agent.dispatch({ type: 'info', info: { ...OFF, allowed: false, enabled: true } });
+    host((r) => {
+      if (r.path === '/api/agent/pair') return [401, { error: 'That code is wrong or has expired' }];
+      if (r.path === '/api/agent') return [200, { ...ON, allowed: false }];
+    });
+    await expect(A.pair('000000', 'Studio')).rejects.toThrow('That code is wrong');
+    await settled();
+    expect(A.helloFields()).toEqual({});
+    expect(A.isOn(A.agent.get())).toBe(false);
+  });
+
+  it('paired: allowed only once the host says so, and a token it doesn’t take is let go', async () => {
+    host((r) => {
+      if (r.path === '/api/agent/pair') return [200, { token: 'tok_new', device: { id: 'dev_me', name: 'Studio' } }];
+      if (r.path === '/api/agent') return [200, { ...ON, allowed: r.auth === 'tok_good' }];
+      if (r.path === '/api/agent/devices') return [200, DEVICES];
+    });
+    await expect(A.pair('123456', 'Studio')).rejects.toThrow('The host didn’t take this device');
+    expect(A.helloFields()).toEqual({});
+    expect(A.agent.get().me).toBeNull();
+    expect(A.isOn(A.agent.get())).toBe(false);
+
+    host((r) => {
+      if (r.path === '/api/agent/pair') return [200, { token: 'tok_good', device: { id: 'dev_me', name: 'Studio' } }];
+      if (r.path === '/api/agent') return [200, { ...ON, allowed: r.auth === 'tok_good' }];
+      if (r.path === '/api/agent/devices') return [200, DEVICES];
+    });
+    await A.pair('123456', 'Studio');
+    expect(A.helloFields()).toEqual({ agentToken: 'tok_good' });
+    expect(A.isOn(A.agent.get())).toBe(true);
+  });
+
+  it('an answer about the token before pairing landed is asked again with the new one', async () => {
+    const asked = host((r) => {
+      if (r.path !== '/api/agent') return undefined;
+      // pairing lands while the host is asked without a token (the host told every studio the agent is on)
+      if (!r.auth) A.keepToken('tok_paired', 'dev_me');
+      return [200, { ...ON, allowed: r.auth === 'tok_paired' }];
+    });
+    const info = await A.refreshAgent();
+    expect(info?.allowed).toBe(true);
+    expect(asked.filter((r) => r.path === '/api/agent').map((r) => r.auth)).toEqual([null, 'tok_paired']);
+    // the token wasn't let go on the strength of the older answer
+    expect(A.helloFields()).toEqual({ agentToken: 'tok_paired' });
+  });
+
+  it('approved to join: allowed with the token; approved without it (that answer was lost), not', async () => {
+    host((r) => {
+      if (r.path.startsWith('/api/agent/devices/requests/')) return [200, { state: 'approved' }];
+      if (r.path === '/api/agent') return [200, { ...ON, allowed: false }];
+    });
+    expect(await A.pollJoin('req_1', 'secret')).toBe('lost');
+    expect(A.helloFields()).toEqual({});
+    expect(A.isOn(A.agent.get())).toBe(false);
+
+    host((r) => {
+      if (r.path.startsWith('/api/agent/devices/requests/'))
+        return [200, { state: 'approved', token: 'tok_join', device: { id: 'dev_me', name: 'Phone' } }];
+      if (r.path === '/api/agent') return [200, { ...ON, allowed: r.auth === 'tok_join' }];
+      if (r.path === '/api/agent/devices') return [200, DEVICES];
+    });
+    expect(await A.pollJoin('req_1', 'secret')).toBe('approved');
+    expect(A.isOn(A.agent.get())).toBe(true);
+    expect(A.agent.get().me).toBe('dev_me');
+  });
+
+  it('a request that lapsed, or was denied, says so', async () => {
+    host((r) =>
+      r.path.endsWith('req_gone?secret=s') ? [404, { error: 'No such request' }] : [200, { state: 'denied' }],
+    );
+    expect(await A.pollJoin('req_gone', 's')).toBe('lapsed');
+    expect(await A.pollJoin('req_no', 's')).toBe('denied');
+    expect(A.helloFields()).toEqual({});
+  });
+});
+
+describe('the live channel back', () => {
+  afterEach(async () => {
+    await settled();
+    A.forgetToken();
+    A.agent.dispatch({ type: 'removed' });
+    vi.stubGlobal('fetch', async () => {
+      throw new Error('no host here');
+    });
+  });
+
+  /** This device allowed, the agent on, and a job of its running on prj_a. */
+  function allowedWithAJob(): void {
+    S.store.set({ bar: false });
+    A.keepToken('tok_me', 'dev_me');
+    A.agent.dispatch({ type: 'me', id: 'dev_me' });
+    A.agent.dispatch({ type: 'info', info: ON });
+    A.agent.dispatch({ type: 'status', job: job({ state: 'running', line: 'Writing bars 5–8' }), barOpen: false });
+  }
+
+  it('after the host restarted: settings and devices read again, and a job it ended ends here too', async () => {
+    allowedWithAJob();
+    const asked = host((r) => {
+      if (r.path === '/api/agent') return [200, ON];
+      if (r.path === '/api/agent/settings') return [200, SETTINGS];
+      if (r.path === '/api/agent/devices') return [200, DEVICES];
+      if (r.path === '/api/agent/threads/prj_a')
+        return [
+          200,
+          {
+            thread: {
+              turns: [
+                {
+                  job: 'agj_000000000001',
+                  request: 'Add a bass line',
+                  reply: null,
+                  label: null,
+                  state: 'failed',
+                  at: 1000,
+                  error: 'HO[LO]’s host restarted before it was done',
+                },
+              ],
+            },
+            job: null,
+          },
+        ];
+    });
+    const effects = await A.catchUp();
+    expect(effects).toEqual([{ job: 'agj_000000000001', running: false }]);
+    const a = A.agent.get();
+    expect(a.jobs.agj_000000000001?.state).toBe('failed');
+    expect(A.exchange(a, 'prj_a')).toMatchObject({
+      working: false,
+      reply: 'HO[LO]’s host restarted before it was done',
+    });
+    expect(A.barSign(a, 'prj_a')).toBe('done');
+    expect(a.settings).toEqual(SETTINGS);
+    expect(a.devices).toEqual(DEVICES);
+    expect(asked.map((r) => r.path)).toContain('/api/agent/threads/prj_a');
+  });
+
+  it('a job still running is told as the host has it; a device not allowed asks for nothing more', async () => {
+    allowedWithAJob();
+    host((r) => {
+      if (r.path === '/api/agent') return [200, ON];
+      if (r.path === '/api/agent/settings') return [200, SETTINGS];
+      if (r.path === '/api/agent/devices') return [200, DEVICES];
+      if (r.path === '/api/agent/threads/prj_a')
+        return [200, { thread: null, job: job({ state: 'running', line: 'Writing bars 9–12' }) }];
+    });
+    expect(await A.catchUp()).toEqual([{ job: 'agj_000000000001', running: true }]);
+    expect(A.exchange(A.agent.get(), 'prj_a')).toMatchObject({ working: true, line: 'Writing bars 9–12' });
+
+    A.forgetToken();
+    const asked = host((r) => (r.path === '/api/agent' ? [200, { ...ON, allowed: false }] : undefined));
+    expect(await A.catchUp()).toEqual([]);
+    expect(asked.map((r) => r.path)).toEqual(['/api/agent']);
+  });
+
+  it('asks how the agent stands when the host’s runners come or go', async () => {
+    const asked = host((r) => (r.path === '/api/agent' ? [200, { ...OFF, allowed: false }] : undefined));
+    const runner = { role: 'runner', name: 'Runner' };
+    const editor = { role: 'editor', name: 'Studio' };
+    A.peersSeen([editor, runner, runner, runner, runner]);
+    A.peersSeen([editor, runner, runner, runner, runner]);
+    await settled();
+    expect(asked).toHaveLength(1);
+    // the runner went (the host restarted, say), then came back
+    A.peersSeen([editor]);
+    A.peersSeen([editor, editor]);
+    A.peersSeen([editor, runner]);
+    await settled();
+    expect(asked).toHaveLength(3);
+  });
+});
+
+describe('the agent’s live messages', () => {
+  it('shows listening from on to off, and takes nothing it doesn’t know', () => {
+    A.agent.dispatch({ type: 'me', id: 'dev_me' });
+    A.agent.dispatch({ type: 'info', info: ON });
+    expect(A.agentMessage({ type: 'agent-listen', job: 'agj_000000000001', state: 'on' }).handled).toBe(true);
+    expect(A.agent.get().listening).toBe('agj_000000000001');
+    A.agentMessage({ type: 'agent-listen', job: 'agj_000000000001', state: 'what' });
+    expect(A.agent.get().listening).toBe('agj_000000000001');
+    A.agentMessage({ type: 'agent-listen', job: 'agj_000000000001', state: 'off' });
+    expect(A.agent.get().listening).toBeNull();
+    // the host sends no `agent-look`: it isn't the agent's to take
+    expect(A.agentMessage({ type: 'agent-look' }).handled).toBe(false);
+    A.agent.dispatch({ type: 'removed' });
+  });
+});

@@ -41,8 +41,10 @@ import {
 import {
   agent,
   agentCommands,
+  allowLabel,
   ask,
   askScan,
+  type BriefWarning,
   doneListening,
   type Exchange,
   exchange,
@@ -146,23 +148,15 @@ function useSwipeDown(): void {
   }, []);
 }
 
-/** What a permission's one button says. */
-const ALLOW: Record<Permission['kind'], string> = {
-  'install-pack': 'Install it',
-  'send-creation': 'Send it',
-  screen: 'Share the screen',
-  photo: 'Take a photo',
-  microphone: 'Record',
-};
-
 /** "0:07": how long a recording has run. */
 const clock = (ms: number) => `${Math.floor(ms / 60_000)}:${String(Math.floor(ms / 1000) % 60).padStart(2, '0')}`;
 
 /**
- * The one button a job's permission needs: a click runs the studio's own code (the Library's install
- * queue, sending the song to its creation, capturing the screen, a photo, the microphone), then the
- * host hears what happened and the agent carries on. A screenshot or a photo is shown first, small,
- * with Send and Cancel: nothing leaves the device until Send.
+ * The one button a job's permission needs, beside the agent's reason for it (a pack's says what it
+ * downloads): a click runs the studio's own code (the Library's install queue, sending the song to its
+ * creation, capturing the screen, a photo, the microphone), then the host hears what happened and the
+ * agent carries on. A screenshot or a photo is shown first, small, with Send and Cancel: nothing leaves
+ * the device until Send.
  */
 function PermissionButton({ job, permission, project }: { job: string; permission: Permission; project: string }) {
   const [busy, setBusy] = useState('');
@@ -174,6 +168,12 @@ function PermissionButton({ job, permission, project }: { job: string; permissio
   const install = useInstalls();
   // a phone can't capture its screen: a photo of it stands in
   const kind = permission.kind === 'screen' && !canCaptureScreen() ? 'photo' : permission.kind;
+  // a pack's size, from the catalog the Library reads
+  const packId = permission.kind === 'install-pack' ? (permission.pack ?? null) : null;
+  useEffect(() => {
+    if (packId && !installs.state.packs) void installs.load();
+  }, [packId]);
+  const pack = packId ? install.packs?.find((p) => p.id === packId) : undefined;
 
   useEffect(() => {
     if (!recording) return;
@@ -257,6 +257,11 @@ function PermissionButton({ job, permission, project }: { job: string; permissio
       ) : null}
       {recording && <span className="muted grow bar-line">Recording {clock(now - recording.since)}</span>}
       {failed && <span className="agent-error grow bar-line">{failed}</span>}
+      {!busy && !recording && !failed && !preview && permission.detail && (
+        <span className="muted grow bar-line" title={permission.detail}>
+          {permission.detail}
+        </span>
+      )}
       {kind === 'photo' && (
         <input
           ref={picker}
@@ -294,14 +299,24 @@ function PermissionButton({ job, permission, project }: { job: string; permissio
         </button>
       ) : (
         <button type="button" className="btn" disabled={!!busy} onClick={() => void run()}>
-          {permission.kind === 'screen' && kind === 'photo' ? 'Take a photo instead' : ALLOW[permission.kind]}
+          {permission.kind === 'screen' && kind === 'photo' ? 'Take a photo instead' : allowLabel(permission, pack)}
         </button>
       )}
     </>
   );
 }
 
-/** A brief for the user's own harness, in full: the lines that run something or link somewhere are marked. */
+/** Why a flagged line of a brief is to be read twice. */
+const WHY: Record<BriefWarning, string> = {
+  command: 'runs a command',
+  url: 'a link: check where it goes',
+  secret: 'asks for something secret: don’t pass it on',
+};
+
+/**
+ * A brief for the user's own harness, in full: the lines that run something, link somewhere or ask for
+ * something secret are marked.
+ */
 function Brief({ text, flagged }: { text: string; flagged: Exchange['flagged'] }) {
   return (
     <div className="brief" role="document" aria-label="Brief">
@@ -310,7 +325,7 @@ function Brief({ text, flagged }: { text: string; flagged: Exchange['flagged'] }
         return (
           <div key={i} className={flag ? 'flag' : undefined}>
             {line || '\u00a0'}
-            {flag && <span className="why">{flag === 'url' ? 'a link: check where it goes' : 'runs a command'}</span>}
+            {flag && <span className="why">{WHY[flag] ?? WHY.command}</span>}
           </div>
         );
       })}

@@ -37,7 +37,16 @@ import {
   updateChannel,
   updateTrack,
 } from './actions.ts';
-import { agent, agentMessage, helloFields, onTokenChange, refreshAgent, viewName } from './agent.ts';
+import {
+  agent,
+  agentMessage,
+  catchUp,
+  helloFields,
+  type JobEffect,
+  onTokenChange,
+  peersSeen,
+  viewName,
+} from './agent.ts';
 import { PlayedMemory } from './played.ts';
 import { store, toast } from './store.ts';
 
@@ -294,6 +303,8 @@ async function onMessage(msg: Record<string, unknown>): Promise<void> {
       store.set({ peers });
       metersWhileRemotes();
       offerRemote(peers);
+      // the runner came or went (back after the host restarted, say): Settings › Agent says so
+      peersSeen(peers);
       return;
     }
     case 'command':
@@ -335,14 +346,9 @@ async function onMessage(msg: Record<string, unknown>): Promise<void> {
     case 'agent-settings':
     case 'agent-harness':
     case 'agent-devices':
-    case 'agent-removed':
-    case 'agent-look': {
+    case 'agent-removed': {
       const r = agentMessage(msg);
-      // this device's job: its changes merge into one step while it runs, and the step takes its name after
-      if (r.effects) {
-        setJobRunning(r.effects.job, r.effects.running);
-        if (r.effects.label) relabelJob(r.effects.job, r.effects.label);
-      }
+      if (r.effects) jobEffects([r.effects]);
       return;
     }
     case 'render-status': {
@@ -550,6 +556,14 @@ export function reportHistory(action: 'undo' | 'redo' | 'step', label: string, j
   send({ type: 'history', action, label, job });
 }
 
+/** This device's jobs: their changes merge into one step while they run, and the step takes its name after. */
+function jobEffects(effects: JobEffect[]): void {
+  for (const fx of effects) {
+    setJobRunning(fx.job, fx.running);
+    if (fx.label) relabelJob(fx.job, fx.label);
+  }
+}
+
 /** Who this studio is: each hello carries the agent's token too, or the host takes it as no longer allowed. */
 function hello(): void {
   send({ type: 'hello', role: 'editor', name: device(), ...helloFields() });
@@ -631,8 +645,8 @@ export function connectLive(): void {
     void checkBuild();
     hello();
     report();
-    // how the agent stands now (turned on or off, this device let go, while away)
-    void refreshAgent();
+    // how the agent stands now (turned on or off, this device let go, the host restarted, while away)
+    void catchUp().then(jobEffects);
   };
   ws.onmessage = (e) => {
     try {

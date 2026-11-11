@@ -134,6 +134,9 @@ importers:
 
   packages/cli:
     dependencies:
+      '@holo/agent':
+        specifier: workspace:*
+        version: link:../agent
       '@holo/engine':
         specifier: workspace:*
         version: link:../engine

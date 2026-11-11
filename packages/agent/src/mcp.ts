@@ -21,8 +21,11 @@ import { check, toJsonSchema } from './args.ts';
 import { describeTool, type Tool, type ToolContext, ToolError, type ToolResult } from './tools/common.ts';
 import { TOOLS } from './tools/index.ts';
 
-/** The protocol versions understood, newest first; a client asking for another gets the newest. */
-export const PROTOCOL_VERSIONS = ['2025-06-18', '2025-03-26', '2024-11-05'] as const;
+/**
+ * The protocol versions understood, newest first; a client asking for another gets the newest.
+ * Claude Code and Cursor ask for 2025-11-25, Codex for 2025-06-18 (docs/agent-harnesses.md).
+ */
+export const PROTOCOL_VERSIONS = ['2025-11-25', '2025-06-18', '2025-03-26', '2024-11-05'] as const;
 
 function packageVersion(): string {
   try {
@@ -82,7 +85,13 @@ export function createServer(opts: ServerOptions): Server {
     if (typeof name !== 'string') return failure(id, INVALID_PARAMS, 'tools/call needs the tool\'s "name"');
     const tool = byName.get(name);
     if (!tool) return failure(id, INVALID_PARAMS, `Unknown tool: ${name}`);
-    const checked = check(tool.args, params.arguments);
+    // _meta is the client's (a progress token, Codex's turn metadata): never one of the tool's arguments
+    const given = params.arguments;
+    const args =
+      typeof given === 'object' && given !== null && !Array.isArray(given) && '_meta' in given
+        ? Object.fromEntries(Object.entries(given).filter(([k]) => k !== '_meta'))
+        : given;
+    const checked = check(tool.args, args);
     if (!checked.ok) {
       return reply(id, {
         content: [{ type: 'text', text: `The arguments for ${name} aren't right:\n- ${checked.errors.join('\n- ')}` }],
@@ -151,6 +160,7 @@ export function createServer(opts: ServerOptions): Server {
         });
       case 'tools/call':
         return call(id, params);
+      // anything else (Claude's server/discover probe, resources/*, prompts/*) isn't offered
       default:
         return failure(id, METHOD_NOT_FOUND, `Method not found: ${m.method}`);
     }

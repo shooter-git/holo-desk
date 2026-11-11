@@ -161,9 +161,48 @@ describe('the MCP server over stdio', () => {
       serverInfo: { name: 'holo', version: '0.6.12' },
     });
     const b = await server.request('initialize', { protocolVersion: '2099-01-01' });
-    expect((b.result as { protocolVersion: string }).protocolVersion).toBe('2025-06-18');
+    expect((b.result as { protocolVersion: string }).protocolVersion).toBe('2025-11-25');
     const c = await server.request('initialize', { protocolVersion: '2024-11-05' });
     expect((c.result as { protocolVersion: string }).protocolVersion).toBe('2024-11-05');
+    // what Claude Code and Cursor ask for, and what Codex asks for
+    const d = await server.request('initialize', { protocolVersion: '2025-11-25', capabilities: {} });
+    expect((d.result as { protocolVersion: string }).protocolVersion).toBe('2025-11-25');
+    const e = await server.request('initialize', { protocolVersion: '2025-06-18', capabilities: {} });
+    expect((e.result as { protocolVersion: string }).protocolVersion).toBe('2025-06-18');
+  });
+
+  it("answers Claude's server/discover probe (a string id) as an unknown method, then initializes", async () => {
+    server.send({ jsonrpc: '2.0', id: 'server-discover-probe-1', method: 'server/discover', params: {} });
+    expect(await server.next()).toEqual({
+      jsonrpc: '2.0',
+      id: 'server-discover-probe-1',
+      error: { code: -32601, message: 'Method not found: server/discover' },
+    });
+    server.send({ jsonrpc: '2.0', id: 'init-2', method: 'initialize', params: { protocolVersion: '2025-11-25' } });
+    const init = await server.next();
+    expect(init.id).toBe('init-2');
+    expect((init.result as { protocolVersion: string }).protocolVersion).toBe('2025-11-25');
+  });
+
+  it('answers resources/* and prompts/* as unknown methods', async () => {
+    for (const method of ['resources/read', 'resources/list', 'resources/templates/list', 'prompts/list']) {
+      const a = await server.request(method, { uri: 'file:///etc/hostname' });
+      expect(a.error).toEqual({ code: -32601, message: `Method not found: ${method}` });
+    }
+  });
+
+  it("ignores _meta (Claude's progress token, Codex's turn metadata), in params or in the arguments", async () => {
+    const a = await server.request('tools/call', {
+      name: 'song_status',
+      arguments: {},
+      _meta: {
+        progressToken: 7,
+        'x-codex-turn-metadata': { sandbox_mode: 'read-only', model: 'm', reasoning_effort: 'low' },
+      },
+    });
+    expect((a.result as CallResult).isError).toBeUndefined();
+    const b = await server.request('tools/call', { name: 'song_status', arguments: { _meta: { progressToken: 8 } } });
+    expect((b.result as CallResult).isError).toBeUndefined();
   });
 
   it('ignores notifications and answers ping', async () => {

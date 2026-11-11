@@ -22,6 +22,7 @@ import {
 } from 'node:fs';
 import { hostname, tmpdir } from 'node:os';
 import { basename, dirname, join, resolve, sep } from 'node:path';
+import { startAgentRunner } from '@holo/agent/runner';
 import { newAudioTrack, newRegion, type Op, type Project, secondsToTick } from '@holo/session';
 import { type AiJob, type Claude, findClaude, runAiJob, validJob } from './ai.ts';
 import { readRunnerKey, runnerKeyFile } from './runner-key.ts';
@@ -97,6 +98,16 @@ export async function runner(base: string, creationsDir: string): Promise<void> 
   const send = (msg: unknown) => {
     if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify(msg));
   };
+
+  // the in-app agent's jobs, sign-ins and updates (@holo/agent): they run beside renders, never in their queue
+  const agent = startAgentRunner({ base, send, repo });
+  for (const signal of ['SIGINT', 'SIGTERM'] as const) {
+    process.once(signal, () => {
+      // a harness runs in a process group of its own: it doesn't hear the terminal's Ctrl C
+      agent.stop();
+      process.exit(signal === 'SIGINT' ? 130 : 143);
+    });
+  }
 
   const api = async <T>(path: string, init?: RequestInit): Promise<T> => {
     const res = await fetch(`${base}${path}`, init);
@@ -294,9 +305,12 @@ export async function runner(base: string, creationsDir: string): Promise<void> 
           version: claude?.version ?? null,
           skill: existsSync(join(repo, 'skills', 'holo')),
         },
+        ...agent.caps,
       };
       const key = readRunnerKey(repo);
       socket.send(JSON.stringify({ type: 'hello', role: 'runner', name, caps, ...(key ? { key } : {}) }));
+      // the agent's harnesses are looked for without holding up the socket (only a keyed runner gets its jobs)
+      if (key) agent.connected();
       console.log(`Creation runner connected to ${base} (creations in ${creationsDir}). Waiting for renders…`);
       console.log(
         claude
@@ -313,6 +327,7 @@ export async function runner(base: string, creationsDir: string): Promise<void> 
     socket.onmessage = (e) => {
       try {
         const msg = JSON.parse(String(e.data)) as Record<string, unknown>;
+        if (agent.handle(msg)) return;
         if (msg.type === 'ai') {
           const job = { id: msg.id, task: msg.task, scan: msg.scan, project: msg.project } as Partial<AiJob>;
           // only a job HO[LO] could have made: a known task, ids of the right shape

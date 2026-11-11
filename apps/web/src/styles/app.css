@@ -1111,6 +1111,14 @@ a.btn {
   white-space: nowrap;
 }
 
+/* where the bar is narrow, the Piano Roll | Score switch at its end names the view, so the title gives
+   its room to the tools (and to undo and redo, which the control bar no longer has room for) */
+@media (max-width: 860px) {
+  .pane-bar .view-title {
+    display: none;
+  }
+}
+
 .roll {
   position: relative;
   display: grid;

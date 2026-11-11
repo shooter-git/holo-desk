@@ -33,7 +33,7 @@ import { isPhone, useLayout } from '../app/layout.ts';
 import { store, useApp } from '../app/store.ts';
 import { engine } from '../audio/engine.ts';
 import { midi } from '../audio/midi.ts';
-import { alpha, prepare, roundRect, useFrame, useSize, velocityColor } from './frame.ts';
+import { alpha, prepare, roundRect, useFrame, useMedia, useSize, velocityColor } from './frame.ts';
 import {
   capture,
   edgeScroll,
@@ -45,6 +45,7 @@ import {
   useWheel,
 } from './gesture.ts';
 import { openMenu } from './menu.tsx';
+import { UndoRedo } from './UndoRedo.tsx';
 import { DOUBLE_TAP_MS, gridStep, Viewport, WHEEL_ZOOM, ZOOM } from './view.ts';
 
 export const rollView = new Viewport(store.get().pianoZoom);
@@ -1154,6 +1155,8 @@ export function PianoRollBar() {
   const trackName = useApp((s) => s.project?.tracks.find((t) => t.id === s.selectedTrack)?.name ?? '');
   const layout = useLayout();
   const phone = isPhone(layout);
+  // (as narrow as the control bar leaves undo and redo to this bar: the velocity slider makes room)
+  const narrow = useMedia('(max-width: 860px)');
   const vel = selectedNotes.length
     ? Math.round(selectedNotes.reduce((a, n) => a + n.v, 0) / selectedNotes.length)
     : null;
@@ -1163,7 +1166,7 @@ export function PianoRollBar() {
   };
   return (
     <>
-      {!phone && <span className="title">Piano Roll</span>}
+      {!phone && <span className="title view-title">Piano Roll</span>}
       <span className="muted" style={{ whiteSpace: 'nowrap' }}>
         {trackName}
       </span>
@@ -1211,7 +1214,7 @@ export function PianoRollBar() {
             max={127}
             value={vel ?? 100}
             aria-label="Velocity of the selected notes"
-            style={{ width: phone ? 64 : 110, flex: 'none', accentColor: '#5cb8ff' }}
+            style={{ width: phone ? 64 : narrow ? 80 : 110, flex: 'none', accentColor: '#5cb8ff' }}
             onChange={(e) => {
               const v = Number(e.target.value);
               replaceNotes(new Map(selectedNotes.map((n) => [n, { ...n, v }])), 'Velocity');
@@ -1223,6 +1226,8 @@ export function PianoRollBar() {
         </>
       )}
       <span className="grow" />
+      {/* a phone has them in its control bar or side rail, on the same screen */}
+      {!phone && <UndoRedo group="seg" />}
       <button type="button" className="btn ghost icon" title="Zoom out" onClick={() => zoomBy(0.7)}>
         <ZoomOut />
       </button>

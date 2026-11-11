@@ -656,6 +656,13 @@ export function LibraryPanel({ overlay = false, full = false }: { overlay?: bool
   const [importing, setImporting] = useState(false);
   const file = useRef<HTMLInputElement>(null);
   const searching = words(query).length > 0;
+  // the bar asked for a sound by name ("Find “cello” in the Library"): it's searched for here
+  const asked = useApp((s) => s.librarySearch);
+  useEffect(() => {
+    if (asked === null) return;
+    setQuery(asked);
+    store.set({ librarySearch: null });
+  }, [asked]);
 
   const importPack = async (f: File) => {
     setImporting(true);

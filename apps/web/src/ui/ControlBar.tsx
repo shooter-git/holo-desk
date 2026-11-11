@@ -1,7 +1,6 @@
 /** The control bar: views, the transport, the display (position, time, tempo, signature, key) and status. */
 import { formatBarBeat, KEYS, type MeterPoint, performed, tickToSeconds } from '@holo/session';
 import {
-  Bot,
   Circle,
   FastForward,
   Keyboard,
@@ -14,6 +13,7 @@ import {
   Play,
   Repeat,
   Rewind,
+  Search,
   Settings,
   SkipBack,
   SlidersVertical,
@@ -36,9 +36,10 @@ import {
   togglePlay,
   toggleRecord,
 } from '../app/actions.ts';
+import { barSign, useAgent } from '../app/agent.ts';
 import { TYPING_PORT } from '../app/keys.ts';
 import { isPhone, useLayout } from '../app/layout.ts';
-import { store, useApp, useShow } from '../app/store.ts';
+import { openBar, store, useApp, useShow } from '../app/store.ts';
 import { engine } from '../audio/engine.ts';
 import { midi } from '../audio/midi.ts';
 import { startDrag, TAP, Wordmark } from './controls.tsx';
@@ -495,9 +496,11 @@ export function ControlBar() {
   const library = useApp((s) => s.library);
   const typing = useApp((s) => s.typing);
   const ports = useApp((s) => s.midiPorts.filter((p) => p.source === 'device').length);
-  const agent = useApp((s) => s.peers.some((p) => p.role === 'agent'));
   const remotes = useApp((s) => s.peers.filter((p) => p.role === 'remote').length);
   const show = useApp((s) => s.show);
+  const project = useApp((s) => s.project?.id ?? null);
+  // the agent's only sign outside the bar: a ring on its button while it works, a dot once it's replied
+  const sign = useAgent((a) => barSign(a, project));
   const narrow = useMedia(NARROW_BAR);
   const [full, setFull] = useState(() => document.fullscreenElement !== null);
   useEffect(() => {
@@ -662,11 +665,6 @@ export function ControlBar() {
           </button>
         )}
         {show.barDsp && <DspMeter />}
-        {agent && (
-          <span className="btn ghost icon ai" title="The AI is connected" role="img" aria-label="The AI is connected">
-            <Bot />
-          </span>
-        )}
         {show.barRemote && (
           <button
             type="button"
@@ -690,12 +688,30 @@ export function ControlBar() {
             {full ? <Minimize2 /> : <Maximize2 />}
           </button>
         )}
+        {/* the bar: every command, track and marker, found by name; always here, as it reaches what's hidden */}
+        <button
+          type="button"
+          className={`btn icon ghost cb-bar${sign ? ` ${sign}` : ''}`}
+          title="Commands (Ctrl /)"
+          aria-label={
+            sign === 'busy'
+              ? 'Commands (Ctrl /): working on your request'
+              : sign === 'done'
+                ? 'Commands (Ctrl /): a reply is waiting'
+                : 'Commands (Ctrl /)'
+          }
+          aria-haspopup="dialog"
+          onClick={openBar}
+        >
+          {sign === 'busy' ? <span className="ring" aria-hidden="true" /> : <Search />}
+          {sign === 'done' && <span className="cb-dot" aria-hidden="true" />}
+        </button>
         <ViewMenu />
         <button
           type="button"
           className="btn icon ghost cb-settings"
-          title="Audio & MIDI settings"
-          aria-label="Audio & MIDI settings"
+          title="Settings"
+          aria-label="Settings"
           onClick={() => store.set({ dialog: 'settings' })}
         >
           <Settings />

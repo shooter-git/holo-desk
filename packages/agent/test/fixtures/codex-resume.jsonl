@@ -1,0 +1,4 @@
+{"type":"thread.started","thread_id":"01a1cbcd-f893-71a1-aa67-6013e3fe50b3"}
+{"type":"turn.started"}
+{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"spike-42; yellow."}}
+{"type":"turn.completed","usage":{"input_tokens":44267,"cached_input_tokens":41472,"cache_write_input_tokens":0,"output_tokens":185,"reasoning_output_tokens":0}}

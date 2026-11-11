@@ -55,6 +55,17 @@ export interface GestureOptions {
   onAbort?: () => void;
 }
 
+/** Taken as a drag starts; what it returns lets go once the drag's onUp or onAbort has run. */
+let holdForDrag: () => () => void = () => () => undefined;
+
+/**
+ * What a drag holds while it lasts: the studio's actions hold the agent's changes back, so they
+ * don't land under a drag (which works from the song as it was pressed) and its own step lands first.
+ */
+export function holdDuringDrags(take: () => () => void): void {
+  holdForDrag = take;
+}
+
 /** Capture the pointer from a pointerdown and follow it to the end. */
 export function capture(e: ReactPointerEvent, o: GestureOptions): Gesture {
   const el = e.currentTarget as HTMLElement;
@@ -65,6 +76,7 @@ export function capture(e: ReactPointerEvent, o: GestureOptions): Gesture {
   const y0 = e.clientY;
   let done = false;
   let timer = 0;
+  const letGo = holdForDrag();
   const g: Gesture = {
     last: e.nativeEvent,
     moved: false,
@@ -75,7 +87,11 @@ export function capture(e: ReactPointerEvent, o: GestureOptions): Gesture {
     abort: () => {
       if (done) return;
       finish();
-      o.onAbort?.();
+      try {
+        o.onAbort?.();
+      } finally {
+        letGo();
+      }
     },
   };
   // until it holds the pointer, a lazy gesture hears it wherever it goes
@@ -113,7 +129,11 @@ export function capture(e: ReactPointerEvent, o: GestureOptions): Gesture {
     if (ev.pointerId !== id) return;
     g.last = ev;
     finish();
-    o.onUp?.(ev, g);
+    try {
+      o.onUp?.(ev, g);
+    } finally {
+      letGo();
+    }
   };
   const cancel = (ev: PointerEvent) => {
     if (ev.pointerId !== id) return;

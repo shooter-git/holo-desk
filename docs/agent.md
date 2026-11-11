@@ -1,0 +1,391 @@
+# The bar and the agent: how they work
+
+The **bar** (Ctrl /, the search button in the control bar, or a swipe down on a phone's top bar) is
+HO[LO]'s command palette. When the **agent** is turned on in Settings › Agent and this device is allowed
+to use it, the bar also takes requests in plain words, with files dropped or pasted on it. The agent
+carries them out on the open song through a harness installed on the host: Claude Code, Codex or Cursor.
+
+This page is the contract between the studio, the server, the runner and the agent's tools.
+
+## What doesn't change
+
+The `holo` command, the `holo` skill and `pnpm skill:install` are how HO[LO], holo-packs and creations
+are developed from a terminal, and they don't change:
+- `packages/cli/src/{main,score,scan,experience}.ts` are untouched;
+- so are `skills/holo/` and `tools/install-skill.mjs`;
+- so are the HTTP routes the CLI uses (`/api/projects/:id/ops` and the rest) and the runner's render path.
+
+The in-app agent lives in `packages/agent` (`@holo/agent`): the runner's side (`src/runner.ts`,
+`src/harness/`), the MCP server (`src/mcp.ts`) and its tools (`src/tools/`). The server's side is
+`apps/server/src/agent/`. It never reads or writes the user's own harness configuration (`~/.claude`,
+`~/.codex`, `~/.cursor`).
+
+## Rules
+
+- **The open song only.** The agent changes only the song the requesting studio has open. It never
+  touches HO[LO]'s code, `packs.lock.json`, holo-packs, a creation's code or engine, or any other file.
+  Asked to, it writes a brief for the user's harness in that repository (`hand_off`). A brief is only for
+  a change to HO[LO] Desk's code, holo-packs or a creation: asked to read or send files, keys, passwords,
+  tokens or anything else, the agent refuses in its reply, with no brief.
+- **Tools, not trust.** The harness gets HO[LO]'s MCP tools only: no shell, no file tools, no web, none
+  of the user's MCP servers. Every tool call goes through `/api/agent/jobs/:job/*`, which checks the job
+  token and that the job is running.
+- **Data, not instructions.** Names in the song, scans, attachments and what was played are material.
+  Only the request and `packages/agent/AGENT.md` tell the agent what to do.
+- **Asking ends the turn.** What only the user can allow (a pack, sending to a creation, a screenshot,
+  a photo, a recording) is asked with one button; the user's click starts the next turn.
+- **One request, one undo step.** It's labelled "Agent: …". Its changes reach only the requesting
+  device's studio. They're applied on the server only for a scan preset whose studio no longer has the
+  song open.
+- **Off by default.** With the agent off, `GET /api/agent` answers `{enabled:false, …}`, the studio shows
+  nothing of it, and the runner runs no harness and fetches nothing: it looks for harnesses only once
+  the server says `agent-on`.
+
+## Identity and tokens
+
+| Who | Credential | How |
+|---|---|---|
+| Runner | `runner.key` in the data folder: 32 random bytes as hex, mode 0600, made by the server the first time it starts | The runner reads it there (or takes `HOLO_RUNNER_KEY`) and says it in `hello {role:'runner', key}`; compared in constant time. A runner with no key still gets renders, but no jobs, pairing codes or `agent-on`. |
+| Allowed device | device token (32 random bytes, base64url) | `Authorization: Bearer <token>` on `/api/agent/*`; `hello {agentToken}` on `/api/live`, said again in every hello. The server stores only `sha256(token)`. The studio keeps it in `localStorage` (`holo:agent-token`). |
+| A job's tools | job token (32 random bytes, base64url) | `Authorization: Bearer <token>` on `/api/agent/jobs/:job/*`. Kept in `<workspace>/.holo-job` (mode 0600), never in argv or the environment. Valid only while that job runs; revoked once its harness exits or the job ends. |
+
+The Origin and Host guard (`apps/server/src/guard.ts`) covers every WebSocket upgrade, `/api/live`,
+`/api/agent` and `/api/agent/*`. It answers 403 when:
+- the `Host` isn't one of HO[LO]'s names: this computer, a private address, the machine's bare name, a
+  `.local`, `.lan`, `.home.arpa`, `.internal` or `.ts.net` name, or one in `HOLO_ALLOWED_HOSTS` (this
+  stops DNS rebinding);
+- or the `Origin` is another site's. Allowed are the request's own Host, this computer, the local
+  network and tailnets on any port, and `HOLO_ALLOWED_HOSTS`.
+
+A request with no `Origin` (the CLI, the runner, curl) passes the Origin check.
+
+## REST: `/api/agent`
+
+The routes marked **open** answer any device. All others need a device token, and answer 401 without
+one. A refusal is `{error, reason?}`. The reasons the studio acts on are `off`, `busy`, `not-open`,
+`no-runner`, `no-harness`, `not-sealed` and `signed-out`, all with 409. Other refusals carry no reason.
+
+**With the agent off**, only these answer (under `/api/agent`): `GET /api/agent`, `POST /pairing`,
+`POST /pair`, `GET /devices/requests/:id`, `GET|PUT /settings`, `GET /devices` and
+`DELETE /devices/:id`. Every other route answers 409 `off`, `POST /devices/requests` included.
+Turning the agent off cancels every job, so the job-scoped routes answer 403.
+
+| Method and path | Body / query | Answer |
+|---|---|---|
+| `GET /api/agent` **open** | | `{enabled, allowed, pairing, runner:{connected, keyed}}`. `allowed`: the bearer is an allowed device's. `pairing`: no device is allowed yet (the studio offers the code first; otherwise asking to join, with the code as the way back in). `runner.keyed`: a runner with the key is connected, so a code can be had. |
+| `POST /api/agent/pairing` **open** | | `{expires}`. Whenever a keyed runner is connected, with or without allowed devices: it's how the first device gets in, and how a device that has lost its token (its site data cleared, the only allowed one lost) gets back in. Makes a 6-digit code (10 min, single use; a new one replaces it) and sends it to keyed runners as `pairing-code`. 409 `no-runner` without a keyed runner; 429 while pairing is locked. |
+| `POST /api/agent/pair` **open** | `{code, name}` (name ≤ 60) | `{token, device:{id, name}}`, and turns the agent on. Allowed devices hear `agent-devices`, so their lists show the new one at once. 401 for a wrong, expired or missing code. 5 tries per code; while no device is allowed, 20 failures in an hour lock pairing for an hour, and once one is, 10 in a day lock it for a day (429). |
+| `POST /api/agent/devices/requests` **open** | `{name}` (≤ 60) | `{id, secret, code}`. `code` is 4 characters (no 0/O or 1/I), shown on both devices. 409 `off` while the agent is off; 429 with 5 waiting. A request lapses after 10 minutes. |
+| `GET /api/agent/devices/requests/:id` **open** | `?secret=` | `{state:'pending'|'denied'}`. Once approved, the first answer is `{state:'approved', token, device}` and later ones `{state:'approved'}`. 404 for a wrong secret or a lapsed request. |
+| `GET /api/agent/devices` | | `{devices:[{id, name, added, seen, current}], requests:[{id, name, code, created}]}`. `current` is the device asking; `requests` are those waiting. |
+| `POST /api/agent/devices/requests/:id/approve` and `/deny` | | `{ok}`; 404 if none of that id is waiting. |
+| `DELETE /api/agent/devices/:id` | | `{ok}`; 404. It takes effect at once: the device's studios get `agent-removed` and lose agent access, its jobs (running or waiting for a click) are cancelled, and allowed devices get `agent-devices`. |
+| `GET /api/agent/settings` | | `{enabled, harness, model, effort, harnesses:[HarnessInfo]}` |
+| `PUT /api/agent/settings` | `{enabled?, harness?, model?, effort?}` | The settings, as GET. `harness` is an id or null (the first that can be sealed). `model` and `effort` must match `^[A-Za-z0-9][\w.:\-\[\]=]{0,79}$` or be empty (the harness's own). Off stops every job; on sends `agent-on` to the runners; any change is announced as `agent-settings`. |
+| `POST /api/agent/harnesses/refresh` | | `{ok}`. The runners look again (`agent-refresh`). 409 `no-runner`. |
+| `POST /api/agent/harnesses/:id/login` | | `{ok}`. Sent to the runner that has it; progress arrives as `agent-harness` live messages. 404 for an unknown harness; 409 `no-harness`, `busy` (a job runs on it), or no reason when it's signed in already (HO[LO] never signs out or switches accounts). |
+| `POST /api/agent/harnesses/:id/login/code` | `{code}` (printable, ≤ 200) | `{ok}`, for a sign-in that asks for a pasted code. |
+| `POST /api/agent/harnesses/:id/update` | | `{ok}`. 409 `no-harness` or `busy`. |
+| `POST /api/agent/requests` | `{project, text, attachments?:[id], context?, preset?}` | `{job}`. `text` is 1 to 4000 characters (empty with a preset). At most 10 attachments, each this device's for this song (400 otherwise). 404 for no such song, or a preset's scan that isn't the song's; 409 `not-open`, `busy`, `no-runner`, `no-harness`, `not-sealed`, `signed-out`. |
+| `POST /api/agent/jobs/:job/cancel` | | `{ok}`. Any allowed device may stop a job; one waiting for a click is dismissed (`cancelled`). 404; 409 once it has ended. |
+| `POST /api/agent/jobs/:job/permission` | `{grant:boolean, result?, attachments?:[id]}` | `{ok, job?}`, `job` being the follow-up's id. Only the device that asked may answer (403), only while the job is `awaiting` (409). `result` is at most 1000 characters; `attachments` as in a request (a screenshot, a photo, a recording). Granting can be refused as a request is (`not-open`, `busy`, `no-harness`), and with 409 when the conversation was started over since the job asked. With a job token, the same path is the tools' (below). |
+| `POST /api/agent/jobs/:job/done-listening` | | `{ok}`. The user pressed Done. Only the device that asked (403); 409 once the job has ended. |
+| `GET /api/agent/threads/:project` | | `{thread, job}`. `thread` is `{id, harness, turns:[{job, request, reply, label, state, at, permission?, brief?, briefWarnings?, error?}]}`, or null. `job` is the song's job that's running or waiting for a click (a `JobView`), or null: after a reload, its button comes back. |
+| `POST /api/agent/threads/:project/reset` | | `{ok}`. The next request starts a new thread. 409 `busy` while a job runs on the song. |
+| `POST /api/agent/attachments` | `?project=&name=&type=` and the file as the body (≤ 25 MB; text ≤ 100 KB, 413) | `{id, name, type, size}`. Allowed types: `image/png`, `image/jpeg`, `image/webp`, `audio/wav`, `audio/x-wav`, `audio/flac`, `audio/mpeg`, `audio/ogg`, `audio/mp4`, `audio/midi`, `application/vnd.recordare.musicxml+xml`, `text/plain`. Its first bytes must be what the type says (415); text and MusicXML must be UTF-8. 404 for no such song. Kept 7 days, the device's own, for that song. |
+| `PUT /api/agent/attachments/:id/meta` | JSON object (≤ 64 KB) | `{ok}`. The browser stores what it measured here. Only the device's own (403). |
+
+**`context`** in a request is what the studio sees:
+`{view, selection:{track, regions, notes, from?, to?}, playhead, cycle:{on, start, end}, scan?}`.
+Positions are ticks. Each part is checked; a `scan` that isn't the song's is left out.
+
+**`preset`** is `{kind:'scan', task:'read'|'check'|'fix', scan}`. The bar shows it as "Read this scan",
+"Check this scan" or "Fix what was flagged". Its prompt is fixed words with only the checked scan id in
+them. A preset gets 45 minutes, and carries on if its studio goes (its changes are then saved on the
+server). Scan's own Read in, which needs no agent, uses `GET /api/scans/:id/engines/reading`
+(`apps/server/src/omr.ts`): the recognition engines' reading as ops the studio applies as one undo
+step. That isn't an agent route.
+
+**`HarnessInfo`** is:
+`{id:'claude'|'codex'|'cursor', name, found, version?, signedIn?, account?, update?:{available, latest?}, sealed, reason?, models?:string[], efforts?:string[]}`.
+- `sealed: false` means the harness can't be locked down to HO[LO]'s tools. The studio shows it as
+  unavailable, with `reason`.
+- `update` is looked up at most every 6 hours, and never installed unasked. Claude Code's is read from
+  its `stable` channel (npm's `stable` tag for an npm install, `downloads.claude.ai/claude-code-releases/stable`
+  for the native one), so Update never offers a version `claude update` won't install. Codex's is
+  npm's `latest`; Cursor's is what `cursor-agent about` says.
+- At most 500 `models` and 50 `efforts` are kept, each checked as settings check them.
+
+## REST: `/api/agent/jobs/:job/*`
+
+These are for the agent's tools, with the job token. Without a token of the right shape they answer
+401. When the job has ended (or its turn has), or the token isn't its, they answer 403. The first call
+moves the job from `waiting` to `running`. Routes marked **studio** also answer 403 unless the
+requester's studio has the job's song open.
+
+| Method and path | Body / query | Answer |
+|---|---|---|
+| `GET …/song` | | The Project (JSON). The studio is asked to save first. |
+| `GET …/describe` | | `{text}` (`describeProject`) |
+| `GET …/state` **studio** | | `{playhead, position, playing, recording, bpm, selection:{track, regions, notes}, cycle, middleC, view?, scan?}` |
+| `POST …/ops` | `{ops, label, batch}` (1 to 5000 ops; label ≤ 80) | `{ok, revision?}`. Sent to the requester's studio as `agent-ops`, answered once applied: 400 if it refused, 504 after 60 s. Without the studio: 403, except for a scan preset, whose batch is applied and saved here as a revision by "Agent". Each batch id is applied once. |
+| `POST …/transport` **studio** | `{action:'play'|'stop'|'locate', bar?}` | `{ok}`. `locate` needs `bar`. Sent as `transport {action, at?}`, `at` in ticks; 409 if the studio can't (its audio isn't started). |
+| `POST …/audition` **studio** | `{track?, events:[[delayMs, status, d1, d2]]}` (1 to 1024; status 0x80 to 0xEF) | `{ok}`. Sent as `play-notes`: heard, not recorded. |
+| `POST …/listen` **studio** | `{maxMs, quietMs, last?}` (maxMs ≤ 45000, quietMs ≤ 10000) | `{notes:[PlayedNote], done, part, pending}`: one part of a listen (below). 409 while a part is under way. |
+| `GET …/played` **studio** | `?seconds=` (1 to 60) | `{notes:[PlayedNote]}` from the studio's memory of what was just played (`agent-played`). 504 if it doesn't answer within 3 s; 409 with its reason if it can't say. |
+| `POST …/compare` **studio** | `{from, to}` (bar numbers; `to` isn't played) | `{ok}`, once the studio has started playing those bars from before the job, then as they are now (`agent-compare`, up to 50 s). |
+| `GET …/packs`, `…/packs/available` | | As `GET /api/packs` and `GET /api/packs/available`. |
+| `GET …/instruments/:pack/:name` | | That instrument's knobs and microphones. |
+| `GET …/scans/:id` | | The scan. 403 if it's another song's. |
+| `GET …/scans/:id/strip/:page/:system` | | The system's strip (PNG). |
+| `PATCH …/scans/:id/systems/:page/:system` | `{state?:'new'|'read'|'checked'|'approved', written?:[first, last], flags?:[line]}` (≤ 40 flags) | As `PATCH /api/scans/:id/systems/:page/:k`. |
+| `GET …/attachments/:id` | | `{name, type, size, meta, data?}`. `data` (base64) comes for pictures, text, and MusicXML up to 1 MB; `meta` is what the browser measured, or null. Only an attachment that the job's request, or an earlier one on its thread, named (403). 404 once it's gone. |
+| `POST …/progress` | `{line}` (≤ 200) | `{ok}`. The line under the bar. |
+| `POST …/permission` | `{kind, detail, pack?}` (detail ≤ 300) | `{ok}`. `kind` is `install-pack` (with `pack`), `send-creation`, `screen`, `photo` or `microphone`. The job waits for the user once the turn ends. |
+| `POST …/handoff` | `{brief}` (≤ 4000) | `{ok}`. Lines that mention a secret, hold a link or run a command are flagged (`briefWarnings`). |
+| `POST …/finish` | `{label, reply}` (one line ≤ 80; ≤ 600) | `{ok}`. The agent is asked for one or two short sentences, about 200 characters at most; 600 is the server's limit. |
+
+**Listening.** A harness can cut a tool call at 60 s, so a listen comes in parts: the `listen` tool asks
+for at most 40 s at a time, and the server takes at most 45 s. A listen hears only the requester's
+studio, and is heard whole across its parts:
+- The first part begins it, and the studio shows it's listening, with Done.
+- A part ends `done` on `quietMs` of silence after a note, on Done, or when the part sent with `last`
+  runs out. After `maxMs` it ends not done, and the tool asks for the next part.
+- Every note's `time` counts from the listen's start, so parts concatenate. A note held over the end of
+  a part goes whole to a later one; `pending` counts those.
+- Between parts the studio keeps showing it listens, and what's played goes to the next part. With no
+  next part within 15 s, the listen is over and what came after the last part is let go.
+- Done pressed between parts ends the next part at once, with what was played up to Done.
+
+## Live channel (`/api/live`)
+
+The server hands the agent only `harnesses`, `agent-progress`, `agent-session`, `agent-done`,
+`agent-failed`, `agent-harness` and `history` (`AGENT_MESSAGES` in `apps/server/src/live.ts`). The
+agent's other traffic uses the existing `state`, `played`, `ack`, `transport`, `play-notes` and `saved`.
+
+**Runner → server**
+- `hello {role:'runner', name, key?, caps:{render, agent}}`. `caps.render` is unchanged; `caps.agent:
+  true` means it runs agent jobs. Only a keyed runner with `caps.agent` is handed jobs, sign-ins and
+  `agent-on`.
+- `harnesses {list:[HarnessInfo]}`. Allowed devices hear the result as `agent-settings`.
+- `agent-progress {job, line}`
+- `agent-session {job, session}`
+- `agent-done {job, reply?}`. `reply` (one line, ≤ 600) stands as the reply only when the agent never
+  called `finish`.
+- `agent-failed {job, error}`
+- `agent-harness {harness, kind:'login'|'update'|'refresh', state:'running'|'done'|'failed', url?, code?, ask?:'code', line?, error?}`
+
+All of these but `hello` are taken only from a keyed runner. The `agent-*` messages about a job are
+taken only from the runner it was handed to, while it runs.
+
+**Server → runner** (keyed runners only)
+- `agent-on {}`: the agent is on. Sent to a runner with `caps.agent` when it joins while the agent is
+  on, and to every such runner when the agent is turned on (`PUT /settings`, or a pairing while it's
+  off). Only then does the runner look for the harnesses. There is no `agent-off`: with the agent off,
+  the runner is handed nothing.
+- `agent-run {job, thread, harness, model, effort, middleC, prompt, token, session?, workspace, base}`.
+  `workspace` is the thread's id; `base` is where the tools reach the server
+  (`http://127.0.0.1:<port>`); `middleC` is `'C3'` or `'C4'`, as the studio names notes.
+- `agent-cancel {job}`
+- `agent-login {harness}`
+- `agent-login-code {harness, code}`
+- `agent-update {harness}`
+- `agent-refresh {}`. The runner answers `harnesses`, then `agent-harness {kind:'refresh', state:'done'}`
+  for each harness.
+- `pairing-code {code, expires}` (the runner prints it)
+
+**Studio → server**
+- `hello {role:'editor', name, agentToken?}`. A token that isn't an allowed device's leaves the studio
+  without the agent.
+- `state {state}`, as before, now also with `view` and `scan`. Opening another song is how the server
+  sees the requester leave a job's song.
+- `played {events}`: what's played here, sent while a job of this device's listens (or the `holo`
+  command's listen does).
+- `history {action:'undo'|'redo'|'step', label, job?}`, sent only while the agent is on and this device
+  is allowed. `step` is a step of the user's own, sent only while one of this device's jobs runs. From
+  a device no longer allowed, it's answered with `agent-removed`.
+- acks: `{type:'ack', id, ok, …}`. An ack is taken only from the connection the request went to.
+
+**Server → studio**, asked (answered with an ack carrying the same `id`):
+- `agent-ops {id, project, job, batch, ops, label}`: ack `{ok, revision?}` once applied, or
+  `{ok:false, error}`.
+- `agent-flush {id}`: save now; ack `{revision}`.
+- `agent-played {id, seconds}`: ack `{notes:[PlayedNote]}` from the last minute of what was played here.
+- `agent-compare {id, job, from, to}`: ack once it has started playing.
+- `transport {id, action, at?}`, the existing message.
+
+**Server → studio**, told:
+- `play-notes {events, track, port:'Agent'}`, the existing message.
+- `agent-status {job:JobView}`, to allowed devices' studios: those of the requesting device, and those
+  with the job's song open.
+- `agent-listen {job, state:'on'|'off'}`. `on` goes to the requester's studios with the song open, `off`
+  to all of the requester's studios. Nothing is sent between two parts of a listen; `off` follows when
+  the listen is over.
+- `agent-settings {enabled, harness, model, effort, harnesses}`, to allowed devices, when the settings or
+  the runners' harnesses change. Other studios get `{enabled}` alone, and only when it changed.
+- `agent-harness {…}`, to allowed devices, as from the runner (checked: only http(s) links, a printable
+  code).
+- `agent-removed {}`, to a device that was just removed.
+- `agent-devices {}`, to allowed devices: the device list, or the requests waiting, changed.
+- `saved {project, revision}`, when a scan preset's batch was saved on the server.
+
+**`PlayedNote`** is `{tick, time, pitch, velocity, length, port}`. `tick` is the song's tick when it
+was played (null when the song wasn't playing); `time` is ms from the listen's start (or from the start
+of the stretch `played` asked for); `length` is ms (null while still held).
+
+**`JobView`** is:
+`{id, project, device, state:'waiting'|'running'|'awaiting'|'done'|'failed'|'cancelled', request, line?, reply?, label?, permission?:{kind, detail, pack?}, brief?, briefWarnings?:[{line, kind:'command'|'url'|'secret'}], error?, started, finished?}`.
+- `waiting` lasts until the runner or the job's tools are first heard from.
+- `briefWarnings` are the brief's lines (from 0) the studio flags, each once: `secret` for a line that
+  mentions one (ssh, `.ssh`, `id_rsa`/`id_ed25519`, private keys, `.pem`, `.env`, credentials, tokens,
+  passwords, API keys, secrets, keychains, `~/.aws`, `~/.config/gh`, `.netrc` and the like, `/etc/passwd`
+  or `shadow`), else `url` for a link, else `command` for a command to run (`briefWarnings` in
+  `apps/server/src/agent/jobs.ts`).
+- The server keeps the last 50 ended jobs in memory; the bar reads older turns from the thread.
+
+## A request's life
+
+1. **Request.** The studio makes each file ready (a picture redrawn in the browser at up to 2048 px on
+   its long side, a recording measured, a MIDI file read into notes). It posts each to
+   `/api/agent/attachments`, then what it measured to `…/meta`, then posts `/api/agent/requests` with
+   their ids and the context.
+2. **Server.** Checks the song is open in this device's studio (`not-open`), that no other job runs on
+   it (`busy`), the attachments, and that there's a harness to run it (`no-runner`, `no-harness`,
+   `not-sealed`, `signed-out`). It asks the studio to save (`agent-flush`, up to 10 s), then takes a
+   restore point (`store.snapshotNow(project, 'Agent')`). It builds the prompt from the song as saved:
+   1. the agent's rules (`packages/agent/AGENT.md`, at most 40,000 characters; a short fallback if it's
+      missing);
+   2. "Since your last reply", on a thread that has one: what the user did since (undo, redo, their own
+      steps, a turn that stopped or failed, a "Not now"), then `describeChanges(seen, now, {middleC})`,
+      or "The song is as you left it.";
+   3. "What the studio shows": the context, in words;
+   4. "Attachments": each id, name, type, size, and a few words of what was measured;
+   5. "The request": the user's words, or a preset's fixed words.
+
+   It makes the job (`agj_…`, `waiting`) and its token, and sends `agent-run` to the runner that has
+   the harness. It adds the turn, clears the thread's events, and starts the clock: 10 minutes, or 45
+   for a scan preset. A permission still waiting on that song is passed over (`done`).
+3. **Runner.** It runs at most two jobs at once, one per thread. It opens the thread's workspace
+   (`${XDG_CACHE_HOME:-~/.cache}/holo/agent/<thread>`, mode 0700) and puts the token in
+   `<workspace>/.holo-job` (mode 0600). It starts the harness sealed, with `@holo/agent`'s MCP server as
+   its only tools (`HOLO_URL`, `HOLO_JOB`, `HOLO_JOB_TOKEN_FILE`, `HOLO_MIDDLE_C`), the prompt on stdin,
+   and the thread's session resumed if it has one. Each change the tools make is an `agent-ops` batch
+   for the requester's studio, which merges it into the job's undo step.
+4. **End of the turn.** The agent calls `finish {label, reply}` (and `ask_permission`, `look` or
+   `hand_off` before it if it needs to), then the harness exits.
+   - The runner sends `agent-done` and removes the token file.
+   - The server revokes the token, asks the studio to save, then stores the song as saved as the
+     thread's `seen_doc`.
+   - The job becomes `done`, or `awaiting` if a permission was asked.
+5. **Permissions.** On the device that asked, the bar shows one button. A click runs the studio's own
+   code:
+   - `install-pack`: the Library's install queue;
+   - `send-creation`: `sendToCreation`;
+   - `screen`: one frame of what the user picks to share (a phone, which can't, takes a photo instead),
+     shown before Send;
+   - `photo`: the camera or a picture, redrawn as a JPEG, shown before Send;
+   - `microphone`: a recording of up to two minutes, as WAV, measured.
+
+   What was captured goes up as an attachment. The studio then posts
+   `/permission {grant:true, result, attachments}`. The server starts the follow-up turn as a new job on
+   the same thread (the same harness session). Its prompt says what was allowed and what happened, and
+   lists the attachments. `{grant:false}` ends the job `done` with the reply "Not now", and the agent
+   hears so next time.
+6. **Ending early.** The job ends `cancelled` or `failed`, and its token is revoked, when:
+   - someone presses Stop;
+   - the requester opens another song (not for a scan preset, which carries on);
+   - the requester undoes a step of the running job;
+   - the requester's device is removed, or the agent is turned off;
+   - the clock runs out;
+   - the runner drops for 15 s, or the harness fails.
+
+   The runner is sent `agent-cancel`, except when the harness failed or the runner dropped. The agent
+   hears next time that its turn didn't finish. Jobs live in memory: after a restart, turns still under
+   way read `failed`, and those waiting for a click `cancelled`.
+
+## Undo grouping (studio)
+
+`apps/web/src/app/history.ts` is pure; `apps/web/src/app/actions.ts` applies it. `Step` is
+`{project, label, job?}`.
+- **`agent-ops` while a gesture or drag is in progress** is queued and applied, in order, after it
+  ends, so the user's step lands first. A hold that lasts 15 s is let through.
+- **A batch that was already applied** (the last 500 are remembered by id) is acked again and not
+  re-applied. A refused one may be tried again.
+- **Merging:** if the job is running and the top undo step is the job's, the ops merge into it (any
+  redo is dropped), and the step keeps the song from before the job. Otherwise a new step is pushed,
+  labelled "Agent: <the batch's label>".
+- **No toasts.** The bar says what the agent is doing.
+- **Finishing:** when `agent-status` says the job ended with a label, its steps, undone or not, are
+  relabelled "Agent: <label>".
+- **Undo and redo** keep `job`, and are reported as `history`.
+- **A/B** (`apps/web/src/app/compare.ts`) plays the bars from the song under the job's first step still
+  in the undo history, then from the song now. Stop, or a change to the song, ends it.
+- **The existing `ops` message** (from the `holo` command) is unchanged: one step per command,
+  "AI: …", with a toast.
+
+## Threads ("since your last reply")
+
+`agent_threads(id, project, harness, session, seen_doc, seen_revision, events_json, created, updated, current)`
+holds one current thread (`agt_…`) per song. `agent_turns(job, thread, request, reply, label, state, at, extra)`
+holds its turns, the last 50; `extra` keeps the permission, the brief and its flagged lines, the error,
+and the attachments. Changing the harness, or `reset`, starts a new thread; the old one is kept but no
+longer current.
+
+A thread keeps the user's doings since the last reply, the latest 20, and clears them once a prompt has
+told them: `undo`, `redo`, `step`, and `stopped`, `failed` or `denied` for a turn that didn't end well.
+`seen_doc` is the song as saved at the end of the last turn.
+
+`describeChanges(before, after, {middleC})` (`packages/session/src/diff.ts`) lists at most 20 lines,
+the last "…and N more changes" when there are more:
+- song settings, tracks, mix, plugins, automation, regions;
+- notes per track, as "Keys bars 9–12: 4 added, 2 removed, 3 changed".
+
+## The agent's tools (`@holo/agent`)
+
+`packages/agent/src/tools/index.ts` lists 38 tools (at most 40), named for MCP (lower-case letters,
+digits and `_`). Changing and asking tools run one at a time, in the order they're called; seeing and
+playing tools run alongside. A change may also post a line under the bar (`…/progress`).
+
+| Tool | Kind | What it does |
+|---|---|---|
+| `song_status` | see | Where the user is: the song's settings and tracks, the playhead, the selection, the cycle, the view, how notes are named. |
+| `song_show` | see | The whole song as text: tempo and meter changes, markers, mastering, every track and bus. |
+| `song_set` | change | Title, tempo, key and meter, from the start or as a change at a position. |
+| `marker` | change | Add, rename or remove a marker. |
+| `cycle` | change | Set the cycle, or turn it off. |
+| `looping` | change | Make the song a loop (a game's or an app's music), or an ordinary song again. |
+| `ops_apply` | change | Raw session ops for what no other tool covers; removals only with `confirm`. |
+| `notes_show` | see | A track's notes, bar by bar. |
+| `notes_write` | change | Write notes from a position, in the compact notation. |
+| `notes_clear` | change | Remove the notes that start in a span. |
+| `track_add` | change | Add a track: a built-in synth, a pack's instrument, or a palette's sound. |
+| `track_set` | change | A track's name, fader, pan, mute, solo, arm, instrument, place and sends. |
+| `synth_set` | change | List or set a built-in synth's knobs. |
+| `kit_set` | change | List or set a sampled kit's microphones, tune and decay. |
+| `instruments` | see | What can play a track: the synths and the installed packs' instruments. |
+| `plugins` | see | The stock plugins, and one's parameters. |
+| `fx` | change | Show, add, set or remove plugins on a track, a bus or the master. |
+| `automate` | change | Write, clear, turn off or read an automation lane. |
+| `finish_master` | change | How bounces and renders are mastered. |
+| `score_show` | see | The song as score text; with `check`, what a player would stumble on. |
+| `score_parts` | see | The parts' staves, clefs and transpositions. |
+| `score_write` | change | Write bars from score text (from a scan's system, marking it read). |
+| `score_part` | change | How a part is written: staves, clefs, transposition, names, tablature. |
+| `score_meta` | change | The score's credits, and a pickup. |
+| `packs` | see | The installed packs, or the catalog. |
+| `transport` | play | Play, stop, or move the playhead in the studio. |
+| `audition` | play | Play notes now, heard and not written. |
+| `listen` | play | Listen to what the user plays, in parts, until quiet, Done or `max` (≤ 600 s). |
+| `played` | play | What the user just played (up to 60 s back). |
+| `analyze_played` | see | Tempo, meter, key, pickup and grid of a performance, and its notes as score text. |
+| `compare` | play | A/B: some bars as they were before the request, then as they are now. |
+| `scan_show` | see | A scan's pages and systems, or one system's strip as an image. |
+| `scan_status` | change | Mark how far a scanned system's reading got. |
+| `attachment_get` | see | An attachment: a picture, a recording's measurements and notes, a MIDI file's notes, a text. |
+| `look` | ask | Ask for a screenshot, a photo or a recording (a permission: it ends the turn). |
+| `ask_permission` | ask | Ask to install a pack, send to the creation, or for a screenshot, a photo or a recording. |
+| `hand_off` | ask | A brief for the user's own coding agent, only for a change to HO[LO] Desk's code, holo-packs or a creation (no commands or code in it; never to read or send files, keys, passwords or tokens). |
+| `finish` | ask | End the turn: the undo step's label and the reply (one or two short sentences, about 200 characters at most: what changed and where). |
+
+There are no tools for opening, creating, importing or exporting songs, rendering to a file, or
+creations, except `ask_permission {kind:'send-creation'}`.

@@ -3,7 +3,7 @@
  * bridge to your creations. It has no accounts and no passwords: it listens on this machine only,
  * and your own devices reach it through Tailscale.
  */
-import { createHash, randomBytes } from 'node:crypto';
+import { createHash } from 'node:crypto';
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import { constants as zlib } from 'node:zlib';
@@ -38,9 +38,12 @@ import {
   writeMidi,
 } from '@holo/session';
 import Fastify, { type FastifyInstance, type FastifyReply } from 'fastify';
+import { runnerKey } from './agent/keys.ts';
+import { agentRoutes } from './agent/routes.ts';
 import type { Config } from './config.ts';
 import { Creations, sessionText } from './creations.ts';
 import { type SongDetails, Store } from './db.ts';
+import { guard } from './guard.ts';
 import { Live, type RenderJob } from './live.ts';
 import { NetworkMidi } from './network-midi.ts';
 import { omrRoutes } from './omr.ts';
@@ -64,6 +67,12 @@ const ISOLATION = {
   'cross-origin-resource-policy': 'same-origin',
 };
 
+/**
+ * How long a closing server waits for the live channel's connections to answer its goodbye, and for
+ * requests under way to end, before it drops them.
+ */
+const CLOSE_GRACE = 1000;
+
 export interface Services {
   store: Store;
   packs: Packs;
@@ -86,7 +95,16 @@ export async function buildApp(config: Config): Promise<{ app: FastifyInstance; 
     .catch((err: unknown) =>
       console.warn(`The packs' maps couldn't be checked (${err instanceof Error ? err.message : String(err)})`),
     );
-  const live = new Live();
+  // the key a runner on this computer says, so only it is handed the agent's jobs
+  let key: string | null = null;
+  try {
+    key = runnerKey(config.dataDir);
+  } catch (err) {
+    console.warn(
+      `The runner key couldn't be made in ${config.dataDir} (${err instanceof Error ? err.message : String(err)}): renders work, the agent's jobs wait for it`,
+    );
+  }
+  const live = new Live({ key });
   live.latestRevision = (id) => store.get(id)?.revision ?? null;
   const creations = new Creations(config.creationsDir);
   /** The engine this studio plays: what an experience's pinned engine is measured against. */
@@ -115,7 +133,28 @@ export async function buildApp(config: Config): Promise<{ app: FastifyInstance; 
     return reply.code(status).send({ error: message });
   });
 
-  await app.register(fastifyWebsocket);
+  /** Set while the server stops: drops what's left once CLOSE_GRACE is up. */
+  let dropping: NodeJS.Timeout | null = null;
+  await app.register(fastifyWebsocket, {
+    // Stopping. The plugin's own goodbye waits for every peer to answer (ws gives one that doesn't
+    // 30 s), and the server waits for it and for any request under way (a listen, for minutes). So
+    // each live connection is told so (1001), and after CLOSE_GRACE whatever's left is dropped.
+    preClose(done) {
+      const wss = app.websocketServer;
+      for (const ws of wss.clients) ws.close(1001, 'HO[LO] is stopping');
+      dropping = setTimeout(() => {
+        for (const ws of wss.clients) ws.terminate();
+        app.server.closeAllConnections();
+      }, CLOSE_GRACE);
+      dropping.unref();
+      // no new connections (an upgrade now is answered 503)
+      wss.close();
+      done();
+    },
+  });
+  // pages from other sites can't open the live channel or use the agent (before the routes, so it
+  // covers them all)
+  guard(app, config.allowedHosts ?? []);
   app.register(async (scope) => {
     scope.get('/api/live', { websocket: true }, (socket) => live.attach(socket));
   });
@@ -196,37 +235,27 @@ export async function buildApp(config: Config): Promise<{ app: FastifyInstance; 
     project: (id) => store.get(id),
   });
 
-  // the AI buttons: your own Claude Code, through the runner on the host (HO[LO] holds no key)
-  app.get('/api/ai', async () => live.aiStatus());
-  app.get<{ Querystring: { project?: string } }>('/api/ai/jobs', async (req) =>
-    live.aiJobsFor(String(req.query.project ?? '')),
-  );
-  app.post<{ Params: { id: string }; Body: { task?: string } }>('/api/scans/:id/ai', async (req, reply) => {
-    const scan = scans.get(req.params.id);
-    if (!scan) return reply.code(404).send({ error: 'No such scan' });
-    const task = req.body?.task;
-    if (task !== 'read' && task !== 'check' && task !== 'fix')
-      return reply.code(400).send({ error: 'The task is read, check or fix' });
-    const status = live.aiStatus();
-    if (!status.available) return reply.code(409).send({ error: 'The AI isn’t available', reason: status.reason });
-    const job = {
-      id: `job_${randomBytes(6).toString('hex')}`,
-      task: task as 'read' | 'check' | 'fix',
-      scan: scan.id,
-      project: scan.project,
-      state: 'waiting' as const,
-      started: Date.now(),
-      finished: null,
-      lines: [],
-      summary: null,
-      error: null,
-    };
-    if (!live.ai(job)) return reply.code(409).send({ error: 'The AI isn’t available', reason: 'no-runner' });
-    return reply.code(202).send(job);
+  // the in-app agent: devices, settings, requests and their jobs, and the routes its tools call
+  const agent = agentRoutes(app, {
+    store,
+    live,
+    repoDir: config.repoDir,
+    dataDir: config.dataDir,
+    scans,
+    // the tools run on this computer, beside the runner: they reach the server here
+    base: () => {
+      const address = app.server.address();
+      return `http://127.0.0.1:${address && typeof address === 'object' ? address.port : config.port}`;
+    },
   });
-  app.post<{ Params: { id: string } }>('/api/ai/jobs/:id/cancel', async (req, reply) =>
-    live.aiCancel(req.params.id) ? { ok: true } : reply.code(404).send({ error: 'No such job running' }),
-  );
+
+  // Scan's old AI buttons: reading a scan with AI is the agent's now, from the bar
+  const moved = async (_req: unknown, reply: FastifyReply) =>
+    reply.code(410).send({ error: 'Reading scans with AI moved to the bar (Ctrl /)' });
+  app.get('/api/ai', moved);
+  app.get('/api/ai/jobs', moved);
+  app.post('/api/scans/:id/ai', moved);
+  app.post('/api/ai/jobs/:id/cancel', moved);
 
   app.delete<{ Params: { id: string } }>('/api/projects/:id', async (req, reply) => {
     if (!store.remove(req.params.id)) return reply.code(404).send({ error: 'No such project' });
@@ -978,6 +1007,8 @@ export async function buildApp(config: Config): Promise<{ app: FastifyInstance; 
   }));
 
   app.addHook('onClose', async () => {
+    if (dropping) clearTimeout(dropping);
+    agent.close();
     networkMidi?.close();
     store.close();
   });

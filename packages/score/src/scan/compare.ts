@@ -11,7 +11,7 @@ import { notate } from '../notate.ts';
 import type { ScanPage } from './model.ts';
 
 /** A bar's notes, every part's: where each starts in the bar and its pitch, in order. */
-function barNotes(doc: ScoreDoc, bar: Bar): [number, number][] {
+export function barNotes(doc: ScoreDoc, bar: Bar): [number, number][] {
   const out: [number, number][] = [];
   for (const part of doc.parts) {
     for (const staff of part.staves) {
@@ -33,11 +33,25 @@ const say = (notes: [number, number][]) => {
 };
 
 /** Whether two bars hold the same notes: the same pitches, starting within a sixteenth of each other. */
-function same(a: [number, number][], b: [number, number][]): boolean {
+export function sameBarNotes(a: [number, number][], b: [number, number][]): boolean {
   if (a.length !== b.length) return false;
   return a.every(([t, p], i) => {
     const [u, q] = b[i] as [number, number];
     return p === q && Math.abs(t - u) <= 240;
+  });
+}
+
+/**
+ * A reading's bars laid over a page's systems: in order, as many to each system as its bar lines
+ * say (at least one), the first system's first. One list a system, in the page's order.
+ */
+export function pageBars(page: ScanPage, doc: ScoreDoc): Bar[][] {
+  let next = 0;
+  return page.systems.map((s) => {
+    const count = Math.max(1, s.bars.length - 1);
+    const bars = doc.bars.slice(next, next + count);
+    next += count;
+    return bars;
   });
 }
 
@@ -58,11 +72,9 @@ export function compareReading(
     return flags;
   }
   const ours = notate(project);
-  let next = 0;
-  for (const s of page.systems) {
-    const count = Math.max(1, s.bars.length - 1);
-    const mine = theirs.bars.slice(next, next + count);
-    next += count;
+  const laid = pageBars(page, theirs);
+  for (const [i, s] of page.systems.entries()) {
+    const mine = laid[i] ?? [];
     if (!s.written) continue;
     const list: string[] = [];
     for (let i = 0; i <= s.written[1] - s.written[0]; i++) {
@@ -76,7 +88,7 @@ export function compareReading(
       }
       const a = barNotes(ours, songBar);
       const b = barNotes(theirs, engineBar);
-      if (!same(a, b)) list.push(`${engine} reads bar ${number} as ${say(b)} (the song has ${say(a)})`);
+      if (!sameBarNotes(a, b)) list.push(`${engine} reads bar ${number} as ${say(b)} (the song has ${say(a)})`);
     }
     if (list.length) flags.set(s.k, list);
   }

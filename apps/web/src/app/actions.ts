@@ -37,6 +37,7 @@ import {
   PPQ,
   type Project,
   paramValue,
+  parseProject,
   pluginDef,
   projectEnd,
   quantize,
@@ -59,18 +60,22 @@ import { audioFiles } from '../audio/files.ts';
 import { midi } from '../audio/midi.ts';
 import { instrumentManifest } from '../audio/pack-files.ts';
 import { library } from '../audio/samples.ts';
+import { holdDuringDrags } from '../ui/gesture.ts';
 import { NOTE_EFFECTS, playsHits } from '../ui/pads.ts';
 import { ApiError, api } from './api.ts';
+import { comparePlan, type Pass } from './compare.ts';
+import * as history from './history.ts';
 // (live.ts imports this module too: neither uses the other while loading, so the cycle is harmless)
-import { reconnectSoon } from './live.ts';
-import { store, toast } from './store.ts';
-
-const MAX_UNDO = 300;
+import { reconnectSoon, reportHistory } from './live.ts';
+import { type Step, store, toast } from './store.ts';
 
 // ---- editing ----
 
-/** Apply operations as one undo step. Returns the new song, or null if they didn't apply. */
-export function apply(ops: Op[], label: string): Project | null {
+/**
+ * Apply operations as one undo step. Returns the new song, or null if they didn't apply. `own` is
+ * false for changes made from the command line (the agent hears only of the user's own).
+ */
+export function apply(ops: Op[], label: string, own = true): Project | null {
   const s = store.get();
   if (!s.project || ops.length === 0) return null;
   let next: Project;
@@ -80,14 +85,19 @@ export function apply(ops: Op[], label: string): Project | null {
     toast(err instanceof Error ? err.message : String(err), 'error');
     return null;
   }
-  store.set({
-    project: next,
-    undo: [...s.undo.slice(-(MAX_UNDO - 1)), { project: s.project, label }],
-    redo: [],
-    saveState: 'dirty',
-  });
+  store.set({ project: next, ...history.push(s, { project: s.project, label }), saveState: 'dirty' });
   changed(next);
+  if (own) userStep(label);
   return next;
+}
+
+/**
+ * A step of the user's own while this device's request runs: the host is told, so the agent hears
+ * of it before its next reply (and the job's changes after it go in a step of their own).
+ */
+function userStep(label: string): void {
+  const s = store.get();
+  if (s.agentReport && Object.values(s.agentJobs).some(Boolean)) reportHistory('step', label);
 }
 
 function changed(project: Project): void {
@@ -100,32 +110,159 @@ function changed(project: Project): void {
 
 export function undo(): void {
   const s = store.get();
-  const step = s.undo[s.undo.length - 1];
-  if (!step || !s.project) return;
-  store.set({
-    project: step.project,
-    undo: s.undo.slice(0, -1),
-    redo: [...s.redo, { project: s.project, label: step.label }],
-    selectedNotes: [],
-    saveState: 'dirty',
-  });
+  const back = s.project && history.undo(s, s.project);
+  if (!back) return;
+  const { step } = back;
+  store.set({ project: step.project, ...back.history, selectedNotes: [], saveState: 'dirty' });
   changed(step.project);
   toast(`Undo ${step.label}`);
+  if (s.agentReport) reportHistory('undo', step.label, step.job);
 }
 
 export function redo(): void {
   const s = store.get();
-  const step = s.redo[s.redo.length - 1];
-  if (!step || !s.project) return;
-  store.set({
-    project: step.project,
-    redo: s.redo.slice(0, -1),
-    undo: [...s.undo, { project: s.project, label: step.label }],
-    selectedNotes: [],
-    saveState: 'dirty',
-  });
+  const again = s.project && history.redo(s, s.project);
+  if (!again) return;
+  const { step } = again;
+  store.set({ project: step.project, ...again.history, selectedNotes: [], saveState: 'dirty' });
   changed(step.project);
   toast(`Redo ${step.label}`);
+  if (s.agentReport) reportHistory('redo', step.label, step.job);
+}
+
+// ---- the agent's changes ----
+
+/** A batch of the agent's changes, as the live channel brought it, for the song open then. */
+interface JobBatch {
+  project: string;
+  ops: Op[];
+  job: string;
+  batch: string;
+  label: string;
+}
+
+/** The agent's batches wait here while a gesture or a drag is in progress (they hold it). */
+const jobs = new history.JobQueue<JobBatch>(runJob);
+holdDuringDrags(() => jobs.hold());
+
+/**
+ * How long a batch waits for a gesture before it goes in anyway: one that never ends (a remote's
+ * fader whose phone went away) mustn't stall the agent, whose host gives up on a batch after a minute.
+ */
+const HOLD_LIMIT_MS = 15_000;
+
+/**
+ * Apply a batch of the agent's changes to the open song, as part of its job's undo step (named
+ * "Agent: <label>"). It waits while the user is in the middle of a gesture or a drag, so their
+ * step lands first; a batch that already went in isn't applied again. Resolves once it's in the song
+ * (not saved yet), or with why it was refused, the song unchanged. No toast: the bar says what the
+ * agent is doing.
+ */
+export function applyJob(ops: Op[], job: string, batch: string, label: string): Promise<history.JobResult> {
+  const s = store.get();
+  if (!s.project) return Promise.resolve({ ok: false, error: 'No song is open in the studio' });
+  // (a job is running from its first batch until the host says otherwise)
+  if (!Object.hasOwn(s.agentJobs, job)) setJobRunning(job, true);
+  const result = jobs.submit({ project: s.project.id, ops, job, batch, label: `Agent: ${label}` });
+  if (jobs.waiting(batch)) {
+    window.setTimeout(() => {
+      if (jobs.waiting(batch)) jobs.letThrough();
+    }, HOLD_LIMIT_MS);
+  }
+  return result;
+}
+
+function runJob(b: JobBatch): history.JobResult {
+  const s = store.get();
+  // (another song was opened while it waited)
+  if (!s.project || s.project.id !== b.project) return { ok: false, error: 'That song is not open in the studio' };
+  if (!b.ops.length) return { ok: true };
+  let next: Project;
+  try {
+    next = applyOps(s.project, b.ops);
+    // what the agent makes must be a song the studio could open again
+    parseProject(next);
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+  let h: history.History = s;
+  // a gesture still going once the batch was let through: its step so far lands first, and it goes
+  // on from the song with the agent's changes in (its own step after theirs)
+  if (gesture) {
+    if (gesture.before !== s.project) h = history.push(h, { project: gesture.before, label: gesture.label });
+    gesture.before = next;
+    gesture.last = undefined;
+  }
+  const running = Object.hasOwn(s.agentJobs, b.job) ? s.agentJobs[b.job] === true : true;
+  h = history.pushOrMergeJob(h, s.project, b.label, b.job, running);
+  // only the history's own fields: `h` may still be the whole state (a batch merged into the job's
+  // step leaves it as it was), whose song is the one from before this batch
+  store.set({ project: next, undo: h.undo, redo: h.redo, saveState: 'dirty' });
+  changed(next);
+  return { ok: true };
+}
+
+/** Whether a job is still running (its batches merge into its step), as the host says. */
+export function setJobRunning(job: string, running: boolean): void {
+  store.set((s) => ({ agentJobs: { ...s.agentJobs, [job]: running } }));
+}
+
+/** A job's steps, undone or not, take its final name: "Agent: <label>". */
+export function relabelJob(job: string, label: string): void {
+  store.set(history.relabelJob(store.get(), job, `Agent: ${label}`));
+}
+
+/** A job's steps in the song as it is, oldest first: the first one's song is the song from before the job. */
+export function jobSteps(job: string): Step[] {
+  return history.jobSteps(store.get(), job);
+}
+
+/** Before and after under way: how to stop it (the song is put back as it is). */
+let comparing: { end: () => void } | null = null;
+
+/**
+ * Before and after (the agent's A/B): bars `from` up to `to` as they were before the job, then the same
+ * bars as they are now; then the song is back as it is, the playhead where they began. Pressing Stop,
+ * or changing the song, ends it there. Says why not when the song from before is gone from the undo
+ * history.
+ */
+export function compareJob(job: string, from: number, to: number): { ok: true } | { ok: false; error: string } {
+  const s = store.get();
+  if (!s.project) return { ok: false, error: 'No song is open in the studio' };
+  const plan = comparePlan(jobSteps(job), s.project, from, to);
+  if ('error' in plan) return { ok: false, error: plan.error };
+  comparing?.end();
+  if (s.playing) stop();
+  const now = s.project;
+  let timer = 0;
+  const end = () => {
+    window.clearInterval(timer);
+    if (comparing?.end !== end) return;
+    comparing = null;
+    engine.stop();
+    store.set({ playing: false });
+    // the audio thread plays the song as it is again
+    const back = store.get().project;
+    if (back) engine.sync(back);
+    engine.locate(plan.after.from);
+    store.set({});
+  };
+  const pass = (p: Pass, then: () => void) => {
+    engine.sync(p.song);
+    engine.locate(p.from);
+    engine.play(p.from);
+    store.set({ playing: true });
+    window.clearInterval(timer);
+    timer = window.setInterval(() => {
+      const cur = store.get();
+      // stopped, or the song changed under it: it ends here
+      if (!cur.playing || cur.project !== now) return end();
+      if (engine.positionTick() >= p.to) then();
+    }, 30);
+  };
+  comparing = { end };
+  pass(plan.before, () => pass(plan.after, end));
+  return { ok: true };
 }
 
 // ---- saving ----
@@ -1109,11 +1246,18 @@ export function updateChannel(target: string, patch: ChannelPatch, label = 'Mixe
   apply([{ op: 'updateChannel', target, patch }], label);
 }
 
-/** Mixer moves while dragging: applied live, one undo step per gesture. */
-let gesture: { label: string; before: Project; last?: Project } | null = null;
+/**
+ * Mixer moves while dragging: applied live, one undo step per gesture. A gesture holds the agent's
+ * changes back until it ends (`release`), so they don't land in the middle of its step.
+ */
+let gesture: { label: string; before: Project; last?: Project; release: () => void } | null = null;
 export function beginGesture(label: string): void {
   const p = store.get().project;
-  if (p) gesture = { label, before: p };
+  if (!p) return;
+  // (one that never ended, as a remote's whose connection went, holds them no longer)
+  const old = gesture;
+  gesture = { label, before: p, release: jobs.hold() };
+  old?.release();
 }
 export function gestureChange(ops: Op[]): void {
   const s = store.get();
@@ -1130,14 +1274,15 @@ export function gestureChange(ops: Op[]): void {
 }
 export function endGesture(): void {
   const s = store.get();
-  if (gesture && s.project && gesture.before !== s.project) {
-    store.set({
-      undo: [...s.undo.slice(-(MAX_UNDO - 1)), { project: gesture.before, label: gesture.label }],
-      redo: [],
-    });
-    changed(s.project);
-  }
+  const g = gesture;
   gesture = null;
+  if (g && s.project && g.before !== s.project) {
+    store.set(history.push(s, { project: g.before, label: g.label }));
+    changed(s.project);
+    userStep(g.label);
+  }
+  // the agent's changes that waited go in now, after the gesture's step
+  g?.release();
 }
 /**
  * Calls a gesture off (Escape): the song goes back to how it was, with no undo step. Where something
@@ -1149,10 +1294,11 @@ export function cancelGesture(): void {
     endGesture();
     return;
   }
-  const { before } = gesture;
+  const { before, release } = gesture;
   gesture = null;
   store.set({ project: before });
   changed(before);
+  release();
 }
 
 export function addPlugin(target: string, type: string, slot: 'inserts' | 'midiFx'): void {
@@ -1403,20 +1549,29 @@ export async function renderInCreation(): Promise<void> {
   }
 }
 
-export async function sendToCreation(): Promise<void> {
+/**
+ * Send the song to the creation it came from: whether it went, and what to say of it (null when the
+ * song has no creation). `quiet` when the bar asked: the agent's reply says how it went, so no toast
+ * says it as well.
+ */
+export async function sendToCreation(quiet = false): Promise<{ ok: boolean; text: string } | null> {
   const p = store.get().project;
-  if (!p?.origin) return;
+  if (!p?.origin) return null;
   await saveNow();
   try {
     const r = await api.send(p.id);
     const sent = r.edited.length
       ? `Sent to ${p.origin.creation}: ${r.edited.length} edited track${r.edited.length === 1 ? '' : 's'} (${r.path})`
       : `Sent to ${p.origin.creation} (${r.path})`;
+    const text = r.note ? `${sent}. ${r.note}` : sent;
     // what its pinned packs did: a pack it can't play yet is worth reading
     const cant = r.packs?.missing.some((m) => m.why !== 'imported') ?? false;
-    toast(r.note ? `${sent}. ${r.note}` : sent, cant ? 'error' : undefined, r.note ? 12000 : undefined);
+    if (!quiet) toast(text, cant ? 'error' : undefined, r.note ? 12000 : undefined);
+    return { ok: true, text };
   } catch (err) {
-    toast(err instanceof Error ? err.message : String(err), 'error', 8000);
+    const text = err instanceof Error ? err.message : String(err);
+    if (!quiet) toast(text, 'error', 8000);
+    return { ok: false, text };
   }
 }
 

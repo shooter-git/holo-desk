@@ -184,6 +184,61 @@ a second, and receives:
 
 `GET /api/live/listen` collects what you play for a few seconds, which is how the AI answers you.
 
+The runner (`pnpm runner`) connects to the same channel and takes renders. When its hello carries the
+key in the data folder (`runner.key`), it also takes the agent's jobs, and once the server says the agent
+is on (`agent-on`) it looks for the harnesses; with the agent off it runs none and fetches nothing. With
+the agent on, a studio whose
+hello carries an allowed device's token also hears the agent's messages: a job's changes (`agent-ops`,
+grouped into one undo step), how a job is going (`agent-status`), and requests to save now, to say what
+was just played, to play some bars before and after, and to show that it's listening. The agent's tools
+don't use the channel: they call the job's own routes, `/api/agent/jobs/:job/*`, with the job's token.
+[agent.md](agent.md) has the contract.
+
+The channel and `/api/agent/*` are behind an Origin and Host check (`apps/server/src/guard.ts`). A page
+from another site, or a request for a name that isn't HO[LO]'s (this computer, the local network, a
+tailnet, or one in `HOLO_ALLOWED_HOSTS`), is refused; a site that points its own name at this computer
+(DNS rebinding) still sends that name as the Host. A request with no Origin, like the `holo` command's,
+passes.
+
+## The agent
+
+The agent is off by default and turned on in Settings › Agent. A request typed in the studio's bar
+goes this way:
+
+```
+the bar ──► server ──► runner ──► harness ──► HO[LO]'s MCP server
+                                                               │
+the studio that asked ◄── server ◄── /api/agent/jobs/:job/* ◄──┘
+```
+
+- **The server** (`apps/server/src/agent`) checks the device and that its studio has the song open,
+  and runs one job per song. It has that studio save, takes a restore point, and writes the prompt:
+  the agent's rules (`packages/agent/AGENT.md`), what changed since its last reply, what the studio
+  shows (view, selection, playhead, cycle, an open scan), what was attached, then the request. It hands
+  the job, with a token of its own, to a runner that said the key.
+- **The runner** (`packages/agent/src/runner.ts`) starts the harness chosen in Settings (Claude Code,
+  Codex or Cursor) in the conversation's workspace, `${XDG_CACHE_HOME:-~/.cache}/holo/agent/<thread>`,
+  with HO[LO]'s MCP server (`packages/agent/src/mcp.ts`) as its only tools, the prompt on stdin and the
+  token in a file there. Each harness's command line is in [agent-harnesses.md](agent-harnesses.md).
+  Tripwires stop the run at the first tool that isn't HO[LO]'s.
+- **The tools** (`packages/agent/src/tools`) call the job's routes, which check the token, that the job
+  is running and, for what needs the studio, that the studio that asked still has the song open.
+  Changes go only to that studio, as batches it groups into one undo step, "Agent: …" (a scan read whose
+  studio has gone is saved on the host instead). Listening, what was just played and before and after
+  are asked of that studio too. Asking a permission (installing a pack, sending the song to its
+  creation, a screenshot, a photo, the microphone) ends the turn; the user's click starts the next one.
+- **A job ends** with the agent's `finish` (a label for the undo step and a reply of a sentence or
+  two), or when it's stopped: Stop, the studio opening another song or undoing the job's change while it
+  runs, the device removed, the agent turned off, the runner gone for 15 s, or after 10 minutes (45 for
+  reading a scan). Its token stops working then.
+- **Threads** (`apps/server/src/agent/threads.ts`). Each song has one conversation: the harness's own
+  session, carried on from request to request, the song as the agent last saw it, and what the user did
+  since (undo, redo, their own steps). The next prompt has a "since your last reply" part, so the agent
+  hears what was undone or changed. A new harness, or *Start a new conversation with the agent*, starts a new thread.
+
+A scan can also be read in without the agent, by the recognition engines (`pnpm omr on`): the Scan
+window writes their reading (`packages/score/src/scan/reading.ts`) into the song as one undo step.
+
 ## Samples
 
 A pack is a folder with `holo-pack.json`: every sample's key and velocity range, its measured root

@@ -25,7 +25,8 @@
   --cycle-rgb: 246 196 83;
   --solo: #f6c453;
   --mute: #5cb8ff;
-  --ai: #c792ff;
+  /* MIDI effects' knobs: a colour of their own, apart from the audio effects' blue */
+  --midi: #c792ff;
   /* the DSP meter's load colors: fine, busy, overloaded */
   --ok: #7ee08a;
   --warn: #ffb74d;
@@ -51,9 +52,11 @@
   --safe-bottom: env(safe-area-inset-bottom, 0px);
   --safe-left: env(safe-area-inset-left, 0px);
   --safe-right: env(safe-area-inset-right, 0px);
-  /* what floats over what: plugin windows, then dialogs, then menus and popovers, then toasts, then the start screen */
+  /* what floats over what: plugin windows, then dialogs, then the bar (Ctrl /, which opens over a dialog
+     too), then menus and popovers, then toasts, then the start screen */
   --z-window: 90;
   --z-dialog: 100;
+  --z-bar: 150;
   --z-popover: 200;
   --z-toast: 300;
   --z-start: 400;
@@ -269,10 +272,6 @@ kbd {
 .btn.left {
   justify-content: flex-start;
   overflow: hidden;
-}
-
-.btn.ghost.ai {
-  color: var(--ai);
 }
 
 /* a button that looks like the text it holds (the brand, the display's pickers) */
@@ -2209,6 +2208,488 @@ button.list-item {
   text-transform: uppercase;
 }
 
+/* ---------- the bar (Ctrl /): the studio's commands, found by name ---------- */
+
+/* a menu with a field on top: the same glass, radius, rows, blue highlight and plain key hints. It
+   hangs near the top, over the control bar's side of the tracks, so what it acts on stays in view;
+   the scrim is clear, and only catches the press outside that closes it */
+.bar-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-bar);
+}
+
+.bar {
+  position: absolute;
+  top: 96px;
+  right: 0;
+  left: 0;
+  display: flex;
+  flex-direction: column;
+  width: min(600px, calc(100vw - 24px));
+  max-height: calc(100dvh - 96px - 12px);
+  margin: 0 auto;
+  overflow: hidden;
+  border: 1px solid var(--line-2);
+  border-radius: 9px;
+  background: rgba(32, 36, 43, 0.97);
+  backdrop-filter: blur(12px);
+  box-shadow: var(--shadow);
+  animation: rise 0.12s ease-out;
+}
+
+.bar .field {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 10px;
+  min-height: 44px;
+  padding: 0 14px;
+  border-bottom: 1px solid var(--line);
+}
+
+.bar .field > svg {
+  flex: none;
+  width: 15px;
+  height: 15px;
+  color: var(--text-3);
+}
+
+.bar .field input {
+  flex: 1;
+  min-width: 0;
+  padding: 12px 0;
+  border: 0;
+  outline: none;
+  background: none;
+  font-size: 14px;
+  line-height: 1.45;
+}
+
+.bar .field input::placeholder {
+  color: var(--text-3);
+}
+
+/* what the commands act on, quietly: "Piano · bars 5–8" */
+.bar .ctx {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-3);
+  font-size: 11.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bar .list {
+  min-height: 0;
+  padding: 5px;
+  overflow-y: auto;
+}
+
+.bar .list:empty {
+  display: none;
+}
+
+.bar .item {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 8px;
+  min-height: 30px;
+  padding: 4px 9px;
+  border-radius: 5px;
+  color: var(--text);
+  font-size: 12.5px;
+  cursor: pointer;
+}
+
+.bar .item .title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bar .item.hl {
+  background: var(--accent-2);
+  color: white;
+}
+
+.bar .item .hint {
+  flex: none;
+  margin-left: auto;
+  color: var(--text-3);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.bar .item.hl .hint {
+  color: rgba(255, 255, 255, 0.72);
+}
+
+/* rows for a finger, as a menu's are; no keys to press on a touch screen, so no key hints */
+@media (pointer: coarse) {
+  .bar .item {
+    min-height: 42px;
+    font-size: 14px;
+  }
+  .bar .item .hint.keys {
+    display: none;
+  }
+}
+
+/* on a phone it opens at the top too, the width of the screen less a margin (no wider than on a desktop
+   when the phone is on its side), clear of the notch and the keyboard; the field's words are 16 px, so
+   the phone doesn't zoom in on it */
+html[data-layout="phone-portrait"] .bar,
+html[data-layout="phone-landscape"] .bar {
+  top: calc(var(--safe-top) + 8px);
+  right: calc(var(--safe-right) + 8px);
+  left: calc(var(--safe-left) + 8px);
+  width: auto;
+  max-width: 600px;
+  max-height: calc(100dvh - var(--safe-top) - 16px);
+}
+
+html[data-layout="phone-portrait"] .bar .field input,
+html[data-layout="phone-landscape"] .bar .field input {
+  font-size: 16px;
+}
+
+/* the agent's side of the bar, while it's on: the song's last request (quiet), then the work going on
+   or the reply, then at most the button it needs. The studio's own blue, nothing of a colour of its own */
+.bar .talk {
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.bar .you {
+  padding: 12px 16px 0;
+  color: var(--text-3);
+  font-size: 12.5px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.bar .reply {
+  padding: 6px 16px 14px;
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.6;
+  white-space: pre-line;
+  overflow-wrap: anywhere;
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+.bar .status {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 16px 14px;
+  color: var(--text-2);
+  font-size: 13px;
+}
+
+.bar .bar-line {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bar .btns {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 0 14px 14px;
+}
+
+.bar .btns .bar-line {
+  font-size: 12px;
+}
+
+.bar .btn.small {
+  height: 24px;
+  font-size: 12px;
+}
+
+/* files going with the next request: small chips in the field, before what's typed */
+.bar .field.has-chips {
+  flex-wrap: wrap;
+  row-gap: 6px;
+  padding-block: 8px;
+}
+
+.bar .field.has-chips input {
+  min-width: 160px;
+  padding-block: 4px;
+}
+
+.bar .att {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+  max-width: 220px;
+  height: 24px;
+  padding: 0 2px 0 7px;
+  border: 1px solid var(--line-3);
+  border-radius: 5px;
+  background: var(--bg-4);
+  color: var(--text);
+  font-size: 11.5px;
+  white-space: nowrap;
+}
+
+.bar .att > svg {
+  flex: none;
+  width: 13px;
+  height: 13px;
+  color: var(--text-2);
+}
+
+.bar .att-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.bar .att-x {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: none;
+  color: var(--text-3);
+  cursor: pointer;
+}
+
+.bar .att-x:hover {
+  background: var(--bg-5);
+  color: var(--text);
+}
+
+.bar .att-x svg {
+  width: 12px;
+  height: 12px;
+}
+
+/* a file dragged over the bar: it's where it can be let go */
+.bar.dropping {
+  outline: 1px dashed var(--accent);
+  outline-offset: -4px;
+}
+
+/* why a file was turned away */
+.bar .bar-note {
+  padding: 6px 16px;
+  border-bottom: 1px solid var(--line);
+  color: var(--text-2);
+  font-size: 12px;
+}
+
+/* a screenshot or a photo, shown before it's sent */
+.bar .shot {
+  flex-basis: 100%;
+  display: flex;
+  justify-content: flex-end;
+}
+
+.bar .shot img {
+  max-width: 100%;
+  max-height: 160px;
+  border: 1px solid var(--line-2);
+  border-radius: var(--radius);
+}
+
+.bar .btns {
+  flex-wrap: wrap;
+}
+
+/* a brief for the user's own harness, in full; the lines that run something or link somewhere are marked */
+.bar .brief {
+  max-height: 220px;
+  margin: 0 16px 12px;
+  padding: 8px 10px;
+  overflow: auto;
+  border: 1px solid var(--line-2);
+  border-radius: var(--radius);
+  background: var(--bg-1);
+  color: var(--text-2);
+  font: 11.5px / 1.55 var(--mono);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+.bar .brief .flag {
+  margin-left: -10px;
+  padding-left: 8px;
+  border-left: 2px solid var(--warn);
+  color: var(--text);
+}
+
+.bar .brief .why {
+  margin-left: 10px;
+  color: var(--warn);
+  font: 600 10px var(--font);
+  white-space: nowrap;
+}
+
+/* busy: the accent blue, a lit arc on a faint track, turning */
+.ring {
+  flex: none;
+  width: 13px;
+  height: 13px;
+  border: 2px solid rgb(var(--accent-rgb) / 0.22);
+  border-top-color: var(--accent);
+  border-right-color: var(--accent);
+  border-radius: 50%;
+  animation: turn 0.9s linear infinite;
+}
+
+@keyframes turn {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* the bar's button: the ring in place of its glass while a request of this device's works, a dot after */
+.control-bar .cb-bar {
+  position: relative;
+}
+
+.cb-bar .ring {
+  width: 15px;
+  height: 15px;
+}
+
+.cb-bar .cb-dot {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+/* ---------- Settings › Agent ---------- */
+
+.agent-grid {
+  display: grid;
+  grid-template-columns: 120px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px 16px;
+}
+
+.agent-grid .agent-key {
+  color: var(--text-2);
+}
+
+.agent-select {
+  min-width: 220px;
+}
+
+/* a harness a row: its name and version, then its sign-in, its update and whether it's in use, each in
+   a column of its own so the rows line up; what's under way (a sign-in, an update) or why it can't be
+   used goes under it, full width */
+.agent-harness {
+  flex-wrap: wrap;
+  gap: 4px 10px;
+}
+
+.agent-harness .agent-cell {
+  display: inline-flex;
+  justify-content: flex-end;
+  min-width: 64px;
+}
+
+.agent-harness .agent-update {
+  min-width: 132px;
+}
+
+.agent-harness .agent-use {
+  min-width: 44px;
+}
+
+.agent-harness .agent-more {
+  flex-basis: 100%;
+  padding-bottom: 2px;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+/* "No allowed device at hand?": the quiet second way, the runner's code */
+.agent-alt {
+  gap: 2px;
+  flex-wrap: wrap;
+}
+
+.agent-join {
+  display: grid;
+  gap: 8px;
+  justify-items: start;
+}
+
+.agent-code {
+  width: 120px;
+  font-family: var(--mono);
+  letter-spacing: 0.3em;
+  text-align: center;
+}
+
+.agent-pair {
+  padding: 1px 6px;
+  border-radius: var(--radius-s);
+  background: var(--bg-4);
+  color: var(--text);
+  letter-spacing: 0.12em;
+}
+
+.agent-devices .list-item {
+  gap: 8px;
+}
+
+.agent-error {
+  color: var(--danger);
+}
+
+.agent-foot {
+  margin: 4px 0 0;
+  line-height: 1.5;
+}
+
+@media (max-width: 560px) {
+  .agent-grid {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 4px;
+  }
+  .agent-grid .agent-key {
+    margin-top: 8px;
+  }
+  .agent-select {
+    min-width: 0;
+    width: 100%;
+  }
+  /* a phone: the name and version, then its states on a line of their own */
+  .agent-harness > .grow {
+    flex-basis: 100%;
+  }
+  .agent-harness .agent-cell {
+    min-width: 0;
+  }
+}
+
 /* ---------- plugin windows ---------- */
 
 .plugin-window {
@@ -2770,14 +3251,6 @@ html[data-layout="phone-landscape"] .toasts {
 .toast.error {
   border-color: var(--danger-line);
   color: #ffd2d6;
-}
-
-.toast.ai {
-  border-color: #5a3d80;
-  color: #ead9ff;
-  box-shadow:
-    var(--shadow),
-    0 0 0 1px color-mix(in srgb, var(--ai) 40%, transparent);
 }
 
 .banner {
@@ -3632,6 +4105,21 @@ html[data-layout="phone-landscape"] .toasts {
   background: var(--bg-4);
 }
 
+/* a phone's way to the bar (it has no room for the bar's button): a row like the others, across the top */
+.view-command {
+  grid-column: 1 / -1;
+  width: 100%;
+  border: 0;
+  background: none;
+  text-align: left;
+}
+
+.view-command > svg {
+  width: 15px;
+  height: 15px;
+  color: var(--text-2);
+}
+
 .view-item .grow {
   flex: 1;
 }
@@ -3903,9 +4391,14 @@ html[data-layout="phone-landscape"] .toasts {
 /* ---------- less motion, when asked for ---------- */
 
 @media (prefers-reduced-motion: reduce) {
+  /* the agent's ring stays, held still */
+  .ring {
+    animation: none;
+  }
   .scrim,
   .dialog,
   .menu,
+  .bar,
   .toast,
   .view-menu.sheet,
   .plugin-window.sheet,
@@ -4247,8 +4740,7 @@ footer.scan-bar {
 
 .scan-tip,
 .scan-busy,
-.scan-hint,
-.scan-job {
+.scan-hint {
   margin: 0;
   padding: 8px 12px;
   color: var(--text-2);
@@ -4276,15 +4768,6 @@ footer.scan-bar {
 .scan-hint {
   grid-row: 2;
   color: var(--warn);
-}
-
-.scan-job {
-  grid-row: 3;
-  color: var(--ai);
-}
-
-.scan-job.failed {
-  color: var(--danger);
 }
 
 .scan-review {

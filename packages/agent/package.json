@@ -1,0 +1,20 @@
+{
+  "name": "@holo/agent",
+  "private": true,
+  "version": "0.6.12",
+  "license": "MIT",
+  "type": "module",
+  "description": "HO[LO]'s in-app agent: its tools for the open song, and the MCP server the harness reaches them through.",
+  "exports": {
+    ".": "./src/index.ts",
+    "./runner": "./src/runner.ts",
+    "./harness": "./src/harness/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p ."
+  },
+  "dependencies": {
+    "@holo/score": "workspace:*",
+    "@holo/session": "workspace:*"
+  }
+}

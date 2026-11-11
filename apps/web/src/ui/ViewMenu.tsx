@@ -3,10 +3,10 @@
  * mixer strips' sections, the control bar's items), as Logic's View menu and its Customize Control
  * Bar do. Each device remembers its own choice.
  */
-import { Eye } from 'lucide-react';
+import { Eye, Search } from 'lucide-react';
 import { useEffect, useId, useRef, useState } from 'react';
 import { isPhone, useLayout } from '../app/layout.ts';
-import { SHOW_DEFAULTS, type ShowKey, store, useApp } from '../app/store.ts';
+import { openBar, SHOW_DEFAULTS, type ShowKey, store, useApp } from '../app/store.ts';
 
 type Pane = 'library' | 'inspector' | 'editor' | 'score' | 'mixer' | 'automation';
 
@@ -151,6 +151,20 @@ export function ViewMenu() {
           aria-labelledby={labelId}
           style={sheet ? undefined : place(rect)}
         >
+          {/* a phone has no room for the bar's button, so the bar is reached from here (or a swipe down) */}
+          {sheet && (
+            <button
+              type="button"
+              className="view-item view-command"
+              onClick={() => {
+                setOpen(false);
+                openBar();
+              }}
+            >
+              <Search aria-hidden="true" />
+              <span className="grow">Commands</span>
+            </button>
+          )}
           <div className="view-group">
             <div className="label">Panes</div>
             {PANES.map(([pane, name, key], i) => (

@@ -1,15 +1,16 @@
 /**
  * Scanning sheet music into the song: photos or PDFs picked, each page's corners set (guessed, then
  * dragged), the music found on it, and the scan saved; then the review, a system at a time: its strip
- * from the page above the bars written from it, with the AI to read, check or fix, and you to approve.
+ * from the page above the bars written from it, for you to approve. The recognition engines, when
+ * they're running, read it in or check what was written; the agent (from the bar, Ctrl /) can too.
  */
 import { notate, type Scan, type ScanSystem, toMEI } from '@holo/score';
-import { Check, Play, Sparkles, Square, X } from 'lucide-react';
+import { Check, Play, X } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
-import { locate, togglePlay } from '../../app/actions.ts';
+import { apply, locate, saveSoon, togglePlay } from '../../app/actions.ts';
 import { store, toast, useApp } from '../../app/store.ts';
 import { renderEach } from '../verovio.ts';
-import { aiStatus, compareEngines, getScan, omrStatus, setSystem, startAi, stopAi } from './client.ts';
+import { compareEngines, getScan, omrStatus, readWithEngines, setSystem } from './client.ts';
 import { NewScan } from './NewScan.tsx';
 
 export default function ScanWindow() {
@@ -49,20 +50,14 @@ const STATE_WORDS: Record<ScanSystem['state'], string> = {
   approved: 'approved',
 };
 
-const MISSING: Record<string, string> = {
-  'no-runner': 'Start the runner on the computer with Claude Code: pnpm runner',
-  'no-claude': 'Install Claude Code on the runner’s computer and sign in once (run claude), then restart the runner',
-  'no-skill': 'Run pnpm skill:install on the runner’s computer',
-};
-
 function Review({ id }: { id: string }) {
   const project = useApp((s) => s.project);
   const tick = useApp((s) => s.scanTick);
-  const job = useApp((s) => (s.aiJob?.scan === id ? s.aiJob : null));
   const [scan, setScan] = useState<Scan | null>(null);
-  const [ai, setAi] = useState<{ available: boolean; reason?: string } | null>(null);
   const [engines, setEngines] = useState<string[]>([]);
   const [comparing, setComparing] = useState(false);
+  /** While the engines' reading is on its way: what's happening. */
+  const [reading, setReading] = useState<string | null>(null);
   const [drawn, setDrawn] = useState<string[]>([]);
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: read again whenever the host says it changed
@@ -71,7 +66,6 @@ function Review({ id }: { id: string }) {
   }, [id, tick]);
   useEffect(() => {
     const check = () => {
-      void aiStatus().then(setAi, () => setAi(null));
       void omrStatus().then(
         (o) => setEngines(o.available ? o.engines : []),
         () => setEngines([]),
@@ -120,10 +114,60 @@ function Review({ id }: { id: string }) {
   if (!scan) return <p className="scan-busy">Opening the scan…</p>;
   const counts: Record<string, number> = {};
   for (const { s } of systems) counts[s.state] = (counts[s.state] ?? 0) + 1;
-  const running = job && (job.state === 'waiting' || job.state === 'running');
-  const flagged = systems.some(({ s }) => s.flags?.length);
-  const run = (task: 'read' | 'check' | 'fix') =>
-    void startAi(scan.id, task).catch((e: Error) => toast(e.message, 'error'));
+  // the engines' reading of the systems not read yet, written into the song as one undo step; only
+  // then is each system marked as far as it got
+  const readIn = async () => {
+    if (scan.project !== store.get().project?.id) {
+      toast('Open this scan’s song first', 'error');
+      return;
+    }
+    if (store.get().saveState === 'conflict') {
+      toast('Choose which version of the song to keep first', 'error');
+      return;
+    }
+    setReading('Reading…');
+    try {
+      // the host works it out from the song as saved: what's here is saved first
+      if ((await saveSoon(0)) === null) {
+        toast('The song couldn’t be saved, so nothing was read in', 'error');
+        return;
+      }
+      const before = store.get().project;
+      const r = await readWithEngines(scan.id, () => setReading('The engines are reading…'));
+      if (!r.ops.length) {
+        const why = r.errors[0] ?? r.warnings[0];
+        toast(why ? `The engines found nothing to write in (${why})` : 'Every system is read already', 'info', 8000);
+        return;
+      }
+      const now = store.get();
+      if (now.project !== before || now.serverRevision !== r.revision) {
+        toast('The song changed while the engines read it: read it in again', 'error', 8000);
+        return;
+      }
+      if (!apply(r.ops, r.label)) return;
+      for (const sys of r.systems) {
+        await setSystem(scan.id, sys.page, sys.system, {
+          state: sys.state,
+          ...(sys.written ? { written: sys.written } : {}),
+          flags: sys.flags ?? [],
+        });
+      }
+      const read = r.systems.filter((x) => x.state === 'read').length;
+      const left = r.systems.length - read;
+      toast(
+        `Read ${read} system${read === 1 ? '' : 's'} into the song${
+          left ? ` (${left} not: see the flags)` : ''
+        }: listen, then check them against the page`,
+        'info',
+        8000,
+      );
+      if (r.warnings.length) toast(r.warnings.join('; '), 'info', 10_000);
+    } catch (e) {
+      toast(e instanceof Error ? e.message : String(e), 'error');
+    } finally {
+      setReading(null);
+    }
+  };
   const goTo = (s: ScanSystem) => {
     if (!project || !s.written) return;
     const doc = notate(project);
@@ -141,76 +185,46 @@ function Review({ id }: { id: string }) {
           to read
         </span>
         <span className="grow" />
-        {running ? (
-          <button type="button" className="btn" onClick={() => job && void stopAi(job.id)}>
-            <Square /> Stop the AI
-          </button>
-        ) : (
+        {engines.length > 0 && (
           <>
             <button
               type="button"
               className="btn primary"
-              disabled={!ai?.available}
-              title={
-                ai?.available
-                  ? 'Claude reads each system into the song'
-                  : (MISSING[ai?.reason ?? ''] ?? 'The AI isn’t available')
-              }
-              onClick={() => run('read')}
+              disabled={reading !== null || comparing || !counts.new}
+              title={`${engines.join(' and ')} read each page, and what they read of the systems not read yet is written into the song (one undo step)`}
+              onClick={() => void readIn()}
             >
-              <Sparkles /> Read with AI
+              {reading ?? 'Read with the recognition engines'}
             </button>
             <button
               type="button"
               className="btn"
-              disabled={!ai?.available || !counts.read}
-              onClick={() => run('check')}
+              disabled={comparing || reading !== null || !counts.read}
+              title={`Read each page with ${engines.join(' and ')} too, and flag the bars they read differently`}
+              onClick={() => {
+                setComparing(true);
+                void compareEngines(scan.id)
+                  .then((r) =>
+                    toast(
+                      r.flagged
+                        ? `The engines read ${r.flagged} bar${r.flagged === 1 ? '' : 's'} differently: see the flags`
+                        : 'The engines agree with every bar written',
+                      'info',
+                      8000,
+                    ),
+                  )
+                  .catch((e: Error) => toast(e.message, 'error'))
+                  .finally(() => setComparing(false));
+              }}
             >
-              Check with AI
+              {comparing ? 'The engines are reading…' : 'Compare with the engines'}
             </button>
-            <button type="button" className="btn" disabled={!ai?.available || !flagged} onClick={() => run('fix')}>
-              Fix flagged
-            </button>
-            {engines.length > 0 && (
-              <button
-                type="button"
-                className="btn"
-                disabled={comparing || !counts.read}
-                title={`Read each page with ${engines.join(' and ')} too, and flag the bars they read differently`}
-                onClick={() => {
-                  setComparing(true);
-                  void compareEngines(scan.id)
-                    .then((r) =>
-                      toast(
-                        r.flagged
-                          ? `The engines read ${r.flagged} bar${r.flagged === 1 ? '' : 's'} differently: see the flags`
-                          : 'The engines agree with every bar written',
-                        'info',
-                        8000,
-                      ),
-                    )
-                    .catch((e: Error) => toast(e.message, 'error'))
-                    .finally(() => setComparing(false));
-                }}
-              >
-                {comparing ? 'The engines are reading…' : 'Compare with the engines'}
-              </button>
-            )}
           </>
         )}
         <button type="button" className="btn ghost icon" title="Close" onClick={close}>
           <X />
         </button>
       </header>
-      {ai && !ai.available && (
-        <p className="scan-hint">The AI buttons need: {MISSING[ai.reason ?? ''] ?? 'the runner'}.</p>
-      )}
-      {job && (
-        <p className={`scan-job ${job.state}`}>
-          AI {job.task}:{' '}
-          {job.state === 'failed' ? job.error : job.state === 'done' ? job.summary : (job.lines.at(-1) ?? 'starting…')}
-        </p>
-      )}
       <div className="scan-review">
         {systems.map(({ page, s }, i) => (
           <section key={`${page}.${s.k}`} className={`scan-row ${s.state}`}>

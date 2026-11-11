@@ -1106,7 +1106,7 @@ export function PluginWindow() {
                 onBegin={() => beginGesture(`${def.name}: ${p.name}`)}
                 onEnd={endGesture}
                 onChange={(v) => change(p.id, v)}
-                color={def.kind === 'midi' ? 'var(--ai)' : 'var(--accent)'}
+                color={def.kind === 'midi' ? 'var(--midi)' : 'var(--accent)'}
               />
             ),
           )}

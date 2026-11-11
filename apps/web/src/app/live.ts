@@ -1,7 +1,8 @@
 /**
- * The studio's side of the live channel. It reports what the studio is doing (so the AI knows the
- * playhead, the selection and the song), applies the AI's changes as undo steps, follows transport
- * commands, plays the AI's notes and passes on notes from other devices.
+ * The studio's side of the live channel. It reports what the studio is doing (so the command line and
+ * the agent know the playhead, the selection and the song), applies their changes as undo steps,
+ * follows transport commands, plays the notes they send and passes on notes from other devices. It
+ * also remembers the last minute of what was played here, for the agent to ask about after the fact.
  */
 import { type ChannelPatch, formatBarBeat, newId, type Op, type Project, tickToSeconds } from '@holo/session';
 import { engine } from '../audio/engine.ts';
@@ -10,8 +11,10 @@ import { library, type PackSummary } from '../audio/samples.ts';
 import { inputLabel, instrumentLabel } from '../ui/Tracks.tsx';
 import {
   apply,
+  applyJob,
   beginGesture,
   bounceSong,
+  compareJob,
   endGesture,
   ensureAudio,
   gestureChange,
@@ -20,10 +23,12 @@ import {
   openProject,
   play,
   redo,
+  relabelJob,
   saveNow,
   saveSoon,
   selectTrack,
   setCycle,
+  setJobRunning,
   stop,
   toggleCycle,
   toggleMetronome,
@@ -32,7 +37,18 @@ import {
   updateChannel,
   updateTrack,
 } from './actions.ts';
-import { type AiJobStatus, store, toast } from './store.ts';
+import {
+  agent,
+  agentMessage,
+  catchUp,
+  helloFields,
+  type JobEffect,
+  onTokenChange,
+  peersSeen,
+  viewName,
+} from './agent.ts';
+import { PlayedMemory } from './played.ts';
+import { store, toast } from './store.ts';
 
 /** Scans this studio has heard of (so a phone's new one is offered once). */
 const seenScans = new Set<string>();
@@ -135,6 +151,9 @@ function report(): void {
     master: p ? { volume: p.master.volume } : null,
     tempo: p?.tempo ?? [],
     meter: p?.meter ?? [],
+    // what the agent's request is about: the view, and the scan open in it
+    view: viewName(s, document.documentElement.dataset.layout?.startsWith('phone') ?? false),
+    scan: s.scanView?.id ?? null,
   };
   // (the one text is both the comparison and what's sent)
   const json = JSON.stringify({ type: 'state', state });
@@ -156,15 +175,44 @@ async function onMessage(msg: Record<string, unknown>): Promise<void> {
       }
       const author = String(msg.author ?? 'AI');
       const label = String(msg.label ?? 'Changes');
-      const next = apply(msg.ops as Op[], `${author}: ${label}`);
+      // (the command line's: not the user's own step)
+      const next = apply(msg.ops as Op[], `${author}: ${label}`, false);
       if (!next) {
         ack(false, { error: 'The changes did not apply' });
         return;
       }
-      toast(`${author}: ${label}`, 'ai');
+      toast(`${author}: ${label}`);
       // (a burst of changes is saved as one, and each is answered with that save's revision)
       const revision = await saveSoon();
       ack(true, revision === null ? {} : { revision });
+      return;
+    }
+    case 'agent-ops': {
+      // the in-app agent's changes: one undo step per request, answered as soon as they're in the song
+      const s = store.get();
+      if (!s.project || s.project.id !== msg.project) {
+        ack(false, { error: 'That song is not open in the studio' });
+        return;
+      }
+      const job = typeof msg.job === 'string' ? msg.job : '';
+      const batch = typeof msg.batch === 'string' ? msg.batch : '';
+      // (a batch is applied once by its id: without one, a second would pass for the first)
+      if (!job || !batch) {
+        ack(false, { error: 'The changes came without their job and batch' });
+        return;
+      }
+      const ops = Array.isArray(msg.ops) ? (msg.ops as Op[]) : [];
+      const r = await applyJob(ops, job, batch, String(msg.label ?? 'Changes'));
+      if (r.ok) ack(true, { revision: store.get().serverRevision });
+      else ack(false, { error: r.error ?? 'The changes did not apply' });
+      return;
+    }
+    case 'agent-flush': {
+      // the agent's turn is over: the host reads the song once it's saved (a save already going
+      // on is waited for, and the song as it is now saved after it)
+      const revision = await saveSoon(0);
+      if (revision === null) ack(false, { error: 'The studio could not save the song' });
+      else ack(true, { revision });
       return;
     }
     case 'transport': {
@@ -233,7 +281,7 @@ async function onMessage(msg: Record<string, unknown>): Promise<void> {
     }
     case 'listening':
       listening = Date.now() + Number(msg.ms ?? 0);
-      toast('The AI is listening: play something', 'ai', Number(msg.ms ?? 4000));
+      toast('The AI is listening: play something', 'info', Number(msg.ms ?? 4000));
       return;
     case 'saved': {
       const s = store.get();
@@ -255,6 +303,8 @@ async function onMessage(msg: Record<string, unknown>): Promise<void> {
       store.set({ peers });
       metersWhileRemotes();
       offerRemote(peers);
+      // the runner came or went (back after the host restarted, say): Settings › Agent says so
+      peersSeen(peers);
       return;
     }
     case 'command':
@@ -275,12 +325,30 @@ async function onMessage(msg: Record<string, unknown>): Promise<void> {
       seenScans.add(id);
       return;
     }
-    case 'ai-status': {
-      const job = msg.job as AiJobStatus;
-      const was = store.get().aiJob;
-      store.set({ aiJob: job });
-      if (job.state === 'done' && was?.state !== 'done') toast(`AI: ${job.summary || 'done'}`, 'ai', 8000);
-      if (job.state === 'failed' && was?.state !== 'failed') toast(`The AI stopped: ${job.error ?? ''}`, 'error', 8000);
+    case 'agent-played': {
+      // what was just played here, for the agent: the last `seconds` (a minute at most)
+      const seconds = Math.max(0, Math.min(60, Number(msg.seconds) || 0));
+      ack(true, { notes: memory.played(seconds, performance.now()) });
+      return;
+    }
+    case 'agent-compare': {
+      // before and after: answered once it has started playing
+      if (!(await audioAllowed())) {
+        ack(false, { error: `The studio on ${device()} hasn't started its audio yet: click Start the studio there` });
+        return;
+      }
+      const r = compareJob(String(msg.job ?? ''), Number(msg.from), Number(msg.to));
+      ack(r.ok, r.ok ? {} : { error: r.error });
+      return;
+    }
+    case 'agent-status':
+    case 'agent-listen':
+    case 'agent-settings':
+    case 'agent-harness':
+    case 'agent-devices':
+    case 'agent-removed': {
+      const r = agentMessage(msg);
+      if (r.effects) jobEffects([r.effects]);
       return;
     }
     case 'render-status': {
@@ -480,10 +548,34 @@ function offerRemote(peers: { role: string; name: string }[]): void {
   );
 }
 
+/**
+ * Tell the host the user undid or redid a step, or made one of their own while this device's request
+ * runs (the agent hears of it before its next reply).
+ */
+export function reportHistory(action: 'undo' | 'redo' | 'step', label: string, job?: string): void {
+  send({ type: 'history', action, label, job });
+}
+
+/** This device's jobs: their changes merge into one step while they run, and the step takes its name after. */
+function jobEffects(effects: JobEffect[]): void {
+  for (const fx of effects) {
+    setJobRunning(fx.job, fx.running);
+    if (fx.label) relabelJob(fx.job, fx.label);
+  }
+}
+
+/** Who this studio is: each hello carries the agent's token too, or the host takes it as no longer allowed. */
+function hello(): void {
+  send({ type: 'hello', role: 'editor', name: device(), ...helloFields() });
+}
+
+// the token came or went (paired, approved, removed): the host hears at once
+onTokenChange(hello);
+
 /** Rename this device (the others see it at once). */
 export function renameDevice(name: string): void {
   store.set({ deviceName: name.trim().slice(0, 40) });
-  send({ type: 'hello', role: 'editor', name: device() });
+  hello();
 }
 
 /** Send MIDI to the studios open on other devices (they hear it as a network device). */
@@ -551,8 +643,10 @@ export function connectLive(): void {
     lastSent = '';
     store.set({ connection: 'online' });
     void checkBuild();
-    send({ type: 'hello', role: 'editor', name: device() });
+    hello();
     report();
+    // how the agent stands now (turned on or off, this device let go, the host restarted, while away)
+    void catchUp().then(jobEffects);
   };
   ws.onmessage = (e) => {
     try {
@@ -571,18 +665,19 @@ export function connectLive(): void {
   if (!stateTimer) stateTimer = window.setInterval(report, 250);
 }
 
-// what's played goes to the AI while it listens (and only then)
+/** The last minute of what was played here, every port: the agent may ask for it after the fact. */
+const memory = new PlayedMemory();
+
+// what's played goes to the host while the command line listens, or the agent's job does (only then)
 midi.onEvent((e) => {
-  if (Date.now() > listening) return;
-  // notes from other devices are reported by the server, which relayed them
-  if (midi.ports.some((p) => p.name === e.port && p.source === 'remote')) return;
-  played.push({
-    tick: store.get().playing ? Math.round(engine.heardTick(e.time, e.frame) ?? 0) : null,
-    status: e.status,
-    d1: e.d1,
-    d2: e.d2,
-    port: e.port,
-  });
+  const tick = store.get().playing ? Math.round(engine.heardTick(e.time, e.frame) ?? 0) : null;
+  memory.add({ at: e.time, status: e.status, d1: e.d1, d2: e.d2, port: e.port, tick });
+  const agentListens = agent.get().listening !== null;
+  if (Date.now() > listening && !agentListens) return;
+  // notes from other devices: for the command line, the host counts those it relayed itself; the agent
+  // hears only what this studio reports, so they come from here
+  if (!agentListens && midi.ports.some((p) => p.name === e.port && p.source === 'remote')) return;
+  played.push({ tick, status: e.status, d1: e.d1, d2: e.d2, port: e.port });
   queueMicrotask(() => {
     if (!played.length) return;
     send({ type: 'played', events: played.splice(0) });

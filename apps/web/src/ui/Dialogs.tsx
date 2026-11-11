@@ -1,4 +1,4 @@
-/** Dialogs: songs (open, new, import, from a creation), Audio & MIDI settings, key commands. */
+/** Dialogs: songs (open, new, import, from a creation), settings (audio, MIDI, the agent), key commands. */
 import { AudioLines, Download, Plus, Send, Upload, X } from 'lucide-react';
 import { type ReactNode, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import {
@@ -21,6 +21,7 @@ import { store, toast, useApp } from '../app/store.ts';
 import { companion, STUDIO_ENGINE } from '../audio/companion.ts';
 import { engine } from '../audio/engine.ts';
 import { midi } from '../audio/midi.ts';
+import { AgentSettings } from './AgentSettings.tsx';
 import { Wordmark } from './controls.tsx';
 import { useFrame } from './frame.ts';
 import { MetronomeSettings } from './Metronome.tsx';
@@ -673,7 +674,8 @@ function SettingsDialog() {
   });
   useEffect(() => midi.onPorts(() => store.set({ midiPorts: midi.ports })), []);
   return (
-    <Dialog title="Audio & MIDI">
+    // (no longer only audio and MIDI: the agent's settings are here too)
+    <Dialog title="Settings">
       <div className="vstack" style={{ gap: 14 }}>
         <section className="vstack">
           <div className="label">This device</div>
@@ -703,13 +705,13 @@ function SettingsDialog() {
               Also here:{' '}
               {peers
                 .filter((p) => p.name !== device())
-                .map((p) => `${p.name} (${p.role === 'editor' ? 'studio' : p.role === 'agent' ? 'AI' : 'device'})`)
+                .map((p) => `${p.name} (${p.role === 'editor' ? 'studio' : p.role === 'agent' ? 'agent' : 'device'})`)
                 .join(', ')}
             </span>
           )}
           <span className="muted">
-            The name other devices and the AI see for this one, and what its notes are called when it plays into another
-            studio.
+            The name other devices and the agent see for this one, and what its notes are called when it plays into
+            another studio.
           </span>
         </section>
         <section className="vstack">
@@ -807,7 +809,7 @@ function SettingsDialog() {
                       : p.source === 'typing'
                         ? 'computer keyboard'
                         : p.source === 'ai'
-                          ? 'the AI'
+                          ? 'the agent'
                           : 'network'}
                   </span>
                 </div>
@@ -838,6 +840,7 @@ function SettingsDialog() {
             ))}
           </div>
         </section>
+        <AgentSettings />
       </div>
     </Dialog>
   );

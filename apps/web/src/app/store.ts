@@ -11,6 +11,8 @@ import type { MidiStatus, PortInfo } from '../audio/midi.ts';
 export interface Step {
   project: Project;
   label: string;
+  /** The agent's job whose changes this step holds (they merge into one step while it runs). */
+  job?: string;
 }
 
 export type SaveState = 'saved' | 'dirty' | 'saving' | 'offline' | 'conflict' | 'error';
@@ -21,24 +23,10 @@ export type NoteView = 'roll' | 'score';
 export type MobileTab = 'tracks' | 'editor' | 'mixer' | 'play' | 'library';
 export type Dialog = null | 'projects' | 'settings' | 'creations' | 'shortcuts' | 'about' | 'remote';
 
-/** An AI job on a scan (the server's AiJob). */
-export interface AiJobStatus {
-  id: string;
-  task: 'read' | 'check' | 'fix';
-  scan: string;
-  project: string;
-  state: 'waiting' | 'running' | 'done' | 'failed';
-  started: number;
-  finished: number | null;
-  lines: string[];
-  summary: string | null;
-  error: string | null;
-}
-
 export interface Toast {
   id: number;
   text: string;
-  kind: 'info' | 'error' | 'ai';
+  kind: 'info' | 'error';
   /** A button beside the words: what it says and does (the toast goes when it's pressed). */
   action?: { label: string; run: () => void };
 }
@@ -50,6 +38,10 @@ export interface AppState {
   undo: Step[];
   redo: Step[];
   saveState: SaveState;
+  /** The agent's jobs this studio has had changes from: true while one runs. */
+  agentJobs: Record<string, boolean>;
+  /** Undo and Redo are reported to the host (the agent is on and this device is allowed). */
+  agentReport: boolean;
 
   selectedTrack: string | null;
   selectedRegions: string[];
@@ -69,8 +61,6 @@ export interface AppState {
   printView: { what: string } | null;
   /** Goes up when the host says a scan changed (the review reads it again). */
   scanTick: number;
-  /** The AI's job on a scan, as the runner last told it. */
-  aiJob: AiJobStatus | null;
   editorHeight: number;
   inspector: boolean;
   library: boolean;
@@ -132,6 +122,10 @@ export interface AppState {
   bouncing: string | null;
   /** Which parts of the studio show (the View menu): everything, until you hide some. */
   show: Record<ShowKey, boolean>;
+  /** The bar is open (Ctrl /): the studio's commands, tracks and markers, found by name. Never remembered. */
+  bar: boolean;
+  /** Words for the Library's search to show (the bar asked it to find a sound); null once it has them. */
+  librarySearch: string | null;
 }
 
 /** The parts of the studio the View menu shows or hides, all shown at first. */
@@ -177,6 +171,8 @@ const initial: AppState = {
   undo: [],
   redo: [],
   saveState: 'saved',
+  agentJobs: {},
+  agentReport: false,
   selectedTrack: null,
   selectedRegions: [],
   selectedNotes: [],
@@ -188,7 +184,6 @@ const initial: AppState = {
   scanView: null,
   printView: null,
   scanTick: 0,
-  aiJob: null,
   // the editor takes a good share of the window to start with; a remembered height stands over this
   editorHeight:
     typeof window === 'undefined' ? 300 : Math.max(260, Math.min(520, Math.round(window.innerHeight * 0.42))),
@@ -233,6 +228,8 @@ const initial: AppState = {
   connection: 'connecting',
   toasts: [],
   bouncing: null,
+  bar: false,
+  librarySearch: null,
   ...stored,
   // parts added since this device last saved its view start shown
   show: { ...SHOW_DEFAULTS, ...(stored.show ?? {}) },
@@ -308,6 +305,15 @@ export function toast(text: string, kind: Toast['kind'] = 'info', ms = 3500, act
   const id = ++toastId;
   store.set((s) => ({ toasts: [...s.toasts, { id, text, kind, ...(action ? { action } : {}) }] }));
   window.setTimeout(() => store.set((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) })), ms);
+}
+
+/** Open the bar (Ctrl /, the search button, or a swipe down on a phone's top bar). */
+export function openBar(): void {
+  if (!state.bar) store.set({ bar: true });
+}
+
+export function closeBar(): void {
+  if (state.bar) store.set({ bar: false });
 }
 
 /** Whether a part of the studio shows (the View menu). */

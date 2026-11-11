@@ -46,7 +46,7 @@ import {
 } from './gesture.ts';
 import { openMenu } from './menu.tsx';
 import { UndoRedo } from './UndoRedo.tsx';
-import { DOUBLE_TAP_MS, gridStep, Viewport, WHEEL_ZOOM, ZOOM } from './view.ts';
+import { DOUBLE_TAP_MS, gridStep, TouchPan, Viewport, WHEEL_ZOOM, ZOOM } from './view.ts';
 
 export const rollView = new Viewport(store.get().pianoZoom);
 
@@ -670,11 +670,28 @@ export function PianoRoll() {
     ]);
   };
 
+  /** A finger scrolling the roll, as a phone scrolls a page (TouchPan): a flick carries on after it lifts. */
+  const panDrag = (e: ReactPointerEvent) => {
+    const pan = new TouchPan(rollView, 'xy', () => maxY, e);
+    start(e, {
+      threshold: 0,
+      onMove: (ev) => pan.move(ev),
+      onUp: (ev) => pan.end(ev.timeStamp),
+    });
+  };
+
   const onNotesDown = (e: ReactPointerEvent<HTMLDivElement>) => {
     const rect = e.currentTarget.getBoundingClientRect();
     const x = e.clientX - rect.left;
     const y = e.clientY - rect.top;
     const touch = e.pointerType === 'touch';
+    // a finger landing while the roll still coasts from a flick catches it, as on a page: it
+    // scrolls on from there, and neither draws nor selects
+    if (rollView.stopFling() && touch) {
+      lastTap.current = 0;
+      panDrag(e);
+      return;
+    }
     const now = performance.now();
     const doubleTap = now - lastTap.current < DOUBLE_TAP_MS;
     lastTap.current = now;
@@ -709,16 +726,7 @@ export function PianoRoll() {
     }
     store.set({ selectedNotes: [] });
     if (touch) {
-      let lx = e.clientX;
-      let ly = e.clientY;
-      start(e, {
-        threshold: 0,
-        onMove: (ev) => {
-          rollView.scrollBy(lx - ev.clientX, ly - ev.clientY, maxY);
-          lx = ev.clientX;
-          ly = ev.clientY;
-        },
-      });
+      panDrag(e);
       return;
     }
     start(e, {

@@ -31,8 +31,8 @@ export interface PressOptions {
   onTap?: () => void;
   /** A finger held still: the item has lifted, and this can open its menu (dragging on closes it). */
   onHold?: (ev: PointerEvent) => void;
-  /** The press is over, however it ended. */
-  onEnd?: () => void;
+  /** The press is over, however it ended: `ev` is the lift, if the finger lifted (it's missing for a cancel). */
+  onEnd?: (ev?: PointerEvent) => void;
 }
 
 interface Point {
@@ -199,11 +199,11 @@ export function pressToReorder(e: ReactPointerEvent, o: ReorderList & PressOptio
       }
       drag?.move(ev);
     },
-    onUp: (_ev, gesture) => {
+    onUp: (ev, gesture) => {
       window.clearTimeout(timer);
       if (drag) drag.drop();
       else if (touch && !gesture.moved) o.onTap?.();
-      o.onEnd?.();
+      o.onEnd?.(ev);
     },
     onAbort: () => {
       window.clearTimeout(timer);

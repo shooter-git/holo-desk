@@ -24,6 +24,7 @@ import { hostname, tmpdir } from 'node:os';
 import { basename, dirname, join, resolve, sep } from 'node:path';
 import { newAudioTrack, newRegion, type Op, type Project, secondsToTick } from '@holo/session';
 import { type AiJob, type Claude, findClaude, runAiJob, validJob } from './ai.ts';
+import { readRunnerKey, runnerKeyFile } from './runner-key.ts';
 
 interface RenderSpec {
   command: string[];
@@ -279,6 +280,8 @@ export async function runner(base: string, creationsDir: string): Promise<void> 
     }
   };
 
+  // the server's key, read on each connection (the server makes it the first time it starts)
+  let keyless = false;
   const connect = () => {
     const socket = new WebSocket(`${base.replace(/^http/, 'ws')}/api/live`);
     ws = socket;
@@ -292,13 +295,20 @@ export async function runner(base: string, creationsDir: string): Promise<void> 
           skill: existsSync(join(repo, 'skills', 'holo')),
         },
       };
-      socket.send(JSON.stringify({ type: 'hello', role: 'runner', name, caps }));
+      const key = readRunnerKey(repo);
+      socket.send(JSON.stringify({ type: 'hello', role: 'runner', name, caps, ...(key ? { key } : {}) }));
       console.log(`Creation runner connected to ${base} (creations in ${creationsDir}). Waiting for renders…`);
       console.log(
         claude
           ? `The AI buttons use Claude Code ${claude.version} (${claude.path}).`
           : 'Claude Code isn’t installed here: the AI buttons wait for it (install it, sign in once, and restart the runner).',
       );
+      if (!key && !keyless) {
+        keyless = true;
+        console.log(
+          `The agent and the AI buttons need the runner key (${runnerKeyFile(repo)}, or HOLO_RUNNER_KEY), which couldn’t be read: renders work without it.`,
+        );
+      }
     };
     socket.onmessage = (e) => {
       try {

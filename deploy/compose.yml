@@ -23,6 +23,8 @@ services:
       HOLO_NETWORK_MIDI_REACH: ${HOLO_NETWORK_MIDI_BIND:-127.0.0.1}
       # the recognition engines, when they're on (pnpm omr on): reached on their own network
       HOLO_OMR_URL: ${HOLO_OMR_URL:-}
+      # other names the studio is reached by (a reverse proxy's), besides this machine, LAN and tailnet
+      HOLO_ALLOWED_HOSTS: ${HOLO_ALLOWED_HOSTS:-}
     # this machine only: your devices reach it over HTTPS on your tailnet (pnpm tailnet on)
     ports:
       - "127.0.0.1:${HOLO_PORT:-47800}:47800"

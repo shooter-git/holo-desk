@@ -6,6 +6,7 @@
  * (play, record, faders…) and the notes it plays go straight to the studio it controls.
  */
 import type { WebSocket } from 'ws';
+import { sameKey } from './agent/keys.ts';
 
 export interface EditorState {
   project: string | null;
@@ -80,6 +81,8 @@ interface Client {
   ws: WebSocket;
   role: 'editor' | 'remote' | 'agent' | 'runner';
   caps?: RunnerCaps;
+  /** A runner that said the runner key: the only kind handed the AI's and the agent's jobs. */
+  keyed?: boolean;
   name: string;
   state: EditorState | null;
   /** The song this studio was last brought up to date about (on joining, or opening another). */
@@ -99,11 +102,27 @@ interface Listener {
   held: Map<number, PlayedNote>;
 }
 
+export interface LiveOptions {
+  /** The runner key (agent/keys.ts); with none, no runner is handed the AI's jobs. */
+  key?: string | null;
+  /** Where the server's own notices go (a runner without the key, say). */
+  log?: (line: string) => void;
+}
+
 export class Live {
   private clients = new Set<Client>();
   private pending = new Map<string, Pending>();
   private listeners = new Set<Listener>();
   private counter = 0;
+  private readonly key: string | null;
+  private readonly log: (line: string) => void;
+  /** Notices already given (each once). */
+  private told = new Set<string>();
+  /**
+   * The runner each job was handed to: only it may say how the job goes. Kept beside the job, not on
+   * it, since jobs go to the studios as JSON.
+   */
+  private assigned = new WeakMap<object, Client>();
   readonly renders = new Map<string, RenderJob>();
   readonly aiJobs = new Map<string, AiJob>();
   /**
@@ -111,6 +130,11 @@ export class Live {
    * opens another song, so a dropped connection never leaves it showing an old version.
    */
   latestRevision: (project: string) => number | null = () => null;
+
+  constructor(options: LiveOptions = {}) {
+    this.key = options.key ?? null;
+    this.log = options.log ?? ((line) => console.warn(line));
+  }
 
   attach(ws: WebSocket): void {
     const client: Client = { ws, role: 'remote', name: 'device', state: null, caughtUp: null };
@@ -127,6 +151,7 @@ export class Live {
     ws.on('close', () => {
       this.clients.delete(client);
       if (client.role === 'editor') this.toRemotes({ type: 'studio-gone', name: client.name });
+      if (client.role === 'runner') this.runnerGone(client);
       this.broadcastPeers();
     });
   }
@@ -139,7 +164,10 @@ export class Live {
             ? (msg.role as Client['role'])
             : 'remote';
         client.name = typeof msg.name === 'string' ? msg.name.slice(0, 80) : client.role;
-        if (client.role === 'runner') client.caps = runnerCaps(msg.caps);
+        if (client.role === 'runner') {
+          client.caps = runnerCaps(msg.caps);
+          client.keyed = this.keyed(msg.key);
+        } else client.keyed = false;
         this.broadcastPeers();
         // a remote arriving sees every open studio at once
         if (client.role === 'remote') {
@@ -233,9 +261,10 @@ export class Live {
       case 'job-progress':
       case 'job-done':
       case 'job-failed': {
-        if (client.role !== 'runner') break;
+        if (client.role !== 'runner' || !client.keyed) break;
         const job = this.aiJobs.get(String(msg.id));
-        if (!job) break;
+        // only from the runner it was handed to
+        if (!job || this.assigned.get(job) !== client) break;
         if (msg.type === 'job-progress') {
           job.state = 'running';
           job.lines = [...job.lines, String(msg.line ?? '').slice(0, 200)].slice(-12);
@@ -351,19 +380,56 @@ export class Live {
     for (const c of this.clients) if (c.role === 'editor') this.send(c, { type: 'midi', port, data, sent: Date.now() });
   }
 
+  /**
+   * Whether a runner's hello carries the runner key. One without it still renders; the server says
+   * once why it gets no AI or agent jobs.
+   */
+  private keyed(given: unknown): boolean {
+    if (this.key !== null && typeof given === 'string' && given.length <= 256 && sameKey(given, this.key)) return true;
+    this.tellOnce(
+      given === undefined || given === null || given === ''
+        ? 'A runner without the key connected: restart it with the current HO[LO] to use the agent'
+        : 'A runner with the wrong key connected: it reads runner.key in HO[LO]’s data folder (or HOLO_RUNNER_KEY), so check its HOLO_DATA_DIR',
+    );
+    return false;
+  }
+
+  private tellOnce(line: string): void {
+    if (this.told.has(line)) return;
+    this.told.add(line);
+    this.log(line);
+  }
+
+  /** The runners that may be handed the AI's and the agent's jobs. */
+  private keyedRunners(): Client[] {
+    return [...this.clients].filter((c) => c.role === 'runner' && c.keyed);
+  }
+
+  /** A runner gone: the jobs it was running can't finish (nothing else may report on them). */
+  private runnerGone(client: Client): void {
+    for (const job of this.aiJobs.values()) {
+      if (this.assigned.get(job) !== client || job.state === 'done' || job.state === 'failed') continue;
+      job.state = 'failed';
+      job.finished = Date.now();
+      job.error = 'The runner disconnected';
+      this.tell({ type: 'ai-status', job }, job.project);
+    }
+  }
+
   /** Whether the AI buttons can work, and if not, what's missing. */
   aiStatus(): { available: boolean; reason?: 'no-runner' | 'no-claude' | 'no-skill'; version?: string } {
-    const runners = [...this.clients].filter((c) => c.role === 'runner');
+    const runners = this.keyedRunners();
     if (!runners.length) return { available: false, reason: 'no-runner' };
     const able = runners.find((c) => c.caps?.ai?.claude && c.caps.ai.skill);
     if (able) return { available: true, ...(able.caps?.ai?.version ? { version: able.caps.ai.version } : {}) };
     return { available: false, reason: runners.some((c) => c.caps?.ai?.claude) ? 'no-skill' : 'no-claude' };
   }
 
-  /** Hand an AI job to a runner that has Claude Code; the studio hears how it goes. */
+  /** Hand an AI job to a keyed runner that has Claude Code; the studio hears how it goes. */
   ai(job: AiJob): boolean {
-    const runner = [...this.clients].find((c) => c.role === 'runner' && c.caps?.ai?.claude && c.caps.ai.skill);
+    const runner = this.keyedRunners().find((c) => c.caps?.ai?.claude && c.caps.ai.skill);
     if (!runner) return false;
+    this.assigned.set(job, runner);
     this.aiJobs.set(job.id, job);
     for (const id of [...this.aiJobs.keys()].slice(0, -20)) this.aiJobs.delete(id);
     this.send(runner, { type: 'ai', id: job.id, task: job.task, scan: job.scan, project: job.project });
@@ -375,7 +441,8 @@ export class Live {
   aiCancel(id: string): boolean {
     const job = this.aiJobs.get(id);
     if (!job || job.state === 'done' || job.state === 'failed') return false;
-    for (const c of this.clients) if (c.role === 'runner') this.send(c, { type: 'ai-cancel', id });
+    const runner = this.assigned.get(job);
+    if (runner) this.send(runner, { type: 'ai-cancel', id });
     return true;
   }
 

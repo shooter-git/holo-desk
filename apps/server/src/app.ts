@@ -38,9 +38,11 @@ import {
   writeMidi,
 } from '@holo/session';
 import Fastify, { type FastifyInstance, type FastifyReply } from 'fastify';
+import { runnerKey } from './agent/keys.ts';
 import type { Config } from './config.ts';
 import { Creations, sessionText } from './creations.ts';
 import { type SongDetails, Store } from './db.ts';
+import { guard } from './guard.ts';
 import { Live, type RenderJob } from './live.ts';
 import { NetworkMidi } from './network-midi.ts';
 import { omrRoutes } from './omr.ts';
@@ -86,7 +88,16 @@ export async function buildApp(config: Config): Promise<{ app: FastifyInstance; 
     .catch((err: unknown) =>
       console.warn(`The packs' maps couldn't be checked (${err instanceof Error ? err.message : String(err)})`),
     );
-  const live = new Live();
+  // the key a runner on this computer says, so only it is handed the AI's and the agent's jobs
+  let key: string | null = null;
+  try {
+    key = runnerKey(config.dataDir);
+  } catch (err) {
+    console.warn(
+      `The runner key couldn't be made in ${config.dataDir} (${err instanceof Error ? err.message : String(err)}): renders work, the AI's jobs wait for it`,
+    );
+  }
+  const live = new Live({ key });
   live.latestRevision = (id) => store.get(id)?.revision ?? null;
   const creations = new Creations(config.creationsDir);
   /** The engine this studio plays: what an experience's pinned engine is measured against. */
@@ -116,6 +127,9 @@ export async function buildApp(config: Config): Promise<{ app: FastifyInstance; 
   });
 
   await app.register(fastifyWebsocket);
+  // pages from other sites can't open the live channel or use the agent (before the routes, so it
+  // covers them all)
+  guard(app, config.allowedHosts ?? []);
   app.register(async (scope) => {
     scope.get('/api/live', { websocket: true }, (socket) => live.attach(socket));
   });

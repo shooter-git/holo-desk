@@ -195,7 +195,9 @@ function runJob(b: JobBatch): history.JobResult {
   }
   const running = Object.hasOwn(s.agentJobs, b.job) ? s.agentJobs[b.job] === true : true;
   h = history.pushOrMergeJob(h, s.project, b.label, b.job, running);
-  store.set({ project: next, ...h, saveState: 'dirty' });
+  // only the history's own fields: `h` may still be the whole state (a batch merged into the job's
+  // step leaves it as it was), whose song is the one from before this batch
+  store.set({ project: next, undo: h.undo, redo: h.redo, saveState: 'dirty' });
   changed(next);
   return { ok: true };
 }

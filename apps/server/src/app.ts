@@ -67,6 +67,12 @@ const ISOLATION = {
   'cross-origin-resource-policy': 'same-origin',
 };
 
+/**
+ * How long a closing server waits for the live channel's connections to answer its goodbye, and for
+ * requests under way to end, before it drops them.
+ */
+const CLOSE_GRACE = 1000;
+
 export interface Services {
   store: Store;
   packs: Packs;
@@ -127,7 +133,25 @@ export async function buildApp(config: Config): Promise<{ app: FastifyInstance; 
     return reply.code(status).send({ error: message });
   });
 
-  await app.register(fastifyWebsocket);
+  /** Set while the server stops: drops what's left once CLOSE_GRACE is up. */
+  let dropping: NodeJS.Timeout | null = null;
+  await app.register(fastifyWebsocket, {
+    // Stopping. The plugin's own goodbye waits for every peer to answer (ws gives one that doesn't
+    // 30 s), and the server waits for it and for any request under way (a listen, for minutes). So
+    // each live connection is told so (1001), and after CLOSE_GRACE whatever's left is dropped.
+    preClose(done) {
+      const wss = app.websocketServer;
+      for (const ws of wss.clients) ws.close(1001, 'HO[LO] is stopping');
+      dropping = setTimeout(() => {
+        for (const ws of wss.clients) ws.terminate();
+        app.server.closeAllConnections();
+      }, CLOSE_GRACE);
+      dropping.unref();
+      // no new connections (an upgrade now is answered 503)
+      wss.close();
+      done();
+    },
+  });
   // pages from other sites can't open the live channel or use the agent (before the routes, so it
   // covers them all)
   guard(app, config.allowedHosts ?? []);
@@ -983,6 +1007,7 @@ export async function buildApp(config: Config): Promise<{ app: FastifyInstance; 
   }));
 
   app.addHook('onClose', async () => {
+    if (dropping) clearTimeout(dropping);
     agent.close();
     networkMidi?.close();
     store.close();

@@ -1,4 +1,5 @@
-import { existsSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
@@ -9,6 +10,7 @@ import {
   parseCursorAuth,
   parseCursorModels,
 } from '../src/harness/cursor.ts';
+import { GIT_ENV, harnessEnv, harnessPath } from '../src/harness/env.ts';
 import {
   alive,
   collect,
@@ -114,6 +116,8 @@ describe('Cursor: finding it', () => {
     expect(env).toContain(`HOME=${probeHome}`);
     expect(env).toContain(`CURSOR_CONFIG_DIR=${join(probeHome, '.cursor')}`);
     expect(env).toContain(`XDG_CONFIG_HOME=${join(s.home, '.config')}`);
+    expect(env).toContain('GIT_SSH_COMMAND=false');
+    expect(env.some((e) => e.startsWith('SSH_'))).toBe(false);
     expect(existsSync(join(s.home, '.cursor'))).toBe(false);
   });
 
@@ -143,6 +147,69 @@ describe('Cursor: finding it', () => {
   });
 });
 
+describe('every harness’s environment: no ssh, no scripts folders', () => {
+  it('keeps PATH’s absolute folders, without node_modules/.bin, pnpm’s node-gyp-bin, empty or relative ones', () => {
+    expect(
+      harnessPath(
+        [
+          './node_modules/.bin',
+          '/repo/node_modules/.bin',
+          '/repo/packages/cli/node_modules/.bin/',
+          '/home/user/.cache/node/corepack/v1/pnpm/10.34.9/dist/node-gyp-bin', // scan-secrets: allow (a placeholder)
+          '',
+          '.',
+          'bin',
+          '/home/user/.local/bin', // scan-secrets: allow (a placeholder)
+          '/usr/bin',
+          '/bin',
+        ].join(':'),
+        'linux',
+      ),
+    ).toBe('/home/user/.local/bin:/usr/bin:/bin'); // scan-secrets: allow (a placeholder)
+    expect(
+      harnessPath('C:\\repo\\node_modules\\.bin;;.\\bin;C:\\Windows\\System32;C:\\Users\\u\\AppData\\npm', 'win32'),
+    ).toBe('C:\\Windows\\System32;C:\\Users\\u\\AppData\\npm');
+  });
+
+  it('sets git’s switches last and drops every SSH_ variable, for every harness and whatever an adapter adds', () => {
+    s = sandbox();
+    for (const id of ['claude', 'codex', 'cursor'] as const) {
+      const env = harnessEnv(
+        id,
+        { GIT_SSH_COMMAND: 'ssh', SSH_AUTH_SOCK: '/tmp/agent.sock', HOME: s.home },
+        s.env,
+        'linux',
+      );
+      expect(env, id).toMatchObject(GIT_ENV);
+      expect(
+        Object.keys(env).filter((k) => k.startsWith('SSH_') || k === 'GITHUB_TOKEN'),
+        id,
+      ).toEqual([]);
+      expect(env.PATH, id).toBe(s.path);
+    }
+  });
+
+  const git = spawnSync('git', ['--version']).status === 0;
+  it.skipIf(!git)('makes git fetch GitHub over https and never start ssh', () => {
+    s = sandbox();
+    const repo = join(s.dir, 'repo');
+    mkdirSync(repo);
+    const env = harnessEnv('cursor', {}, s.env, 'linux');
+    const run = (...args: string[]) => spawnSync('git', args, { cwd: repo, env, encoding: 'utf8', timeout: 10_000 });
+    expect(run('init', '-q').status).toBe(0);
+    expect(run('remote', 'add', 'scp', 'git@github.com:cursor/plugins.git').status).toBe(0);
+    expect(run('remote', 'add', 'url', 'ssh://git@github.com/cursor/plugins.git').status).toBe(0);
+    expect(run('remote', 'get-url', 'scp').stdout.trim()).toBe('https://github.com/cursor/plugins.git');
+    expect(run('remote', 'get-url', 'url').stdout.trim()).toBe('https://github.com/cursor/plugins.git');
+    // another host over ssh: git's ssh is `false`, which fails at once, without the network
+    const started = Date.now();
+    const other = run('ls-remote', 'git@example.invalid:someone/private.git'); // scan-secrets: allow (a placeholder)
+    expect(other.status).not.toBe(0);
+    expect(other.stderr).toContain('Could not read from remote repository');
+    expect(Date.now() - started).toBeLessThan(5000);
+  });
+});
+
 describe('Cursor: a sealed run', () => {
   it('passes the prompt on stdin only, a private home, and the workspace’s own MCP config and permissions', async () => {
     s = sandbox();
@@ -169,8 +236,10 @@ describe('Cursor: a sealed run', () => {
       '--model=composer-2.5',
     ]);
     const home = join(j.workspace, 'home');
+    // the whole environment: no ssh agent, no node_modules/.bin, and git that never runs ssh (Cursor
+    // fetches its plugins with git: GitHub over anonymous https) or reads the user's git config
     expect(r.env).toEqual({
-      PATH: s.env.PATH,
+      PATH: '/usr/local/bin:/usr/bin:/bin',
       LANG: 'C.UTF-8',
       CURSOR_API_KEY: 'key_test',
       HOME: home,
@@ -179,6 +248,15 @@ describe('Cursor: a sealed run', () => {
       XDG_CACHE_HOME: join(home, '.cache'),
       XDG_DATA_HOME: join(home, '.local', 'share'),
       XDG_STATE_HOME: join(home, '.local', 'state'),
+      GIT_SSH_COMMAND: 'false',
+      GIT_TERMINAL_PROMPT: '0',
+      GIT_CONFIG_NOSYSTEM: '1',
+      GIT_CONFIG_GLOBAL: '/dev/null',
+      GIT_CONFIG_COUNT: '2',
+      GIT_CONFIG_KEY_0: 'url.https://github.com/.insteadOf',
+      GIT_CONFIG_VALUE_0: 'git@github.com:',
+      GIT_CONFIG_KEY_1: 'url.https://github.com/.insteadOf',
+      GIT_CONFIG_VALUE_1: 'ssh://git@github.com/',
     });
     expect(r.tokenMode).toBe('600');
     expect(statSync(home).mode & 0o777).toBe(0o700);
@@ -289,6 +367,10 @@ describe('Cursor: signing in and updating', () => {
     const env = readFileSync(join(s.rec, 'login-env'), 'utf8').split('\0');
     expect(env).toContain(`HOME=${s.home}`);
     expect(env).toContain('NO_OPEN_BROWSER=1');
+    // its own home, but still never git over ssh, nor the ssh agent
+    expect(env).toContain('GIT_SSH_COMMAND=false');
+    expect(env).toContain('GIT_CONFIG_GLOBAL=/dev/null');
+    expect(env.some((e) => e.startsWith('SSH_'))).toBe(false);
   });
 
   it('never signs in over an account that’s signed in', async () => {

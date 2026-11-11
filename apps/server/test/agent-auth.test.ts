@@ -80,10 +80,8 @@ describe('the agent, before any device is allowed', () => {
       allowed: true,
       pairing: false,
     });
-    // devices exist: pairing is closed, and asking for a code says so
-    expect((await pair(third)).statusCode).toBe(409);
-    expect((await app.inject({ method: 'POST', url: '/api/agent/pairing' })).statusCode).toBe(409);
-    // with the only device gone, that code still doesn't work again
+    // the code has been used: it doesn't work again, with the device there or gone
+    expect((await pair(third)).statusCode).toBe(401);
     await app.inject({ method: 'DELETE', url: `/api/agent/devices/${device.id}`, headers: auth(token) });
     expect((await pair(third)).statusCode).toBe(401);
   });
@@ -110,6 +108,88 @@ describe('the agent, before any device is allowed', () => {
 });
 
 describe('allowed devices', () => {
+  it('lets a device that lost its way back in pair with a new code: the allowed ones see it at once', async () => {
+    const { app, runner, pair, studio } = await setup();
+    const keyed = runner();
+    const { token: desk, device: deskDevice } = await pair(keyed);
+    const deskStudio = studio(desk, null);
+    const outsider = studio(null, null, 'outsider');
+    // a device is allowed: the studio asks to join first, but the code is still there to use
+    expect((await app.inject({ method: 'GET', url: '/api/agent' })).json()).toEqual({
+      enabled: true,
+      allowed: false,
+      pairing: false,
+      runner: { connected: true, keyed: true },
+    });
+    const pairWith = (code: string, name = 'Phone') =>
+      app.inject({ method: 'POST', url: '/api/agent/pair', payload: { code, name } });
+    const newCode = async () => {
+      const res = await app.inject({ method: 'POST', url: '/api/agent/pairing' });
+      expect(res.statusCode, res.body).toBe(200);
+      return String(keyed.got('pairing-code').at(-1)?.code);
+    };
+
+    // the same rules as the first time: 5 tries, then a new code
+    const first = await newCode();
+    const wrong = first === '000000' ? '111111' : '000000';
+    for (let i = 0; i < 5; i++) expect((await pairWith(wrong)).statusCode).toBe(401);
+    expect((await pairWith(first)).statusCode).toBe(401);
+
+    const before = deskStudio.got('agent-devices').length;
+    const code = await newCode();
+    expect(outsider.got('pairing-code')).toEqual([]);
+    const paired = await pairWith(code);
+    expect(paired.statusCode, paired.body).toBe(200);
+    const phone = paired.json() as { token: string; device: { id: string; name: string } };
+    expect(phone.device).toEqual({ id: expect.stringMatching(/^dev_/), name: 'Phone' });
+    // the allowed device's list is told at once, the others hear nothing
+    expect(deskStudio.got('agent-devices').length).toBeGreaterThan(before);
+    expect(outsider.got('agent-devices')).toEqual([]);
+    const listed = await app.inject({ method: 'GET', url: '/api/agent/devices', headers: auth(desk) });
+    expect(listed.json()).toMatchObject({
+      devices: [
+        { id: deskDevice.id, name: 'Desk', current: true },
+        { id: phone.device.id, name: 'Phone', current: false },
+      ],
+    });
+    expect((await app.inject({ method: 'GET', url: '/api/agent', headers: auth(phone.token) })).json()).toMatchObject({
+      allowed: true,
+      pairing: false,
+    });
+    // once
+    expect((await pairWith(code, 'Tablet')).statusCode).toBe(401);
+
+    // with the agent off, the code still lets a device back in, and turns the agent on again
+    await app.inject({ method: 'PUT', url: '/api/agent/settings', headers: auth(desk), payload: { enabled: false } });
+    const again = await pairWith(await newCode(), 'Laptop');
+    expect(again.statusCode, again.body).toBe(200);
+    expect((await app.inject({ method: 'GET', url: '/api/agent' })).json()).toMatchObject({ enabled: true });
+
+    // without a keyed runner there's no code to be had
+    keyed.close();
+    const none = await app.inject({ method: 'POST', url: '/api/agent/pairing' });
+    expect(none.statusCode).toBe(409);
+    expect(none.json()).toMatchObject({ reason: 'no-runner' });
+  });
+
+  it('locks pairing for a day after 10 wrong codes in a day once a device is allowed', async () => {
+    const { app, runner, pair } = await setup();
+    const keyed = runner();
+    await pair(keyed);
+    const pairWith = (code: string) =>
+      app.inject({ method: 'POST', url: '/api/agent/pair', payload: { code, name: 'Phone' } });
+    for (let round = 0; round < 2; round++) {
+      expect((await app.inject({ method: 'POST', url: '/api/agent/pairing' })).statusCode).toBe(200);
+      const code = String(keyed.got('pairing-code').at(-1)?.code);
+      const wrong = code === '000000' ? '111111' : '000000';
+      for (let i = 0; i < 5; i++) expect((await pairWith(wrong)).statusCode).toBe(401);
+    }
+    const locked = await app.inject({ method: 'POST', url: '/api/agent/pairing' });
+    expect(locked.statusCode).toBe(429);
+    expect(locked.json()).toMatchObject({ error: 'Too many wrong codes: try again tomorrow' });
+    expect((await pairWith('123456')).statusCode).toBe(429);
+  });
+
   it('needs a device’s token on every route but the open ones, and a job’s on the tools’', async () => {
     const { app, runner, pair } = await setup();
     const { token } = await pair(runner());

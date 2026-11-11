@@ -158,9 +158,10 @@ runner going (`pnpm runner`, the one that also renders [creations](docs/creation
 
 The first device pairs with a 6-digit code the runner prints; the code works once, for 10 minutes. A
 later device asks to join, and a device already allowed approves it in its own Settings › Agent, where
-any device can also be removed, at once. The harness, its model and effort, its sign-in and its updates
-are there too. An update runs only when you click it, and it updates the same harness your terminal
-uses.
+any device can also be removed, at once. A device that has lost its way back in (its site data
+cleared, or the only allowed device lost) pairs with a new code from the runner, the same way. The
+harness, its model and effort, its sign-in and its updates are there too. An update runs only when you
+click it, and it updates the same harness your terminal uses.
 
 Type a request and press Enter. A picture, a recording, a MIDI or MusicXML file or a text file dropped
 or pasted on the bar goes with it (a picture is redrawn on your device first, without its location
@@ -178,7 +179,8 @@ agent works, then a dot until you open the bar again. The agent works on the ope
 
 Everything it changes for one request is one undo step, "Agent: …", and before your next request it's
 told what you undid or changed since. It can't change HO[LO]'s code, its packs, a creation's code or
-any file: asked to, it writes a brief for you to copy into your own coding agent in that repository.
+any file: asked to, it writes a brief for you to copy into your own coding agent in that repository
+(only for a change to that code, never to read or send your files, keys or passwords).
 Its harness runs with HO[LO]'s tools and nothing else: no shell, files or web, and none of your own
 settings, skills or MCP servers. [docs/agent.md](docs/agent.md) has how it works.
 

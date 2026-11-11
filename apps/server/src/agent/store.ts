@@ -67,7 +67,7 @@ export interface ThreadRow {
 export interface TurnExtra {
   permission?: { kind: string; detail: string; pack?: string };
   brief?: string;
-  briefWarnings?: { line: number; kind: 'command' | 'url' }[];
+  briefWarnings?: { line: number; kind: 'command' | 'url' | 'secret' }[];
   error?: string;
   /** The attachments its request carried (its job, and later ones on the thread, may read them). */
   attachments?: string[];

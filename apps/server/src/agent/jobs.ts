@@ -36,11 +36,11 @@ import { parseExtra, type Threads } from './threads.ts';
 
 export type JobState = 'waiting' | 'running' | 'awaiting' | 'done' | 'failed' | 'cancelled';
 
-/** A line of a hand-off brief the studio flags: a command to run, or a link. */
+/** A line of a hand-off brief the studio flags: a command to run, a link, or a secret it mentions. */
 export interface BriefWarning {
   /** Its index in the brief's lines (from 0). */
   line: number;
-  kind: 'command' | 'url';
+  kind: 'command' | 'url' | 'secret';
 }
 
 /** A job as the studios see it (docs/agent.md). */
@@ -1220,12 +1220,48 @@ const SHELL =
 /** A line that runs something: a shell prompt, a program and its arguments (in code or not), pipes into a shell, chains. */
 const COMMAND = new RegExp(`(^\\s*\\$\\s)|(^\\s*${SHELL}\\s)|(\`\\s*${SHELL}\\b)|(\\|\\s*(?:ba|z)?sh\\b)|&&|\\$\\(`);
 const LINK = /\b(https?|ftp|file):\/\/|\bwww\.[a-z0-9-]+\.[a-z]/i;
+/** A word, with `_`, `-`, `.` and `/` counting as gaps (API_KEY, client-secret, ~/.ssh/). */
+const word = (re: string) => `(?<![a-z0-9])(?:${re})(?![a-z0-9])`;
+/**
+ * A line that mentions what a brief must never ask for (a brief is only for a change to HO[LO]'s
+ * code, holo-packs or a creation): ssh and its keys, private keys, `.env` files (not `process.env`),
+ * credentials, tokens, passwords, API keys, secrets, keychains, where other programs keep theirs, and
+ * the system's password files.
+ */
+const SECRET = new RegExp(
+  [
+    word('ssh'),
+    word('id_(?:rsa|dsa|ecdsa|ed25519)'),
+    word('authorized_keys'),
+    word('private[ _-]?keys?'),
+    word('gnupg|gpg'),
+    '\\.(?:pem|p12|pfx)(?![a-z0-9])',
+    '(?<![a-z0-9_.$])\\.env(?![a-z0-9])',
+    word('credentials?'),
+    word('tokens?'),
+    word('pass(?:words?|wd|phrases?)'),
+    word('api[ _-]?keys?'),
+    word('secrets?'),
+    word('key[ -]?(?:chains?|rings?)'),
+    '\\.aws(?![a-z0-9])',
+    '\\.config/gh(?![a-z0-9])',
+    '\\.(?:netrc|npmrc|pypirc|pgpass|git-credentials)(?![a-z0-9])',
+    '\\.docker/config\\.json',
+    '\\.kube/config(?![a-z0-9])',
+    '/etc/(?:passwd|shadow|sudoers)(?![a-z0-9])',
+  ].join('|'),
+  'i',
+);
 
-/** The lines of a brief the user should read twice before pasting: commands, and links. */
+/**
+ * The lines of a brief the user should read twice before pasting: secrets it mentions, links and
+ * commands. A line is flagged once: a secret first, then a link, then a command.
+ */
 export function briefWarnings(brief: string): BriefWarning[] {
   const out: BriefWarning[] = [];
   for (const [line, text] of brief.split('\n').entries()) {
-    if (LINK.test(text)) out.push({ line, kind: 'url' });
+    if (SECRET.test(text)) out.push({ line, kind: 'secret' });
+    else if (LINK.test(text)) out.push({ line, kind: 'url' });
     else if (COMMAND.test(text)) out.push({ line, kind: 'command' });
   }
   return out;

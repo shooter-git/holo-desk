@@ -10,6 +10,7 @@ import {
   parseCodexLogin,
   parseCodexModels,
 } from '../src/harness/codex.ts';
+import { GIT_ENV } from '../src/harness/env.ts';
 import {
   alive,
   collect,
@@ -124,6 +125,10 @@ describe('Codex: finding it', () => {
     expect(args).toContain('features.multi_agent_v2.disable_native_tools=true');
     const env = readFileSync(join(s.rec, 'probe-env'), 'utf8').split('\0');
     expect(env).toContain(`CODEX_HOME=${join(s.root, '.codex-probe')}`);
+    // the probe too: git never over ssh, no ssh agent, no scripts folders
+    expect(env).toContain('GIT_SSH_COMMAND=false');
+    expect(env).toContain(`PATH=${s.path}`);
+    expect(env.some((e) => e.startsWith('SSH_'))).toBe(false);
     expect(statSync(join(s.root, '.codex-probe')).mode & 0o777).toBe(0o700);
   });
 
@@ -204,7 +209,13 @@ describe('Codex: a sealed run', () => {
       `--cd=${j.workspace}`,
       '-',
     ]);
-    expect(r.env).toEqual({ PATH: s.env.PATH, HOME: s.home, LANG: 'C.UTF-8', OPENAI_API_KEY: 'sk-openai-test' });
+    expect(r.env).toEqual({
+      PATH: s.path,
+      HOME: s.home,
+      LANG: 'C.UTF-8',
+      OPENAI_API_KEY: 'sk-openai-test',
+      ...GIT_ENV,
+    });
     expect(r.tokenMode).toBe('600');
     // the agent's instructions as the workspace's AGENTS.md
     expect(readFileSync(join(j.workspace, 'AGENTS.md'), 'utf8')).toBe('# Rules\nWork on the open song only.\n');

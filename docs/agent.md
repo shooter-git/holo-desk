@@ -24,7 +24,9 @@ The in-app agent lives in `packages/agent` (`@holo/agent`): the runner's side (`
 
 - **The open song only.** The agent changes only the song the requesting studio has open. It never
   touches HO[LO]'s code, `packs.lock.json`, holo-packs, a creation's code or engine, or any other file.
-  Asked to, it writes a brief for the user's harness in that repository (`hand_off`).
+  Asked to, it writes a brief for the user's harness in that repository (`hand_off`). A brief is only for
+  a change to HO[LO] Desk's code, holo-packs or a creation: asked to read or send files, keys, passwords,
+  tokens or anything else, the agent refuses in its reply, with no brief.
 - **Tools, not trust.** The harness gets HO[LO]'s MCP tools only: no shell, no file tools, no web, none
   of the user's MCP servers. Every tool call goes through `/api/agent/jobs/:job/*`, which checks the job
   token and that the job is running.
@@ -70,9 +72,9 @@ Turning the agent off cancels every job, so the job-scoped routes answer 403.
 
 | Method and path | Body / query | Answer |
 |---|---|---|
-| `GET /api/agent` **open** | | `{enabled, allowed, pairing, runner:{connected, keyed}}`. `allowed`: the bearer is an allowed device's. `pairing`: no device is allowed yet. `runner.keyed`: a runner with the key is connected. |
-| `POST /api/agent/pairing` **open** | | `{expires}`. Only while no device is allowed (409 otherwise). Makes a 6-digit code (10 min, single use; a new one replaces it) and sends it to keyed runners as `pairing-code`. 409 `no-runner` without a keyed runner; 429 while pairing is locked. |
-| `POST /api/agent/pair` **open** | `{code, name}` (name ≤ 60) | `{token, device:{id, name}}`, and turns the agent on. 401 for a wrong, expired or missing code. 5 tries per code; 20 failures in an hour lock pairing for an hour (429). 409 once a device is allowed. |
+| `GET /api/agent` **open** | | `{enabled, allowed, pairing, runner:{connected, keyed}}`. `allowed`: the bearer is an allowed device's. `pairing`: no device is allowed yet (the studio offers the code first; otherwise asking to join, with the code as the way back in). `runner.keyed`: a runner with the key is connected, so a code can be had. |
+| `POST /api/agent/pairing` **open** | | `{expires}`. Whenever a keyed runner is connected, with or without allowed devices: it's how the first device gets in, and how a device that has lost its token (its site data cleared, the only allowed one lost) gets back in. Makes a 6-digit code (10 min, single use; a new one replaces it) and sends it to keyed runners as `pairing-code`. 409 `no-runner` without a keyed runner; 429 while pairing is locked. |
+| `POST /api/agent/pair` **open** | `{code, name}` (name ≤ 60) | `{token, device:{id, name}}`, and turns the agent on. Allowed devices hear `agent-devices`, so their lists show the new one at once. 401 for a wrong, expired or missing code. 5 tries per code; while no device is allowed, 20 failures in an hour lock pairing for an hour, and once one is, 10 in a day lock it for a day (429). |
 | `POST /api/agent/devices/requests` **open** | `{name}` (≤ 60) | `{id, secret, code}`. `code` is 4 characters (no 0/O or 1/I), shown on both devices. 409 `off` while the agent is off; 429 with 5 waiting. A request lapses after 10 minutes. |
 | `GET /api/agent/devices/requests/:id` **open** | `?secret=` | `{state:'pending'|'denied'}`. Once approved, the first answer is `{state:'approved', token, device}` and later ones `{state:'approved'}`. 404 for a wrong secret or a lapsed request. |
 | `GET /api/agent/devices` | | `{devices:[{id, name, added, seen, current}], requests:[{id, name, code, created}]}`. `current` is the device asking; `requests` are those waiting. |
@@ -140,8 +142,8 @@ requester's studio has the job's song open.
 | `GET …/attachments/:id` | | `{name, type, size, meta, data?}`. `data` (base64) comes for pictures, text, and MusicXML up to 1 MB; `meta` is what the browser measured, or null. Only an attachment that the job's request, or an earlier one on its thread, named (403). 404 once it's gone. |
 | `POST …/progress` | `{line}` (≤ 200) | `{ok}`. The line under the bar. |
 | `POST …/permission` | `{kind, detail, pack?}` (detail ≤ 300) | `{ok}`. `kind` is `install-pack` (with `pack`), `send-creation`, `screen`, `photo` or `microphone`. The job waits for the user once the turn ends. |
-| `POST …/handoff` | `{brief}` (≤ 4000) | `{ok}`. Lines that run a command or hold a link are flagged (`briefWarnings`). |
-| `POST …/finish` | `{label, reply}` (one line ≤ 80; ≤ 600) | `{ok}` |
+| `POST …/handoff` | `{brief}` (≤ 4000) | `{ok}`. Lines that mention a secret, hold a link or run a command are flagged (`briefWarnings`). |
+| `POST …/finish` | `{label, reply}` (one line ≤ 80; ≤ 600) | `{ok}`. The agent is asked for one or two short sentences, about 200 characters at most; 600 is the server's limit. |
 
 **Listening.** A harness can cut a tool call at 60 s, so a listen comes in parts: the `listen` tool asks
 for at most 40 s at a time, and the server takes at most 45 s. A listen hears only the requester's
@@ -178,9 +180,9 @@ taken only from the runner it was handed to, while it runs.
 
 **Server → runner** (keyed runners only)
 - `agent-on {}`: the agent is on. Sent to a runner with `caps.agent` when it joins while the agent is
-  on, and to every such runner when the agent is turned on (`PUT /settings`, or the first pairing). Only
-  then does the runner look for the harnesses. There is no `agent-off`: with the agent off, the runner
-  is handed nothing.
+  on, and to every such runner when the agent is turned on (`PUT /settings`, or a pairing while it's
+  off). Only then does the runner look for the harnesses. There is no `agent-off`: with the agent off,
+  the runner is handed nothing.
 - `agent-run {job, thread, harness, model, effort, middleC, prompt, token, session?, workspace, base}`.
   `workspace` is the thread's id; `base` is where the tools reach the server
   (`http://127.0.0.1:<port>`); `middleC` is `'C3'` or `'C4'`, as the studio names notes.
@@ -232,9 +234,13 @@ was played (null when the song wasn't playing); `time` is ms from the listen's s
 of the stretch `played` asked for); `length` is ms (null while still held).
 
 **`JobView`** is:
-`{id, project, device, state:'waiting'|'running'|'awaiting'|'done'|'failed'|'cancelled', request, line?, reply?, label?, permission?:{kind, detail, pack?}, brief?, briefWarnings?:[{line, kind:'command'|'url'}], error?, started, finished?}`.
+`{id, project, device, state:'waiting'|'running'|'awaiting'|'done'|'failed'|'cancelled', request, line?, reply?, label?, permission?:{kind, detail, pack?}, brief?, briefWarnings?:[{line, kind:'command'|'url'|'secret'}], error?, started, finished?}`.
 - `waiting` lasts until the runner or the job's tools are first heard from.
-- `briefWarnings` are the brief's lines (from 0) that run a command or hold a link: the studio flags them.
+- `briefWarnings` are the brief's lines (from 0) the studio flags, each once: `secret` for a line that
+  mentions one (ssh, `.ssh`, `id_rsa`/`id_ed25519`, private keys, `.pem`, `.env`, credentials, tokens,
+  passwords, API keys, secrets, keychains, `~/.aws`, `~/.config/gh`, `.netrc` and the like, `/etc/passwd`
+  or `shadow`), else `url` for a link, else `command` for a command to run (`briefWarnings` in
+  `apps/server/src/agent/jobs.ts`).
 - The server keeps the last 50 ended jobs in memory; the bar reads older turns from the thread.
 
 ## A request's life
@@ -378,8 +384,8 @@ playing tools run alongside. A change may also post a line under the bar (`…/p
 | `attachment_get` | see | An attachment: a picture, a recording's measurements and notes, a MIDI file's notes, a text. |
 | `look` | ask | Ask for a screenshot, a photo or a recording (a permission: it ends the turn). |
 | `ask_permission` | ask | Ask to install a pack, send to the creation, or for a screenshot, a photo or a recording. |
-| `hand_off` | ask | A brief for the user's own coding agent (no commands or code in it). |
-| `finish` | ask | End the turn: the undo step's label and the reply. |
+| `hand_off` | ask | A brief for the user's own coding agent, only for a change to HO[LO] Desk's code, holo-packs or a creation (no commands or code in it; never to read or send files, keys, passwords or tokens). |
+| `finish` | ask | End the turn: the undo step's label and the reply (one or two short sentences, about 200 characters at most: what changed and where). |
 
 There are no tools for opening, creating, importing or exporting songs, rendering to a file, or
 creations, except `ask_permission {kind:'send-creation'}`.

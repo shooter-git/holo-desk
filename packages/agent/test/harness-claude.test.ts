@@ -2,7 +2,7 @@ import { existsSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { claudeArgs, claudeHarness, claudeModels, claudeReader, parseClaudeAuth } from '../src/harness/claude.ts';
-import { allowed } from '../src/harness/env.ts';
+import { allowed, GIT_ENV } from '../src/harness/env.ts';
 import {
   alive,
   collect,
@@ -200,15 +200,16 @@ describe('Claude Code: a sealed run', () => {
       '--disable-slash-commands',
       '--no-chrome',
     ]);
-    // exactly the allowlist, its own sign-in and its switches
+    // exactly the allowlist (PATH without the scripts folders), its own sign-in, its switches and git's
     expect(r.env).toEqual({
-      PATH: s.env.PATH,
+      PATH: s.path,
       HOME: s.home,
       LANG: 'C.UTF-8',
       ANTHROPIC_API_KEY: 'sk-ant-test',
       DISABLE_AUTOUPDATER: '1',
       ENABLE_CLAUDEAI_MCP_SERVERS: 'false',
       CLAUDE_CODE_DISABLE_CLAUDE_MDS: '1',
+      ...GIT_ENV,
     });
     // the token file as the MCP server finds it
     expect(r.tokenMode).toBe('600');

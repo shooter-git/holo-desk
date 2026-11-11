@@ -37,6 +37,31 @@ server of ours as its only tools. The adapters in `packages/agent/src/harness/` 
 | Stop | process-group SIGTERM: all gone | same | same; also needed after a normal exit (worker daemon) |
 | Verdict | **Sealed** | **Sealed, with caveats** | **Sealed, with caveats** |
 
+## Every harness's environment
+
+Each run, sign-in, update and probe gets an environment built by `harnessEnv`
+(`packages/agent/src/harness/env.ts`), never the runner's own:
+- **An allowlist:** `HOME`, `PATH`, `LANG`, `LANGUAGE`, `TERM`, `TMPDIR`, `TZ`, `USER`, `LOGNAME`, `LC_*`,
+  `XDG_*`, the proxy variables and `NODE_EXTRA_CA_CERTS`, `SSL_CERT_FILE`, `SSL_CERT_DIR` (on Windows, also
+  what a program needs to start), plus that harness's own sign-in variables. Then each adapter's switches
+  (below).
+- **No ssh agent.** No `SSH_*` variable is passed (`SSH_AUTH_SOCK` among them), whatever sets it.
+- **`PATH` without scripts folders.** `pnpm runner` puts the repository's `node_modules/.bin` first, and pnpm
+  its `node-gyp-bin`; a harness gets neither, and no empty or relative entry (those would be looked up in its
+  workspace). Only absolute folders are kept, in order.
+- **Git without ssh or the user's git config**, set last so nothing undoes it. In an end-to-end run, Cursor
+  fetched its plugins with `git fetch` over `ssh git@github.com` (24 connections), and ssh reads the real
+  `~/.ssh` and talks to the user's agent whatever `HOME` says. Now:
+  - `GIT_SSH_COMMAND=false`: git's ssh is `false`, which fails at once ("Could not read from remote
+    repository"), with no network;
+  - `GIT_CONFIG_COUNT=2`, `GIT_CONFIG_KEY_0` and `_1` = `url.https://github.com/.insteadOf`,
+    `GIT_CONFIG_VALUE_0=git@github.com:`, `GIT_CONFIG_VALUE_1=ssh://git@github.com/`: GitHub's ssh addresses
+    are fetched over anonymous https, so public repositories (Cursor's plugins) still come;
+  - `GIT_CONFIG_NOSYSTEM=1` and `GIT_CONFIG_GLOBAL=/dev/null`: none of the user's or the system's git config,
+    so none of their credential helpers or URL rewrites (Cursor's `XDG_CONFIG_HOME` is the real one, where
+    `git/config` may be);
+  - `GIT_TERMINAL_PROMPT=0`: git never asks for a name or password; a private repository just fails.
+
 ## Claude Code
 
 **Command** (prompt on stdin):
@@ -356,6 +381,17 @@ cursor-agent -p --output-format=stream-json --workspace=<ws> --trust --approve-m
 - `CURSOR_CONFIG_DIR=<ws>/home/.cursor`.
 - In the adapter, also `XDG_CACHE_HOME`, `XDG_DATA_HOME` and `XDG_STATE_HOME` inside the private home
   (`<ws>/home/.cache`, `.local/share`, `.local/state`).
+- And git as every harness has it ("Every harness's environment", above): Cursor fetches the account's
+  plugins with `git fetch` from `git@github.com:`, which used the user's own SSH key (ssh reads the real
+  `~/.ssh` whatever `HOME` is). With `GIT_SSH_COMMAND=false` and GitHub's ssh addresses rewritten to
+  `https://github.com/`, they come over anonymous https, and the ssh agent's `SSH_AUTH_SOCK` isn't passed.
+
+The whole environment of a run, then: `PATH` (absolute folders, without `node_modules/.bin`), `LANG` and the
+other allowlisted variables that are set, `CURSOR_API_KEY` or `CURSOR_AUTH_TOKEN` if set, `HOME=<ws>/home`,
+`XDG_CONFIG_HOME=<real home>/.config`, `CURSOR_CONFIG_DIR=<ws>/home/.cursor`, `XDG_CACHE_HOME`,
+`XDG_DATA_HOME`, `XDG_STATE_HOME` (in the private home), `GIT_SSH_COMMAND=false`, `GIT_TERMINAL_PROMPT=0`,
+`GIT_CONFIG_NOSYSTEM=1`, `GIT_CONFIG_GLOBAL=/dev/null`, `GIT_CONFIG_COUNT=2` and the two `insteadOf`
+rewrites.
 
 `<ws>/.cursor/mcp.json`:
 

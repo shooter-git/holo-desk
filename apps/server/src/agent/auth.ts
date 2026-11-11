@@ -1,9 +1,11 @@
 /**
  * Who may use the agent: the devices allowed to. The first is allowed with a 6-digit code the runner
  * prints on this computer (so whoever types it can see the computer's screen); later ones ask, and a
- * device already allowed approves them. Each holds a token (32 random bytes); the server keeps only
- * its sha256, and compares hashes in constant time. Removing a device deletes its hash: its next
- * request is refused, and its open studio loses the agent at once.
+ * device already allowed approves them. The code stays a way in whenever a keyed runner is connected,
+ * so a device that has lost its token (its site data cleared, the only allowed one lost) pairs again
+ * the same way, and the allowed devices see it in their list at once. Each holds a token (32 random
+ * bytes); the server keeps only its sha256, and compares hashes in constant time. Removing a device
+ * deletes its hash: its next request is refused, and its open studio loses the agent at once.
  */
 import { createHash, randomBytes, randomInt, timingSafeEqual } from 'node:crypto';
 import { sameKey } from './keys.ts';
@@ -38,8 +40,13 @@ const HOUR = 60 * MINUTE;
 /** How long a pairing code works, and how many tries it allows. */
 const CODE_LIFE = 10 * MINUTE;
 const CODE_TRIES = 5;
-/** Failed codes in an hour that lock pairing for an hour. */
+const DAY = 24 * HOUR;
+/**
+ * Wrong codes that lock pairing. While no device is allowed, 20 in an hour lock it for an hour. Once one
+ * is, a code is only a way back in that stays open for good, so 10 in a day lock it for a day.
+ */
 const LOCK_AFTER = 20;
+const LOCK_AFTER_PAIRED = 10;
 /** Devices asking to join: at most this many waiting, each for this long. */
 const MAX_PENDING = 5;
 const REQUEST_LIFE = 10 * MINUTE;
@@ -48,7 +55,7 @@ const ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 
 export type PairResult =
   | { ok: true; token: string; device: { id: string; name: string } }
-  | { ok: false; status: 401 | 409 | 429; error: string };
+  | { ok: false; status: 401 | 429; error: string };
 
 export interface AuthOptions {
   store: AgentStore;
@@ -97,15 +104,23 @@ export class Auth {
     return this.store.device(id) !== null;
   }
 
-  // ---- the first device: a code printed on this computer ----
+  // ---- a code printed on this computer: how the first device gets in, and any device back in ----
 
-  /** Whether no device is allowed yet: a code is how the first one gets in. */
-  pairable(): boolean {
+  /**
+   * Whether no device is allowed yet (the studio offers the code first then, and asking to join once
+   * one is). Pairing with a code works either way.
+   */
+  unpaired(): boolean {
     return this.store.devices().length === 0;
   }
 
   locked(): boolean {
     return this.now() < this.lockedUntil;
+  }
+
+  /** What a locked pairing says: when to try again. */
+  lockedText(): string {
+    return `Too many wrong codes: try again ${this.lockedUntil - this.now() > HOUR ? 'tomorrow' : 'in an hour'}`;
   }
 
   /** A new code (the one before stops working), for the runner to print. */
@@ -116,11 +131,12 @@ export class Auth {
     return { code, expires };
   }
 
-  /** Pair with the code: the device's token, said once. */
+  /**
+   * Pair with the code: the device's token, said once. With devices allowed already, they hear of it
+   * (`changed`), so their lists show the new one at once.
+   */
   pair(code: string, name: string): PairResult {
-    if (this.locked()) return { ok: false, status: 429, error: 'Too many wrong codes: try again in an hour' };
-    if (!this.pairable())
-      return { ok: false, status: 409, error: 'A device is allowed already: ask it to approve this one' };
+    if (this.locked()) return { ok: false, status: 429, error: this.lockedText() };
     const current = this.code;
     if (!current) return this.fail('Ask for a code first: the runner prints it');
     if (this.now() > current.expires) {
@@ -153,9 +169,11 @@ export class Auth {
 
   private fail(error: string): PairResult {
     const now = this.now();
-    this.failures = [...this.failures.filter((t) => now - t < HOUR), now];
-    if (this.failures.length >= LOCK_AFTER) {
-      this.lockedUntil = now + HOUR;
+    const paired = !this.unpaired();
+    const span = paired ? DAY : HOUR;
+    this.failures = [...this.failures.filter((t) => now - t < span), now];
+    if (this.failures.length >= (paired ? LOCK_AFTER_PAIRED : LOCK_AFTER)) {
+      this.lockedUntil = now + span;
       this.failures = [];
       this.code = null;
     }

@@ -203,7 +203,7 @@ export const handOff: Tool = {
   name: 'hand_off',
   kind: 'ask',
   summary:
-    "When the user asks for something outside the open song (a change to HO[LO] itself, a new pack, a creation's code or engine, any file), you can't do it: write a brief they paste into their own coding agent in that repository. The brief describes the wanted change and why, in plain words: what it should do, what the user said, what you saw in the song. No commands, scripts or code to run: their agent works out how. At most 4000 characters. Then call finish with a reply saying the brief is ready to copy.",
+    "When the user asks for a change outside the open song (to HO[LO] Desk's code, a new pack, a creation's code or engine), you can't make it: write a brief they paste into their own coding agent in that repository. The brief describes the wanted change and why, in plain words: what it should do, what the user said, what you saw in the song. No commands, scripts or code to run: their agent works out how. At most 4000 characters. Then call finish with a reply saying the brief is ready to copy. A brief is only for a change to HO[LO] Desk's code, holo-packs or a creation: never for reading, copying or sending files, keys, passwords, tokens or anything outside those repositories (an SSH key, a .env file, credentials). Such a request is simply refused in your finish reply, with no brief.",
   args: [
     {
       name: 'brief',
@@ -230,7 +230,7 @@ export const finish: Tool = {
   name: 'finish',
   kind: 'ask',
   summary:
-    'End your turn: "label" names the undo step for everything you changed (at most 80 characters, e.g. "Counter-melody on oboe, bars 9–16"), and "reply" is what the user reads under the bar (a sentence or two, at most 600 characters, in musical terms: what you did, or what you\'re waiting for). Call it exactly once, last.',
+    'End your turn: "label" names the undo step for everything you changed (at most 80 characters, e.g. "Counter-melody on oboe, bars 9–16"), and "reply" is what the user reads under the bar: one or two short sentences, at most about 200 characters, in musical terms; what changed and where, nothing else (or what you\'re waiting for, or why you couldn\'t). Call it exactly once, last.',
   args: [
     {
       name: 'label',
@@ -242,7 +242,8 @@ export const finish: Tool = {
     {
       name: 'reply',
       type: 'string',
-      describe: 'The reply under the bar, a sentence or two',
+      describe:
+        'The reply under the bar: one or two short sentences, at most about 200 characters; what changed and where, nothing else',
       required: true,
       maxLength: 600,
     },

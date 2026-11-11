@@ -22,8 +22,13 @@ export interface Sandbox {
   root: string;
   rec: string;
   env: NodeJS.ProcessEnv;
+  /** The PATH a harness should get from `env`'s: the system's folders only. */
+  path: string;
   cleanup(): void;
 }
+
+/** The folders a harness's PATH keeps in these tests (the fakes need only the system's tools). */
+const SYSTEM_PATH = ['/usr/local/bin', '/usr/bin', '/bin'];
 
 /** A temporary HOME, a workspaces folder, a folder for what the fakes record, and an environment with extras. */
 export function sandbox(extra: Record<string, string> = {}): Sandbox {
@@ -34,16 +39,37 @@ export function sandbox(extra: Record<string, string> = {}): Sandbox {
   mkdirSync(home, { recursive: true });
   mkdirSync(rec, { recursive: true });
   const env: NodeJS.ProcessEnv = {
-    PATH: process.env.PATH ?? '/usr/bin:/bin',
+    // as `pnpm runner` has it: the package's and the repository's scripts first, pnpm's node-gyp, an
+    // empty entry (the current folder); a harness gets none of those
+    PATH: [
+      './node_modules/.bin',
+      join(REPO, 'node_modules', '.bin'),
+      '/home/user/.cache/node/corepack/v1/pnpm/10.34.9/dist/node-gyp-bin', // scan-secrets: allow (a placeholder)
+      '',
+      ...SYSTEM_PATH,
+    ].join(':'),
     HOME: home,
     LANG: 'C.UTF-8',
     // never to be passed on
     SECRET_OF_ANOTHER_TOOL: 'nope',
     GITHUB_TOKEN: 'ghp_nope',
     NODE_OPTIONS: '--require /tmp/evil.js',
+    SSH_AUTH_SOCK: '/tmp/ssh-agent.sock',
+    SSH_AGENT_PID: '4242',
+    // the user's own git setup: replaced
+    GIT_SSH_COMMAND: 'ssh -i ~/.ssh/id_ed25519',
+    GIT_CONFIG_GLOBAL: '/home/user/.gitconfig', // scan-secrets: allow (a placeholder)
     ...extra,
   };
-  return { dir, home, root, rec, env, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
+  return {
+    dir,
+    home,
+    root,
+    rec,
+    env,
+    path: SYSTEM_PATH.join(':'),
+    cleanup: () => rmSync(dir, { recursive: true, force: true }),
+  };
 }
 
 export interface FakeCase {

@@ -1,7 +1,8 @@
 /**
- * The agent's HTTP routes (docs/agent.md): turning it on and pairing the first device, devices asking
- * to join, settings, the harnesses' sign-in and updates, requests and their jobs, threads; and the
- * job-scoped routes its tools call (`/api/agent/jobs/:job/*`, with the job's token).
+ * The agent's HTTP routes (docs/agent.md): turning it on and pairing a device with the runner's code
+ * (the first, or one that lost its way back in), devices asking to join, settings, the harnesses'
+ * sign-in and updates, requests and their jobs, threads; and the job-scoped routes its tools call
+ * (`/api/agent/jobs/:job/*`, with the job's token).
  *
  * Only `GET /api/agent`, pairing, and asking to join are open; everything else needs an allowed
  * device's token (401 without one), or for the tools, the running job's token (403 when it isn't).
@@ -277,16 +278,16 @@ export function agentRoutes(app: FastifyInstance, o: AgentOptions): { jobs: Jobs
   app.get('/api/agent', async (req) => ({
     enabled: agentStore.settings().enabled,
     allowed: auth.device(req.headers.authorization) !== null,
-    pairing: auth.pairable(),
+    // no device is allowed yet (a code works either way, while a keyed runner is connected)
+    pairing: auth.unpaired(),
     runner: live.runners(),
   }));
 
   app.post(
     '/api/agent/pairing',
     open(async (_req, reply) => {
-      if (auth.locked()) return reply.code(429).send({ error: 'Too many wrong codes: try again in an hour' });
-      if (!auth.pairable())
-        return reply.code(409).send({ error: 'A device is allowed already: ask it to approve this one' });
+      if (auth.locked()) return reply.code(429).send({ error: auth.lockedText() });
+      // with devices allowed or not: the code is the way back in for a device that lost its token
       const runners = live.keyedRunners();
       if (!runners.length)
         return reply

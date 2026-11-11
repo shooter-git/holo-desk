@@ -1,0 +1,9 @@
+{"type":"thread.started","thread_id":"01a1cbcd-f893-71a1-aa67-6013e3fe50b3"}
+{"type":"turn.started"}
+{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"I’ll call the echo tool first, then request and inspect the image it returns."}}
+{"type":"item.started","item":{"id":"item_1","type":"mcp_tool_call","server":"holo","tool":"echo","arguments":{"text":"spike-42"},"result":null,"error":null,"status":"in_progress"}}
+{"type":"item.completed","item":{"id":"item_1","type":"mcp_tool_call","server":"holo","tool":"echo","arguments":{"text":"spike-42"},"result":{"content":[{"type":"text","text":"spike-42"}],"structured_content":null},"error":null,"status":"completed"}}
+{"type":"item.started","item":{"id":"item_2","type":"mcp_tool_call","server":"holo","tool":"image","arguments":{},"result":null,"error":null,"status":"in_progress"}}
+{"type":"item.completed","item":{"id":"item_2","type":"mcp_tool_call","server":"holo","tool":"image","arguments":{},"result":{"content":[{"type":"image","data":"iVBORw0KGgoAAAANSUhEUgAAAEAAAABA…(base64 trimmed)","mimeType":"image/png"},{"type":"text","text":"That is the picture."}],"structured_content":null},"error":null,"status":"completed"}}
+{"type":"item.completed","item":{"id":"item_3","type":"agent_message","text":"spike-42 — yellow."}}
+{"type":"turn.completed","usage":{"input_tokens":35230,"cached_input_tokens":32640,"cache_write_input_tokens":0,"output_tokens":174,"reasoning_output_tokens":0}}

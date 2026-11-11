@@ -1,0 +1,10 @@
+{"type":"system","subtype":"init","apiKeySource":"login","cwd":"~/.cache/holo/agent-spike/cursor","session_id":"4da7463b-469a-41bf-86ad-c56bdcee7187","model":"Composer 2.5","permissionMode":"default"}
+{"type":"user","message":{"role":"user","content":[{"type":"text","text":"In one short line: what text did you echo in your previous turn, and what colour was the picture?"}]},"session_id":"4da7463b-469a-41bf-86ad-c56bdcee7187"}
+{"type":"thinking","subtype":"delta","text":"I","session_id":"4da7463b-469a-41bf-86ad-c56bdcee7187","timestamp_ms":1794421383293}
+{"type":"thinking","subtype":"delta","text":" need to recall what","session_id":"4da7463b-469a-41bf-86ad-c56bdcee7187","timestamp_ms":1794421383304}
+{"type":"thinking","subtype":"delta","text":" I echoed in my previous","session_id":"4da7463b-469a-41bf-86ad-c56bdcee7187","timestamp_ms":1794421383322}
+{"type":"thinking","subtype":"delta","text":" turn and what colour","session_id":"4da7463b-469a-41bf-86ad-c56bdcee7187","timestamp_ms":1794421383339}
+{"type":"thinking","subtype":"delta","text":" the picture was.","session_id":"4da7463b-469a-41bf-86ad-c56bdcee7187","timestamp_ms":1794421383376}
+{"type":"thinking","subtype":"completed","session_id":"4da7463b-469a-41bf-86ad-c56bdcee7187","timestamp_ms":1794421383376}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"**spike-42**, red."}]},"session_id":"4da7463b-469a-41bf-86ad-c56bdcee7187"}
+{"type":"result","subtype":"success","duration_ms":1682,"duration_api_ms":1682,"is_error":false,"result":"**spike-42**, red.","session_id":"4da7463b-469a-41bf-86ad-c56bdcee7187","request_id":"e35b4cd6-11a9-45fc-ac15-09c97695598e","usage":{"inputTokens":82,"outputTokens":79,"cacheReadTokens":6784,"cacheWriteTokens":0}}

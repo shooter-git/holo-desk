@@ -423,19 +423,27 @@ function HarnessRow({ harness: h, current }: { harness: HarnessInfo; current: bo
       {login && h.signedIn === false && (
         <div className="agent-more vstack">
           {login.url && (
-            <span>
-              Open{' '}
-              <a href={login.url} target="_blank" rel="noopener noreferrer">
-                {login.url}
-              </a>{' '}
-              on any device to sign in{login.code ? ', with the code ' : '.'}
-              {login.code && <b className="mono">{login.code}</b>}
-            </span>
+            <div className="agent-signin">
+              <a className="btn" href={login.url} target="_blank" rel="noopener noreferrer">
+                Open the sign-in page
+              </a>
+              <span className="muted">
+                {login.code ? (
+                  <>
+                    and enter <b className="mono">{login.code}</b>
+                  </>
+                ) : login.ask === 'code' ? (
+                  'then paste the code it shows here'
+                ) : (
+                  'on any device'
+                )}
+              </span>
+            </div>
           )}
           {login.ask === 'code' && login.state === 'running' && (
-            <div className="hstack">
+            <div className="agent-signin">
               <input
-                className="input agent-select"
+                className="input"
                 aria-label="The code the sign-in page showed"
                 placeholder="The code the page showed"
                 value={code}

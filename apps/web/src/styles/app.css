@@ -2624,9 +2624,24 @@ html[data-layout="phone-landscape"] .bar .field input {
 
 .agent-harness .agent-more {
   flex-basis: 100%;
+  min-width: 0;
   padding-bottom: 2px;
   font-size: 12px;
   line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+/* a sign-in: a button for its page, and a field for the code it shows, wrapping on a phone */
+.agent-signin {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+}
+
+.agent-signin .input {
+  flex: 1 1 180px;
+  min-width: 0;
 }
 
 /* "No allowed device at hand?": the quiet second way, the runner's code */

@@ -98,6 +98,7 @@ describe('settings, as they change', () => {
         enabled: false,
         harness: null,
         model: '',
+        relays: [],
         effort: '',
         harnesses: [expect.objectContaining({ id: 'claude', found: true })],
       },

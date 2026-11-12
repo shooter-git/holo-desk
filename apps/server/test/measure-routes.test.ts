@@ -36,6 +36,8 @@ function served(o: KitOptions = {}) {
   const closing: (() => void)[] = [];
   /** The lines put under the bar. */
   const lines: string[] = [];
+  /** What the studio was asked, and how long it was given (ms). */
+  const asked: [Record<string, unknown>, number][] = [];
   const forJob: JobRouteKit['forJob'] = (handler) => async (req, reply) => {
     try {
       return await handler(req, reply, job);
@@ -56,7 +58,12 @@ function served(o: KitOptions = {}) {
       onJobEnd: (fn: (j: AgentJob) => void) => ends.push(fn),
       progress: (_j: AgentJob, line: string) => lines.push(line),
     },
-    live: { request: async () => o.meters ?? { ok: false, error: NO_ANSWER } },
+    live: {
+      request: async (_studio: unknown, msg: Record<string, unknown>, ms: number) => {
+        asked.push([msg, ms]);
+        return o.meters ?? { ok: false, error: NO_ANSWER };
+      },
+    },
     attachments: {
       get: (id: string) => o.attachments?.(song)[id] ?? null,
       file: (id: string) => (o.attachments?.(song)[id] ? join(dataDir, 'agent', 'attachments', id, 'data') : null),
@@ -71,7 +78,7 @@ function served(o: KitOptions = {}) {
     for (const fn of closing) fn();
     await app.close();
   };
-  return { app, song, vocals, keys: song.tracks[0] as Track, dataDir, job, ends, lines, post, close };
+  return { app, song, vocals, keys: song.tracks[0] as Track, dataDir, job, ends, lines, asked, post, close };
 }
 
 describe('measuring through the job’s routes', () => {
@@ -248,11 +255,12 @@ describe('measuring through the job’s routes', () => {
     }
   });
 
-  it('asks the studio for its meters while the song plays', async () => {
+  it('asks the studio for its meters over the last seconds of play, and gives it time to watch them', async () => {
     const meters = {
       ok: true,
       playing: true,
       seconds: 12.3,
+      covered: 8,
       channels: [
         { id: 'master', peak: [-3, -3.2], max: [-1, -1.1], gr: null, grMax: null, clipped: true },
         { id: 'trk_vocals', peak: [-9, -9], max: [-6, -6], gr: -2.5, grMax: -6.1, clipped: false },
@@ -268,12 +276,21 @@ describe('measuring through the job’s routes', () => {
           kind: 'meters',
           playing: true,
           seconds: 12.3,
+          covered: 8,
           channels: [
             { id: 'master', peak: [-3, -3.2], max: [-1, -1.1], gr: null, grMax: null, clipped: true },
             { id: 'trk_vocals', peak: [-9, -9], max: [-6, -6], gr: -2.5, grMax: -6.1, clipped: false },
           ],
         },
       });
+      // 8 s unless asked; the studio may wait that long for them, then has 4 s more to answer
+      expect((await s.post({ what: 'meters', seconds: 20 })).statusCode).toBe(200);
+      expect(s.asked).toEqual([
+        [{ type: 'agent-meters', seconds: 8 }, 12_000],
+        [{ type: 'agent-meters', seconds: 20 }, 24_000],
+      ]);
+      expect((await s.post({ what: 'meters', seconds: 31 })).statusCode).toBe(400);
+      expect((await s.post({ what: 'meters', seconds: 0 })).statusCode).toBe(400);
     } finally {
       await s.close();
     }

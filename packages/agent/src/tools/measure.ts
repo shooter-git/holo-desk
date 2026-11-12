@@ -23,6 +23,7 @@ import type {
 import {
   barsText,
   channelRef,
+  num as numArg,
   plural,
   position,
   str,
@@ -347,9 +348,17 @@ function metersText(r: MetersMeasure, song: Project): string {
       ? 'The song is playing but no channel has sounded yet: measure the meters again in a few seconds.'
       : "The meters have nothing to show: the song hasn't played since the studio opened it. Start it (transport play), let it run a few seconds, then measure the meters again.";
   const pair = (p: [number | null, number | null]) => `${num(p[0])}/${num(p[1])}`;
+  const covered = Math.round(r.covered);
+  const watched = Math.round(r.seconds);
   const lines = [
-    `The studio's meters (${r.playing ? 'playing' : 'stopped'}, ${r.seconds.toFixed(0)} s of play watched): peaks left/right in dBFS, the last 3 s, then since play started.`,
+    `The studio's meters, ${r.playing ? 'still playing' : 'stopped'}: they cover the last ${plural(covered, 'second')} of play${
+      watched > covered ? ` (of ${watched} s watched since play started)` : ''
+    }. Peaks left/right in dBFS over those seconds, then (max) since play started.`,
   ];
+  if (covered < 3)
+    lines.push(
+      `That's only ${plural(covered, 'second')} of the song: play it longer, or a louder part, before judging it all.`,
+    );
   for (const c of r.channels) {
     const parts = [`${pair(c.peak)} (${pair(c.max)} max)`];
     if (c.grMax !== null)
@@ -434,7 +443,7 @@ export const measure: Tool = {
   name: 'measure',
   kind: 'see',
   summary:
-    'Measure how the song sounds, before judging it. "what": "take" (an audio track\'s recording, one line such as a vocal: each note\'s pitch in cents against the song\'s key, or against a track\'s notes with "against", its drift and vibrato, its start against the "grid", and each phrase\'s level; quick), "mix" (the mix\'s loudness in LUFS, true peak, clipping, each section\'s loudness and its balance across octave bands; rendered, or "source": "bounce" for the newest bounce), "tracks" (each track alone: its loudness, peak and where its sound sits; with "track" one track in detail, and with "against" a second track: where the two mask each other), "plugin" (what a plugin on "track" does: an EQ\'s or a reverb\'s response, or a compressor\'s gain reduction on the track\'s own sound), "meters" (the studio\'s meters while the song plays: peaks, gain reduction, clipping), "file" (an attached recording, or the newest bounce). "from" and "to" limit it to some bars. Rendering is slower than the song plays: a call waits up to 40 s and otherwise says how far it got; call again with the same arguments for the result. Example: {"what": "take", "track": "Vocals", "from": "17", "to": "25"}.',
+    'Measure how the song sounds, before judging it. "what": "take" (an audio track\'s recording, one line such as a vocal: each note\'s pitch in cents against the song\'s key, or against a track\'s notes with "against", its drift and vibrato, its start against the "grid", and each phrase\'s level; quick), "mix" (the mix\'s loudness in LUFS, true peak, clipping, each section\'s loudness and its balance across octave bands; rendered, or "source": "bounce" for the newest bounce), "tracks" (each track alone: its loudness, peak and where its sound sits; with "track" one track in detail, and with "against" a second track: where the two mask each other), "plugin" (what a plugin on "track" does: an EQ\'s or a reverb\'s response, or a compressor\'s gain reduction on the track\'s own sound), "meters" (the studio\'s meters while the song plays: peaks, gain reduction, clipping; start playback first, then measure the meters: they cover the last "seconds" of playing, 8 unless you say, up to 30, and the studio waits until it has played that long), "file" (an attached recording, or the newest bounce). "from" and "to" limit it to some bars. Rendering is slower than the song plays: a call waits up to 40 s and otherwise says how far it got; call again with the same arguments for the result. Example: {"what": "take", "track": "Vocals", "from": "17", "to": "25"}.',
   args: [
     { name: 'what', type: 'enum', values: WHAT, describe: 'What to measure', required: true },
     {
@@ -466,11 +475,19 @@ export const measure: Tool = {
       describe: 'mix: render it (the default) or read the newest bounce',
     },
     { name: 'attachment', type: 'string', describe: 'take or file: an attached recording, by id (att_…)' },
+    {
+      name: 'seconds',
+      type: 'number',
+      describe: 'meters: how many seconds of playing they cover, the last of it (8 by default)',
+      min: 1,
+      max: 30,
+    },
   ],
   async run(ctx, args) {
     const what = str(args, 'what') as MeasureWhat;
     if (what === 'meters') {
-      const a = await ctx.api.measure({ what });
+      const seconds = numArg(args, 'seconds');
+      const a = await ctx.api.measure({ what, ...(seconds !== undefined ? { seconds } : {}) });
       const song = await ctx.api.song();
       return { text: a.done ? resultText(a.result, song, ctx.middleC) : pendingText(a, 'the meters') };
     }

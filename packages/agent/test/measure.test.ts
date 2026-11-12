@@ -7,6 +7,7 @@ import {
   type MeasureAnswer,
   type MeasureBody,
   type MeasureResult,
+  type MetersMeasure,
   type MixMeasure,
   type TakeMeasure,
 } from '../src/api.ts';
@@ -34,6 +35,8 @@ function measuredSong(): Project {
 function setup(options: FakeJobApiOptions = {}): FakeJobApi {
   return fakeJobApi(measuredSong(), options);
 }
+
+type MeterChannels = MetersMeasure['channels'];
 
 const done = (result: MeasureResult): MeasureAnswer => ({ done: true, task: 'msr_1', result });
 const bodies = (api: FakeJobApi) =>
@@ -357,26 +360,32 @@ describe('measure', () => {
     expect(await refused(api, 'measure', { what: 'plugin', plugin: 'eq' })).toContain('Say which "track"');
   });
 
-  it('reads the studio’s meters, or says to play the song first', async () => {
+  it('reads the studio’s meters over the last seconds of play, or says to play the song first', async () => {
+    const channels: MeterChannels = [
+      { id: 'master', peak: [-1.2, -1.4], max: [0.3, 0.1], gr: null, grMax: null, clipped: true },
+      { id: 'trk_bass', peak: [-8, -8], max: [-6, -6], gr: -2.5, grMax: -6.1, clipped: false },
+    ];
     const api = setup({
       measured: {
         meters: [
-          done({ kind: 'meters', playing: false, seconds: 0, channels: [] }),
-          done({
-            kind: 'meters',
-            playing: true,
-            seconds: 14,
-            channels: [
-              { id: 'master', peak: [-1.2, -1.4], max: [0.3, 0.1], gr: null, grMax: null, clipped: true },
-              { id: 'trk_bass', peak: [-8, -8], max: [-6, -6], gr: -2.5, grMax: -6.1, clipped: false },
-            ],
-          }),
+          done({ kind: 'meters', playing: false, seconds: 0, covered: 0, channels: [] }),
+          done({ kind: 'meters', playing: true, seconds: 14, covered: 8, channels }),
+          done({ kind: 'meters', playing: false, seconds: 1.2, covered: 1.2, channels }),
         ],
       },
     });
     expect((await call(api, 'measure', { what: 'meters' })).text).toContain('Start it (transport play)');
     const r = await call(api, 'measure', { what: 'meters' });
+    expect(r.text).toContain(
+      "The studio's meters, still playing: they cover the last 8 seconds of play (of 14 s watched since play started).",
+    );
     expect(r.text).toContain('The master: -1.2/-1.4 (0.3/0.1 max); CLIPPED (went past full scale).');
     expect(r.text).toContain('Bass: -8.0/-8.0 (-6.0/-6.0 max); gain reduction 2.5 dB (6.1 max).');
+    // how long they cover is passed on; a second of play is said to be too little to judge by
+    const short = await call(api, 'measure', { what: 'meters', seconds: 20 });
+    expect(short.text).toContain('stopped: they cover the last 1 second of play.');
+    expect(short.text).toContain("That's only 1 second of the song");
+    expect(bodies(api)).toEqual([{ what: 'meters' }, { what: 'meters' }, { what: 'meters', seconds: 20 }]);
+    await expect(call(api, 'measure', { what: 'meters', seconds: 45 })).rejects.toThrow('"seconds" must be at most 30');
   });
 });

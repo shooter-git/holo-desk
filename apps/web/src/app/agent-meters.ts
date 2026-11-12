@@ -1,13 +1,15 @@
 /**
  * The studio's meters, for the agent (`agent-meters`, docs/agent.md): while the song plays, every
  * channel's meter (the master, the tracks, the buses) is read from the engine twenty times a second
- * and kept (meter-watch.ts): the loudest of the last three seconds and since play started, its gain
- * reduction, and whether it clipped. The agent's request is answered with what was kept; after play
- * stops, with what the last play showed. Loaded by live.ts.
+ * and kept (meter-watch.ts): the loudest of the last seconds asked for (`seconds`, 8 unless it says,
+ * up to 30) and since play started, its gain reduction, and whether it clipped. When play started
+ * less than that long ago, the answer waits until it has played that long (or stops), so it never
+ * judges the song by its first second; after play stops, it's what the last play showed. Loaded by
+ * live.ts.
  */
 import { engine } from '../audio/engine.ts';
 import { registerAgentRequest } from './agent-studio.ts';
-import { MeterWatch } from './meter-watch.ts';
+import { MeterWatch, metersSeconds } from './meter-watch.ts';
 import { store } from './store.ts';
 
 const EVERY_MS = 50;
@@ -37,6 +39,13 @@ store.subscribe(() => {
   }
 });
 
-registerAgentRequest('agent-meters', (_msg, ack) => {
-  ack(true, { ...watch.report(performance.now(), ids()) });
+registerAgentRequest('agent-meters', async (msg, ack) => {
+  const want = metersSeconds(msg.seconds) * 1000;
+  // playing for less than that: watch on until it has played that long, or stops
+  await watch.until(
+    want,
+    () => performance.now(),
+    (ms) => new Promise((r) => setTimeout(r, ms)),
+  );
+  ack(true, { ...watch.report(performance.now(), ids(), want) });
 });

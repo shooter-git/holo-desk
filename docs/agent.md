@@ -178,14 +178,18 @@ closes.
 
 | Method and path | Body / query | Answer |
 |---|---|---|
-| `POST …/measure` | `{what:'take'\|'mix'\|'tracks'\|'plugin'\|'meters'\|'file', track?, region?, plugin?, from?, to?, against?, grid?, source?:'render'\|'bounce', attachment?}` (ids and ticks) | `{done:true, task, result, cached?}`, or `{done:false, task, progress, eta, stage}` after 40 s (`eta` in seconds). `take`: an audio `track` (or a recording `attachment`), `region?`, `against` `'key'` (default), `'none'` or an instrument track's id, `grid` in ticks (240). `mix`: rendered, or the newest file in `data/bounces/<song>/` with `source:'bounce'` (404 `reason:'no-bounce'` without one; `made` and `stale` say when it was made and whether the song changed after). `tracks`: every track alone, or `track`, and with `against` a second track (masking). `plugin`: `track` is a track's, a bus's id or `master`; EQs, Space Reverb, Space Designer, Tape Delay and Stereo Width by their response to an impulse, the rest on the track's own sound (not on a bus). `file`: an `attachment` (WAV, FLAC or AIFF; 422 for MP3, OGG, M4A), else the newest bounce. `meters` **studio**: asked of the requester's studio as `agent-meters` (3 s). A failed measurement is 422 with its reason. |
+| `POST …/measure` | `{what:'take'\|'mix'\|'tracks'\|'plugin'\|'meters'\|'file', track?, region?, plugin?, from?, to?, against?, grid?, source?:'render'\|'bounce', attachment?, seconds?}` (ids and ticks) | `{done:true, task, result, cached?}`, or `{done:false, task, progress, eta, stage}` after 40 s (`eta` in seconds). `take`: an audio `track` (or a recording `attachment`), `region?`, `against` `'key'` (default), `'none'` or an instrument track's id, `grid` in ticks (240). `mix`: rendered, or the newest file in `data/bounces/<song>/` with `source:'bounce'` (404 `reason:'no-bounce'` without one; `made` and `stale` say when it was made and whether the song changed after). `tracks`: every track alone, or `track`, and with `against` a second track (masking). `plugin`: `track` is a track's, a bus's id or `master`; EQs, Space Reverb, Space Designer, Tape Delay and Stereo Width by their response to an impulse, the rest on the track's own sound (not on a bus). `file`: an `attachment` (WAV, FLAC or AIFF; 422 for MP3, OGG, M4A), else the newest bounce. `meters` **studio**: `seconds?` (1–30, 8 by default), asked of the requester's studio as `agent-meters`, which has that long plus 4 s to answer. A failed measurement is 422 with its reason. |
 | `GET …/measure/:task` | | As above, for a measurement of the job's song by id (404 once it's forgotten). |
 
-`agent-meters {id}` (server → studio, asked): the studio reads every channel's meter twenty times a
-second while the song plays (`apps/web/src/app/agent-meters.ts`) and acks
-`{playing, seconds, channels:[{id, peak:[l, r], max:[l, r], gr, grMax, clipped}]}`: dBFS of the last
-3 s and since play started (null for silence), the deepest gain reduction (dB), and whether it went
-past full scale. After play stops it answers what the last play showed.
+`agent-meters {id, seconds}` (server → studio, asked): the studio reads every channel's meter twenty
+times a second while the song plays (`apps/web/src/app/agent-meters.ts`, keeping the last 30 s) and
+acks `{playing, seconds, covered, channels:[{id, peak:[l, r], max:[l, r], gr, grMax, clipped}]}`:
+dBFS over the last `covered` seconds of play (the `seconds` asked, or all of the play if it was
+shorter) and since play started (null for silence), the deepest gain reduction (dB), and whether it
+went past full scale; `seconds` is how much play was watched. When play started less than `seconds`
+ago, it waits until it has watched that long (or play stops) before it answers, so a measurement
+taken as playback starts isn't a second's worth. After play stops it answers what the last play
+showed.
 
 The results (`packages/agent/src/api.ts`, `MeasureResult`) are numbers: a take's notes (`tick`, `pitch`
 with cents, `target`, `cents`, `inKey` or `ref`, `drift`, `vibrato:[Hz, ±cents]`, `grid` ms, `db`), its

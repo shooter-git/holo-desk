@@ -14,7 +14,7 @@ import { keysOf, PLUGINS, type Project, projectEnd, type Track, tickToSeconds } 
 import type { FastifyRequest } from 'fastify';
 import { NO_ANSWER } from '../../live.ts';
 import { ATTACHMENT_ID } from '../attachments.ts';
-import { type Body, bad, body, ID, int, isObj, type Params } from '../check.ts';
+import { type Body, bad, body, ID, int, isObj, num, type Params } from '../check.ts';
 import type { JobRouteKit } from '../job-routes/index.ts';
 import { type AgentJob, Refusal } from '../jobs.ts';
 import {
@@ -32,8 +32,11 @@ export type MeasureWhat = (typeof MEASURE_WHAT)[number];
 
 /** A render estimated to take longer than this (s) is refused, with what to do instead. */
 export const MAX_RENDER_S = 600;
-/** How long the studio has to read out its meters (ms). */
-const METERS_MS = 3000;
+/** How many seconds of play the studio's meters cover unless asked (it waits for them, up to 30). */
+const METERS_S = 8;
+const METERS_MAX_S = 30;
+/** How long the studio has to read out its meters, past the seconds it may wait for them (ms). */
+const METERS_MS = 4000;
 /** A bounce file, as the server names them. */
 const BOUNCE_FILE = /^[\w .()'-]+\.wav$/;
 /** Audio attachments the host decodes (MP3, OGG and M4A are measured in the studio, as their meta). */
@@ -125,10 +128,12 @@ function metersOf(answer: Record<string, unknown>): Record<string, unknown> {
       grMax: level(c.grMax),
       clipped: c.clipped === true,
     }));
+  const seconds = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? Math.max(0, Math.min(86_400, v)) : 0);
   return {
     kind: 'meters',
     playing: answer.playing === true,
-    seconds: level(answer.seconds) ?? 0,
+    seconds: seconds(answer.seconds),
+    covered: Math.min(METERS_MAX_S, seconds(answer.covered)),
     channels,
   };
 }
@@ -366,7 +371,9 @@ export default function measureRoutes(kit: JobRouteKit, options: MeasureRoutesOp
       if (what === 'meters') {
         const studio = jobs.studio(job);
         if (!studio) throw new Refusal(403, 'The song isn’t open in the studio that asked');
-        const answer = await live.request(studio, { type: 'agent-meters' }, METERS_MS);
+        const seconds = opt(b.seconds) ? METERS_S : num(b.seconds, 'seconds', 1, METERS_MAX_S);
+        // the studio waits until it has watched that much play (playing started less than that ago)
+        const answer = await live.request(studio, { type: 'agent-meters', seconds }, seconds * 1000 + METERS_MS);
         if (!answer.ok)
           throw new Refusal(
             answer.error === NO_ANSWER ? 504 : 409,

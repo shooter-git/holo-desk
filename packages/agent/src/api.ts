@@ -160,6 +160,8 @@ export interface MeasureBody {
   grid?: number;
   source?: 'render' | 'bounce';
   attachment?: string;
+  /** meters: how many seconds of play they cover (8 by default, up to 30); the studio waits until it has watched that much. */
+  seconds?: number;
 }
 
 /** A measured note of a take (docs/agent.md): ticks (null off the timeline), seconds, MIDI pitches, cents, ms, dB. */
@@ -301,7 +303,9 @@ export interface PluginMeasure {
 export interface MetersMeasure {
   kind: 'meters';
   playing: boolean;
+  /** Seconds of play watched, and the seconds `peak` and `gr` cover (the last of play). */
   seconds: number;
+  covered: number;
   channels: {
     id: string;
     peak: [number | null, number | null];

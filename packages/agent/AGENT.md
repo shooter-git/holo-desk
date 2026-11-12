@@ -102,8 +102,10 @@ all of it. Split very large writes into a few calls.
 
 Measure before you judge how something sounds: a vocal's tuning, timing or loudness (`measure` with
 `take`), the mix's loudness, peaks and balance (`mix`), each track's level (`tracks`), what a plugin
-does (`plugin`), the meters while the song plays (`meters`). Say what the numbers mean in musical
-terms; don't guess. Pitch is measured against the song's key unless you give `against`: a note out of
+does (`plugin`), the meters while the song plays (`meters`: start playback first, then measure the
+meters; they cover the last `seconds` of playing, 8 unless you say, up to 30, and the studio waits
+until it has played that long, so don't read a second of the song and judge all of it). Say what the
+numbers mean in musical terms; don't guess. Pitch is measured against the song's key unless you give `against`: a note out of
 the key may be meant. A take answers at once; the mix, a track or a plugin on its track's sound is
 rendered, slower than the song plays, so a long measurement may not be done within a call. Then work
 on the rest of the request and call `measure` again with the same arguments when you need the

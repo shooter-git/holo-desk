@@ -1,7 +1,7 @@
 {
   "name": "@holo/agent",
   "private": true,
-  "version": "0.7.3",
+  "version": "0.7.4",
   "license": "MIT",
   "type": "module",
   "description": "HO[LO]'s in-app agent: its tools for the open song, and the MCP server the harness reaches them through.",

@@ -4,10 +4,10 @@ import { lazy, Suspense, useEffect, useRef } from 'react';
 import { ensureAudio, resolveConflict } from '../app/actions.ts';
 import { clampEditorHeight, fitEditorHeight, isPhone, type Layout, useLayout } from '../app/layout.ts';
 import { otherStudioToDrive } from '../app/live.ts';
-import { type MobileTab, store, useApp } from '../app/store.ts';
+import { type MobileTab, openSettings, store, useApp } from '../app/store.ts';
 import { AudioEditor, AudioEditorBar } from './AudioEditor.tsx';
 import { Bar } from './Bar.tsx';
-import { ControlBar, Lcd, SaveDot, TransportButtons } from './ControlBar.tsx';
+import { BarButton, ControlBar, Lcd, SaveDot, TransportButtons } from './ControlBar.tsx';
 import { Wordmark } from './controls.tsx';
 import { Dialogs } from './Dialogs.tsx';
 import { Mixer, PluginWindow, StageWindow, SynthWindow } from './Mixer.tsx';
@@ -17,7 +17,6 @@ import { PianoRoll, PianoRollBar } from './PianoRoll.tsx';
 import { PlayPad } from './PlayPad.tsx';
 import { spareTrackRoom, TracksArea } from './Tracks.tsx';
 import { UndoRedo } from './UndoRedo.tsx';
-import { ViewMenu } from './ViewMenu.tsx';
 import { DOUBLE_TAP_MS } from './view.ts';
 
 /** The selected track's editor: the Piano Roll, or the Audio Editor for an audio track. */
@@ -389,9 +388,9 @@ function RailTools() {
       <button
         type="button"
         className="btn ghost icon"
-        title="Audio & MIDI settings"
-        aria-label="Audio & MIDI settings"
-        onClick={() => store.set({ dialog: 'settings' })}
+        title="Settings"
+        aria-label="Settings"
+        onClick={() => openSettings()}
       >
         <Settings />
       </button>
@@ -420,7 +419,8 @@ function PhoneLayout({ layout, inert }: { layout: Layout; inert: boolean }) {
             <TransportButtons minimal />
             <Lcd compact />
             <SongTitle />
-            <ViewMenu />
+            {/* the bar; View is in Settings, as on a phone held upright */}
+            <BarButton />
           </div>
           <Banners />
           <PhoneView />

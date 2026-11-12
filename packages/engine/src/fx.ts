@@ -8,6 +8,7 @@ import type { PreparedImpulse } from './convolver.ts';
 import { Biquad, dbToGain } from './dsp.ts';
 import { Lofi, Phaser, RotarySpeaker, Tremolo } from './modfx.ts';
 import { ParametricEq } from './peq.ts';
+import { PitchCorrection } from './pitchcorrect.ts';
 import type { SamplerSpec } from './protocol.ts';
 import { DrumReplacer } from './replacer.ts';
 import { StringResonance } from './resonance.ts';
@@ -792,6 +793,8 @@ export function createEffect(type: string, host: Host): Effect | null {
       return new StringResonance(host);
     case 'replacer':
       return new DrumReplacer(host);
+    case 'pitch':
+      return new PitchCorrection(host);
     default:
       return null;
   }

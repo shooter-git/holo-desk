@@ -51,8 +51,10 @@ change merged, `sha-<commit>` always. The timer looks every 15 minutes and never
 studio is playing or recording; an open studio offers to reload when its host has been updated. Songs
 and packs live in `./data`, outside the image, so an update never touches them. An update also moves this
 checkout to the code of the image it started (a release's tag, or main's head), so its compose file, its
-tools and the runner match the server, and starts the runner again; a checkout with changes or commits of
-your own stays as it is. (A checkout older than v0.7.1 doesn't move itself yet: bring it up to date once.)
+tools and the runner match the server, and starts the runner again. `pnpm run update` takes a checkout on
+main along (it's then on no branch, and follows); a checkout on any other branch, or with changes or
+commits of your own, is your work and stays as it is. (A checkout older than v0.7.2 doesn't move itself
+yet: bring it up to date once.)
 
 To run your own changes instead, `pnpm run up` builds from this checkout (`holo-desk:local`); automatic
 updates wait until you `pnpm run update` again.

@@ -363,6 +363,7 @@ CI publishes the studio and its server as one image on every change to `main` an
 each with a signed record of what built it. A host follows a channel (`pnpm run update`), and
 `pnpm run autoupdate on` keeps it current: a timer pulls every 15 minutes, starts a new image only when
 there is one, and waits while a studio is playing or recording. Each look also moves a following
-checkout (no changes or commits of its own) to the code of the image it runs, and starts the runner
-again (`pnpm run runner-service on`) when it moved, so the runner always speaks the server's version. An open studio asks for a reload when
+checkout (on no branch, with no changes or commits of its own) forward to the code of the image it runs,
+and starts the runner again (`pnpm run runner-service on`) when it moved, so the runner always speaks
+the server's version. A branch is someone's work and is never moved by an update. An open studio asks for a reload when
 its host has been updated. `pnpm run up` builds from a checkout instead, and the timer waits.

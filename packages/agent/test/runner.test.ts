@@ -13,11 +13,13 @@ let s: Sandbox;
 afterEach(() => s?.cleanup());
 
 /** A harness whose runs the test drives by hand. */
-function stub(id: HarnessId, o: { delayInfo?: number } = {}) {
+function stub(id: HarnessId, o: { delayInfo?: number; missing?: boolean } = {}) {
   const runs: { job: Job; on: (e: RunEvent) => void; finish: () => void; cancelled: boolean }[] = [];
   const logins: ((e: HarnessEvent) => void)[] = [];
   const codes: string[] = [];
   let infoCalls = 0;
+  let rechecks = 0;
+  let installed = !o.missing;
   const h: Harness = {
     id,
     name: id === 'claude' ? 'Claude Code' : id === 'codex' ? 'Codex' : 'Cursor',
@@ -25,6 +27,7 @@ function stub(id: HarnessId, o: { delayInfo?: number } = {}) {
     async info(): Promise<HarnessInfo> {
       infoCalls++;
       if (o.delayInfo) await new Promise((ok) => setTimeout(ok, o.delayInfo));
+      if (!installed) return { id, name: h.name, found: false, sealed: false, installer: `install ${id}` };
       return { id, name: h.name, found: true, sealed: true, version: `1.${infoCalls}` };
     },
     authStatus: async () => ({ signedIn: false }),
@@ -42,6 +45,14 @@ function stub(id: HarnessId, o: { delayInfo?: number } = {}) {
     checkUpdate: async () => null,
     async update(onLine) {
       onLine('updating…');
+    },
+    async install(onLine) {
+      if (installed) throw new Error(`${h.name} is installed already`);
+      onLine('downloading…');
+      installed = true;
+    },
+    recheck() {
+      rechecks++;
     },
     models: async () => [],
     efforts: async () => [],
@@ -61,15 +72,15 @@ function stub(id: HarnessId, o: { delayInfo?: number } = {}) {
       };
     },
   };
-  return { h, runs, codes, infoCalls: () => infoCalls };
+  return { h, runs, codes, infoCalls: () => infoCalls, rechecks: () => rechecks };
 }
 
-function runner(over: { delayInfo?: number } = {}) {
+function runner(over: { delayInfo?: number; missing?: HarnessId[] } = {}) {
   const sent: Record<string, unknown>[] = [];
   const logs: string[] = [];
-  const claude = stub('claude', over);
-  const codex = stub('codex', over);
-  const cursor = stub('cursor', over);
+  const claude = stub('claude', { ...over, missing: over.missing?.includes('claude') });
+  const codex = stub('codex', { ...over, missing: over.missing?.includes('codex') });
+  const cursor = stub('cursor', { ...over, missing: over.missing?.includes('cursor') });
   const r = startAgentRunner({
     base: 'http://127.0.0.1:47998',
     send: (m) => sent.push(m),
@@ -79,6 +90,7 @@ function runner(over: { delayInfo?: number } = {}) {
     root: s.root,
     env: s.env,
     middleC: async () => 'C4',
+    host: 'studio-host',
   });
   return { r, sent, logs, claude, codex, cursor };
 }
@@ -120,12 +132,21 @@ describe('the agent runner', () => {
     expect(r.handle({ type: 'agent-on' })).toBe(true);
     expect(sent).toEqual([]);
     await until(() => sent.length > 0);
-    expect(sent[0]).toMatchObject({ type: 'harnesses', list: [{ id: 'claude' }, { id: 'codex' }, { id: 'cursor' }] });
+    // each with the computer it's on
+    expect(sent[0]).toMatchObject({
+      type: 'harnesses',
+      list: [
+        { id: 'claude', host: 'studio-host' },
+        { id: 'codex', host: 'studio-host' },
+        { id: 'cursor', host: 'studio-host' },
+      ],
+    });
     r.connected();
     expect(sent).toHaveLength(2);
     expect(claude.infoCalls()).toBe(1);
-    // asked to look again: a fresh look, and each harness says it's done
+    // asked to look again: a fresh look (a failed seal checked again), and each harness says it's done
     r.handle({ type: 'agent-refresh' });
+    expect(claude.rechecks()).toBe(1);
     await until(() => sent.filter((m) => m.type === 'agent-harness').length === 3);
     expect(claude.infoCalls()).toBe(2);
     expect(sent.filter((m) => m.type === 'agent-harness')[0]).toEqual({
@@ -261,16 +282,79 @@ describe('the agent runner', () => {
     });
   });
 
-  it('runs an update only when asked, and says what it found after', async () => {
+  it('runs an update only when asked, and says it’s done once it has looked again', async () => {
     s = sandbox();
     const { r, sent } = runner();
     r.handle({ type: 'agent-update', harness: 'cursor' });
-    await until(() => sent.some((m) => m.type === 'harnesses'));
+    await until(() => sent.some((m) => m.type === 'agent-harness' && m.state === 'done'));
     expect(sent.filter((m) => m.type === 'agent-harness').map((m) => [m.state, m.line ?? ''])).toEqual([
       ['running', 'Updating Cursor'],
       ['running', 'updating…'],
       ['done', ''],
     ]);
+    // the new version's models and efforts were reported before the studio hears it's done
+    const order = sent.map((m) => (m.type === 'agent-harness' ? `${m.kind}:${m.state}` : m.type));
+    expect(order.indexOf('harnesses')).toBeLessThan(order.indexOf('update:done'));
+  });
+
+  it('installs a harness only when asked, then looks again and says what it found', async () => {
+    s = sandbox();
+    const { r, sent, cursor, logs } = runner({ missing: ['cursor'] });
+    r.handle({ type: 'agent-install', harness: 'cursor' });
+    await until(() => sent.some((m) => m.type === 'agent-harness' && m.state !== 'running'));
+    expect(sent.filter((m) => m.type === 'agent-harness')).toEqual([
+      {
+        type: 'agent-harness',
+        harness: 'cursor',
+        kind: 'install',
+        state: 'running',
+        line: 'Installing Cursor on studio-host',
+      },
+      { type: 'agent-harness', harness: 'cursor', kind: 'install', state: 'running', line: 'downloading…' },
+      { type: 'agent-harness', harness: 'cursor', kind: 'install', state: 'done', line: 'Cursor 1.1 is installed' },
+    ]);
+    // the fresh look came first: Settings shows its version and Sign in when it hears it's done
+    const report = sent.find((m) => m.type === 'harnesses') as { list: HarnessInfo[] };
+    expect(report.list.find((h) => h.id === 'cursor')).toMatchObject({ found: true, version: '1.1' });
+    expect(logs.join('\n')).toContain('official installer');
+    expect(cursor.infoCalls()).toBe(1);
+    // a second click finds it installed
+    r.handle({ type: 'agent-install', harness: 'cursor' });
+    await until(() => sent.filter((m) => m.type === 'agent-harness' && m.state === 'failed').length === 1);
+    expect(sent.filter((m) => m.type === 'agent-harness').at(-1)).toMatchObject({
+      kind: 'install',
+      state: 'failed',
+      error: 'Cursor is installed already',
+    });
+  });
+
+  it('never installs while the harness is busy', async () => {
+    s = sandbox();
+    const { r, sent, claude } = runner();
+    r.handle(run(1));
+    await until(() => claude.runs.length === 1);
+    r.handle({ type: 'agent-install', harness: 'claude' });
+    expect(sent.filter((m) => m.type === 'agent-harness')).toEqual([
+      {
+        type: 'agent-harness',
+        harness: 'claude',
+        kind: 'install',
+        state: 'failed',
+        error: 'Claude Code is busy: try once it’s done',
+      },
+    ]);
+    r.handle({ type: 'agent-install', harness: 'bash' });
+    expect(sent.filter((m) => m.type === 'agent-harness')).toHaveLength(1);
+  });
+
+  it('looks quietly when Settings › Agent is opened (a light refresh): no seal checked again, nothing said but the list', async () => {
+    s = sandbox();
+    const { r, sent, claude } = runner();
+    r.handle({ type: 'agent-refresh', light: true });
+    await until(() => sent.some((m) => m.type === 'harnesses'));
+    expect(claude.infoCalls()).toBe(1);
+    expect(claude.rechecks()).toBe(0);
+    expect(sent.map((m) => m.type)).toEqual(['harnesses']);
   });
 });
 

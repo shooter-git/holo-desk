@@ -2681,6 +2681,27 @@ html[data-layout="phone-landscape"] .bar .field input {
   overflow-wrap: anywhere;
 }
 
+/* the harnesses, then Look again under them, at the start */
+.agent-harness-list {
+  align-items: flex-start;
+}
+
+.agent-harness-list > .agent-harnesses {
+  align-self: stretch;
+}
+
+/* Install's and Update's question: its words, then its two buttons (on a phone, under the words) */
+.agent-confirm {
+  flex-wrap: wrap;
+  row-gap: 8px;
+}
+
+/* what Install runs, as a command: broken only between its words where it can be */
+.agent-confirm .agent-command {
+  color: var(--text);
+  overflow-wrap: break-word;
+}
+
 /* a sign-in: a button for its page, and a field for the code it shows, wrapping on a phone */
 .agent-signin {
   display: flex;
@@ -2768,6 +2789,13 @@ html[data-layout="phone-landscape"] .bar .field input {
   }
   .agent-harness .agent-cell {
     min-width: 0;
+  }
+  .agent-confirm > .grow {
+    flex-basis: 100%;
+  }
+  .agent-confirm > .btn {
+    flex: 1 1 0;
+    min-height: 36px;
   }
 }
 

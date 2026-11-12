@@ -5,7 +5,7 @@
  */
 import { readFileSync } from 'node:fs';
 import type { Scan, ScanSystem, SystemState } from '@holo/score';
-import { applyOps, describeProject, type Op, type Project, type SampleMic } from '@holo/session';
+import { type AudioFile, applyOps, describeProject, type Op, type Project, type SampleMic } from '@holo/session';
 
 /** What the requester's studio shows: the playhead, the selection, the cycle and the view. */
 export interface StudioState {
@@ -117,7 +117,7 @@ export interface Attachment {
   data?: string;
 }
 
-export type PermissionKind = 'install-pack' | 'send-creation' | 'screen' | 'photo' | 'microphone';
+export type PermissionKind = 'install-pack' | 'send-creation' | 'bounce' | 'render' | 'screen' | 'photo' | 'microphone';
 
 /** One part of a listen (docs/agent.md: POST …/listen). */
 export interface ListenPart {
@@ -135,6 +135,232 @@ export interface Image {
   mime: string;
   /** base64 */
   data: string;
+}
+
+// Each area's types, and its parts of JobApi, httpJobApi, FakeJobApiOptions and fakeJobApi, go in its own
+// labelled block, so the areas added side by side keep their lines apart.
+
+// ---- measure ----
+
+/** What `measure` measures (docs/agent.md, "Measuring"). */
+export type MeasureWhat = 'take' | 'mix' | 'tracks' | 'plugin' | 'meters' | 'file';
+
+/** POST …/measure: ids and ticks (the tool turns names and positions into these). */
+export interface MeasureBody {
+  what: MeasureWhat;
+  /** A track's id (take, tracks); a track's, a bus's or "master" (plugin). */
+  track?: string;
+  region?: string;
+  plugin?: string;
+  from?: number;
+  to?: number;
+  /** take: "key", "none" or a reference track's id; tracks: a second track's id. */
+  against?: string;
+  /** take: the grid, in ticks. */
+  grid?: number;
+  /** take: "effects" renders it through its track's plugins and measures that; "recording" (the default) reads the files. */
+  through?: 'recording' | 'effects';
+  source?: 'render' | 'bounce';
+  attachment?: string;
+  /** meters: how many seconds of play they cover (8 by default, up to 30); the studio waits until it has watched that much. */
+  seconds?: number;
+}
+
+/** A measured note of a take (docs/agent.md): ticks (null off the timeline), seconds, MIDI pitches, cents, ms, dB. */
+export interface TakeNoteMeasure {
+  tick: number | null;
+  end: number | null;
+  at: number;
+  length: number;
+  pitch: number;
+  target: number;
+  cents: number;
+  inKey?: boolean;
+  ref?: number | null;
+  drift: number;
+  vibrato: [number, number] | null;
+  grid: number | null;
+  attack: boolean;
+  db: number;
+  peak: number;
+  region: string | null;
+}
+
+export interface TakeMeasure {
+  kind: 'take';
+  track: string | null;
+  name: string;
+  /** Measured as it comes out of its track's plugins (rendered): which they were, and what the render reported. */
+  through?: { plugins: { id: string; name: string; bypass: boolean }[]; errors: string[] };
+  unplayable?: UnplayableMeasure;
+  regions: string[];
+  seconds: number;
+  against: { kind: 'key'; keys: string[] } | { kind: 'track'; track: string } | { kind: 'none' };
+  grid: number;
+  notes: TakeNoteMeasure[];
+  phrases: {
+    tick: number | null;
+    end: number | null;
+    at: number;
+    length: number;
+    notes: number;
+    db: number;
+    peak: number;
+  }[];
+  summary: {
+    notes: number;
+    meanAbs: number;
+    bias: number;
+    within10: number;
+    within25: number;
+    sharp: number;
+    flat: number;
+    timing: { mean: number; spread: number; late: number; early: number } | null;
+    vibrato: { notes: number; rate: number; depth: number } | null;
+    drifting: number;
+  };
+}
+
+/** What of the song plays a HO[LO] Pack that isn't installed here: silent in a render, as in the studio. */
+export interface UnplayableMeasure {
+  tracks: { id: string; name: string; pack: string }[];
+  /** Plugins whose kit or response is in such a pack: left out. */
+  plugins: { id: string; name: string; channel: string; pack: string }[];
+}
+
+/** Loudness (LUFS, LU), peaks (dBTP, dBFS) and samples at full scale; null where silent. */
+export interface LoudnessMeasure {
+  seconds: number;
+  integrated: number | null;
+  momentaryMax: number | null;
+  shortTermMax: number | null;
+  range: number | null;
+  truePeak: number | null;
+  samplePeak: number | null;
+  over: number;
+  overRuns: number;
+}
+
+export interface MixMeasure {
+  kind: 'mix';
+  source: 'render' | 'bounce' | 'file';
+  name?: string;
+  /** A bounce: when it was made, and whether the song changed after. */
+  made?: string;
+  stale?: boolean;
+  tick: number | null;
+  end: number | null;
+  loudness: LoudnessMeasure;
+  sections: {
+    name: string | null;
+    tick: number | null;
+    end: number | null;
+    at: number;
+    length: number;
+    lufs: number | null;
+    shortTermMax: number | null;
+  }[];
+  /** Octave bands 31.5 Hz to 16 kHz (dB). */
+  octaves: (number | null)[];
+  tilt: number | null;
+  errors: string[];
+  unplayable?: UnplayableMeasure;
+}
+
+export interface TracksMeasure {
+  kind: 'tracks';
+  tick: number;
+  end: number;
+  tracks: {
+    id: string;
+    name: string;
+    output: string;
+    muted: boolean;
+    silent: boolean;
+    lufs: number | null;
+    peak: number | null;
+    truePeak: number | null;
+    octaves: (number | null)[];
+    /** Third-octave bands 25 Hz to 20 kHz (dB), for one track. */
+    thirds?: (number | null)[];
+    source?: { lufs: number | null; peak: number | null } | null;
+    /** It plays this pack, which isn't installed here: silent, not rendered. */
+    missing?: string;
+  }[];
+  masking: { a: string; b: string; bands: { hz: number; overlap: number; diff: number }[] } | null;
+  errors: string[];
+  unplayable?: UnplayableMeasure;
+}
+
+export interface PluginMeasure {
+  kind: 'plugin';
+  channel: string;
+  plugin: { id: string; type: string; name: string; bypass: boolean };
+  method: 'response' | 'signal';
+  response?: {
+    thirds: (number | null)[];
+    latency: number;
+    decay?: number | null;
+    predelay?: number | null;
+    echoes?: [number, number][];
+  };
+  signal?: {
+    tick: number;
+    end: number;
+    in: { lufs: number | null; peak: number | null };
+    out: { lufs: number | null; peak: number | null };
+    octavesIn: (number | null)[];
+    octavesOut: (number | null)[];
+    gr: { active: number; median: number; p90: number; max: number } | null;
+  };
+  errors: string[];
+  unplayable?: UnplayableMeasure;
+}
+
+export interface MetersMeasure {
+  kind: 'meters';
+  playing: boolean;
+  /** Seconds of play watched, and the seconds `peak` and `gr` cover (the last of play). */
+  seconds: number;
+  covered: number;
+  channels: {
+    id: string;
+    peak: [number | null, number | null];
+    max: [number | null, number | null];
+    gr: number | null;
+    grMax: number | null;
+    clipped: boolean;
+  }[];
+}
+
+export type MeasureResult = TakeMeasure | MixMeasure | TracksMeasure | PluginMeasure | MetersMeasure;
+
+/** A measurement's answer: its result, or (not done within 40 s) how far it has got and about how many seconds are left. */
+export type MeasureAnswer =
+  | { done: true; task: string; result: MeasureResult; cached?: boolean }
+  | { done: false; task: string; progress: number; eta: number | null; stage: string };
+
+/** A measuring call waits up to 40 s on the server: the client gives it 50 (a harness cuts a call at 60). */
+const MEASURE_TIMEOUT_MS = 50_000;
+
+// ---- import ----
+
+/**
+ * What `POST …/import` brings in of an attachment: a recording as one of the song's audio files (kept
+ * as WAV), or a MIDI or MusicXML file as a song of its own, to merge; or not done yet (the studio is
+ * still converting it: the same call again waits on).
+ */
+export type ImportAnswer =
+  | { done: true; kind: 'audio'; how: 'copied' | 'converted' | 'studio'; file: AudioFile }
+  | { done: true; kind: 'notes'; format: 'midi' | 'musicxml'; name: string; song: Project; warnings: string[] }
+  | { done: false; line: string };
+
+// ---- details ----
+
+/** Who a song is by and its album, as the library keeps them beside the song (null: none). */
+export interface SongDetails {
+  artist: string | null;
+  album: string | null;
 }
 
 export interface JobApi {
@@ -186,6 +412,23 @@ export interface JobApi {
   handoff(brief: string): Promise<{ ok: boolean }>;
   /** POST …/finish: the undo step's label (≤ 80) and the reply under the bar (≤ 600). */
   finish(label: string, reply: string): Promise<{ ok: boolean }>;
+
+  // ---- measure ----
+  /** POST …/measure: waits up to 40 s; not done, the same body again joins it (or GET …/measure/:task). */
+  measure(body: MeasureBody): Promise<MeasureAnswer>;
+  /** GET …/measure/:task: a measurement under way, waited for up to 40 s. */
+  measureTask(task: string): Promise<MeasureAnswer>;
+
+  // ---- import ----
+  /** POST …/import: an attachment brought into the song's files (a recording) or read as a song (MIDI, MusicXML). */
+  importAttachment(attachment: string): Promise<ImportAnswer>;
+
+  // ---- details ----
+  /**
+   * PUT …/details: who the song is by and its album (each one given is set, null clears it). Outside
+   * undo; refused (400) for a creation's song.
+   */
+  details(body: { artist?: string | null; album?: string | null }): Promise<{ ok: boolean } & SongDetails>;
 }
 
 /** An answer from HO[LO] that wasn't OK: its own `error` message, and the status. */
@@ -273,6 +516,17 @@ export function httpJobApi(base: string, job: string, tokenFile: string): JobApi
     permission: (body) => json('POST', '/permission', body),
     handoff: (brief) => json('POST', '/handoff', { brief }),
     finish: (label, reply) => json('POST', '/finish', { label, reply }),
+
+    // ---- measure ----
+    measure: (body) => json('POST', '/measure', body, MEASURE_TIMEOUT_MS),
+    measureTask: (task) => json('GET', `/measure/${seg(task)}`, undefined, MEASURE_TIMEOUT_MS),
+
+    // ---- import ----
+    // (the server takes at most about 40 s, then says it isn't done; a harness cuts a call at 60)
+    importAttachment: (attachment) => json('POST', '/import', { attachment }, 50_000),
+
+    // ---- details ----
+    details: (body) => json('PUT', '/details', body),
   };
 }
 
@@ -289,6 +543,18 @@ export interface FakeJobApiOptions {
   /** What listening hears: each part, in turn (the last given again once they run out). */
   heard?: PlayedNote[] | ListenPart[];
   attachments?: Record<string, Attachment>;
+
+  // ---- measure ----
+  /** What measuring answers, by what's measured: one answer, or several in turn (the last again once they run out). */
+  measured?: Partial<Record<MeasureWhat, MeasureAnswer | MeasureAnswer[]>>;
+
+  // ---- import ----
+  /** What importing each attachment brings: an answer, or one a call at a time (the last given again). */
+  imports?: Record<string, ImportAnswer | ImportAnswer[]>;
+
+  // ---- details ----
+  /** Who the song is by and its album at first; `refuse`: the 400 a creation's song gets. */
+  details?: Partial<SongDetails> & { refuse?: string };
 }
 
 /** Every call the fake took, in order. */
@@ -408,6 +674,46 @@ export function fakeJobApi(project: Project, options: FakeJobApiOptions = {}): F
     async finish(label, reply) {
       log('finish', label, reply);
       return { ok: true };
+    },
+
+    // ---- measure ----
+    async measure(body) {
+      log('measure', body);
+      const given = options.measured?.[body.what];
+      if (!given) throw new ApiError(404, `Nothing to measure (${body.what})`);
+      if (!Array.isArray(given)) return given;
+      const i = calls.filter((c) => c.method === 'measure' && (c.args[0] as MeasureBody).what === body.what).length - 1;
+      return given[Math.min(i, given.length - 1)] as MeasureAnswer;
+    },
+    async measureTask(task) {
+      log('measureTask', task);
+      for (const given of Object.values(options.measured ?? {})) {
+        const found = (Array.isArray(given) ? given : [given]).find((a) => a.task === task && a.done);
+        if (found) return found;
+      }
+      return missing('measurement');
+    },
+
+    // ---- import ----
+    async importAttachment(attachment) {
+      log('importAttachment', attachment);
+      const given = options.imports?.[attachment];
+      if (!given) return missing('attachment');
+      if (!Array.isArray(given)) return given;
+      const i = calls.filter((c) => c.method === 'importAttachment' && c.args[0] === attachment).length - 1;
+      return given[Math.min(i, given.length - 1)] as ImportAnswer;
+    },
+
+    // ---- details ----
+    async details(body) {
+      log('details', body);
+      // (kept in the options, as the library keeps them beside the song)
+      options.details ??= {};
+      const about = options.details;
+      if (about.refuse) throw new ApiError(400, about.refuse);
+      for (const field of ['artist', 'album'] as const)
+        if (body[field] !== undefined) about[field] = body[field] ?? null;
+      return { ok: true, artist: about.artist ?? null, album: about.album ?? null };
     },
   };
   return fake;

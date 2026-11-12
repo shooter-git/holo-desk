@@ -22,6 +22,7 @@ import {
   playheadTick,
   quantizeSelection,
   redo,
+  renderForAgent,
   repeatRegions,
   saveNow,
   selectAll,
@@ -154,9 +155,9 @@ const clock = (ms: number) => `${Math.floor(ms / 60_000)}:${String(Math.floor(ms
 /**
  * The one button a job's permission needs, beside the agent's reason for it (a pack's says what it
  * downloads): a click runs the studio's own code (the Library's install queue, sending the song to its
- * creation, capturing the screen, a photo, the microphone), then the host hears what happened and the
- * agent carries on. A screenshot or a photo is shown first, small, with Send and Cancel: nothing leaves
- * the device until Send.
+ * creation, a bounce, the creation's own render, capturing the screen, a photo, the microphone), then
+ * the host hears what happened and the agent carries on. A screenshot or a photo is shown first, small,
+ * with Send and Cancel: nothing leaves the device until Send.
  */
 function PermissionButton({ job, permission, project }: { job: string; permission: Permission; project: string }) {
   const [busy, setBusy] = useState('');
@@ -174,6 +175,8 @@ function PermissionButton({ job, permission, project }: { job: string; permissio
     if (packId && !installs.state.packs) void installs.load();
   }, [packId]);
   const pack = packId ? install.packs?.find((p) => p.id === packId) : undefined;
+  // the creation that renders the song ("Hear it as my-game")
+  const creation = useApp((s) => s.project?.origin?.creation);
 
   useEffect(() => {
     if (!recording) return;
@@ -221,6 +224,17 @@ function PermissionButton({ job, permission, project }: { job: string; permissio
           true,
           sent ? sent.text : 'This song didn’t come from a creation, so there’s none to send it to',
         );
+      });
+    if (kind === 'bounce')
+      return attempt('Bouncing…', async () => {
+        // the song (or the cycle, when it's on), kept with it on the host, where the agent measures it
+        const r = await bounceSong(false);
+        if (!r) throw new Error('The bounce didn’t finish: try again');
+        await permit(job, true, `Bounced ${clock(r.seconds * 1000)} of the song, kept with it as ${r.path}`);
+      });
+    if (kind === 'render')
+      return attempt('Rendering…', async () => {
+        await permit(job, true, await renderForAgent());
       });
     if (kind === 'screen')
       return attempt('Choose what to share…', async () => shown(await grabScreen(), 'Shared a screenshot'));
@@ -299,7 +313,9 @@ function PermissionButton({ job, permission, project }: { job: string; permissio
         </button>
       ) : (
         <button type="button" className="btn" disabled={!!busy} onClick={() => void run()}>
-          {permission.kind === 'screen' && kind === 'photo' ? 'Take a photo instead' : allowLabel(permission, pack)}
+          {permission.kind === 'screen' && kind === 'photo'
+            ? 'Take a photo instead'
+            : allowLabel(permission, pack, creation)}
         </button>
       )}
     </>

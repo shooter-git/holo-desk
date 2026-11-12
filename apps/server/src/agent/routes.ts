@@ -1,7 +1,7 @@
 /**
  * The agent's HTTP routes (docs/agent.md): turning it on and pairing a device with the runner's code
  * (the first, or one that lost its way back in), devices asking to join, settings, the harnesses'
- * sign-in and updates, requests and their jobs, threads; and the job-scoped routes its tools call
+ * sign-in, updates and installs, requests and their jobs, threads; and the job-scoped routes its tools call
  * (`/api/agent/jobs/:job/*`, with the job's token).
  *
  * Only `GET /api/agent`, pairing, and asking to join are open; everything else needs an allowed
@@ -12,6 +12,7 @@
  * Attachments a device sends are kept a week, each the device's own for the song it was sent for;
  * a job reads only those its request (or an earlier one on its thread) named.
  */
+import { createReadStream } from 'node:fs';
 import { join } from 'node:path';
 import { SCAN_ID, type Scan } from '@holo/score';
 import { describeProject, type Op } from '@holo/session';
@@ -23,13 +24,20 @@ import {
   ATTACHMENT_TYPES,
   Attachments,
   type AttachmentType,
-  MAX_ATTACHMENT,
+  HEAD,
+  isAudio,
+  isScore,
+  MAX_AUDIO,
   MAX_META,
-  MAX_TEXT,
+  maxSize,
   metaSummary,
+  scoreText,
   sniff,
+  tooBigText,
 } from './attachments.ts';
 import { Auth, bearer } from './auth.ts';
+import { type Body, bad, body, CONTROL, ID, int, isObj, line, num, type Params, text } from './check.ts';
+import { type JobHandler, type JobRouteKit, type OwnMethod, registerJobRoutes } from './job-routes/index.ts';
 import { type AgentJob, Jobs, type Limits, MODEL, PERMISSION_KINDS, Refusal } from './jobs.ts';
 import type { PermissionKind, RequestContext, ScanPreset } from './prompt.ts';
 import { AgentStore, HARNESSES, type HarnessId } from './store.ts';
@@ -52,53 +60,7 @@ const OFF = 'The agent is off: turn it on in Settings › Agent';
 /** MusicXML is passed on whole (as text) up to this size; past it, only what was measured. */
 const MAX_XML_DATA = 1024 * 1024;
 
-type Body = Record<string, unknown>;
-type Params = Record<string, string>;
-
-// ---- checking what comes in ----
-
-const isObj = (v: unknown): v is Body => typeof v === 'object' && v !== null && !Array.isArray(v);
-const bad = (message: string) => new Refusal(400, message);
-/** Control characters (tabs and line breaks aside). */
-const CONTROL = /(?![\t\n])\p{Cc}/u;
-const ID = /^[\w-]{1,64}$/;
-
-/** A body's fields (none: an empty one). */
-function body(req: FastifyRequest): Body {
-  if (req.body === undefined || req.body === null) return {};
-  if (!isObj(req.body)) throw bad('The body is a JSON object');
-  return req.body;
-}
-
-/** A line of text: trimmed, 1 to `max` characters, no line breaks or control characters. */
-function line(v: unknown, what: string, max: number): string {
-  if (typeof v !== 'string') throw bad(`${what} is text`);
-  const text = v.trim();
-  if (!text || text.length > max || CONTROL.test(text) || /[\n\r]/.test(text))
-    throw bad(`${what} is one line of at most ${max} characters`);
-  return text;
-}
-
-/** Text that may run over several lines: trimmed, 1 to `max` characters. */
-function text(v: unknown, what: string, max: number, optional = false): string {
-  if (optional && (v === undefined || v === null || v === '')) return '';
-  if (typeof v !== 'string') throw bad(`${what} is text`);
-  const t = v.replace(/\r\n?/g, '\n').trim();
-  if ((!t && !optional) || t.length > max || CONTROL.test(t)) throw bad(`${what} is at most ${max} characters`);
-  return t;
-}
-
-function int(v: unknown, what: string, lo: number, hi: number): number {
-  if (typeof v !== 'number' || !Number.isInteger(v) || v < lo || v > hi)
-    throw bad(`${what} is a whole number from ${lo} to ${hi}`);
-  return v;
-}
-
-function num(v: unknown, what: string, lo: number, hi: number): number {
-  if (typeof v !== 'number' || !Number.isFinite(v) || v < lo || v > hi)
-    throw bad(`${what} is a number from ${lo} to ${hi}`);
-  return v;
-}
+// ---- checking what comes in (the checks every route uses are in check.ts) ----
 
 /** What the studio sees, as a request carries it: each part checked, anything else left out. */
 function context(v: unknown): RequestContext | undefined {
@@ -231,7 +193,6 @@ export function agentRoutes(app: FastifyInstance, o: AgentOptions): { jobs: Jobs
       }
     };
 
-  type JobHandler = (req: FastifyRequest, reply: FastifyReply, job: AgentJob) => Promise<unknown>;
   /**
    * A route for a job's tools: its token, while it runs (403 otherwise); with `studio`, only while the
    * requester's studio has the job's song open.
@@ -254,11 +215,11 @@ export function agentRoutes(app: FastifyInstance, o: AgentOptions): { jobs: Jobs
     };
 
   /** One of the server's own routes, asked from here (the tools get exactly what the studio does). */
-  const own = async (method: 'GET' | 'PATCH', url: string, payload?: Body) => {
+  const own = async (method: OwnMethod, url: string, payload?: Body) => {
     const res = await app.inject({ method, url, ...(payload ? { payload } : {}) });
     return res;
   };
-  const relayJson = async (reply: FastifyReply, method: 'GET' | 'PATCH', url: string, payload?: Body) => {
+  const relayJson = async (reply: FastifyReply, method: OwnMethod, url: string, payload?: Body) => {
     const res = await own(method, url, payload);
     return reply.code(res.statusCode).type('application/json; charset=utf-8').send(res.body);
   };
@@ -412,6 +373,11 @@ export function agentRoutes(app: FastifyInstance, o: AgentOptions): { jobs: Jobs
       return { ok: true };
     }),
   );
+  // Settings › Agent was opened: a runner that looked an hour ago or more looks again, quietly
+  app.post(
+    '/api/agent/harnesses/look',
+    forDevice(async () => ({ ok: true, asked: theJobs.look() })),
+  );
   app.post(
     '/api/agent/harnesses/:id/login',
     forDevice(async (req) => {
@@ -434,6 +400,14 @@ export function agentRoutes(app: FastifyInstance, o: AgentOptions): { jobs: Jobs
     '/api/agent/harnesses/:id/update',
     forDevice(async (req) => {
       theJobs.relay('update', harnessId((req.params as Params).id));
+      return { ok: true };
+    }),
+  );
+  // the vendor's official installer, on the runner's computer: the runner runs its own fixed command
+  app.post(
+    '/api/agent/harnesses/:id/install',
+    forDevice(async (req) => {
+      theJobs.relay('install', harnessId((req.params as Params).id));
       return { ok: true };
     }),
   );
@@ -471,9 +445,12 @@ export function agentRoutes(app: FastifyInstance, o: AgentOptions): { jobs: Jobs
   const askPermission = async (req: FastifyRequest, job: AgentJob) => {
     const b = body(req);
     if (!PERMISSION_KINDS.includes(b.kind as PermissionKind))
-      throw bad('kind is install-pack, send-creation, screen, photo or microphone');
+      throw bad('kind is install-pack, send-creation, bounce, render, screen, photo or microphone');
     const kind = b.kind as PermissionKind;
     const detail = line(b.detail, 'detail', 300);
+    // only a creation can render its own song
+    if (kind === 'render' && !store.get(job.view.project)?.origin)
+      throw bad('This song didn’t come from a creation, so there’s none to render it');
     let pack: string | undefined;
     if (b.pack !== undefined && b.pack !== null) {
       if (typeof b.pack !== 'string' || !/^[\w.-]{1,80}$/.test(b.pack)) throw bad('pack is a pack’s id');
@@ -527,17 +504,16 @@ export function agentRoutes(app: FastifyInstance, o: AgentOptions): { jobs: Jobs
 
   // ---- attachments: what a device sends with a request ----
 
-  // any type comes in as bytes (the type it is is in the query, and checked against its first bytes);
-  // the device and the agent being on are checked before the body is read
+  // any type comes in as bytes, straight to disk as they arrive, cut off at the type's limit (the type
+  // it is is in the query, and checked against its first bytes); the device and the agent being on are
+  // checked before the body is read
   app.register(async (scope) => {
     scope.removeAllContentTypeParsers();
-    scope.addContentTypeParser('*', { parseAs: 'buffer', bodyLimit: MAX_ATTACHMENT }, (_req, data, done) =>
-      done(null, data),
-    );
+    scope.addContentTypeParser('*', (_req, payload, done) => done(null, payload));
     scope.post(
       '/api/agent/attachments',
       {
-        bodyLimit: MAX_ATTACHMENT,
+        bodyLimit: MAX_AUDIO,
         onRequest: async (req, reply) => {
           if (!auth.device(req.headers.authorization)) return reply.code(401).send({ error: NOT_ALLOWED });
           if (!agentStore.settings().enabled) return reply.code(409).send({ error: OFF, reason: 'off' });
@@ -551,17 +527,47 @@ export function agentRoutes(app: FastifyInstance, o: AgentOptions): { jobs: Jobs
         if (!ATTACHMENT_TYPES.includes(q.type as AttachmentType))
           throw new Refusal(415, `HO[LO] takes ${ATTACHMENT_TYPES.join(', ')}`);
         const type = q.type as AttachmentType;
-        const data = Buffer.isBuffer(req.body) ? req.body : null;
-        if (!data?.length) throw bad('The file is the body, and it’s empty');
-        if (type === 'text/plain' && data.length > MAX_TEXT)
-          throw new Refusal(413, `A text is ${MAX_TEXT / 1024} KB at most`);
-        const wrong = sniff(type, data);
-        if (wrong) throw new Refusal(415, wrong);
-        const a = attachments.add(device, q.project, name, type, data);
+        const max = maxSize(type);
+        // too big by what it says: not read at all
+        if (Number(req.headers['content-length']) > max) throw new Refusal(413, tooBigText(type));
+        const body = req.body as AsyncIterable<Uint8Array> | null | undefined;
+        const got = body && Symbol.asyncIterator in Object(body) ? await attachments.receive(body, max) : null;
+        if (body && !got) throw new Refusal(413, tooBigText(type));
+        if (!got?.size) {
+          if (got) attachments.discard(got.id);
+          throw bad('The file is the body, and it’s empty');
+        }
+        // a recording by its first bytes; anything else (at most 25 MB) whole
+        const wrong = sniff(type, attachments.head(got.id, isAudio(type) ? HEAD : undefined));
+        if (wrong) {
+          attachments.discard(got.id);
+          throw new Refusal(415, wrong);
+        }
+        const a = attachments.keep(got.id, device, q.project, name, type, got.size);
         return { id: a.id, name: a.name, type: a.type, size: a.size };
       }),
     );
   });
+
+  // a file's bytes, for the device that sent it (the studio imports a recording it can decode); or for
+  // the device whose running job may read it (an earlier request on the job's thread, from another device)
+  app.get(
+    '/api/agent/attachments/:id/data',
+    forDevice(async (req, reply, device) => {
+      const id = (req.params as Params).id ?? '';
+      const a = ATTACHMENT_ID.test(id) ? attachments.get(id) : null;
+      const path = a ? attachments.file(id) : null;
+      if (!a || !path) throw new Refusal(404, 'No such attachment');
+      const job = theJobs.running(a.project);
+      const jobs = !!job && job.view.device === device && theJobs.mayRead(job, id);
+      if (a.device !== device && !jobs) throw new Refusal(403, 'Not this device’s');
+      return reply
+        .type(a.type)
+        .header('content-length', a.size)
+        .header('cache-control', 'no-store')
+        .send(createReadStream(path));
+    }),
+  );
 
   app.put(
     '/api/agent/attachments/:id/meta',
@@ -763,11 +769,15 @@ export function agentRoutes(app: FastifyInstance, o: AgentOptions): { jobs: Jobs
       // only what this job's request (or an earlier one on its thread) named, for its song
       if (a.project !== job.view.project || !theJobs.mayRead(job, id))
         throw new Refusal(403, 'That attachment isn’t this request’s');
-      const whole =
-        a.type.startsWith('image/') ||
-        a.type === 'text/plain' ||
-        (a.type === 'application/vnd.recordare.musicxml+xml' && a.size <= MAX_XML_DATA);
-      const data = whole ? attachments.data(id) : null;
+      const whole = a.type.startsWith('image/') || a.type === 'text/plain';
+      let data = whole ? attachments.data(id) : null;
+      // a score as UTF-8 text, whatever it came as (UTF-16, or zipped in an .mxl), up to MAX_XML_DATA
+      if (isScore(a.type)) {
+        const bytes = attachments.data(id);
+        const xml = bytes ? await scoreText(a.type, bytes).catch(() => null) : null;
+        const utf8 = xml === null ? null : Buffer.from(xml, 'utf8');
+        if (utf8 && utf8.length <= MAX_XML_DATA) data = utf8;
+      }
       return {
         name: a.name,
         type: a.type,
@@ -801,12 +811,31 @@ export function agentRoutes(app: FastifyInstance, o: AgentOptions): { jobs: Jobs
     }),
   );
 
+  // the rest of the job's tools: each area's routes in its own module (job-routes/index.ts lists them)
+  const closing: (() => void)[] = [];
+  const kit: JobRouteKit = {
+    app,
+    J,
+    forJob,
+    jobs: theJobs,
+    live,
+    store,
+    attachments,
+    dataDir: o.dataDir,
+    scans: o.scans,
+    own,
+    relayJson,
+    onClose: (fn) => closing.push(fn),
+  };
+  registerJobRoutes(kit);
+
   return {
     jobs: theJobs,
     auth,
     close: () => {
       theJobs.close();
       attachments.stop();
+      for (const fn of closing) fn();
     },
   };
 }

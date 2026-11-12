@@ -288,11 +288,12 @@ const HEAVY_SYNTHS =
 
 /**
  * Plugins dearer than most (timed with `pnpm bench --effects`): String Resonance's hundred strings,
- * and a Drum Replacer's kit sounding on top of its listening.
+ * a Drum Replacer's kit sounding on top of its listening, and Pitch Correction's ear and grains.
  */
 const EFFECT_COSTS: Record<string, number> = {
   resonance: 0.07,
   replacer: 0.02,
+  pitch: 0.02,
   rotary: 0.015,
   phaser: 0.012,
   lofi: 0.008,

@@ -32,6 +32,8 @@ server of ours as its only tools. The adapters in `packages/agent/src/harness/` 
 | Signed-in check | `claude auth status` (JSON, exit 0/1) | `codex login status` (stderr text, exit 0/1) | `cursor-agent status --format json` (exit 0 both) |
 | Sign-in without a TTY | URL printed, pasted `code#state` on stdin (source) | `codex login --device-auth`: URL + one-time code (source) | `NO_OPEN_BROWSER=1`: URL printed, then polls (source) |
 | Check for an update without installing | the `stable` channel file on downloads.claude.ai | npm registry / GitHub releases | `cursor-agent about --format json` |
+| Official installer (Install) | `curl -fsSL https://claude.ai/install.sh \| bash` | `curl -fsSL https://chatgpt.com/codex/install.sh \| sh` | `curl https://cursor.com/install -fsS \| bash` |
+| Models / efforts from | `--help` (aliases; `--effort`'s choices), per version | `codex debug models`, per version and hourly | `cursor-agent models` at each look; effort is in the model id |
 | Updates itself during a run | not with `DISABLE_AUTOUPDATER=1` | not seen | **yes, unless `--disable-auto-update`** |
 | Startup to first event | 0.3–0.5 s | 0.06–0.5 s | 3–7 s warm, 15–34 s cold |
 | Stop | process-group SIGTERM: all gone | same | same; also needed after a normal exit (worker daemon) |
@@ -61,6 +63,62 @@ Each run, sign-in, update and probe gets an environment built by `harnessEnv`
     so none of their credential helpers or URL rewrites (Cursor's `XDG_CONFIG_HOME` is the real one, where
     `git/config` may be);
   - `GIT_TERMINAL_PROMPT=0`: git never asks for a name or password; a private repository just fails.
+
+## Install
+
+Settings › Agent lists all three harnesses. One the runner doesn't find has **Install**, which runs its
+vendor's official installer, as the vendor's docs give it:
+
+| Harness | Command | Puts it in |
+|---|---|---|
+| Claude Code | `curl -fsSL https://claude.ai/install.sh \| bash` | `~/.local/bin/claude` |
+| Codex | `curl -fsSL https://chatgpt.com/codex/install.sh \| sh` | `~/.local/bin/codex` |
+| Cursor | `curl https://cursor.com/install -fsS \| bash` | `~/.local/bin/cursor-agent` |
+
+How it runs (`install` in `packages/agent/src/harness/adapter.ts`, the command in each adapter's spec):
+- **A fixed string, run by bash:** `bash -o pipefail -c '<command>'`, with bash found on PATH or in
+  `/bin`, `/usr/bin`. Nothing from the studio, the server or a request is in it: `agent-install` names
+  the harness only. `pipefail` makes a download that fails (curl's `-f`) fail the install, rather than
+  hand the shell an empty script that "succeeds". Running the vendor's pipe as it's documented was
+  chosen over downloading to a temporary file: the command the user confirms is then exactly the one
+  the vendor publishes, and the one that runs.
+- **As the user's own update runs:** the allowlisted environment of `harnessEnv` with the user's real
+  `HOME` (no sealed run's private home, no `SSH_*`, no other tools' keys), in `<root>/.probe`. Only on a
+  click (the studio asks first), never while that harness has a job or another relay, and refused when
+  the harness is found (Update is for that). Linux and macOS only: on Windows no `installer` is reported.
+- **Then a fresh look.** The runner looks again before it says `done`, so Settings shows the version
+  and Sign in at once. The adapters look in `~/.local/bin` whatever PATH says, so what the installers
+  put there is found; if nothing can be found after an installer that succeeded, the install fails
+  with "Installed in ~/.local/bin, which the runner doesn't see: run `pnpm run runner-service on` again
+  on the host" (the service's PATH is the one it was turned on with).
+- The tests run fake installers only: `packages/agent/test/harness-install.test.ts` gives the installer a
+  PATH holding a fake `curl` (it records what it was asked for and prints a fake script) and links to
+  the few tools that script uses, so no real download can happen.
+
+## Models and efforts
+
+The Model and Effort pickers follow what each vendor releases. HO[LO]'s server never asks a vendor:
+each harness lists its own on the host, the runner reports the result (`HarnessInfo.models`,
+`efforts`), and the server keeps it.
+
+| Harness | Models | Efforts | Read again |
+|---|---|---|---|
+| Claude Code | the aliases `--help` names for `--model`, plus `sonnet`, `opus`, `haiku` | the choices `--help` lists for `--effort` (`low…max` if it lists none) | with each new version (`--help` is read once per version) |
+| Codex | `codex debug models` (visible ones; `--bundled` offline) | per model, from the same catalog (`ultra` left out) | with each new version, and when the catalog is an hour old |
+| Cursor | `cursor-agent models` | none: the model id carries it (`…-low`, `…[fast=true]`) | at every look |
+
+When the runner looks:
+- when the agent is turned on, or a runner joins while it's on (`agent-on`);
+- after a sign-in, an update or an install (before it says `done`);
+- **Look again** (`agent-refresh`), which also re-checks a seal that failed for a version;
+- **when Settings › Agent is opened** and the runner's last look is an hour old or more (the server
+  sends `agent-refresh {light:true}`, at most once an hour per runner): the versions, sign-ins, models
+  and efforts as they are now, each seal as remembered for its version. A new version, noticed then or
+  after an update, is read in full at once (its `--help`, its catalog, its seal).
+
+A saved model or effort the harness no longer offers isn't an error: the adapter drops it before the
+run (the model when the last look listed others; the effort when the harness doesn't take it with that
+model), and the run uses the harness's default. The picker shows it as "(no longer offered)".
 
 ## Claude Code
 
@@ -188,8 +246,11 @@ process-group SIGTERM ended Claude (exit 143) and the MCP server, which got SIGT
   `--tools`, `--strict-mcp-config`, `--mcp-config`, `--allowedTools`, `--permission-mode`, `--setting-sources`,
   `--settings`, `--disable-slash-commands`, `--append-system-prompt`, `--effort` and `--resume`. An older Claude
   Code is listed as unavailable, with what it lacks.
-- Models: the aliases `--help` names for `--model`, plus `sonnet`, `opus` and `haiku`. An effort outside
-  `low…max` is left out of the run.
+- Models: the aliases `--help` names for `--model`, plus `sonnet`, `opus` and `haiku`. Efforts: the choices
+  `--help` lists for `--effort` (`(low, medium, high, xhigh, max)` in 2.1.322; commander's
+  `(choices: "…")` form is read too), `low…max` when it lists none. An effort it doesn't list is left out
+  of the run, and so is a model it no longer names.
+- Install: `curl -fsSL https://claude.ai/install.sh | bash` (the native installer, `~/.local/bin/claude`).
 - Sign-in status: `claude auth status --json`. `claude auth login` is offered only while it says signed out.
 - **The update check reads the `stable` channel**: `https://downloads.claude.ai/claude-code-releases/stable`,
   whatever channel the install follows (`claude doctor` names it; on this machine it's `latest`). An install on
@@ -363,8 +424,9 @@ write tool left, `apply_patch`, is refused. The caveats:
   are code mode's own (`exec`, `wait`, `request_user_input`, `request_user_input_async`) and, reached through
   `exec`, `apply_patch`, `clock__curr_time`, the three MCP resource tools and `mcp__holo__*`.
 - Models: those `codex debug models` lists as visible (`--bundled` when it can't fetch them), each with its
-  efforts, read once per version and every 6 hours. `ultra` isn't offered: it hands work to sub-agents, which a
-  sealed run doesn't have.
+  efforts, read once per version and again once the list is an hour old. `ultra` isn't offered: it hands work
+  to sub-agents, which a sealed run doesn't have.
+- Install: `curl -fsSL https://chatgpt.com/codex/install.sh | sh` (the standalone install, `~/.local/bin/codex`).
 - The tripwire also lets `error` items through, and Codex's top-level `error` events ("Reconnecting… 2/5") are
   shown, not taken as a failure; `turn.failed` is.
 - Sign-in: `codex login --device-auth`, its link and one-time code relayed. Status: `codex login status`.
@@ -506,8 +568,8 @@ rewrites.
 **MCP handshake** (seen): `initialize` with protocol `2025-11-25`, client `Cursor`, one server process per run.
 It sends `tools/call` with no `_meta`. It once tried `resources/read`; our `-32601` answer was fine.
 
-**Many tools:** MCP tools reach the model through the two meta-tools (search, then call), not one by one. No cap
-showed, but more than 3 tools wasn't tried.
+**Many tools:** MCP tools reach the model through the two meta-tools (search, then call), not one by one. With 48
+and with 96 tools, one GetDynamicTools for `holo` returned them all (see "Tool count").
 
 **Sign-in.**
 - `cursor-agent status --format json` exits 0 either way:
@@ -551,6 +613,16 @@ Cursor unavailable when they fail. What it does instead is the flag probe below.
   --allowed-tools=holo_probe`, with no prompt and a private home of its own (`<root>/.cursor-home`). An unknown
   value makes Cursor list the valid ones before it does anything else. Cursor is offered only when that list has
   `mcp_tool_call` and `get_mcp_tools_tool_call`, so a version that drops or renames the hidden flag isn't used.
+- **Signed out, the newest Cursor checks its sign-in first.** Cursor 2026.11.11-b912975, on a host where it isn't
+  signed in, answers the probe with `Error: Authentication required. Please run 'agent login' first, or set
+  CURSOR_API_KEY environment variable.` before it reads its options. An earlier adapter took that for a missing
+  option ("This Cursor no longer takes the option that limits it to HO[LO]'s tools") and remembered it for the
+  version, so signing in never cleared it. Now an authentication refusal (`cursorWantsSignIn`) reports Cursor
+  signed out with its seal unknown (`sealUnknown`), and nothing is remembered: Settings shows **Sign in**, and
+  the first look after it probes again. A probe that times out isn't remembered either. A "no" this adapter
+  remembers carries `probe: 2`; one without it (an earlier adapter's) is probed again at the next look. A "no"
+  for the version is also forgotten after a sign-in through Settings, and by **Look again**.
+- Install: `curl https://cursor.com/install -fsS | bash` (`~/.local/bin/cursor-agent`).
 - **The sandbox fallback.** A run starts with `--sandbox=enabled`. If Cursor answers
   `Sandbox mode is enabled but not available`, the adapter notes that for this version and runs the turn again
   with `--sandbox=disabled`, as every later run of that version does. A new version tries the sandbox again.
@@ -563,6 +635,38 @@ Cursor unavailable when they fail. What it does instead is the flag probe below.
   skills repositories) with `git fetch`, now over anonymous https with no ssh (see "Every harness's
   environment"), and its worker starts a TypeScript language server with `npx -y typescript-language-server
   --stdio`, which npm downloads into the private home on first use. Neither is offered to the model as a tool.
+
+## Tool count
+
+Can the agent have more than 40 tools? Tried on 2026-11-12 with `tools/agent-spike-tools.mjs`: Claude Code
+2.1.322, Codex CLI 0.167.1, Cursor CLI 2026.11.11-043ef28.
+
+- **The server:** N tools, `tool_01`…, each answering `ok-NN-<nonce>` (a new nonce each time the server
+  starts). Descriptions and schemas are padded to the sizes of HO[LO]'s 38 real tools, cycled. So 48 tools are
+  43.0k characters of `tools/list` (HO[LO]'s 38 are 35.4k), and 96 are 87.1k.
+- **The runs:** each harness ran sealed, with the adapters' own argv, environment and workspace files, imported
+  from `packages/agent/src/harness`. Two differences: no agent instructions, and Codex with `--ephemeral`.
+  Neither changes the tools. The models were the cheapest, as in C0. One prompt: count the holo tools, call the
+  last two, say what they returned. The server's log shows each call.
+
+| | Claude Code (`haiku`, low) | Codex (`gpt-6-luna`, low) | Cursor (`composer-2.5`) |
+|---|---|---|---|
+| 48 tools: seen | 48 (`init` listed 48) | 48 | 48 (one GetDynamicTools returned all) |
+| `tool_45`, `tool_48` | called; both answers reported | called; both reported | called; both reported |
+| 96 tools: seen, `tool_93` and `tool_96` | 96; both called and reported | 96; both | 96; both (one GetDynamicTools, 87k characters) |
+| Warnings about the tool count | none | none | none |
+
+What the tools cost differs:
+- **Claude** sends every tool in every request: about 18.2k prompt tokens with 48 tools and 33.3k with 96, so
+  about 315 tokens per tool of HO[LO]'s weight.
+- **Codex** (code mode) never lists MCP tools in the prompt, at any count (3 or 48, in `debug prompt-input`). It
+  calls them "deferred nested tools", and the model finds them in `ALL_TOOLS`. Its prompt stayed the same size
+  (24k and 23k input tokens).
+- **Cursor** brings them in when the model looks them up: GetDynamicTools without a tool name returned every
+  description and schema (16k and 32k input tokens).
+
+**Verdict:** no limit up to 96 in any harness, so the cap can rise to 48 with twice that in reserve. The
+`--disable-auto-update` flag kept Cursor at its version, and the settings and sign-in files were unchanged.
 
 ## Effects on `docs/agent.md` and the plan
 

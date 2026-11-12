@@ -1,9 +1,10 @@
 /**
  * What goes with a request: a picture (a screenshot, a photo of a page), a recording, a MIDI file, a
- * MusicXML score or a text. Each is made ready on this device before it leaves:
+ * MusicXML score (plain or .mxl) or a text. Each is made ready on this device before it leaves:
  *  - a picture is drawn again through a canvas, no bigger than it needs to be, so what the camera wrote
  *    into it (where it was taken, on what) stays here;
- *  - a recording is measured (its length, loudness, a tempo, and the notes when it's one line);
+ *  - a recording is measured (its length, loudness, a tempo, and the notes when it's one line), when
+ *    this browser can decode it and it isn't long;
  *  - a MIDI file is read into notes.
  * What HO[LO] takes, and how big, is the host's rule (agent/attachments.ts); a file it wouldn't take is
  * turned away here, with a line in the bar.
@@ -17,19 +18,24 @@ export const ATTACHMENT_TYPES = [
   'audio/wav',
   'audio/x-wav',
   'audio/flac',
+  'audio/aiff',
   'audio/mpeg',
   'audio/ogg',
   'audio/mp4',
   'audio/midi',
   'application/vnd.recordare.musicxml+xml',
+  'application/vnd.recordare.musicxml',
   'text/plain',
 ] as const;
 export type AttachmentType = (typeof ATTACHMENT_TYPES)[number];
 export type AttachmentKind = 'image' | 'audio' | 'midi' | 'score' | 'text';
 
-/** The host's limits: a file, a text, and what's measured of one. */
+/** The host's limits: a file, a recording, a text, and what's measured of one. */
 export const MAX_ATTACHMENT = 25 * 1024 * 1024;
+export const MAX_AUDIO = 200 * 1024 * 1024;
 export const MAX_TEXT = 100 * 1024;
+/** A recording is measured here up to this size (a longer one goes as it is). */
+export const MAX_MEASURED = 25 * 1024 * 1024;
 export const MAX_META = 64 * 1024;
 /** A picture is drawn no bigger than this on its long side: enough to read a page of music. */
 export const MAX_IMAGE_SIDE = 2048;
@@ -47,6 +53,9 @@ const BY_ENDING: Record<string, [AttachmentType | null, AttachmentKind]> = {
   gif: [null, 'image'],
   wav: ['audio/wav', 'audio'],
   flac: ['audio/flac', 'audio'],
+  aif: ['audio/aiff', 'audio'],
+  aiff: ['audio/aiff', 'audio'],
+  aifc: ['audio/aiff', 'audio'],
   mp3: ['audio/mpeg', 'audio'],
   ogg: ['audio/ogg', 'audio'],
   oga: ['audio/ogg', 'audio'],
@@ -56,6 +65,7 @@ const BY_ENDING: Record<string, [AttachmentType | null, AttachmentKind]> = {
   midi: ['audio/midi', 'midi'],
   musicxml: ['application/vnd.recordare.musicxml+xml', 'score'],
   xml: ['application/vnd.recordare.musicxml+xml', 'score'],
+  mxl: ['application/vnd.recordare.musicxml', 'score'],
   txt: ['text/plain', 'text'],
 };
 
@@ -70,6 +80,8 @@ const BY_TYPE: Record<string, [AttachmentType | null, AttachmentKind]> = {
   'audio/wave': ['audio/wav', 'audio'],
   'audio/flac': ['audio/flac', 'audio'],
   'audio/x-flac': ['audio/flac', 'audio'],
+  'audio/aiff': ['audio/aiff', 'audio'],
+  'audio/x-aiff': ['audio/aiff', 'audio'],
   'audio/mpeg': ['audio/mpeg', 'audio'],
   'audio/mp3': ['audio/mpeg', 'audio'],
   'audio/ogg': ['audio/ogg', 'audio'],
@@ -79,6 +91,7 @@ const BY_TYPE: Record<string, [AttachmentType | null, AttachmentKind]> = {
   'audio/mid': ['audio/midi', 'midi'],
   'audio/x-midi': ['audio/midi', 'midi'],
   'application/vnd.recordare.musicxml+xml': ['application/vnd.recordare.musicxml+xml', 'score'],
+  'application/vnd.recordare.musicxml': ['application/vnd.recordare.musicxml', 'score'],
   'text/plain': ['text/plain', 'text'],
 };
 
@@ -101,8 +114,9 @@ export function classify(file: {
     };
   const [type, kind] = found;
   if (!file.size) return { error: `${file.name} is empty` };
-  if (kind === 'image' ? file.size > MAX_IMAGE_IN : file.size > MAX_ATTACHMENT)
-    return { error: `${file.name} is ${mb(file.size)}: ${mb(MAX_ATTACHMENT)} at most` };
+  const max = kind === 'audio' ? MAX_AUDIO : MAX_ATTACHMENT;
+  if (kind === 'image' ? file.size > MAX_IMAGE_IN : file.size > max)
+    return { error: `${file.name} is ${mb(file.size)}: ${mb(max)} at most` };
   if (kind === 'text' && file.size > MAX_TEXT) return { error: `${file.name} is too long: a text is 100 KB at most` };
   return { kind, type };
 }
@@ -257,8 +271,10 @@ export async function ready(file: File): Promise<Ready> {
   if (c.kind === 'image') return redraw(file, file.name, imageType('file', file.type));
   const type = c.type as AttachmentType;
   if (c.kind === 'audio') {
-    const { samples, sampleRate } = await decode(await file.arrayBuffer());
-    return { blob: file, name: file.name, type, kind: c.kind, meta: fitMeta(await measureAudio(samples, sampleRate)) };
+    // measured when this browser decodes it (most don't decode AIFF) and it isn't long; else it goes as it is
+    const decoded = file.size <= MAX_MEASURED ? await decode(await file.arrayBuffer()).catch(() => null) : null;
+    const meta = decoded ? fitMeta(await measureAudio(decoded.samples, decoded.sampleRate)) : null;
+    return { blob: file, name: file.name, type, kind: c.kind, meta };
   }
   if (c.kind === 'midi') {
     let midi: MidiFile;

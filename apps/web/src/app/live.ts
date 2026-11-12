@@ -47,8 +47,18 @@ import {
   peersSeen,
   viewName,
 } from './agent.ts';
+import { answerAgentRequest } from './agent-studio.ts';
 import { PlayedMemory } from './played.ts';
 import { store, toast } from './store.ts';
+
+// the modules that answer more of the agent's requests (each registers its own in agent-studio.ts),
+// each area's in its block
+
+// ---- measure ----
+import './agent-meters.ts';
+
+// ---- import ----
+import './agent-import.ts';
 
 /** Scans this studio has heard of (so a phone's new one is offered once). */
 const seenScans = new Set<string>();
@@ -372,6 +382,10 @@ async function onMessage(msg: Record<string, unknown>): Promise<void> {
       }
       return;
     }
+    default:
+      // another of the agent's requests: answered as its area registered it (agent-studio.ts)
+      if (typeof msg.type === 'string' && msg.type.startsWith('agent-')) await answerAgentRequest(msg, ack);
+      return;
   }
 }
 

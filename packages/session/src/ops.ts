@@ -3,6 +3,8 @@
  * all operations, applied by this one function, so they behave the same wherever they're applied:
  * in the open studio (with an undo step) or on the server when no studio has the song open.
  */
+import { arrange } from './arrange.ts';
+import { splitRegionAt } from './audio-region.ts';
 import { keysForText, textForKeys } from './keysig.ts';
 import type {
   AudioFile,
@@ -66,6 +68,17 @@ export type Op =
   | { op: 'updateRegion'; track: string; region: string; patch: RegionPatch }
   | { op: 'removeRegion'; track: string; region: string }
   | { op: 'moveRegion'; from: string; to: string; region: string; start?: number }
+  /**
+   * A region cut in two at `at` (a tick of the song, inside it): the left half keeps its id, the right
+   * half takes `id` (the caller's, new to the song), as the studio's Split does.
+   */
+  | { op: 'splitRegion'; track: string; region: string; at: number; id: string }
+  /**
+   * Bars across the whole song (arrange.ts): `insert` empty bars [from, to); `delete` [from, to);
+   * `copy` [from, to) to `at`, what was there moving on; `move` [from, to) to `at`. Ticks, each on a
+   * bar line. Worked out on the song where it's applied, so it never acts on an old copy.
+   */
+  | { op: 'arrange'; edit: 'insert' | 'delete' | 'copy' | 'move'; from: number; to: number; at?: number }
   | { op: 'setNotes'; track: string; region: string; notes: Note[] }
   | { op: 'addNotes'; track: string; region: string; notes: Note[] }
   /**
@@ -273,6 +286,30 @@ export function applyOp(project: Project, op: Op): Project {
       );
       return mapTrack(without, op.to, (t) => edited({ ...t, regions: [...t.regions, moved] }));
     }
+    case 'splitRegion': {
+      if (typeof op.id !== 'string' || !op.id) throw new OpError('splitRegion needs the right half\'s "id"');
+      if (project.tracks.some((t) => t.regions.some((r) => r.id === op.id)))
+        throw new OpError(`A region "${op.id}" exists already`);
+      return mapTrack(project, op.track, (t) => {
+        const region = t.regions.find((r) => r.id === op.region);
+        if (!region) throw new OpError(`No region "${op.region}" on track "${t.name}"`);
+        const at = Math.round(op.at);
+        if (!Number.isFinite(at) || at <= region.start || at >= region.start + region.length)
+          throw new OpError(
+            `A split goes inside the region (ticks ${region.start + 1}–${region.start + region.length - 1})`,
+          );
+        const [left, right] = splitRegionAt(project, region, at, op.id);
+        const sorted = (r: Region): Region => ({ ...r, notes: r.notes.slice().sort(byStart) });
+        return edited({ ...t, regions: [...t.regions.filter((r) => r.id !== region.id), sorted(left), sorted(right)] });
+      });
+    }
+    case 'arrange':
+      return arrange(project, {
+        edit: op.edit,
+        from: op.from,
+        to: op.to,
+        ...(op.at !== undefined ? { at: op.at } : {}),
+      });
     case 'setNotes':
       return mapTrack(project, op.track, (t) =>
         mapRegion(t, op.region, (r) => ({ ...r, notes: op.notes.slice().sort(byStart) })),

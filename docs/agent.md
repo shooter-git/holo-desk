@@ -80,20 +80,23 @@ Turning the agent off cancels every job, so the job-scoped routes answer 403.
 | `GET /api/agent/devices` | | `{devices:[{id, name, added, seen, current}], requests:[{id, name, code, created}]}`. `current` is the device asking; `requests` are those waiting. |
 | `POST /api/agent/devices/requests/:id/approve` and `/deny` | | `{ok}`; 404 if none of that id is waiting. |
 | `DELETE /api/agent/devices/:id` | | `{ok}`; 404. It takes effect at once: the device's studios get `agent-removed` and lose agent access, its jobs (running or waiting for a click) are cancelled, and allowed devices get `agent-devices`. |
-| `GET /api/agent/settings` | | `{enabled, harness, model, effort, harnesses:[HarnessInfo]}` |
+| `GET /api/agent/settings` | | `{enabled, harness, model, effort, harnesses:[HarnessInfo], relays:[…]}`. `relays` are the sign-ins, updates and installs under way, each as its runner last told it (its `agent-harness` message, less `type`), for a studio that opens Settings later or reloads; one is let go when it ends, after 15 minutes, or when its runner goes. |
 | `PUT /api/agent/settings` | `{enabled?, harness?, model?, effort?}` | The settings, as GET. `harness` is an id or null (the first that can be sealed). `model` and `effort` must match `^[A-Za-z0-9][\w.:\-\[\]=]{0,79}$` or be empty (the harness's own). Off stops every job; on sends `agent-on` to the runners; any change is announced as `agent-settings`. |
-| `POST /api/agent/harnesses/refresh` | | `{ok}`. The runners look again (`agent-refresh`). 409 `no-runner`. |
+| `POST /api/agent/harnesses/refresh` | | `{ok}`. **Look again**: the runners look again (`agent-refresh`), a seal check that failed for a version included. 409 `no-runner`. |
+| `POST /api/agent/harnesses/look` | | `{ok, asked}`. Settings › Agent was opened: each runner whose last look (its last `harnesses`, or the last time it was asked) is an hour old or more is sent `agent-refresh {light:true}`; `asked` is how many. At most once an hour per runner, and only when a studio asks. |
 | `POST /api/agent/harnesses/:id/login` | | `{ok}`. Sent to the runner that has it; progress arrives as `agent-harness` live messages. 404 for an unknown harness; 409 `no-harness`, `busy` (a job runs on it), or no reason when it's signed in already (HO[LO] never signs out or switches accounts). |
 | `POST /api/agent/harnesses/:id/login/code` | `{code}` (printable, ≤ 200) | `{ok}`, for a sign-in that asks for a pasted code. |
 | `POST /api/agent/harnesses/:id/update` | | `{ok}`. 409 `no-harness` or `busy`. |
+| `POST /api/agent/harnesses/:id/install` | | `{ok}`. Sent as `agent-install {harness}` to a runner that reported the harness not found, with an `installer`; progress arrives as `agent-harness` with `kind:'install'`. 404 for an unknown harness; 409 `no-runner`, `busy` (a job runs on it), or no reason when a runner has it already (Update is for that) or none can install it (a Windows host). The body is empty: the runner runs its own fixed command. |
 | `POST /api/agent/requests` | `{project, text, attachments?:[id], context?, preset?}` | `{job}`. `text` is 1 to 4000 characters (empty with a preset). At most 10 attachments, each this device's for this song (400 otherwise). 404 for no such song, or a preset's scan that isn't the song's; 409 `not-open`, `busy`, `no-runner`, `no-harness`, `not-sealed`, `signed-out`. |
 | `POST /api/agent/jobs/:job/cancel` | | `{ok}`. Any allowed device may stop a job; one waiting for a click is dismissed (`cancelled`). 404; 409 once it has ended. |
 | `POST /api/agent/jobs/:job/permission` | `{grant:boolean, result?, attachments?:[id]}` | `{ok, job?}`, `job` being the follow-up's id. Only the device that asked may answer (403), only while the job is `awaiting` (409). `result` is at most 1000 characters; `attachments` as in a request (a screenshot, a photo, a recording). Granting can be refused as a request is (`not-open`, `busy`, `no-harness`), and with 409 when the conversation was started over since the job asked. With a job token, the same path is the tools' (below). |
 | `POST /api/agent/jobs/:job/done-listening` | | `{ok}`. The user pressed Done. Only the device that asked (403); 409 once the job has ended. |
 | `GET /api/agent/threads/:project` | | `{thread, job}`. `thread` is `{id, harness, turns:[{job, request, reply, label, state, at, permission?, brief?, briefWarnings?, error?}]}`, or null. `job` is the song's job that's running or waiting for a click (a `JobView`), or null: after a reload, its button comes back. |
 | `POST /api/agent/threads/:project/reset` | | `{ok}`. The next request starts a new thread. 409 `busy` while a job runs on the song. |
-| `POST /api/agent/attachments` | `?project=&name=&type=` and the file as the body (≤ 25 MB; text ≤ 100 KB, 413) | `{id, name, type, size}`. Allowed types: `image/png`, `image/jpeg`, `image/webp`, `audio/wav`, `audio/x-wav`, `audio/flac`, `audio/mpeg`, `audio/ogg`, `audio/mp4`, `audio/midi`, `application/vnd.recordare.musicxml+xml`, `text/plain`. Its first bytes must be what the type says (415); text and MusicXML must be UTF-8. 404 for no such song. Kept 7 days, the device's own, for that song. |
+| `POST /api/agent/attachments` | `?project=&name=&type=` and the file as the body (a recording ≤ 200 MB, anything else ≤ 25 MB, text ≤ 100 KB; 413) | `{id, name, type, size}`. Allowed types: `image/png`, `image/jpeg`, `image/webp`, `audio/wav`, `audio/x-wav`, `audio/flac`, `audio/aiff`, `audio/mpeg`, `audio/ogg`, `audio/mp4`, `audio/midi`, `application/vnd.recordare.musicxml+xml`, `application/vnd.recordare.musicxml` (`.mxl`), `text/plain`. The body goes to disk as it arrives, and is cut off at the type's limit (one whose `content-length` says it's over isn't read at all). Its first bytes must be what the type says (415): a recording's first 64 KB are checked; text must be UTF-8, MusicXML UTF-8 or UTF-16, and an `.mxl` a zip with a score in it. 404 for no such song. Kept 7 days, the device's own, for that song. |
 | `PUT /api/agent/attachments/:id/meta` | JSON object (≤ 64 KB) | `{ok}`. The browser stores what it measured here. Only the device's own (403). |
+| `GET /api/agent/attachments/:id/data` | | The file's bytes, as its type, `no-store`: for the studio to decode a recording the agent imports (below). Only the device that sent it, or the device whose running job may read it (an earlier request on the job's thread, from another device); 403 otherwise, 404 once it's gone. |
 
 **`context`** in a request is what the studio sees:
 `{view, selection:{track, regions, notes, from?, to?}, playhead, cycle:{on, start, end}, scan?}`.
@@ -107,14 +110,56 @@ server). Scan's own Read in, which needs no agent, uses `GET /api/scans/:id/engi
 step. That isn't an agent route.
 
 **`HarnessInfo`** is:
-`{id:'claude'|'codex'|'cursor', name, found, version?, signedIn?, account?, update?:{available, latest?}, sealed, reason?, models?:string[], efforts?:string[]}`.
+`{id:'claude'|'codex'|'cursor', name, found, version?, signedIn?, account?, update?:{available, latest?}, sealed, sealUnknown?, reason?, models?:string[], efforts?:string[], host?, installer?}`.
+- The runner reports all three, found or not.
 - `sealed: false` means the harness can't be locked down to HO[LO]'s tools. The studio shows it as
   unavailable, with `reason`.
+- `sealUnknown: true` (with `signedIn: false`) means the seal couldn't be checked yet: the harness asks
+  for its sign-in before it reads its options (Cursor 2026.11.11-b912975). The studio offers Sign in;
+  a request is refused `signed-out`, not `not-sealed`. The first look after the sign-in checks the seal.
+- `host` is the runner's computer (its host name: letters, digits, `.`, `-`, `_`, ≤ 64).
+- `installer` is given only when the harness isn't found and the runner can run its installer (Linux
+  and macOS): the command Install runs there, as the confirmation shows it (≤ 200 characters).
 - `update` is looked up at most every 6 hours, and never installed unasked. Claude Code's is read from
   its `stable` channel (npm's `stable` tag for an npm install, `downloads.claude.ai/claude-code-releases/stable`
   for the native one), so Update never offers a version `claude update` won't install. Codex's is
   npm's `latest`; Cursor's is what `cursor-agent about` says.
-- At most 500 `models` and 50 `efforts` are kept, each checked as settings check them.
+- At most 500 `models` and 50 `efforts` are kept, each checked as settings check them. They're the
+  harness's own lists, read on the host (docs/agent-harnesses.md, "Models and efforts"): HO[LO]'s server
+  never asks a vendor for them, it keeps what the runner reports.
+
+### Settings › Agent
+
+An allowed device's Settings › Agent lists Claude Code, Codex and Cursor as the host has them, a row
+each (`apps/web/src/ui/harness-row.ts`), through a harness's whole life:
+
+1. **Not installed**, with **Install** when the runner gave an `installer`. Install asks first: "This
+   downloads and runs *Harness*'s official installer on *host* (*command*)", then **Install** or **Not
+   now**. Without an installer (a Windows host), the row says to install it there and Look again.
+2. **Installing**: the installer's lines under the row (a few a second), then how it ended. The runner
+   looks again before it says `done`, so the row shows the version and Sign in at once; an install that
+   finished but left nothing the runner can find fails with "Installed in ~/.local/bin, which the
+   runner doesn't see: run `pnpm run runner-service on` again on the host".
+3. **Signed out**: **Sign in**, whatever the seal (a harness that can't be sealed keeps Sign in, and says
+   why it can't be used). The sign-in is each harness's own relay: Claude Code's page and a pasted code,
+   Codex's page and a one-time code, Cursor's page while it waits. A harness signed out isn't offered
+   as **Use**.
+4. **Signed in**: **Use**, or **In use** for the one the agent runs with.
+5. **Update to x.y** when a newer version is out; it asks first ("This updates the *Harness* your
+   terminal uses too"), then shows its lines. The runner looks again before it says `done`, so the new
+   version's models and efforts show with it. **Up to date** otherwise.
+
+**Look again**, under the list, asks every runner for a fresh look (`POST …/harnesses/refresh`).
+
+**Opening Settings › Agent** asks the host to have its runners look again if their last look is an
+hour old or more (`POST …/harnesses/look`): the lists show at once as they were, and change when the
+new `harnesses` report comes (as `agent-settings`). Nothing is asked while nobody opens it, and nothing
+is polled.
+
+**Model and Effort** list the harness's own names. A saved model or effort the harness no longer
+offers stays selected, labelled "(no longer offered)", and a run uses the harness's default instead of
+failing (the adapter drops it before the run). Cursor has no Effort list: its model names carry their
+effort, and the row says so.
 
 ## REST: `/api/agent/jobs/:job/*`
 
@@ -139,11 +184,13 @@ requester's studio has the job's song open.
 | `GET …/scans/:id` | | The scan. 403 if it's another song's. |
 | `GET …/scans/:id/strip/:page/:system` | | The system's strip (PNG). |
 | `PATCH …/scans/:id/systems/:page/:system` | `{state?:'new'|'read'|'checked'|'approved', written?:[first, last], flags?:[line]}` (≤ 40 flags) | As `PATCH /api/scans/:id/systems/:page/:k`. |
-| `GET …/attachments/:id` | | `{name, type, size, meta, data?}`. `data` (base64) comes for pictures, text, and MusicXML up to 1 MB; `meta` is what the browser measured, or null. Only an attachment that the job's request, or an earlier one on its thread, named (403). 404 once it's gone. |
+| `GET …/attachments/:id` | | `{name, type, size, meta, data?}`. `data` (base64) comes for pictures, text, and MusicXML up to 1 MB (as UTF-8 text, whether it came as UTF-16 or zipped in an `.mxl`); `meta` is what the browser measured, or null. Only an attachment that the job's request, or an earlier one on its thread, named (403). 404 once it's gone. |
+| `POST …/import` **studio** | `{attachment}` | What importing it brings (below): `{done:true, kind:'audio', how:'copied'|'converted'|'studio', file:AudioFile}`, `{done:true, kind:'notes', format:'midi'|'musicxml', name, song:Project, warnings}`, or after about 40 s of the studio still converting, `{done:false, line}` (the same call again waits on). 403 as `…/attachments/:id`; 415 for a picture or a text; 400 for a file that can't be read; 409 with the studio's reason, 504 when it never answered. |
 | `POST …/progress` | `{line}` (≤ 200) | `{ok}`. The line under the bar. |
-| `POST …/permission` | `{kind, detail, pack?}` (detail ≤ 300) | `{ok}`. `kind` is `install-pack` (with `pack`), `send-creation`, `screen`, `photo` or `microphone`. The job waits for the user once the turn ends. |
+| `POST …/permission` | `{kind, detail, pack?}` (detail ≤ 300) | `{ok}`. `kind` is `install-pack` (with `pack`), `send-creation`, `bounce`, `render`, `screen`, `photo` or `microphone`; `render` only for a song that came from a creation (400). The job waits for the user once the turn ends. |
 | `POST …/handoff` | `{brief}` (≤ 4000) | `{ok}`. Lines that mention a secret, hold a link or run a command are flagged (`briefWarnings`). |
 | `POST …/finish` | `{label, reply}` (one line ≤ 80; ≤ 600) | `{ok}`. The agent is asked for one or two short sentences, about 200 characters at most; 600 is the server's limit. |
+| `PUT …/details` | `{artist?, album?}` (each a name, or null to clear) | `{ok, artist, album}`, as `PUT /api/projects/:id/details` answers for the job's song: the library keeps them beside the song (no new revision, outside undo). 400 for a creation's song. |
 
 **Listening.** A harness can cut a tool call at 60 s, so a listen comes in parts: the `listen` tool asks
 for at most 40 s at a time, and the server takes at most 45 s. A listen hears only the requester's
@@ -156,6 +203,54 @@ studio, and is heard whole across its parts:
 - Between parts the studio keeps showing it listens, and what's played goes to the next part. With no
   next part within 15 s, the listen is over and what came after the last part is let go.
 - Done pressed between parts ends the next part at once, with what was played up to Done.
+
+### Measuring (`…/measure`)
+
+`apps/server/src/agent/measure/`. Measurements run in child processes at the lowest priority
+(`runner.ts`, `child.ts`): one lane for files (a take, a bounce, an attachment, a plugin's response)
+and one for renders (the mix, tracks, a plugin on its track's sound, a take through its effects), one
+measurement at a time in each. A call waits up to 40 s (the tool's client gives it 50: Cursor cuts a
+call at 60); while it waits, the job's line under the bar says how far the measurement has got ("Still
+measuring the mix: 35% done, about 2 min left"), as each step comes from the child. The same question
+about the song as it is now (its revision and the body) joins the measurement under way, or is
+answered from the cache. Renders are `renderSession` with `finish: false`, from two bars before `from`
+(not measured), slower than real time; one estimated past ten minutes is refused (422, `reason:
+'too-long'`) with what to do instead. What plays a HO[LO] Pack that isn't installed (asked of the same
+source the render reads) is silent in a measurement, as in the studio: its tracks are muted with no
+instrument to load, and plugins that play such a pack's kit or response are left out, in the measured
+copy only; the result's `unplayable` lists them (`{tracks:[{id, name, pack}], plugins:[{id, name,
+channel, pack}]}`), a silent track's level says `missing: pack`, and a plugin measured on such a
+track, or one playing such a pack itself, fails with why. A measurement is cancelled when the last job
+that asked for it is stopped or fails; when that job's turn simply ends, it runs on (up to 15 minutes)
+for the next turn to collect. A lane's child is let go after a minute with nothing to do, and when the
+server closes.
+
+| Method and path | Body / query | Answer |
+|---|---|---|
+| `POST …/measure` | `{what:'take'\|'mix'\|'tracks'\|'plugin'\|'meters'\|'file', track?, region?, plugin?, from?, to?, against?, grid?, through?:'recording'\|'effects', source?:'render'\|'bounce', attachment?, seconds?}` (ids and ticks) | `{done:true, task, result, cached?}`, or `{done:false, task, progress, eta, stage}` after 40 s (`eta` in seconds). `take`: an audio `track` (or a recording `attachment`), `region?`, `against` `'key'` (default), `'none'` or an instrument track's id, `grid` in ticks (240), `through` `'recording'` (default: its files, at once) or `'effects'`: rendered in the render lane as the track comes out of its plugins (a solo copy with its sends gone, out to a bare master, its fader, pan and stage left out, `finish:false`) over its regions' bars (`region`'s, within `from`–`to`; 422 where it plays nothing) and two bars before, the plugins' delay made up for as in the mix, then measured as its recordings are, with `through:{plugins, errors}` in the result. `mix`: rendered, or the newest file in `data/bounces/<song>/` with `source:'bounce'` (404 `reason:'no-bounce'` without one; `made` and `stale` say when it was made and whether the song changed after). `tracks`: every track alone, or `track`, and with `against` a second track (masking). `plugin`: `track` is a track's, a bus's id or `master`; EQs, Space Reverb, Space Designer, Tape Delay and Stereo Width by their response to an impulse, the rest on the track's own sound (not on a bus). `file`: an `attachment` (WAV, FLAC or AIFF; 422 for MP3, OGG, M4A), else the newest bounce. `meters` **studio**: `seconds?` (1–30, 8 by default), asked of the requester's studio as `agent-meters`, which has that long plus 4 s to answer. A failed measurement is 422 with its reason. |
+| `GET …/measure/:task` | | As above, for a measurement of the job's song by id (404 once it's forgotten). |
+
+`agent-meters {id, seconds}` (server → studio, asked): the studio reads every channel's meter twenty
+times a second while the song plays (`apps/web/src/app/agent-meters.ts`, keeping the last 30 s) and
+acks `{playing, seconds, covered, channels:[{id, peak:[l, r], max:[l, r], gr, grMax, clipped}]}`:
+dBFS over the last `covered` seconds of play (the `seconds` asked, or all of the play if it was
+shorter) and since play started (null for silence), the deepest gain reduction (dB), and whether it
+went past full scale; `seconds` is how much play was watched. When play started less than `seconds`
+ago, it waits until it has watched that long (or play stops) before it answers, so a measurement
+taken as playback starts isn't a second's worth. After play stops it answers what the last play
+showed.
+
+The results (`packages/agent/src/api.ts`, `MeasureResult`) are numbers: a take's notes (`tick`, `pitch`
+with cents, `target`, `cents`, `inKey` or `ref`, `drift`, `vibrato:[Hz, ±cents]`, `grid` ms, `db`), its
+phrases and a summary; the mix's loudness (integrated, momentary and short-term maxima, LRA, true and
+sample peak, samples at full scale), its sections (markers, else every 8 bars) and octave bands with a
+tilt; each track's loudness, peaks, octave bands and (audio tracks) its recordings' own level; a
+plugin's third-octave response, decay, pre-delay and echoes, or its gain reduction and in/out levels.
+The analysis is `@holo/engine/analysis` (packages/engine/src/analysis/): pitch to a cent or two (YIN,
+refined at the full rate); a note from silence starts where its voice does (its level within 20 dB
+of its attack's loudest, and voiced: a soft attack or a scoop counts from its beginning, a breath or
+an unvoiced consonant before it doesn't), out of the note before where the pitch moves; loudness by BS.1770-4 and EBU Tech 3341/3342 with the finish's own
+K-weighting and true-peak interpolator, bands through the engine's FFT.
 
 ## Live channel (`/api/live`)
 
@@ -173,7 +268,9 @@ agent's other traffic uses the existing `state`, `played`, `ack`, `transport`, `
 - `agent-done {job, reply?}`. `reply` (one line, ≤ 600) stands as the reply only when the agent never
   called `finish`.
 - `agent-failed {job, error}`
-- `agent-harness {harness, kind:'login'|'update'|'refresh', state:'running'|'done'|'failed', url?, code?, ask?:'code', line?, error?}`
+- `agent-harness {harness, kind:'login'|'update'|'install'|'refresh', state:'running'|'done'|'failed', url?, code?, ask?:'code', line?, error?}`.
+  A sign-in, an update or an install says `done` or `failed` only after the runner has looked at its
+  harnesses again (its `harnesses` comes first).
 
 All of these but `hello` are taken only from a keyed runner. The `agent-*` messages about a job are
 taken only from the runner it was handed to, while it runs.
@@ -190,8 +287,13 @@ taken only from the runner it was handed to, while it runs.
 - `agent-login {harness}`
 - `agent-login-code {harness, code}`
 - `agent-update {harness}`
-- `agent-refresh {}`. The runner answers `harnesses`, then `agent-harness {kind:'refresh', state:'done'}`
-  for each harness.
+- `agent-install {harness}`: run the harness's official installer (the runner's own fixed command),
+  then look again.
+- `agent-refresh {light?}`. Without `light` (Look again), the runner forgets any seal check that failed
+  for a version, looks again, and answers `harnesses`, then `agent-harness {kind:'refresh', state:'done'}`
+  for each harness. With `light: true` (Settings › Agent was opened), it looks again quietly, unless a
+  look is under way: versions, sign-ins, models and efforts as they are now, each seal as remembered for
+  its version; it answers `harnesses` only.
 - `pairing-code {code, expires}` (the runner prints it)
 
 **Studio → server**
@@ -212,6 +314,10 @@ taken only from the runner it was handed to, while it runs.
 - `agent-flush {id}`: save now; ack `{revision}`.
 - `agent-played {id, seconds}`: ack `{notes:[PlayedNote]}` from the last minute of what was played here.
 - `agent-compare {id, job, from, to}`: ack once it has started playing.
+- `agent-import-audio {id, project, attachment, name}`: ack `{file:AudioFile}` once the studio has
+  fetched the attachment (`GET /api/agent/attachments/:id/data`), decoded it and uploaded it as a WAV
+  (`POST /api/projects/:id/files`), or `{ok:false, error}` (another song open, a recording the browser
+  can't read). Up to 10 minutes.
 - `transport {id, action, at?}`, the existing message.
 
 **Server → studio**, told:
@@ -246,7 +352,8 @@ of the stretch `played` asked for); `length` is ms (null while still held).
 ## A request's life
 
 1. **Request.** The studio makes each file ready (a picture redrawn in the browser at up to 2048 px on
-   its long side, a recording measured, a MIDI file read into notes). It posts each to
+   its long side, a recording up to 25 MB measured when the browser decodes it, a MIDI file read into
+   notes). It posts each to
    `/api/agent/attachments`, then what it measured to `…/meta`, then posts `/api/agent/requests` with
    their ids and the context.
 2. **Server.** Checks the song is open in this device's studio (`not-open`), that no other job runs on
@@ -281,6 +388,10 @@ of the stretch `played` asked for); `length` is ms (null while still held).
    code:
    - `install-pack`: the Library's install queue;
    - `send-creation`: `sendToCreation`;
+   - `bounce` ("Bounce the song"): `bounceSong`, kept with the song on the host and not downloaded;
+     the result says its length and its path under `bounces/`;
+   - `render` ("Hear it as my-game"): the creation renders the song (`POST /api/projects/:id/render`),
+     and the studio waits (up to 30 minutes) until it's back as a soloed audio track, or failed;
    - `screen`: one frame of what the user picks to share (a phone, which can't, takes a photo instead),
      shown before Send;
    - `photo`: the camera or a picture, redrawn as a JPEG, shown before Send;
@@ -342,30 +453,33 @@ the last "…and N more changes" when there are more:
 
 ## The agent's tools (`@holo/agent`)
 
-`packages/agent/src/tools/index.ts` lists 38 tools (at most 40), named for MCP (lower-case letters,
-digits and `_`). Changing and asking tools run one at a time, in the order they're called; seeing and
-playing tools run alongside. A change may also post a line under the bar (`…/progress`).
+`packages/agent/src/tools/index.ts` lists 42 tools (at most 48: Claude Code, Codex and Cursor each list and
+call 48 sealed, docs/agent-harnesses.md), named for MCP (lower-case letters, digits and `_`). Changing and
+asking tools run one at a time, in the order they're called; seeing and playing tools run alongside. A
+change may also post a line under the bar (`…/progress`).
 
 | Tool | Kind | What it does |
 |---|---|---|
 | `song_status` | see | Where the user is: the song's settings and tracks, the playhead, the selection, the cycle, the view, how notes are named. |
 | `song_show` | see | The whole song as text: tempo and meter changes, markers, mastering, every track and bus. |
-| `song_set` | change | Title, tempo, key and meter, from the start or as a change at a position. |
+| `song_set` | change | Title, tempo, key and meter, from the start or as a change at a position; who it's by and its album (beside the song, outside undo; a creation's song keeps its creation's). |
 | `marker` | change | Add, rename or remove a marker. |
 | `cycle` | change | Set the cycle, or turn it off. |
 | `looping` | change | Make the song a loop (a game's or an app's music), or an ordinary song again. |
-| `ops_apply` | change | Raw session ops for what no other tool covers; removals only with `confirm`. |
+| `ops_apply` | change | Raw session ops for what no other tool covers; removals, and `arrange` deletes and moves, only with `confirm`. |
+| `timeline` | change | Insert, delete, copy or move whole bars across every track (one `arrange` op); delete and move only with `confirm`. |
 | `notes_show` | see | A track's notes, bar by bar. |
 | `notes_write` | change | Write notes from a position, in the compact notation. |
 | `notes_clear` | change | Remove the notes that start in a span. |
+| `regions` | change | Show, split (chop), delete (with `confirm`), copy, move, repeat, trim, gain, fade, stretch, mute, rename audio and MIDI regions; quantize and transpose MIDI; write a MIDI region's controller and pitch-bend lanes. A region by id, name or "selected". |
 | `track_add` | change | Add a track: a built-in synth, a pack's instrument, or a palette's sound. |
 | `track_set` | change | A track's name, fader, pan, mute, solo, arm, instrument, place and sends. |
 | `synth_set` | change | List or set a built-in synth's knobs. |
 | `kit_set` | change | List or set a sampled kit's microphones, tune and decay. |
 | `instruments` | see | What can play a track: the synths and the installed packs' instruments. |
 | `plugins` | see | The stock plugins, and one's parameters. |
-| `fx` | change | Show, add, set or remove plugins on a track, a bus or the master. |
-| `automate` | change | Write, clear, turn off or read an automation lane. |
+| `fx` | change | Show, add, set, move (reorder) or remove plugins on a track, a bus or the master; a plugin with a key and scale is added in the song's key (an audio effect's automation follows its key changes). |
+| `automate` | change | List what can move on a channel, show a lane, write, clear, turn off or read (back on) a lane; a plugin's parameter by type (`eq.hsGain`), position (`eq#2.hsGain`) or id (`fx_….hsGain`). |
 | `finish_master` | change | How bounces and renders are mastered. |
 | `score_show` | see | The song as score text; with `check`, what a player would stumble on. |
 | `score_parts` | see | The parts' staves, clefs and transpositions. |
@@ -382,10 +496,67 @@ playing tools run alongside. A change may also post a line under the bar (`…/p
 | `scan_show` | see | A scan's pages and systems, or one system's strip as an image. |
 | `scan_status` | change | Mark how far a scanned system's reading got. |
 | `attachment_get` | see | An attachment: a picture, a recording's measurements and notes, a MIDI file's notes, a text. |
+| `import` | change | Bring an attachment into the song: a recording onto an audio track, a MIDI or MusicXML file as tracks (below). |
 | `look` | ask | Ask for a screenshot, a photo or a recording (a permission: it ends the turn). |
-| `ask_permission` | ask | Ask to install a pack, send to the creation, or for a screenshot, a photo or a recording. |
+| `ask_permission` | ask | Ask to install a pack, send to the creation, bounce the song, have the creation render it, or for a screenshot, a photo or a recording. |
 | `hand_off` | ask | A brief for the user's own coding agent, only for a change to HO[LO] Desk's code, holo-packs or a creation (no commands or code in it; never to read or send files, keys, passwords or tokens). |
 | `finish` | ask | End the turn: the undo step's label and the reply (one or two short sentences, about 200 characters at most: what changed and where). |
 
-There are no tools for opening, creating, importing or exporting songs, rendering to a file, or
-creations, except `ask_permission {kind:'send-creation'}`.
+There are no tools for opening, creating or exporting songs, or for creations. What the user attached
+comes into the open song through `import`; a bounce, sending the song to its creation and the
+creation's own render each need the user's click (`ask_permission` with `bounce`, `send-creation` or
+`render`).
+
+### Bringing things in: `import`, a bounce, a creation's render
+
+**`import {attachment, at?, track?, name?, tempo?, parts?}`** brings an attachment of the
+conversation's into the song (`POST …/import`, `apps/server/src/agent/import/`), then sends its changes
+as one batch, one undo step with the rest of the request (`addFile`, `addTrack`, `addRegion`;
+`ops_apply` still refuses `addFile`).
+- **A recording** becomes one of the song's audio files, kept as WAV so every renderer reads it. A WAV
+  the engine's reader takes (PCM of 8 to 32 bits, or float) is copied as it is, its rate and channels
+  kept; FLAC and AIFF are decoded on the host (`decodeInput`) and written as 32-bit float WAV; MP3, Ogg,
+  M4A and any other WAV go to the requester's studio (`agent-import-audio`), which decodes them and
+  uploads them as WAV. It goes from `at` (the playhead when unsaid) on the audio track `track` names,
+  or a new audio track named `name` (or the file's name). A job asking again for the same attachment
+  gets the same file.
+- **A MIDI or MusicXML file** (`.mid`, `.musicxml`/`.xml` in UTF-8 or UTF-16, `.mxl`) is read on the
+  host (`projectFromMidi(readMidi(…))`, `readMusicXml(await scoreText(…))`) and merged by
+  `mergeOps(song, file, {at, tempo, parts, into?, name?})` (`packages/session/src/merge.ts`):
+  - `parts` chooses the file's parts by name (or the start of one) or number from 1; every part with
+    notes when unsaid. Each becomes a new track, or the one part goes onto `track` (an instrument
+    track) as a region.
+  - Everything gets new ids: tracks, regions, plugins, articulations.
+  - The song keeps its meter and key. The notes keep their beats from `at` (the playhead's bar when
+    unsaid), and each region starts and ends on the song's bar lines. A file with a pickup lands with
+    its first full bar at `at`, the pickup just before (at `at` when there's no room).
+  - A send goes to the song's bus of the same name, or is left out: never to a bus the song lacks. A
+    channel's output to such a bus goes to the master.
+  - Automation, a performance's dynamics and clef changes move with the notes; a staff's first clef
+    stays at the start.
+  - `tempo:'keep'` (the default) leaves the song's tempo; `'adopt'` puts the file's tempo map from
+    where it lands to the bar line after it ends, and the song's own tempo back there if the song goes
+    on past it.
+  - What wasn't brought (markers, chord symbols, repeats, a different meter, the file's tempo) is said
+    in the tool's answer.
+- **Time.** A tool call must finish within about 50 s: the client gives `…/import` 50 s and the server
+  answers within about 40. A studio still converting by then answers `{done:false}`, and the tool asks
+  the agent to call it again with the same arguments; the conversion carries on meanwhile (up to 10
+  minutes).
+
+**`bounce` and `render`** are permission kinds: the agent asks, the user clicks, and the studio does it
+(`bounceSong`, or the creation's render through `renderForAgent`). The follow-up turn hears what
+happened: the bounce's length and path (`bounces/<song>/<file>.wav`, which a measurement reads), or
+that the creation's render is back as a soloed audio track.
+
+**Audio files are WAV.** `POST /api/projects/:id/files` makes a FLAC or AIFF a 32-bit float WAV under
+the same id (the `holo audio` command, which sends FLAC, gets the same answer as before), and the
+server makes the songs' FLAC and AIFF files kept before this was so WAV once as it starts
+(`apps/server/src/audio-files.ts`): the WAV replaces the file, never sits beside it. A bounce and a
+headless render read only WAV.
+
+### Measuring
+
+| Tool | Kind | What it does |
+|---|---|---|
+| `measure` | see | How the song sounds, measured: a take's pitch (cents against the key's nearest scale tone, or a track's notes; its notes spelled as the key spells them), drift, vibrato, timing against the grid and phrase levels, as recorded or as it comes out of its track's plugins (`through: "effects"`, rendered: to check a Pitch Correction or an effect); the mix's loudness, peaks, clipping, sections and balance (rendered, or the newest bounce); each track alone, and where two mask each other; what a plugin does; the studio's meters while it plays (the last `seconds` of it, 8 by default, waiting until it has played that long); an attached recording; what plays a pack that isn't installed is silent, and said. A render not done within 40 s says how far it got, and the same call again collects it. |

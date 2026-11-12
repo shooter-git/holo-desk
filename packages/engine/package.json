@@ -8,7 +8,9 @@
   "exports": {
     ".": "./src/index.ts",
     "./node": "./src/node.ts",
-    "./companion": "./src/companion.ts"
+    "./companion": "./src/companion.ts",
+    "./analysis": "./src/analysis/index.ts",
+    "./analysis/pitch": "./src/analysis/pitch.ts"
   },
   "scripts": {
     "typecheck": "tsc -p ."

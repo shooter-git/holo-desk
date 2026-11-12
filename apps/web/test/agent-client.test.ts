@@ -435,6 +435,14 @@ describe('the bar’s permission and brief', () => {
     expect(A.allowLabel({ kind: 'microphone' })).toBe('Record');
   });
 
+  it('says what a bounce or a creation’s render does', () => {
+    expect(A.allowLabel({ kind: 'bounce' })).toBe('Bounce the song');
+    expect(A.allowLabel({ kind: 'render' }, undefined, 'my-game')).toBe('Hear it as my-game');
+    expect(A.allowLabel({ kind: 'render' })).toBe('Hear it as the creation plays it');
+    // the creation's name is only for its render
+    expect(A.allowLabel({ kind: 'bounce' }, undefined, 'my-game')).toBe('Bounce the song');
+  });
+
   it('flags a line that asks for something secret, as it does a command or a link', () => {
     const a = A.reduce(on(), {
       type: 'status',

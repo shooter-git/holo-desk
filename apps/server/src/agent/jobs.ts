@@ -72,10 +72,19 @@ export interface HarnessInfo {
   account?: string;
   update?: { available: boolean; latest?: string };
   sealed: boolean;
+  /** Its seal couldn't be checked yet: it asks for its sign-in first (it's signed out). */
+  sealUnknown?: boolean;
   reason?: string;
   models?: string[];
   efforts?: string[];
+  /** The runner's computer. */
+  host?: string;
+  /** Not found: the official installer Install would run there. */
+  installer?: string;
 }
+
+/** How often, at most, opening Settings › Agent has a runner look at its harnesses again. */
+export const LOOK_EVERY_MS = 3_600_000;
 
 /** A job as the server keeps it. */
 export interface AgentJob {
@@ -231,17 +240,37 @@ export class Jobs implements AgentHooks {
   private readonly assigned = new WeakMap<AgentJob, LiveClient>();
   /** What each runner said it has. */
   private readonly reported = new WeakMap<LiveClient, HarnessInfo[]>();
+  /** When each runner last said what it has, or was last asked to look (whichever came last). */
+  private readonly looked = new WeakMap<LiveClient, number>();
   /**
-   * A sign-in or an update under way, by harness, as its runner last told it: a studio that opens
-   * Settings later, or again after a reload (a phone does, coming back from the sign-in page), is shown it.
+   * A sign-in, an update or an install under way, by harness, as its runner last told it: a studio that
+   * opens Settings later, or again after a reload (a phone does, coming back from the sign-in page), is
+   * shown it.
    */
   private readonly relays = new Map<HarnessId, { event: Record<string, unknown>; runner: LiveClient; at: number }>();
   /** Songs a request is being started on (it waits for the studio to save first). */
   private readonly starting = new Set<string>();
+  /** Told when a job ends, however it ends (its state says how). */
+  private readonly endings: ((job: AgentJob) => void)[] = [];
 
   constructor(options: JobsOptions) {
     this.o = options;
     this.limits = { ...LIMITS, ...options.limits };
+  }
+
+  /** Something to do when a job ends (a measurement it started stops, or runs on for its next turn). */
+  onJobEnd(fn: (job: AgentJob) => void): void {
+    this.endings.push(fn);
+  }
+
+  private ended(job: AgentJob): void {
+    for (const fn of this.endings) {
+      try {
+        fn(job);
+      } catch {
+        // (one listener's trouble isn't the job's)
+      }
+    }
   }
 
   get(id: string): AgentJob | null {
@@ -268,6 +297,15 @@ export class Jobs implements AgentHooks {
       if (best) out.push(best);
     }
     return out;
+  }
+
+  /** A runner that doesn't have the harness and can install it (it reported the installer it would run). */
+  private installerFor(harness: HarnessId): LiveClient | null {
+    for (const runner of this.o.live.agentRunners()) {
+      const info = this.reported.get(runner)?.find((x) => x.id === harness);
+      if (info && !info.found && info.installer) return runner;
+    }
+    return null;
   }
 
   /** The runner to hand a harness's job (or sign-in) to: one that has it, sealed, signed in if it can be. */
@@ -301,6 +339,9 @@ export class Jobs implements AgentHooks {
           : 'No harness is on this computer: install Claude Code, Codex or Cursor',
         'no-harness',
       );
+    // signed out, with its seal not yet checked (it asks for its sign-in first): the sign-in is what's missing
+    if (!found.info.sealed && found.info.sealUnknown && found.info.signedIn === false)
+      throw new Refusal(409, `${HARNESS_NAMES[harness]} is signed out: sign in in Settings › Agent`, 'signed-out');
     if (!found.info.sealed)
       throw new Refusal(
         409,
@@ -312,15 +353,33 @@ export class Jobs implements AgentHooks {
     return { harness, runner: found.runner };
   }
 
-  /** Ask the runners to look for harnesses again, or a harness's runner to sign in, take a code, or update. */
-  relay(action: 'refresh' | 'login' | 'login-code' | 'update', harness?: HarnessId, code?: string): void {
+  /**
+   * Ask the runners to look for harnesses again, or a harness's runner to sign in, take a code, update,
+   * or (a runner that doesn't have it) install it.
+   */
+  relay(action: 'refresh' | 'login' | 'login-code' | 'update' | 'install', harness?: HarnessId, code?: string): void {
     if (action === 'refresh') {
       const runners = this.o.live.agentRunners();
       if (!runners.length) throw new Refusal(409, 'Start the runner on this computer: pnpm runner', 'no-runner');
-      for (const r of runners) this.o.live.sendTo(r, { type: 'agent-refresh' });
+      for (const r of runners) {
+        this.looked.set(r, Date.now());
+        this.o.live.sendTo(r, { type: 'agent-refresh' });
+      }
       return;
     }
     if (!harness) throw new Refusal(400, 'Which harness?');
+    if (action === 'install') {
+      if (!this.o.live.agentRunners().length)
+        throw new Refusal(409, 'Start the runner on this computer: pnpm runner', 'no-runner');
+      // only one that isn't there: HO[LO] never reinstalls over one (Update is for that)
+      if (this.runnerFor(harness)) throw new Refusal(409, `${HARNESS_NAMES[harness]} is installed already`);
+      if ([...this.jobs.values()].some((j) => j.harness === harness && isLive(j)))
+        throw new Refusal(409, `${HARNESS_NAMES[harness]} is working on a request: try once it’s done`, 'busy');
+      const runner = this.installerFor(harness);
+      if (!runner) throw new Refusal(409, `HO[LO] can’t install ${HARNESS_NAMES[harness]} on this computer`);
+      this.o.live.sendTo(runner, { type: 'agent-install', harness });
+      return;
+    }
     const found = this.runnerFor(harness);
     if (!found) throw new Refusal(409, `${HARNESS_NAMES[harness]} isn’t on this computer`, 'no-harness');
     if (action !== 'login-code' && [...this.jobs.values()].some((j) => j.harness === harness && isLive(j)))
@@ -331,6 +390,25 @@ export class Jobs implements AgentHooks {
       this.o.live.sendTo(found.runner, { type: 'agent-login', harness });
     } else if (action === 'login-code') this.o.live.sendTo(found.runner, { type: 'agent-login-code', harness, code });
     else this.o.live.sendTo(found.runner, { type: 'agent-update', harness });
+  }
+
+  /**
+   * Settings › Agent was opened: each runner that last looked at its harnesses an hour ago or more looks
+   * again, quietly (`agent-refresh {light}`), so new versions' models and efforts show. At most once an
+   * hour per runner; nothing is asked when nobody opens Settings. How many were asked.
+   */
+  look(): number {
+    const now = Date.now();
+    let asked = 0;
+    for (const runner of this.o.live.agentRunners()) {
+      const last = this.looked.get(runner);
+      // one that hasn't reported yet looks anyway once the agent is on (agent-on)
+      if (last === undefined || now - last < LOOK_EVERY_MS) continue;
+      this.looked.set(runner, now);
+      this.o.live.sendTo(runner, { type: 'agent-refresh', light: true });
+      asked++;
+    }
+    return asked;
   }
 
   // ---- requests ----
@@ -640,6 +718,7 @@ export class Jobs implements AgentHooks {
     });
     this.saveTurn(job);
     this.tell(job);
+    this.ended(job);
   }
 
   /** The harness finished its turn: the studio saves, and the song as saved is what the agent saw. */
@@ -660,6 +739,7 @@ export class Jobs implements AgentHooks {
     job.view.finished = Date.now();
     this.saveTurn(job);
     this.tell(job);
+    this.ended(job);
   }
 
   /** The turn's row as the job now stands: its state, reply and label, and what it asked, wrote and attached. */
@@ -708,6 +788,7 @@ export class Jobs implements AgentHooks {
     if (client.role !== 'runner' || !client.keyed) return;
     if (msg.type === 'harnesses') {
       this.reported.set(client, parseHarnesses(msg.list));
+      this.looked.set(client, Date.now());
       // Settings › Agent shows them as they are now
       if (client.caps?.agent) this.announce(false);
       return;
@@ -806,8 +887,8 @@ export class Jobs implements AgentHooks {
   // ---- settings, and the song's conversation ----
 
   /**
-   * Keep a sign-in or an update under way (what it said so far: its link and code stay as later lines
-   * come); one that's over is let go.
+   * Keep a sign-in, an update or an install under way (what it said so far: its link and code stay as
+   * later lines come); one that's over is let go.
    */
   private keepRelay(runner: LiveClient, relay: Record<string, unknown>): void {
     const harness = relay.harness as HarnessId;
@@ -821,7 +902,7 @@ export class Jobs implements AgentHooks {
     this.relays.set(harness, { event, runner, at: Date.now() });
   }
 
-  /** The settings, as GET /api/agent/settings answers: with any sign-in or update under way. */
+  /** The settings, as GET /api/agent/settings answers: with any sign-in, update or install under way. */
   settingsView(): {
     enabled: boolean;
     harness: HarnessId | null;
@@ -993,8 +1074,9 @@ export class Jobs implements AgentHooks {
     this.o.live.sendTo(studio, { type: 'play-notes', events, track: track ?? null, port: 'Agent' });
   }
 
-  /** A line under the bar while the agent works. */
+  /** A line under the bar while the agent works (nothing once the job is over). */
   progress(job: AgentJob, line: string): void {
+    if (!isLive(job) || job.ending) return;
     job.view.state = 'running';
     job.view.line = oneLine(line, 200);
     this.tell(job);
@@ -1324,8 +1406,13 @@ export function parseHarnesses(list: unknown): HarnessInfo[] {
       found: h.found === true,
       sealed: h.sealed === true,
     };
+    if (h.sealUnknown === true && !info.sealed) info.sealUnknown = true;
     const version = str(h.version, 80);
     if (version) info.version = version;
+    // a computer's name (letters, digits, - . _), and an installer's command line, as the studio shows them
+    if (typeof h.host === 'string' && /^[A-Za-z0-9][\w.-]{0,63}$/.test(h.host)) info.host = h.host;
+    const installer = str(h.installer, 200);
+    if (installer && !info.found) info.installer = installer;
     if (typeof h.signedIn === 'boolean') info.signedIn = h.signedIn;
     const account = str(h.account, 120);
     if (account) info.account = account;
@@ -1353,13 +1440,13 @@ export function parseHarnesses(list: unknown): HarnessInfo[] {
   return out;
 }
 
-/** How a sign-in, update or refresh goes, from the runner, checked before the studios see it. */
-/** How long a sign-in or an update under way is shown to a studio that comes later (a sign-in waits no longer). */
+/** How long a sign-in, an update or an install under way is shown to a studio that comes later (a sign-in waits no longer). */
 const RELAY_LIFE = 15 * 60_000;
 
+/** How a sign-in, update, install or refresh goes, from the runner, checked before the studios see it. */
 export function parseHarnessEvent(msg: Record<string, unknown>): Record<string, unknown> | null {
   if (!HARNESSES.includes(msg.harness as HarnessId)) return null;
-  if (msg.kind !== 'login' && msg.kind !== 'update' && msg.kind !== 'refresh') return null;
+  if (msg.kind !== 'login' && msg.kind !== 'update' && msg.kind !== 'install' && msg.kind !== 'refresh') return null;
   if (msg.state !== 'running' && msg.state !== 'done' && msg.state !== 'failed') return null;
   const out: Record<string, unknown> = { harness: msg.harness, kind: msg.kind, state: msg.state };
   if (typeof msg.url === 'string' && msg.url.length <= 500) {
@@ -1382,6 +1469,8 @@ export function parseHarnessEvent(msg: Record<string, unknown>): Record<string, 
 export const PERMISSION_KINDS: readonly PermissionKind[] = [
   'install-pack',
   'send-creation',
+  'bounce',
+  'render',
   'screen',
   'photo',
   'microphone',

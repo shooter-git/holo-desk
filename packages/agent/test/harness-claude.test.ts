@@ -1,7 +1,15 @@
 import { existsSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { claudeArgs, claudeHarness, claudeModels, claudeReader, parseClaudeAuth } from '../src/harness/claude.ts';
+import {
+  CLAUDE_EFFORTS,
+  claudeArgs,
+  claudeEfforts,
+  claudeHarness,
+  claudeModels,
+  claudeReader,
+  parseClaudeAuth,
+} from '../src/harness/claude.ts';
 import { allowed, GIT_ENV } from '../src/harness/env.ts';
 import {
   alive,
@@ -96,6 +104,69 @@ exit 0`,
     },
   });
 }
+
+describe('Claude Code: its models and efforts', () => {
+  it('reads the efforts `--help` lists for --effort, in either form, and the usual ones when it lists none', () => {
+    expect(claudeEfforts(HELP)).toEqual(['low', 'medium', 'high', 'xhigh', 'max']);
+    expect(claudeEfforts('  --effort <level>   Effort level (low, high, ultra)\n  --model <m>')).toEqual([
+      'low',
+      'high',
+      'ultra',
+    ]);
+    expect(
+      claudeEfforts(
+        '  --effort <level>   How hard it thinks\n                     (choices: "low", "medium", "turbo")',
+      ),
+    ).toEqual(['low', 'medium', 'turbo']);
+    // the first parenthesis after --effort, never another option's
+    expect(claudeEfforts('  --effort <level>   Effort level\n  --model <m>   (e.g. opus)')).toEqual([
+      ...CLAUDE_EFFORTS,
+    ]);
+    expect(claudeEfforts('')).toEqual([...CLAUDE_EFFORTS]);
+    // nothing that reads as more than a name
+    expect(claudeEfforts('  --effort <l>  (low, rm -rf ~; x, MAX, max)')).toEqual(['low', 'max']);
+  });
+
+  it('reads them again at once when the version changes, and not before', async () => {
+    s = sandbox();
+    const version = join(s.rec, 'version');
+    const help = join(s.rec, 'help');
+    writeFileSync(version, '2.1.322 (Claude Code)\n');
+    writeFileSync(help, HELP);
+    const path = fakeBinary(
+      s,
+      'claude',
+      [
+        { when: '--version', run: `cat ${q(version)}; exit 0` },
+        { when: '--help', run: `cat ${q(help)}; exit 0` },
+        { when: 'auth\\ status*', run: `echo ${q(SIGNED_IN)}; exit 0` },
+      ],
+      'exit 0',
+    );
+    const h = claudeHarness({
+      env: { ...s.env, HOLO_CLAUDE: path },
+      root: s.root,
+      repo: REPO,
+      fetchText: async () => '2.1.400',
+    });
+    const first = await h.info();
+    expect(first.models).toEqual(['fable', 'opus', 'sonnet', 'haiku']);
+    expect(first.efforts).toEqual(['low', 'medium', 'high', 'xhigh', 'max']);
+    const newer = HELP.replace("'fable', 'opus', or 'sonnet'", "'lyric', 'opus', or 'sonnet'").replace(
+      '(low, medium, high, xhigh, max)',
+      '(low, medium, high, xhigh, max, ultra)',
+    );
+    writeFileSync(help, newer);
+    // the same version: what was read for it stands
+    expect((await h.info(true)).efforts).toEqual(first.efforts);
+    // a new version (an update, or one noticed at a look): read again at once
+    writeFileSync(version, '2.1.400 (Claude Code)\n');
+    const second = await h.info(true);
+    expect(second.version).toBe('2.1.400');
+    expect(second.models).toEqual(['lyric', 'opus', 'sonnet', 'haiku']);
+    expect(second.efforts).toEqual(['low', 'medium', 'high', 'xhigh', 'max', 'ultra']);
+  });
+});
 
 describe('Claude Code: finding it', () => {
   it('reports its version, sign-in, seal, models, efforts and an update', async () => {
@@ -272,6 +343,21 @@ ${replay('claude-normal')}`,
     expect(recorded(s, 1).argv.join(' ')).not.toContain('--resume');
     expect(events[0]).toEqual({ type: 'session', session: 'c58564bc-c9a7-4e0d-ad72-6461accd9689' });
     expect(events.at(-1)?.type).toBe('done');
+  });
+
+  it('runs at the default with a model or an effort it no longer offers, rather than failing', async () => {
+    s = sandbox();
+    const h = fake({ signedIn: true });
+    await h.info();
+    // a model saved when an earlier version offered it, and an effort none takes now
+    const events = await runToEnd(h, job(s, { model: 'gone-model', effort: 'xhigh' }));
+    expect(events.at(-1)?.type).toBe('done');
+    expect(recorded(s, 0).argv.some((a) => a.startsWith('--model'))).toBe(false);
+    expect(recorded(s, 0).argv).toContain('--effort=xhigh');
+    // one still offered is passed on
+    await runToEnd(h, job(s, { model: 'fable', effort: 'gone-effort' }));
+    expect(recorded(s, 1).argv).toContain('--model=fable');
+    expect(recorded(s, 1).argv.some((a) => a.startsWith('--effort'))).toBe(false);
   });
 
   it('refuses a model or effort that reads as more than a value, and drops an effort it doesn’t take', async () => {

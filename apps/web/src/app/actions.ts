@@ -1549,6 +1549,39 @@ export async function renderInCreation(): Promise<void> {
   }
 }
 
+/** A creation's render as the host tells it (`GET /api/renders/:id`). */
+interface RenderView {
+  state: 'waiting' | 'running' | 'done' | 'failed';
+  title: string;
+  piece: string;
+  error: string | null;
+}
+
+/**
+ * The creation renders this song for the agent (the bar's "Hear it as …"): what to tell it once the
+ * render is back on its track, soloed, or failed. A render that can't start throws, with why (the bar
+ * shows it, and the button stays). Its progress shows as a render's always does.
+ */
+export async function renderForAgent(): Promise<string> {
+  const p = store.get().project;
+  if (!p?.origin) return 'This song didn’t come from a creation, so there’s none to render it';
+  await saveNow();
+  const res = await fetch(`/api/projects/${p.id}/render`, { method: 'POST' });
+  const started = (await res.json().catch(() => ({}))) as { id?: string; error?: string };
+  if (!res.ok || !started.id) throw new Error(started.error ?? 'The render could not start');
+  const until = Date.now() + 30 * 60_000;
+  while (Date.now() < until) {
+    await new Promise((r) => window.setTimeout(r, 2000));
+    const job = (await fetch(`/api/renders/${started.id}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .catch(() => null)) as RenderView | null;
+    if (job?.state === 'done')
+      return `${job.title} rendered “${p.title}”: it's on the track “${job.title} render” at the top, soloed (unsoloed, the studio's own mix plays)`;
+    if (job?.state === 'failed') return `${job.title} couldn’t render ${job.piece}: ${job.error ?? 'it failed'}`;
+  }
+  return `${p.origin.creation} is still rendering after 30 minutes: its render will come back as a soloed track`;
+}
+
 /**
  * Send the song to the creation it came from: whether it went, and what to say of it (null when the
  * song has no creation). `quiet` when the bar asked: the agent's reply says how it went, so no toast

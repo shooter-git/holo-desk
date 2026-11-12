@@ -185,6 +185,13 @@ export const PHASER_STAGES = [2, 4, 6, 8, 10, 12];
 /** String Resonance's strings below A0 at most: an extended grand's, down to C0. */
 export const BASS_STRINGS = 9;
 
+/** The voices Pitch Correction listens for: the pitches it looks between (Hz), a low voice's to a high one's. */
+export const PITCH_RANGES: { name: string; low: number; high: number }[] = [
+  { name: 'Low', low: 72, high: 520 },
+  { name: 'Normal', low: 85, high: 1050 },
+  { name: 'High', low: 160, high: 1600 },
+];
+
 /** The kit pieces a Drum Replacer can play, each on its General MIDI drum key. */
 export const DRUM_PIECES: { name: string; key: number }[] = [
   { name: 'Kick', key: 36 },
@@ -590,6 +597,30 @@ export const PLUGINS: PluginDef[] = [
       { id: 'curve', name: 'Curve', min: -100, max: 100, default: 0 },
       pct('mix', 'Mix', 100),
       db('level', 'Level', -24, 12, 0),
+    ],
+  },
+  {
+    type: 'pitch',
+    name: 'Pitch Correction',
+    kind: 'audio',
+    category: 'Pitch',
+    description:
+      'Hears the pitch of one voice as it sings and pulls it to the nearest note of a key and scale: at once for a hard, robotic tune, or more slowly so its slides and vibrato stay.',
+    params: [
+      keyParam,
+      { ...scaleParam, default: SCALES.length - 1 },
+      ms('response', 'Response', 0, 200, 40, false),
+      pct('amount', 'Amount', 100),
+      {
+        id: 'range',
+        name: 'Range',
+        min: 0,
+        max: PITCH_RANGES.length - 1,
+        default: 1,
+        step: 1,
+        options: PITCH_RANGES.map((r) => r.name),
+      },
+      { id: 'tune', name: 'Reference', min: 415, max: 466, default: 440, unit: 'Hz' },
     ],
   },
   {

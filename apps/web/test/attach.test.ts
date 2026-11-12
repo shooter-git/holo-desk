@@ -7,6 +7,7 @@ import {
   fitMeta,
   imageType,
   MAX_ATTACHMENT,
+  MAX_AUDIO,
   MAX_META,
   MAX_TEXT,
   midiMeta,
@@ -31,11 +32,29 @@ describe('what may go with a request', () => {
     expect(classify(file('', 'image/png'))).toEqual({ kind: 'image', type: null });
   });
 
+  it('takes compressed MusicXML and AIFF, and a long recording', () => {
+    const mxl = { kind: 'score', type: 'application/vnd.recordare.musicxml' };
+    expect(classify(file('strings.mxl', 'application/vnd.recordare.musicxml'))).toEqual(mxl);
+    expect(classify(file('strings.mxl', 'application/zip'))).toEqual(mxl);
+    expect(classify(file('', 'application/vnd.recordare.musicxml'))).toEqual(mxl);
+    for (const name of ['take.aif', 'take.aiff', 'take.AIFC'])
+      expect(classify(file(name, 'application/octet-stream'))).toEqual({ kind: 'audio', type: 'audio/aiff' });
+    expect(classify(file('', 'audio/x-aiff'))).toEqual({ kind: 'audio', type: 'audio/aiff' });
+    // a recording may be 200 MB; anything else that isn't a picture, 25
+    expect(MAX_AUDIO).toBe(200 * 1024 * 1024);
+    expect(classify(file('album side.wav', 'audio/wav', 180 * 1024 * 1024))).toEqual({
+      kind: 'audio',
+      type: 'audio/wav',
+    });
+    expect(classify(file('huge.mid', 'audio/midi', MAX_ATTACHMENT + 1))).toEqual({
+      error: 'huge.mid is 25 MB: 25 MB at most',
+    });
+  });
+
   it('turns away other kinds, and files too big, saying why', () => {
     expect(classify(file('song.pdf', 'application/pdf'))).toHaveProperty('error');
-    expect(classify(file('score.mxl', 'application/vnd.recordare.musicxml'))).toHaveProperty('error');
-    expect(classify(file('take.wav', 'audio/wav', MAX_ATTACHMENT + 1))).toEqual({
-      error: 'take.wav is 25 MB: 25 MB at most',
+    expect(classify(file('take.wav', 'audio/wav', MAX_AUDIO + 1))).toEqual({
+      error: 'take.wav is 200 MB: 200 MB at most',
     });
     expect(classify(file('long.txt', 'text/plain', MAX_TEXT + 1))).toHaveProperty('error');
     expect(classify(file('empty.wav', 'audio/wav', 0))).toEqual({ error: 'empty.wav is empty' });

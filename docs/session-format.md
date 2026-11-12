@@ -91,7 +91,8 @@ depends on the next one), the way Hallowed Lanterns' own code plays it:
 
 An audio track (`"kind": "audio"`) plays recordings instead of notes. Its regions carry `audio`, and
 the recordings themselves are listed in the song's `files` and kept beside the song on the host
-(`data/audio/<song id>/`), never inside the session file:
+(`data/audio/<song id>/`, as WAV: a FLAC or AIFF sent there is made a WAV under the same id), never
+inside the session file:
 
 ```jsonc
 // in the song
@@ -247,7 +248,32 @@ the bytes stores one and answers its id).
 Edits travel as operations (`ops.ts`): `setProject`, `addTrack`, `removeTrack`, `moveTrack`,
 `updateTrack`, `updateChannel`, `addPlugin`, `updatePlugin`, `removePlugin`, `movePlugin`, `addBus`,
 `removeBus`, `updateBus`, `addRegion`, `updateRegion`, `removeRegion`, `moveRegion`, `setNotes`,
-`addNotes`, `setNotesIn` and `setMarksIn` (replace only what starts in `[from, to)` of a region), `setCC`,
-`setAutomation` (with `curve`), `addFile`. `setProject` takes `finish`, `loop`, `keys`, `form` and `score` (`null`
+`splitRegion`, `addNotes`, `setNotesIn` and `setMarksIn` (replace only what starts in `[from, to)` of a
+region), `setCC`, `setAutomation` (with `curve`), `addFile`, `arrange`. `setProject` takes `finish`, `loop`, `keys`, `form` and `score` (`null`
 removes them). `POST /api/projects/:id/ops` with `{ "ops": [...], "author": "AI", "label": "…" }`
 applies them through the open studio when there is one.
+
+`{ "op": "splitRegion", "track", "region", "at", "id" }` cuts a region in two at `at` (a tick of the song,
+inside the region), as the studio's Split does: the left half keeps the region's id, the right half takes
+`id` (the caller's, new to the song). Notes, controller points and marks go to the half they start in (a
+note keeps its length; a line over the cut stops there); an audio region's right half plays on from where
+the cut fell in its recording.
+
+`{ "op": "arrange", "edit": "insert" | "delete" | "copy" | "move", "from", "to", "at"? }` changes bars across
+the whole song (`arrange.ts`), every position a tick on a bar line:
+- `insert`: empty bars `[from, to)`; what was at `from` moves to `to`. They are whole bars of the meter just
+  before `from`.
+- `delete`: takes out `[from, to)`; what came after moves back to `from`.
+- `copy`: plays `[from, to)` again at `at`; what was at `at` moves later.
+- `move`: takes `[from, to)` to `at` (not inside them).
+
+Everything with a time moves with its bars: regions and their notes, controller lanes and marks, automation,
+tempo (ramps too), meter, keys, markers, chords, the cycle and the loop, repeats and jumps (an `end`, `fine`,
+`toCoda`, `dc` or `ds` belongs to the bar before its tick), the score's breaks, clefs, and a Performance
+instrument's dynamics. A region inside one stretch moves whole and keeps its id; one an edit cuts goes in
+pieces with new ids, except that a MIDI region stays one region where the song only opens up (an insert) or
+closes up (a delete). Automation and dynamics hold their value through inserted bars and keep their shape
+on both sides of a cut. Pieces of one recording that end up side by side, playing on where the other
+stopped, are one region again, so deleting inserted bars gives the song back as it was. The operation is
+worked out on the song where it's applied, so it never acts on an old copy; in the studio it's one undo
+step. Positions off a bar line, and edits at the start of a song with a pickup, are refused.

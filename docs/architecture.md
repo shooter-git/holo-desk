@@ -24,7 +24,8 @@ the MIDI and audio effects, the mixer, and the song's compiler. The same code ru
   set);
 - **headless**, on the host: `holo render-audio`, the server, or a creation's build, with no browser.
 
-A bounce and a headless render read samples and audio files with the same WAV decoder and the same
+A bounce and a headless render read samples and audio files with the same WAV decoder (a song's audio
+files are kept as WAV for this: the host makes a FLAC or AIFF sent to it a WAV) and the same
 resampler, start from the same state and add up in the same order, so they are the same numbers: a
 song bounced in the studio and rendered by `holo render-audio` give byte-identical files. That is what
 lets a creation ship exactly what you heard and approved in the studio.

@@ -1,7 +1,7 @@
 /**
  * What the three adapters share: finding the program, asking its version and sign-in, looking up
- * updates (at most every 6 hours, never installing one unasked), relaying a sign-in or an update,
- * and running a turn: the prompt on stdin, the event stream read line by line, each event checked
+ * updates (at most every 6 hours, never installing one unasked), relaying a sign-in, an update or an
+ * install (the vendor's official installer, a fixed command, on a click only), and running a turn: the prompt on stdin, the event stream read line by line, each event checked
  * against the tripwire, and the whole process group stopped on a tripwire, a cancel, the time
  * limit, and after every run.
  */
@@ -9,7 +9,17 @@ import type { ChildProcess } from 'node:child_process';
 import { existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { harnessEnv } from './env.ts';
-import { capture, eachLine, type Found, plain, type SpawnOptions, start, stopGroup } from './process.ts';
+import {
+  candidates,
+  capture,
+  eachLine,
+  type Found,
+  findBinary,
+  plain,
+  type SpawnOptions,
+  start,
+  stopGroup,
+} from './process.ts';
 import type { AuthStatus, Binary, Harness, HarnessEvent, HarnessId, HarnessInfo, Job, Run, RunEvent } from './types.ts';
 import { MODEL } from './types.ts';
 import { mcpServer, privateDir } from './workspace.ts';
@@ -58,14 +68,22 @@ export interface Spec {
   toolEnv(ctx: Context, purpose: 'probe' | 'login' | 'update'): { env: Record<string, string>; cwd: string };
   parseVersion(stdout: string): string | null;
   auth(ctx: Context): Promise<AuthStatus | null>;
-  /** Whether it can be limited to HO[LO]'s tools here (and why not). */
-  sealed(ctx: Context): Promise<{ sealed: boolean; reason?: string }>;
+  /**
+   * Whether it can be limited to HO[LO]'s tools here (and why not). `signedOut`: it wouldn't say
+   * before it's signed in, so the seal is unknown (and nothing is remembered).
+   */
+  sealed(ctx: Context): Promise<Sealed>;
   models(ctx: Context): Promise<string[]>;
   efforts(ctx: Context, model?: string): Promise<string[]>;
   /** The newest version out, from where its installer gets it; null when unknown. */
   latest(ctx: Context): Promise<{ latest: string; available?: boolean } | null>;
   login: { args: string[]; asksCode: boolean; parse(text: string): { url?: string; code?: string } };
   updateArgs: string[];
+  /**
+   * The vendor's official installer, as its docs give it: a fixed command run with
+   * `bash -o pipefail -c` (never anything from input). Each puts the program in ~/.local/bin.
+   */
+  installer: string;
   /** The workspace's files for a job, and the run's argv and extra environment. */
   prepare(ctx: Context, job: Job): { args: string[]; env: Record<string, string> };
   reader(): Reader;
@@ -85,10 +103,25 @@ export interface AdapterOptions {
   runLimitMs?: number;
 }
 
+/** What a seal check found. */
+export interface Sealed {
+  sealed: boolean;
+  reason?: string;
+  signedOut?: boolean;
+}
+
 export const HOUR = 3_600_000;
 const UPDATE_TTL = 6 * HOUR;
 const LOGIN_LIMIT_MS = 15 * 60_000;
 const UPDATE_LIMIT_MS = 10 * 60_000;
+const INSTALL_LIMIT_MS = 10 * 60_000;
+
+/** Said when an installer finished but the runner still can't find what it installed. */
+export const NOT_SEEN =
+  'Installed in ~/.local/bin, which the runner doesn’t see: run `pnpm run runner-service on` again on the host';
+
+/** Where the installers run: they're bash scripts. */
+export const INSTALLS_ON: readonly NodeJS.Platform[] = ['linux', 'darwin'];
 
 async function defaultFetchText(url: string): Promise<string> {
   const res = await fetch(url, { signal: AbortSignal.timeout(10_000), headers: { accept: '*/*' } });
@@ -178,6 +211,10 @@ const TOOL_WORDS: Record<string, string> = {
   scan_show: 'Reading the scan',
   scan_status: 'Marking the scan',
   attachment_get: 'Reading the attachment',
+  measure: 'Measuring',
+  import: 'Bringing it in',
+  regions: 'Editing regions',
+  timeline: 'Arranging bars',
   look: 'Asking you',
   ask_permission: 'Asking you',
   hand_off: 'Writing a brief',
@@ -213,6 +250,14 @@ export function defineHarness(spec: Spec, o: AdapterOptions): Harness {
   let known: { bin: Binary; version: string | null } | null = null;
   let unresolved: string | null = null;
   let login: { child: ChildProcess; asksCode: boolean } | null = null;
+  /** The models the last look found, for its version: a job's model is checked against them. */
+  let offered: { version: string | null; models: string[] } | null = null;
+  const sealKey = `sealed:${spec.id}`;
+  /** A seal check that failed for this version is done again at the next look. */
+  const forgetFailedSeal = () => {
+    const cached = memory.get<{ sealed?: boolean }>(sealKey);
+    if (cached && cached.sealed !== true) memory.set(sealKey, undefined);
+  };
 
   const context = (bin: Binary, version: string | null): Context => ({
     bin,
@@ -259,19 +304,19 @@ export function defineHarness(spec: Spec, o: AdapterOptions): Harness {
     return { available, latest: latest.latest };
   }
 
-  /** Relay a long command's lines (a sign-in, an update) until it ends or runs out of time. */
+  /** Relay a long command's lines (a sign-in, an update, an installer) until it ends or runs out of time. */
   function relay(
-    ctx: Context,
+    bin: Binary,
     args: string[],
-    purpose: 'login' | 'update',
+    where: SpawnOptions,
+    purpose: 'login' | 'update' | 'install',
     onLine: (text: string) => void,
     limitMs: number,
   ): Promise<{ ok: boolean; tail: string[] }> {
     return new Promise((done) => {
-      const where = spec.toolEnv(ctx, purpose);
       let child: ChildProcess;
       try {
-        child = start(ctx.bin, args, where);
+        child = start(bin, args, where);
       } catch (err) {
         done({ ok: false, tail: [err instanceof Error ? err.message : String(err)] });
         return;
@@ -306,6 +351,18 @@ export function defineHarness(spec: Spec, o: AdapterOptions): Harness {
     });
   }
 
+  /** A long command's lines as they're relayed: a few a second is plenty. */
+  const fewLines = (onLine: (line: string) => void) => {
+    let last = 0;
+    return (line: string) => {
+      const t = now();
+      if (t - last > 300) {
+        last = t;
+        onLine(line.slice(0, 200));
+      }
+    };
+  };
+
   const harness: Harness = {
     id: spec.id,
     name: spec.name,
@@ -319,22 +376,26 @@ export function defineHarness(spec: Spec, o: AdapterOptions): Harness {
       try {
         const ctx = await found(fresh);
         if (!ctx) {
-          return unresolved
-            ? {
-                ...base,
-                found: true,
-                reason: `Its launcher (${unresolved}) couldn’t be resolved to the program it runs`,
-              }
-            : { ...base, reason: `${spec.name} isn’t installed on this computer` };
+          if (unresolved)
+            return {
+              ...base,
+              found: true,
+              reason: `Its launcher (${unresolved}) couldn’t be resolved to the program it runs`,
+            };
+          const missing: HarnessInfo = { ...base, reason: `${spec.name} isn’t installed on this computer` };
+          if (INSTALLS_ON.includes(platform)) missing.installer = spec.installer;
+          return missing;
         }
         const info: HarnessInfo = { ...base, found: true };
         if (ctx.version) info.version = ctx.version;
         const [auth, sealed, models, efforts, update] = await Promise.all([
           spec.auth(ctx).catch(() => null),
-          spec.sealed(ctx).catch((err: unknown) => ({
-            sealed: false,
-            reason: err instanceof Error ? err.message : String(err),
-          })),
+          spec.sealed(ctx).catch(
+            (err: unknown): Sealed => ({
+              sealed: false,
+              reason: err instanceof Error ? err.message : String(err),
+            }),
+          ),
           spec.models(ctx).catch(() => []),
           spec.efforts(ctx).catch(() => []),
           checkUpdate(ctx),
@@ -345,7 +406,16 @@ export function defineHarness(spec: Spec, o: AdapterOptions): Harness {
         }
         info.sealed = sealed.sealed;
         if (sealed.reason) info.reason = sealed.reason;
+        if (sealed.signedOut) {
+          // it asked for its sign-in before saying whether it can be sealed: signed out, whatever its
+          // status said, and checked again at the first look once it's signed in
+          info.signedIn = false;
+          delete info.account;
+          info.sealed = false;
+          info.sealUnknown = true;
+        }
         const okModels = models.filter((m) => MODEL.test(m));
+        offered = { version: ctx.version, models: okModels };
         if (okModels.length) info.models = okModels;
         info.efforts = efforts.filter((e) => MODEL.test(e));
         if (update) info.update = update;
@@ -380,8 +450,9 @@ export function defineHarness(spec: Spec, o: AdapterOptions): Harness {
       let text = '';
       let told: { url?: string; code?: string } = {};
       const { ok, tail } = await relay(
-        ctx,
+        ctx.bin,
         spec.login.args,
+        spec.toolEnv(ctx, 'login'),
         'login',
         (line) => {
           text += `${line}\n`;
@@ -398,8 +469,11 @@ export function defineHarness(spec: Spec, o: AdapterOptions): Harness {
         LOGIN_LIMIT_MS,
       );
       const after = await spec.auth(ctx).catch(() => null);
-      if (ok && after?.signedIn !== false) onEvent({ state: 'done', line: `${spec.name} is signed in` });
-      else onEvent({ state: 'failed', error: cleanError(tailError(tail) || 'The sign-in didn’t finish') });
+      if (ok && after?.signedIn !== false) {
+        // a seal check that failed while it was signed out is done again at the next look
+        forgetFailedSeal();
+        onEvent({ state: 'done', line: `${spec.name} is signed in` });
+      } else onEvent({ state: 'failed', error: cleanError(tailError(tail) || 'The sign-in didn’t finish') });
     },
 
     loginCode(code) {
@@ -417,24 +491,48 @@ export function defineHarness(spec: Spec, o: AdapterOptions): Harness {
     async update(onLine) {
       const ctx = await found();
       if (!ctx) throw new Error(`${spec.name} isn’t installed on this computer`);
-      let last = 0;
       const { ok, tail } = await relay(
-        ctx,
+        ctx.bin,
         spec.updateArgs,
+        spec.toolEnv(ctx, 'update'),
         'update',
-        (line) => {
-          // a few lines a second is plenty
-          const t = now();
-          if (t - last > 300) {
-            last = t;
-            onLine(line.slice(0, 200));
-          }
-        },
+        fewLines(onLine),
         UPDATE_LIMIT_MS,
       );
       memory.set(`update:${spec.id}`, undefined);
       await found(true);
       if (!ok) throw new Error(cleanError(tailError(tail) || 'The update failed'));
+    },
+
+    async install(onLine) {
+      if (!INSTALLS_ON.includes(platform))
+        throw new Error(`HO[LO] installs ${spec.name} on Linux and macOS: install it by hand here`);
+      if ((await found(true)) || unresolved) throw new Error(`${spec.name} is installed already`);
+      // the fixed command, run by bash: nothing from input reaches it. pipefail: a download that fails
+      // fails the install, rather than handing bash nothing to run
+      const bash = findBinary(candidates(['bash'], ['/bin', '/usr/bin'], undefined, env, platform), platform);
+      if (!bash || !('binary' in bash)) throw new Error('bash isn’t on this computer');
+      // as the user's own update runs: their home and environment (the allowlist), not a sealed run's
+      const where: SpawnOptions = {
+        cwd: privateDir(join(o.root, '.probe')),
+        env: harnessEnv(spec.id, {}, env, platform),
+      };
+      const { ok, tail } = await relay(
+        bash.binary,
+        ['-o', 'pipefail', '-c', spec.installer],
+        where,
+        'install',
+        fewLines(onLine),
+        INSTALL_LIMIT_MS,
+      );
+      memory.set(`update:${spec.id}`, undefined);
+      const after = await found(true);
+      if (!ok) throw new Error(cleanError(tailError(tail) || 'The installer failed'));
+      if (!after) throw new Error(NOT_SEEN);
+    },
+
+    recheck() {
+      forgetFailedSeal();
     },
 
     async models() {
@@ -459,7 +557,7 @@ export function defineHarness(spec: Spec, o: AdapterOptions): Harness {
       const done = (async () => {
         const ctx = await found();
         if (!ctx) return report({ type: 'failed', error: `${spec.name} isn’t installed on this computer` });
-        const checked = await checkJob(spec, ctx, job);
+        const checked = await checkJob(spec, ctx, job, offered?.version === ctx.version ? offered.models : null);
         if ('error' in checked) return report({ type: 'failed', error: checked.error });
         let attempt: Job = checked.job;
         for (let tries = 0; tries < 3 && !cancelled; tries++) {
@@ -631,17 +729,30 @@ export function defineHarness(spec: Spec, o: AdapterOptions): Harness {
 
 /**
  * A job's model and effort, checked before anything starts: anything that could read as more than a
- * value is refused; an effort the harness doesn't take with that model (a setting left from another
- * harness) is dropped, so it runs at its default.
+ * value is refused. A model the harness no longer offers (its last look listed others) is dropped, and
+ * so is an effort it doesn't take with the model (one no longer offered, or a setting left from
+ * another harness): the run uses the harness's default rather than failing. `models` is what the last
+ * look listed for this version (null: not looked at yet, so they're asked for now).
  */
-async function checkJob(spec: Spec, ctx: Context, job: Job): Promise<{ error: string } | { job: Job }> {
+async function checkJob(
+  spec: Spec,
+  ctx: Context,
+  job: Job,
+  models: string[] | null,
+): Promise<{ error: string } | { job: Job }> {
   if (job.model && !MODEL.test(job.model)) return { error: `“${job.model}” isn’t a model name` };
   if (job.effort && !MODEL.test(job.effort)) return { error: `“${job.effort}” isn’t an effort` };
-  if (job.effort) {
-    const efforts = await spec.efforts(ctx, job.model || undefined);
-    if (!efforts.includes(job.effort)) return { job: { ...job, effort: '' } };
+  let out = job;
+  if (out.model) {
+    const list = models ?? (await spec.models(ctx).catch(() => [])).filter((m) => MODEL.test(m));
+    // an empty list says nothing (it couldn't be read): the model is passed on
+    if (list.length && !list.includes(out.model)) out = { ...out, model: '' };
   }
-  return { job };
+  if (out.effort) {
+    const efforts: string[] = await spec.efforts(ctx, out.model || undefined).catch(() => []);
+    if (!efforts.includes(out.effort)) out = { ...out, effort: '' };
+  }
+  return { job: out };
 }
 
 /** The MCP server for a job, as the adapters put it in their config. */

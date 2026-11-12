@@ -890,9 +890,12 @@ describe('reading', () => {
         playing: true,
         selection: { track: 'trk_strings', regions: ['rgn_a'], notes: 2 },
         view: 'piano roll',
+        about: ['By "Es Claro", on no album.'],
       },
     });
     const r = await call(api, 'song_status', {}, 'C3');
+    // who it's by comes right after the title line
+    expect(r.text.split('\n')[1]).toBe('By "Es Claro", on no album.');
     expect(r.text).toContain('Playhead: 9.1.1 (playing)');
     expect(r.text).toContain('Selected: track Strings, 1 region, 2 notes');
     expect(r.text).toContain('middle C (MIDI 60) is C3');

@@ -587,7 +587,12 @@ export function agentRoutes(app: FastifyInstance, o: AgentOptions): { jobs: Jobs
   );
   app.get(
     `${J}/describe`,
-    forJob(async (_req, _reply, job) => ({ text: describeProject(await theJobs.song(job)) })),
+    forJob(async (_req, _reply, job) => {
+      // the song as text, after who it's by, its album and its creation (the library's, beside the song)
+      const text = describeProject(await theJobs.song(job));
+      const about = theJobs.about(job.view.project);
+      return { text: about.length ? `${about.join('\n')}\n${text}` : text };
+    }),
   );
   app.get(
     `${J}/state`,

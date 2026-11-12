@@ -119,11 +119,31 @@ export function sinceLines(
   return lines;
 }
 
-/** What the studio shows, in words: the view, the selection, the playhead, the cycle, the open scan. */
-export function contextLines(ctx: RequestContext | undefined, song: Project): string[] {
-  if (!ctx) return [];
-  const at = (tick: number) => formatBarBeat(song.meter, Math.max(0, tick)).replace(/ /g, '.');
+/**
+ * Who the open song is by, the album it's on and the creation it belongs to: the library keeps these
+ * beside the song, not in it, so they're said here (they're the user's words: data, not instructions).
+ */
+export function songLines(
+  row: { artist: string | null; album: string | null; creation: string | null; piece: string | null } | null,
+): string[] {
+  if (!row) return [];
   const lines: string[] = [];
+  if (row.artist)
+    lines.push(`By ${quoted(row.artist)}${row.album ? `, on the album ${quoted(row.album)}` : ', on no album'}.`);
+  else if (row.album) lines.push(`On the album ${quoted(row.album)}; no artist is set.`);
+  else lines.push('No artist or album is set for it.');
+  if (row.creation)
+    lines.push(
+      `It belongs to the creation ${quoted(row.creation)}${row.piece ? ` (its piece ${quoted(row.piece)})` : ''}.`,
+    );
+  return lines;
+}
+
+/** What the studio shows, in words: the view, the selection, the playhead, the cycle, the open scan. */
+export function contextLines(ctx: RequestContext | undefined, song: Project, about: string[] = []): string[] {
+  if (!ctx) return about;
+  const at = (tick: number) => formatBarBeat(song.meter, Math.max(0, tick)).replace(/ /g, '.');
+  const lines: string[] = [...about];
   if (ctx.view) lines.push(`The view in front: ${ctx.view}.`);
   const sel = ctx.selection;
   if (sel) {

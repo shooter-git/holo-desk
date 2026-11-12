@@ -30,7 +30,7 @@ export const songStatus: Tool = {
   name: 'song_status',
   kind: 'see',
   summary: ({ middleC }) =>
-    `Where the user is now: the song's title, tempo, meter, key and length; its tracks; the playhead (bar.beat.sixteenth) and whether it's playing; what's selected; the cycle; the editor in front; and how note names are written here (middle C, MIDI 60, is ${middleC}). Cheap: call it first, and again after the user may have moved.`,
+    `Where the user is now: the song's title, who it's by, its album and creation, tempo, meter, key and length; its tracks; the playhead (bar.beat.sixteenth) and whether it's playing; what's selected; the cycle; the editor in front; and how note names are written here (middle C, MIDI 60, is ${middleC}). Cheap: call it first, and again after the user may have moved.`,
   args: [],
   async run(ctx) {
     const [state, project] = await Promise.all([ctx.api.state(), ctx.api.song()]);
@@ -38,6 +38,7 @@ export const songStatus: Tool = {
     const m = project.meter[0];
     const lines = [
       `"${project.title}": ${project.tempo[0]?.bpm ?? 120} bpm, ${m ? `${m.num}/${m.den}` : '4/4'}, ${project.key ?? 'no key set'}, ${plural(bars, 'bar')}`,
+      ...(Array.isArray(state.about) ? state.about.filter((l): l is string => typeof l === 'string') : []),
       `Tracks: ${
         project.tracks
           .map((t) => `${t.name}${t.channel.mute ? ' (muted)' : ''}${t.channel.solo ? ' (solo)' : ''}`)

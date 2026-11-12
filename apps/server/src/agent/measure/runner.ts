@@ -24,6 +24,9 @@ export type MeasureAnswer =
   | { done: true; task: string; result: MeasureResult; cached?: boolean }
   | { done: false; task: string; progress: number; eta: number | null; stage: string };
 
+/** Told, while a call waits, each time its measurement says how far it has got, and what it measures (the bar shows it). */
+export type Watcher = (now: Extract<MeasureAnswer, { done: false }>, label: string) => void;
+
 /** A measuring process, as the runner sees one (a forked child, or a test's stand-in). */
 export interface ChildLike {
   send(msg: unknown): unknown;
@@ -56,6 +59,8 @@ export interface MeasureJob {
   /** About how long it should take (s), until it says how far it has got. */
   estimate: number;
   input: ChildInput;
+  /** What it measures, in a few words ("the mix"). */
+  label?: string;
 }
 
 /** A measurement that failed or was cancelled: why. */
@@ -71,6 +76,7 @@ interface Task {
   /** Running on after the turn that asked for it: when it gives up. */
   orphaned: NodeJS.Timeout | null;
   input: ChildInput | null;
+  label: string;
   state: 'queued' | 'running' | 'done' | 'failed';
   progress: number;
   stage: string;
@@ -79,6 +85,8 @@ interface Task {
   result?: MeasureResult;
   error?: string;
   waiters: Set<() => void>;
+  /** The calls waiting on it that want to hear how far it gets. */
+  watchers: Set<Watcher>;
 }
 
 interface LaneState {
@@ -132,8 +140,11 @@ export class MeasureRunner {
     return seconds * (this.pace.get(project) ?? 1);
   }
 
-  /** Measure (or join the same measurement, or answer from the cache), waiting up to the budget. */
-  request(m: MeasureJob, budgetMs = this.budgetMs): Promise<MeasureAnswer> {
+  /**
+   * Measure (or join the same measurement, or answer from the cache), waiting up to the budget; `watch`
+   * hears how far it gets while this call waits.
+   */
+  request(m: MeasureJob, budgetMs = this.budgetMs, watch?: Watcher): Promise<MeasureAnswer> {
     if (this.closed) return Promise.reject(new MeasureFailed('HO[LO] is closing'));
     const hit = this.cache.get(m.key);
     if (hit?.result) {
@@ -152,12 +163,14 @@ export class MeasureRunner {
         jobs: new Set([m.job]),
         orphaned: null,
         input: m.input,
+        label: m.label ?? 'it',
         state: 'queued',
         progress: 0,
         stage: 'Waiting for another measurement to finish',
         started: null,
         estimate: Math.max(1, m.estimate),
         waiters: new Set(),
+        watchers: new Set(),
       };
       this.tasks.set(task.id, task);
       this.live.set(task.key, task);
@@ -165,15 +178,21 @@ export class MeasureRunner {
       this.prune();
       this.pump(task.lane);
     }
-    return this.wait(task, budgetMs);
+    return this.wait(task, budgetMs, watch);
   }
 
   /** A measurement by id, for a job of its song (null: none such), waiting up to the budget. */
-  check(id: string, project: string, job: string, budgetMs = this.budgetMs): Promise<MeasureAnswer> | null {
+  check(
+    id: string,
+    project: string,
+    job: string,
+    budgetMs = this.budgetMs,
+    watch?: Watcher,
+  ): Promise<MeasureAnswer> | null {
     const task = this.tasks.get(id);
     if (!task || task.project !== project) return null;
     if (task.state === 'queued' || task.state === 'running') this.join(task, job);
-    return this.wait(task, budgetMs);
+    return this.wait(task, budgetMs, watch);
   }
 
   /** A job ended: stopped (cancelled, failed) or its turn finished. Its measurements go, or run on a while. */
@@ -217,16 +236,18 @@ export class MeasureRunner {
     task.orphaned = null;
   }
 
-  private wait(task: Task, budgetMs: number): Promise<MeasureAnswer> {
+  private wait(task: Task, budgetMs: number, watch?: Watcher): Promise<MeasureAnswer> {
     return new Promise((resolve, reject) => {
       const settle = () => {
         clearTimeout(timer);
         task.waiters.delete(settle);
+        if (watch) task.watchers.delete(watch);
         if (task.state === 'failed') reject(new MeasureFailed(task.error ?? 'The measurement failed'));
         else resolve(this.answer(task));
       };
       const timer = setTimeout(settle, task.state === 'done' || task.state === 'failed' ? 0 : budgetMs);
       task.waiters.add(settle);
+      if (watch && task.state !== 'done' && task.state !== 'failed') task.watchers.add(watch);
     });
   }
 
@@ -334,6 +355,10 @@ export class MeasureRunner {
       if (typeof msg.fraction === 'number' && Number.isFinite(msg.fraction))
         task.progress = Math.max(task.progress, Math.min(1, msg.fraction));
       if (typeof msg.stage === 'string') task.stage = msg.stage.slice(0, 120);
+      if (task.watchers.size) {
+        const now = this.answer(task);
+        if (!now.done) for (const w of [...task.watchers]) w(now, task.label);
+      }
       return;
     }
     if (msg.type !== 'done' && msg.type !== 'failed') return;

@@ -2,6 +2,7 @@ import type { Scan } from '@holo/score';
 import { newRegion, PPQ, parseNoteName, SYNTH_PRESETS } from '@holo/session';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ApiError, type PlayedNote } from '../src/api.ts';
+import { toolWords } from '../src/harness/adapter.ts';
 import { notationLength } from '../src/index.ts';
 import { describeTool } from '../src/tools/common.ts';
 import { TOOLS, toolNamed } from '../src/tools/index.ts';
@@ -17,6 +18,17 @@ describe('the tool list', () => {
       expect(describeTool(t, 'C4').length).toBeGreaterThan(60);
       expect(['see', 'change', 'play', 'ask']).toContain(t.kind);
     }
+  });
+
+  it('says each tool in words under the bar while it runs, never "Working"', () => {
+    for (const t of TOOLS) expect(toolWords(t.name), t.name).not.toBe('Working');
+    expect([toolWords('measure'), toolWords('import'), toolWords('regions'), toolWords('timeline')]).toEqual([
+      'Measuring',
+      'Bringing it in',
+      'Editing regions',
+      'Arranging bars',
+    ]);
+    expect(toolWords('something_new')).toBe('Working');
   });
 
   it('has the tools docs/agent.md names', () => {

@@ -1012,8 +1012,9 @@ export class Jobs implements AgentHooks {
     this.o.live.sendTo(studio, { type: 'play-notes', events, track: track ?? null, port: 'Agent' });
   }
 
-  /** A line under the bar while the agent works. */
+  /** A line under the bar while the agent works (nothing once the job is over). */
   progress(job: AgentJob, line: string): void {
+    if (!isLive(job) || job.ending) return;
     job.view.state = 'running';
     job.view.line = oneLine(line, 200);
     this.tell(job);

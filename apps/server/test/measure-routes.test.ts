@@ -34,6 +34,8 @@ function served(o: KitOptions = {}) {
   const job = { view: { id: JOB, project: song.id, state: 'running' } } as unknown as AgentJob;
   const ends: ((j: AgentJob) => void)[] = [];
   const closing: (() => void)[] = [];
+  /** The lines put under the bar. */
+  const lines: string[] = [];
   const forJob: JobRouteKit['forJob'] = (handler) => async (req, reply) => {
     try {
       return await handler(req, reply, job);
@@ -52,6 +54,7 @@ function served(o: KitOptions = {}) {
       studio: () => (o.studio === false ? null : {}),
       mayRead: () => true,
       onJobEnd: (fn: (j: AgentJob) => void) => ends.push(fn),
+      progress: (_j: AgentJob, line: string) => lines.push(line),
     },
     live: { request: async () => o.meters ?? { ok: false, error: NO_ANSWER } },
     attachments: {
@@ -68,7 +71,7 @@ function served(o: KitOptions = {}) {
     for (const fn of closing) fn();
     await app.close();
   };
-  return { app, song, vocals, keys: song.tracks[0] as Track, dataDir, job, ends, post, close };
+  return { app, song, vocals, keys: song.tracks[0] as Track, dataDir, job, ends, lines, post, close };
 }
 
 describe('measuring through the job’s routes', () => {
@@ -129,6 +132,39 @@ describe('measuring through the job’s routes', () => {
       const failed = await s.app.inject({ method: 'GET', url: `/api/agent/jobs/${JOB}/measure/${b.task}` });
       expect(failed.statusCode).toBe(422);
       expect(failed.json().error).toBe('The measurement failed: No instrument x/y');
+    } finally {
+      await s.close();
+    }
+  });
+
+  it('says under the bar how far a long one has got while the call waits, asked again by id too', async () => {
+    const children: FakeChild[] = [];
+    const runner = new MeasureRunner({
+      budgetMs: 300,
+      spawn: () => {
+        const c = new FakeChild();
+        children.push(c);
+        return c;
+      },
+    });
+    const s = served({ runner });
+    try {
+      const waiting = s.post({ what: 'mix', from: 0, to: BAR * 2 });
+      await vi.waitFor(() => expect(children[0]?.sent).toHaveLength(1));
+      const child = children[0] as FakeChild;
+      child.say({ type: 'progress', id: child.running, fraction: 0.4, stage: 'Rendering… 40%' });
+      const a = (await waiting).json();
+      expect(a).toMatchObject({ done: false, progress: 0.4, stage: 'Rendering… 40%' });
+      expect(s.lines).toEqual([expect.stringMatching(/^Still measuring the mix: 40% done, about \d+ s left$/)]);
+      const again = s.app.inject({ method: 'GET', url: `/api/agent/jobs/${JOB}/measure/${a.task}` });
+      await new Promise((r) => setTimeout(r, 20));
+      child.say({ type: 'progress', id: a.task, fraction: 0.7, stage: 'Rendering… 70%' });
+      expect((await again).json()).toMatchObject({ done: false, progress: 0.7 });
+      expect(s.lines[1]).toMatch(/^Still measuring the mix: 70% done/);
+      // a call that has answered hears no more
+      child.say({ type: 'progress', id: a.task, fraction: 0.9, stage: 'Rendering… 90%' });
+      expect(s.lines).toHaveLength(2);
+      child.say({ type: 'done', id: a.task, result: { kind: 'mix', ok: 1 } });
     } finally {
       await s.close();
     }

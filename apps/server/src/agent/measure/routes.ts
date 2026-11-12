@@ -10,14 +10,21 @@
  */
 import { existsSync, readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
-import { keysOf, type Project, projectEnd, type Track, tickToSeconds } from '@holo/session';
+import { keysOf, PLUGINS, type Project, projectEnd, type Track, tickToSeconds } from '@holo/session';
 import type { FastifyRequest } from 'fastify';
 import { NO_ANSWER } from '../../live.ts';
 import { ATTACHMENT_ID } from '../attachments.ts';
 import { type Body, bad, body, ID, int, isObj, type Params } from '../check.ts';
 import type { JobRouteKit } from '../job-routes/index.ts';
 import { type AgentJob, Refusal } from '../jobs.ts';
-import { type Lane, type MeasureAnswer, MeasureFailed, MeasureRunner, type RunnerOptions } from './runner.ts';
+import {
+  type Lane,
+  type MeasureAnswer,
+  MeasureFailed,
+  MeasureRunner,
+  type RunnerOptions,
+  type Watcher,
+} from './runner.ts';
 import type { ChildInput } from './tasks.ts';
 
 export const MEASURE_WHAT = ['take', 'mix', 'tracks', 'plugin', 'meters', 'file'] as const;
@@ -40,6 +47,8 @@ interface Planned {
   input: ChildInput;
   /** Said with the answer (a bounce's name and age). */
   extra?: Record<string, unknown>;
+  /** What it measures, in words for the bar ("the mix"). */
+  label: string;
 }
 
 const opt = (v: unknown) => v === undefined || v === null;
@@ -188,6 +197,7 @@ export default function measureRoutes(kit: JobRouteKit, options: MeasureRoutesOp
             key: `take:${b.attachment}:${against ?? 'key'}:${k ? `${k.fifths}${k.mode}` : ''}`,
             estimate: 3,
             input: { kind: 'recording', path, name, key: k, against: against === 'none' ? 'none' : 'key' },
+            label: 'the recording',
           };
         }
         const t = trackOf(b.track);
@@ -210,6 +220,7 @@ export default function measureRoutes(kit: JobRouteKit, options: MeasureRoutesOp
         return {
           lane: 'files',
           key: `take:${rev}:${JSON.stringify([t.id, region, from, to, ref, grid])}`,
+          label: `the take on ${t.name}`,
           estimate: 1 + seconds * 0.015,
           input: {
             kind: 'take',
@@ -232,6 +243,7 @@ export default function measureRoutes(kit: JobRouteKit, options: MeasureRoutesOp
           return {
             lane: 'files',
             key: `file:${b.attachment}`,
+            label: 'the recording',
             estimate: 5,
             input: { kind: 'file', path, name, source: 'file' },
           };
@@ -243,6 +255,7 @@ export default function measureRoutes(kit: JobRouteKit, options: MeasureRoutesOp
           return {
             lane: 'files',
             key: `bounce:${f.path}:${f.made}:${song.id}@${song.revision}`,
+            label: 'the bounce',
             estimate: 5,
             input: { kind: 'file', path: f.path, name: f.name, source: 'bounce', ...(whole ? { project: song } : {}) },
             extra: { made: new Date(f.made).toISOString(), stale: f.made < Date.parse(song.modified) },
@@ -254,6 +267,7 @@ export default function measureRoutes(kit: JobRouteKit, options: MeasureRoutesOp
         return {
           lane: 'render',
           key: `mix:${rev}:${JSON.stringify([from, to])}`,
+          label: 'the mix',
           estimate,
           input: { kind: 'mix', dataDir, project: song, ...range },
         };
@@ -277,6 +291,7 @@ export default function measureRoutes(kit: JobRouteKit, options: MeasureRoutesOp
         return {
           lane: 'render',
           key: `tracks:${rev}:${JSON.stringify([list.map((t) => t.id), from, to])}`,
+          label: list.length === 1 ? (list[0] as Track).name : list.length === 2 ? 'the two tracks' : 'each track',
           estimate,
           input: { kind: 'tracks', dataDir, project: song, tracks: list.map((t) => t.id), ...range },
         };
@@ -303,12 +318,33 @@ export default function measureRoutes(kit: JobRouteKit, options: MeasureRoutesOp
         return {
           lane: linear ? 'files' : 'render',
           key: `plugin:${rev}:${JSON.stringify([channel, id, linear ? null : from, linear ? null : to])}`,
+          label: `the ${PLUGINS.find((d) => d.type === p.type)?.name ?? p.type}`,
           estimate,
           input: { kind: 'plugin', dataDir, project: song, channel, plugin: id, ...range },
         };
       }
     }
   }
+
+  /**
+   * While a call waits, the bar under the studio's command bar says how far the measurement has got
+   * ("Still measuring the mix: 35% done, about 2 min left"), as the tool will when the call answers.
+   */
+  const saying = (job: AgentJob): Watcher => {
+    let said = '';
+    return (now, label) => {
+      const left =
+        now.eta === null
+          ? ''
+          : now.eta < 90
+            ? `, about ${now.eta} s left`
+            : `, about ${Math.round(now.eta / 60)} min left`;
+      const line = `Still measuring ${label}: ${Math.round(now.progress * 100)}% done${left}`;
+      if (line === said) return;
+      said = line;
+      jobs.progress(job, line);
+    };
+  };
 
   /** A measurement's answer (with what's said beside its result), or why it failed. */
   const answered = async (waiting: Promise<MeasureAnswer>, extra?: Record<string, unknown>) => {
@@ -352,8 +388,10 @@ export default function measureRoutes(kit: JobRouteKit, options: MeasureRoutesOp
             lane: planned.lane,
             estimate: planned.estimate,
             input: planned.input,
+            label: planned.label,
           },
           budget,
+          saying(job),
         ),
         planned.extra,
       );
@@ -364,7 +402,9 @@ export default function measureRoutes(kit: JobRouteKit, options: MeasureRoutesOp
     `${J}/measure/:task`,
     forJob(async (req: FastifyRequest, _reply, job) => {
       const id = (req.params as Params).task ?? '';
-      const waiting = /^msr_[a-z0-9]{1,40}$/.test(id) ? runner.check(id, job.view.project, job.view.id) : null;
+      const waiting = /^msr_[a-z0-9]{1,40}$/.test(id)
+        ? runner.check(id, job.view.project, job.view.id, undefined, saying(job))
+        : null;
       if (!waiting) throw new Refusal(404, 'No such measurement (it may be from before HO[LO] restarted): ask again');
       return answered(waiting);
     }),

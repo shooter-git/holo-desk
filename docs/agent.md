@@ -165,7 +165,9 @@ studio, and is heard whole across its parts:
 `apps/server/src/agent/measure/`. Measurements run in child processes at the lowest priority
 (`runner.ts`, `child.ts`): one lane for files (a take, a bounce, an attachment, a plugin's response)
 and one for renders (the mix, tracks, a plugin on its track's sound), one measurement at a time in
-each. A call waits up to 40 s (the tool's client gives it 50: Cursor cuts a call at 60). The same
+each. A call waits up to 40 s (the tool's client gives it 50: Cursor cuts a call at 60); while it
+waits, the job's line under the bar says how far the measurement has got ("Still measuring the mix:
+35% done, about 2 min left"), as each step comes from the child. The same
 question about the song as it is now (its revision and the body) joins the measurement under way, or
 is answered from the cache. Renders are `renderSession` with `finish: false`, from two bars before
 `from` (not measured), slower than real time; one estimated past ten minutes is refused (422,

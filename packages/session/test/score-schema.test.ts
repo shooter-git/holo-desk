@@ -3,6 +3,7 @@ import {
   applyOps,
   barToTick,
   describeProject,
+  keyShort,
   keysOf,
   keyText,
   nameOnFifths,
@@ -134,6 +135,19 @@ describe('key signatures', () => {
     expect(keyText({ fifths: -3, mode: 'major' })).toBe('Eb major');
     expect(keyText({ fifths: 4, mode: 'lydian' })).toBe('A lydian');
     expect([0, -2, 6, 13, -9].map(nameOnFifths)).toEqual(['C', 'Bb', 'F#', 'F##', 'Bbb']);
+  });
+
+  it('writes keys short, as a chord chart does', () => {
+    expect(['D major', 'F# minor', 'Bb', 'Am', 'A lydian', 'E harmonic minor', 'G# major'].map(keyShort)).toEqual([
+      'D',
+      'F#m',
+      'Bb',
+      'Am',
+      'A lyd',
+      'Em',
+      'G#',
+    ]);
+    expect(keyShort('no key')).toBe('no key');
   });
 
   it('keeps the key text and the key signatures the same', () => {

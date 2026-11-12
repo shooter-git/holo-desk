@@ -4,7 +4,7 @@ import { lazy, Suspense, useEffect, useRef } from 'react';
 import { ensureAudio, resolveConflict } from '../app/actions.ts';
 import { clampEditorHeight, fitEditorHeight, isPhone, type Layout, useLayout } from '../app/layout.ts';
 import { otherStudioToDrive } from '../app/live.ts';
-import { type MobileTab, openSettings, store, useApp } from '../app/store.ts';
+import { type MobileTab, openSettings, store, useApp, useShow } from '../app/store.ts';
 import { AudioEditor, AudioEditorBar } from './AudioEditor.tsx';
 import { Bar } from './Bar.tsx';
 import { BarButton, ControlBar, Lcd, SaveDot, TransportButtons } from './ControlBar.tsx';
@@ -387,7 +387,7 @@ function RailTools() {
       <UndoRedo button="btn ghost icon" />
       <button
         type="button"
-        className="btn ghost icon"
+        className="btn ghost icon wide"
         title="Settings"
         aria-label="Settings"
         onClick={() => openSettings()}
@@ -407,6 +407,7 @@ function RailTools() {
 }
 
 function PhoneLayout({ layout, inert }: { layout: Layout; inert: boolean }) {
+  const nav = useShow('barNav');
   if (layout === 'phone-landscape') {
     return (
       <div className="app phone phone-landscape" inert={inert}>
@@ -415,9 +416,11 @@ function PhoneLayout({ layout, inert }: { layout: Layout; inert: boolean }) {
           <RailTools />
         </aside>
         <div className="phone-main">
+          {/* on its side, the phone has the room for the back and forward buttons and the key (held
+              upright it hasn't: the position display's drag moves a bar at a time there) */}
           <div className="phone-transport top">
-            <TransportButtons minimal />
-            <Lcd compact />
+            <TransportButtons minimal={!nav} />
+            <Lcd compact keyCell />
             <SongTitle />
             {/* the bar; View is in Settings, as on a phone held upright */}
             <BarButton />

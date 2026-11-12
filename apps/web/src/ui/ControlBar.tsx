@@ -1,5 +1,5 @@
 /** The control bar: views, the transport, the display (position, time, tempo, signature, key) and status. */
-import { formatBarBeat, KEYS, type MeterPoint, performed, tickToSeconds } from '@holo/session';
+import { formatBarBeat, KEYS, keyShort, type MeterPoint, performed, tickToSeconds } from '@holo/session';
 import {
   Circle,
   FastForward,
@@ -46,6 +46,7 @@ import { startDrag, TAP, Wordmark } from './controls.tsx';
 import { useFrame, useMedia } from './frame.ts';
 import { MetronomeButton } from './Metronome.tsx';
 import { openMenuAt } from './menu.tsx';
+import { jog } from './ruler.ts';
 import { tapTempo } from './tap-tempo.ts';
 import { UndoRedo } from './UndoRedo.tsx';
 import { ViewMenu } from './ViewMenu.tsx';
@@ -79,7 +80,11 @@ const SIGNATURES: [number, number, number[]?][] = [
   [12, 8],
 ];
 
-export function Lcd({ compact = false }: { compact?: boolean }) {
+/**
+ * The display. Compact (a narrow bar, a phone) shortens the position and leaves out the time and the
+ * key, unless `keyCell` asks for the key (a phone on its side has the room).
+ */
+export function Lcd({ compact = false, keyCell = !compact }: { compact?: boolean; keyCell?: boolean }) {
   const project = useApp((s) => s.project);
   const showTime = useShow('barTime');
   const showSig = useShow('barSig');
@@ -125,8 +130,22 @@ export function Lcd({ compact = false }: { compact?: boolean }) {
   return (
     <section className={`lcd${compact ? ' compact' : ''}`} aria-label="Song position and tempo">
       <div
+        className="lcd-pos"
+        title="Position (bar, beat, division, tick): drag sideways to move a bar at a time. Double-click: go to the beginning"
+        onPointerDown={(e) => {
+          if (e.button !== 0) return;
+          // a jog: each bar's worth of travel moves the playhead a bar (where the back and forward
+          // buttons don't fit, a phone held upright, this is how to get around)
+          let travel = 0;
+          startDrag(e, {
+            onMove: (dx, dy) => {
+              const { bars, rest } = jog(travel + dx - dy);
+              travel = rest;
+              if (bars) moveBars(bars);
+            },
+          });
+        }}
         onDoubleClick={() => locate(0)}
-        title="Position (bar, beat, division, tick). Double-click: go to the beginning"
       >
         <span className="value pos" ref={pos} />
         <span className="caption">{compact ? 'position' : 'bar beat div tick'}</span>
@@ -260,11 +279,12 @@ export function Lcd({ compact = false }: { compact?: boolean }) {
           <span className="caption">{m.groups ? m.groups.join('+') : 'sig'}</span>
         </button>
       )}
-      {!compact && showKey && (
+      {keyCell && showKey && (
         <button
           type="button"
           className="btn bare cell lcd-key"
-          title="Key"
+          // (compact, the key is written short: its whole name is here)
+          title={compact && project.key ? `Key: ${project.key}` : 'Key'}
           aria-haspopup="menu"
           onClick={(e) =>
             openMenuAt(e.currentTarget, [
@@ -288,7 +308,7 @@ export function Lcd({ compact = false }: { compact?: boolean }) {
             ])
           }
         >
-          <span className="value small key">{project.key ?? '—'}</span>
+          <span className="value small key">{project.key ? (compact ? keyShort(project.key) : project.key) : '—'}</span>
           <span className="caption">key</span>
         </button>
       )}
@@ -306,7 +326,7 @@ export function TransportButtons({ minimal = false }: { minimal?: boolean }) {
         <>
           <button
             type="button"
-            className="btn tp-nav"
+            className="btn tp-nav tp-start"
             title="Go to the beginning (Return)"
             aria-label="Go to the beginning (Return)"
             onClick={() => locate(0)}

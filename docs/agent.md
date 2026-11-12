@@ -164,26 +164,26 @@ studio, and is heard whole across its parts:
 
 `apps/server/src/agent/measure/`. Measurements run in child processes at the lowest priority
 (`runner.ts`, `child.ts`): one lane for files (a take, a bounce, an attachment, a plugin's response)
-and one for renders (the mix, tracks, a plugin on its track's sound), one measurement at a time in
-each. A call waits up to 40 s (the tool's client gives it 50: Cursor cuts a call at 60); while it
-waits, the job's line under the bar says how far the measurement has got ("Still measuring the mix:
-35% done, about 2 min left"), as each step comes from the child. The same
-question about the song as it is now (its revision and the body) joins the measurement under way, or
-is answered from the cache. Renders are `renderSession` with `finish: false`, from two bars before
-`from` (not measured), slower than real time; one estimated past ten minutes is refused (422,
-`reason: 'too-long'`) with what to do instead. What plays a HO[LO] Pack that isn't installed (asked of
-the same source the render reads) is silent in a measurement, as in the studio: its tracks are muted
-with no instrument to load, and plugins that play such a pack's kit or response are left out, in the
-measured copy only; the result's `unplayable` lists them (`{tracks:[{id, name, pack}], plugins:[{id,
-name, channel, pack}]}`), a silent track's level says `missing: pack`, and a plugin measured on such
-a track, or one playing such a pack itself, fails with why. A measurement is cancelled when the last job that asked
-for it is stopped or fails; when that job's turn simply ends, it runs on (up to 15 minutes) for the
-next turn to collect. A lane's child is let go after a minute with nothing to do, and when the server
-closes.
+and one for renders (the mix, tracks, a plugin on its track's sound, a take through its effects), one
+measurement at a time in each. A call waits up to 40 s (the tool's client gives it 50: Cursor cuts a
+call at 60); while it waits, the job's line under the bar says how far the measurement has got ("Still
+measuring the mix: 35% done, about 2 min left"), as each step comes from the child. The same question
+about the song as it is now (its revision and the body) joins the measurement under way, or is
+answered from the cache. Renders are `renderSession` with `finish: false`, from two bars before `from`
+(not measured), slower than real time; one estimated past ten minutes is refused (422, `reason:
+'too-long'`) with what to do instead. What plays a HO[LO] Pack that isn't installed (asked of the same
+source the render reads) is silent in a measurement, as in the studio: its tracks are muted with no
+instrument to load, and plugins that play such a pack's kit or response are left out, in the measured
+copy only; the result's `unplayable` lists them (`{tracks:[{id, name, pack}], plugins:[{id, name,
+channel, pack}]}`), a silent track's level says `missing: pack`, and a plugin measured on such a
+track, or one playing such a pack itself, fails with why. A measurement is cancelled when the last job
+that asked for it is stopped or fails; when that job's turn simply ends, it runs on (up to 15 minutes)
+for the next turn to collect. A lane's child is let go after a minute with nothing to do, and when the
+server closes.
 
 | Method and path | Body / query | Answer |
 |---|---|---|
-| `POST …/measure` | `{what:'take'\|'mix'\|'tracks'\|'plugin'\|'meters'\|'file', track?, region?, plugin?, from?, to?, against?, grid?, source?:'render'\|'bounce', attachment?, seconds?}` (ids and ticks) | `{done:true, task, result, cached?}`, or `{done:false, task, progress, eta, stage}` after 40 s (`eta` in seconds). `take`: an audio `track` (or a recording `attachment`), `region?`, `against` `'key'` (default), `'none'` or an instrument track's id, `grid` in ticks (240). `mix`: rendered, or the newest file in `data/bounces/<song>/` with `source:'bounce'` (404 `reason:'no-bounce'` without one; `made` and `stale` say when it was made and whether the song changed after). `tracks`: every track alone, or `track`, and with `against` a second track (masking). `plugin`: `track` is a track's, a bus's id or `master`; EQs, Space Reverb, Space Designer, Tape Delay and Stereo Width by their response to an impulse, the rest on the track's own sound (not on a bus). `file`: an `attachment` (WAV, FLAC or AIFF; 422 for MP3, OGG, M4A), else the newest bounce. `meters` **studio**: `seconds?` (1–30, 8 by default), asked of the requester's studio as `agent-meters`, which has that long plus 4 s to answer. A failed measurement is 422 with its reason. |
+| `POST …/measure` | `{what:'take'\|'mix'\|'tracks'\|'plugin'\|'meters'\|'file', track?, region?, plugin?, from?, to?, against?, grid?, through?:'recording'\|'effects', source?:'render'\|'bounce', attachment?, seconds?}` (ids and ticks) | `{done:true, task, result, cached?}`, or `{done:false, task, progress, eta, stage}` after 40 s (`eta` in seconds). `take`: an audio `track` (or a recording `attachment`), `region?`, `against` `'key'` (default), `'none'` or an instrument track's id, `grid` in ticks (240), `through` `'recording'` (default: its files, at once) or `'effects'`: rendered in the render lane as the track comes out of its plugins (a solo copy with its sends gone, out to a bare master, its fader, pan and stage left out, `finish:false`) over its regions' bars (`region`'s, within `from`–`to`; 422 where it plays nothing) and two bars before, the plugins' delay made up for as in the mix, then measured as its recordings are, with `through:{plugins, errors}` in the result. `mix`: rendered, or the newest file in `data/bounces/<song>/` with `source:'bounce'` (404 `reason:'no-bounce'` without one; `made` and `stale` say when it was made and whether the song changed after). `tracks`: every track alone, or `track`, and with `against` a second track (masking). `plugin`: `track` is a track's, a bus's id or `master`; EQs, Space Reverb, Space Designer, Tape Delay and Stereo Width by their response to an impulse, the rest on the track's own sound (not on a bus). `file`: an `attachment` (WAV, FLAC or AIFF; 422 for MP3, OGG, M4A), else the newest bounce. `meters` **studio**: `seconds?` (1–30, 8 by default), asked of the requester's studio as `agent-meters`, which has that long plus 4 s to answer. A failed measurement is 422 with its reason. |
 | `GET …/measure/:task` | | As above, for a measurement of the job's song by id (404 once it's forgotten). |
 
 `agent-meters {id, seconds}` (server → studio, asked): the studio reads every channel's meter twenty
@@ -508,4 +508,4 @@ headless render read only WAV.
 
 | Tool | Kind | What it does |
 |---|---|---|
-| `measure` | see | How the song sounds, measured: a take's pitch (cents against the key's nearest scale tone, or a track's notes), drift, vibrato, timing against the grid and phrase levels; the mix's loudness, peaks, clipping, sections and balance (rendered, or the newest bounce); each track alone, and where two mask each other; what a plugin does; the studio's meters while it plays; an attached recording. A render not done within 40 s says how far it got, and the same call again collects it. |
+| `measure` | see | How the song sounds, measured: a take's pitch (cents against the key's nearest scale tone, or a track's notes; its notes spelled as the key spells them), drift, vibrato, timing against the grid and phrase levels, as recorded or as it comes out of its track's plugins (`through: "effects"`, rendered: to check a Pitch Correction or an effect); the mix's loudness, peaks, clipping, sections and balance (rendered, or the newest bounce); each track alone, and where two mask each other; what a plugin does; the studio's meters while it plays (the last `seconds` of it, 8 by default, waiting until it has played that long); an attached recording; what plays a pack that isn't installed is silent, and said. A render not done within 40 s says how far it got, and the same call again collects it. |

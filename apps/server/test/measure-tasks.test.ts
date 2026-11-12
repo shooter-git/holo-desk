@@ -116,6 +116,51 @@ describe('the measurements', () => {
     ).rejects.toThrow('on a bus');
   });
 
+  it('measures a take as it comes out of its track’s plugins: a Pitch Correction’s result, on time', async () => {
+    const { dataDir, song, vocals, keys } = world();
+    // the F4 is 30 cents sharp; Pitch Correction (chromatic, 1024 frames late) pulls it in
+    const pitch = newPlugin('pitch');
+    vocals.channel.inserts.push(pitch);
+    vocals.channel.volume = -12;
+    vocals.channel.pan = 1;
+    const take = { kind: 'take' as const, dataDir, project: song, track: vocals.id, against: 'key', grid: 240 };
+    const raw = await runTask(take, () => {});
+    const { seen, progress } = progressOf();
+    const fx = await runTask({ ...take, through: 'effects' }, progress);
+    if (raw.kind !== 'take' || fx.kind !== 'take') throw new Error('not a take');
+    expect(raw.notes.map((n) => [n.target, Math.round(n.cents)])).toEqual([
+      [62, 0],
+      [65, 30],
+      [69, 0],
+    ]);
+    expect(raw.through).toBeUndefined();
+    expect(fx.through).toEqual({ plugins: [{ id: pitch.id, name: 'Pitch Correction', bypass: false }], errors: [] });
+    expect(fx.notes.map((n) => n.target)).toEqual([62, 65, 69]);
+    for (const n of fx.notes) expect(Math.abs(n.cents), `${n.target}`).toBeLessThan(5);
+    // on the timeline where the recording's notes are (its delay made up for), at their level (no fader, no pan)
+    fx.notes.forEach((n, i) => {
+      const r = raw.notes[i] as (typeof raw.notes)[number];
+      expect(Math.abs((n.grid ?? 99) - (r.grid ?? 0)), `note ${i}`).toBeLessThan(3);
+      expect(Math.abs(n.db - r.db), `note ${i}`).toBeLessThan(0.5);
+      expect(n.region).toBe('rgn_take1');
+    });
+    expect(fx).toMatchObject({ regions: ['rgn_take1'], seconds: 4, against: { kind: 'key', keys: ['D minor'] } });
+    expect(seen.length).toBeGreaterThan(2);
+    // bypassed, it leaves the take as it is; a region, or some bars of it
+    pitch.bypass = true;
+    const off = await runTask({ ...take, through: 'effects' }, () => {});
+    expect(off.kind === 'take' && off.notes.map((n) => Math.round(n.cents))).toEqual([0, 30, 0]);
+    expect(off.kind === 'take' && off.through?.plugins[0]?.bypass).toBe(true);
+    pitch.bypass = false;
+    const some = await runTask({ ...take, through: 'effects', region: 'rgn_take1', from: BAR + 2400 }, () => {});
+    expect(some.kind === 'take' && some.notes.map((n) => n.target)).toEqual([65, 69]);
+    // a track with nothing recorded where it's asked
+    await expect(runTask({ ...take, through: 'effects', to: BAR }, () => {})).rejects.toThrow('plays nothing');
+    // (the song itself is left as it was)
+    expect(vocals.channel).toMatchObject({ volume: -12, pan: 1 });
+    expect(keys.channel.mute).toBe(false);
+  });
+
   it('renders what plays a pack that isn’t installed here silent, as the studio does, and says so', async () => {
     const { dataDir, song, keys } = world();
     // no packs in this data folder: the piano's (with a compressor) and the Drum Replacer's kit are missing

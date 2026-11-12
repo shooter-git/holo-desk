@@ -36,6 +36,7 @@ import {
   type MaskingBand,
   masking,
   measureRecording,
+  measureRendered,
   measureTake,
   monoOf,
   spectralTilt,
@@ -58,6 +59,7 @@ import {
   tickToSeconds,
 } from '@holo/session';
 import { decodeFile, type MeasureSource, measureSource } from './source.ts';
+import { takeSpan } from './span.ts';
 
 // ---- what the child is asked, and what it answers ----
 
@@ -73,6 +75,8 @@ export type ChildInput =
       /** "key", "none", or a reference track's id. */
       against: string;
       grid: number;
+      /** "effects": as it comes out of the track's plugins (rendered), not its recordings as they are. */
+      through?: 'effects';
     }
   | { kind: 'recording'; path: string; name: string; key: KeyPoint | null; against: 'key' | 'none' }
   | { kind: 'mix'; dataDir: string; project: Project; from?: number; to?: number }
@@ -96,6 +100,9 @@ export interface TakeResult extends TakeReport {
   /** The track (null: a recording that isn't on one), and its name or the file's. */
   track: string | null;
   name: string;
+  /** Measured as it comes out of the track's plugins (rendered): which they were, in order. */
+  through?: { plugins: { id: string; name: string; bypass: boolean }[]; errors: string[] };
+  unplayable?: Unplayable;
 }
 
 /** A stretch of the mix: a marker's section, some bars, or some seconds. */
@@ -588,15 +595,72 @@ function echoesOf(l: Float32Array, r: Float32Array, start: number, sr: number, a
 
 // ---- the tasks ----
 
+/**
+ * A track alone through its plugins and nothing else: its solo copy without its fader, pan or stage
+ * (the take as its effects leave it, at the level they leave it).
+ */
+export function effectsCopy(project: Project, trackId: string): Project {
+  const p = soloCopy(project, trackId);
+  const c = (p.tracks[0] as Track).channel;
+  c.volume = 0;
+  c.pan = 0;
+  delete c.stage;
+  c.automation = (c.automation ?? []).filter((a) => a.param.startsWith('fx:'));
+  return p;
+}
+
+/**
+ * A take as it comes out of its track's plugins (a Pitch Correction's result, an EQ's): the track
+ * rendered alone through them (effectsCopy), over its regions' bars and two bars before, the plugins'
+ * delay made up for as the mix makes it up, then measured note by note on the timeline as its
+ * recordings are.
+ */
+async function takeThrough(
+  input: Extract<ChildInput, { kind: 'take' }>,
+  track: Track,
+  against: 'key' | 'none' | Track,
+  progress: Progress,
+): Promise<TakeResult> {
+  const { project } = input;
+  const source = measureSource(input.dataDir, project.id);
+  const span = takeSpan(track, input);
+  const u = await unplayable(project, source);
+  const copy = effectsCopy(withoutUnplayable(project, u), track.id);
+  const r = await render(copy, source, span, progress, 0, 0.9, 'Through its effects: ');
+  progress(0.92, 'Reading the take');
+  const mono = monoOf(after(r.channels, r.skip));
+  const report = measureRendered(project, track, mono, r.sr, tickToSeconds(project.tempo, r.from), {
+    from: r.from,
+    to: r.to,
+    ...(input.region ? { region: input.region } : {}),
+    against,
+    grid: input.grid,
+  });
+  const plugins = (copy.tracks[0] as Track).channel.inserts.map((p) => ({
+    id: p.id,
+    name: PLUGINS.find((d) => d.type === p.type)?.name ?? p.type,
+    bypass: p.bypass,
+  }));
+  return {
+    kind: 'take',
+    track: track.id,
+    name: track.name,
+    ...report,
+    through: { plugins, errors: r.errors },
+    ...unplayableOf(u, [track.id]),
+  };
+}
+
 async function take(input: Extract<ChildInput, { kind: 'take' }>, progress: Progress): Promise<TakeResult> {
   const { project } = input;
   const track = project.tracks.find((t) => t.id === input.track);
   if (track?.kind !== 'audio') throw new Error('A take is measured on an audio track');
-  const source = measureSource(input.dataDir, project.id);
   const against =
     input.against === 'key' || input.against === 'none'
       ? input.against
       : (project.tracks.find((t) => t.id === input.against) ?? 'key');
+  if (input.through === 'effects') return takeThrough(input, track, against, progress);
+  const source = measureSource(input.dataDir, project.id);
   progress(0.1, 'Reading the take');
   const report = measureTake(project, track, (file) => source.decodeAudio(file), {
     ...(input.from !== undefined ? { from: input.from } : {}),

@@ -788,38 +788,39 @@ function takeNote(
 }
 
 /**
- * A take on an audio track, measured note by note on the timeline: each piece the track plays (its
- * regions, `from`–`to`), from the file `decode` gives for it.
+ * A stretch of a line laid on the timeline: its samples, the timeline's seconds (through the tempo
+ * map) where the first of them plays, how much it's stretched, its gain (dB), and the region each
+ * note in it belongs to (null: none, and it's left out).
  */
-export function measureTake(
+interface Laid {
+  samples: Float32Array;
+  rate: number;
+  at: number;
+  stretch: number;
+  gain: number;
+  region: (at: number) => string | null;
+}
+
+/** Notes of stretches laid on the timeline, each measured against what it should be, as a take's report. */
+function takeReport(
   project: Project,
-  track: Track,
-  decode: (file: string) => Decoded | null,
-  opts: TakeOptions = {},
+  laid: readonly Laid[],
+  regions: string[],
+  seconds: number,
+  opts: TakeOptions,
 ): TakeReport {
   const grid = Math.max(1, Math.round(opts.grid ?? 240));
-  const pieces = takePieces(project, track, opts);
   const seg: TempoSegment[] = compileTempo(project, 1);
   const keys = keysOf(project);
   const against = opts.against ?? 'key';
   const notes: TakeNote[] = [];
   const power: number[] = [];
   const frames: number[] = [];
-  let seconds = 0;
-  const cache = new Map<string, { rate: number; mono: Float32Array } | null>();
-  for (const piece of pieces) {
-    if (!cache.has(piece.file)) {
-      const d = decode(piece.file);
-      cache.set(piece.file, d ? { rate: d.rate, mono: monoOf(d.channels) } : null);
-    }
-    const file = cache.get(piece.file);
-    if (!file) continue;
-    const i0 = Math.max(0, Math.round(piece.fileStart * file.rate));
-    const i1 = Math.min(file.mono.length, Math.round(piece.fileEnd * file.rate));
-    if (i1 - i0 < file.rate * 0.05) continue;
-    seconds += (i1 - i0) / file.rate;
-    for (const n of lineNotes(file.mono.subarray(i0, i1), file.rate)) {
-      const at = piece.at + (n.start + i0 / file.rate - piece.fileStart) * piece.stretch;
+  for (const piece of laid) {
+    for (const n of lineNotes(piece.samples, piece.rate)) {
+      const at = piece.at + n.start * piece.stretch;
+      const region = piece.region(at);
+      if (region === null) continue;
       const length = (n.end - n.start) * piece.stretch;
       const tick = frameToTick(seg, at);
       const end = frameToTick(seg, at + length);
@@ -837,7 +838,7 @@ export function measureTake(
       const note = takeNote(n, at, length, piece.gain, target);
       note.tick = Math.round(tick);
       note.end = Math.round(end);
-      note.region = piece.region;
+      note.region = region;
       const line = gridLine(project, tick, grid);
       note.grid = round((at - tickToFrame(seg, line)) * 1000, 1);
       notes.push(note);
@@ -851,7 +852,7 @@ export function measureTake(
   const hi = opts.to ?? Number.POSITIVE_INFINITY;
   const keysThere = keys.filter((k, i) => (keys[i + 1]?.tick ?? Number.POSITIVE_INFINITY) > lo && k.tick < hi);
   return {
-    regions: [...new Set(pieces.map((p) => p.region))],
+    regions,
     seconds: round(seconds, 2),
     against:
       against === 'none'
@@ -870,6 +871,75 @@ export function measureTake(
     ),
     summary: summaryOf(sorted),
   };
+}
+
+/**
+ * A take on an audio track, measured note by note on the timeline: each piece the track plays (its
+ * regions, `from`–`to`), from the file `decode` gives for it.
+ */
+export function measureTake(
+  project: Project,
+  track: Track,
+  decode: (file: string) => Decoded | null,
+  opts: TakeOptions = {},
+): TakeReport {
+  const pieces = takePieces(project, track, opts);
+  const laid: Laid[] = [];
+  let seconds = 0;
+  const cache = new Map<string, { rate: number; mono: Float32Array } | null>();
+  for (const piece of pieces) {
+    if (!cache.has(piece.file)) {
+      const d = decode(piece.file);
+      cache.set(piece.file, d ? { rate: d.rate, mono: monoOf(d.channels) } : null);
+    }
+    const file = cache.get(piece.file);
+    if (!file) continue;
+    const i0 = Math.max(0, Math.round(piece.fileStart * file.rate));
+    const i1 = Math.min(file.mono.length, Math.round(piece.fileEnd * file.rate));
+    if (i1 - i0 < file.rate * 0.05) continue;
+    seconds += (i1 - i0) / file.rate;
+    laid.push({
+      samples: file.mono.subarray(i0, i1),
+      rate: file.rate,
+      at: piece.at + (i0 / file.rate - piece.fileStart) * piece.stretch,
+      stretch: piece.stretch,
+      gain: piece.gain,
+      region: () => piece.region,
+    });
+  }
+  return takeReport(project, laid, [...new Set(pieces.map((p) => p.region))], seconds, opts);
+}
+
+/**
+ * A take as it comes out of its track's plugins: the track rendered alone through them (`samples`,
+ * mono, from `at` seconds on the timeline, the plugins' delay made up for), measured as `measureTake`
+ * measures its recordings. A note counts where the track plays a region (`region`'s alone, if given,
+ * `from`–`to`): a plugin's echo past a region's end isn't a note of the take. Levels are as the
+ * plugins leave them (the regions' gain is in the render).
+ */
+export function measureRendered(
+  project: Project,
+  track: Track,
+  samples: Float32Array,
+  rate: number,
+  at: number,
+  opts: TakeOptions = {},
+): TakeReport {
+  const pieces = takePieces(project, track, opts);
+  const spans = pieces.map((p) => ({ region: p.region, a: p.at, b: p.at + (p.fileEnd - p.fileStart) * p.stretch }));
+  // a note a little before its region (a pre-delay's smear, rounding) is still its region's
+  const regionAt = (t: number) => spans.find((s) => t >= s.a - 0.02 && t < s.b)?.region ?? null;
+  const seconds = spans.reduce(
+    (sum, s) => sum + Math.max(0, Math.min(s.b, at + samples.length / rate) - Math.max(s.a, at)),
+    0,
+  );
+  return takeReport(
+    project,
+    [{ samples, rate, at, stretch: 1, gain: 0, region: regionAt }],
+    [...new Set(pieces.map((p) => p.region))],
+    seconds,
+    opts,
+  );
 }
 
 /**

@@ -25,6 +25,7 @@ import {
   type RunnerOptions,
   type Watcher,
 } from './runner.ts';
+import { takeSpan } from './span.ts';
 import type { ChildInput } from './tasks.ts';
 
 export const MEASURE_WHAT = ['take', 'mix', 'tracks', 'plugin', 'meters', 'file'] as const;
@@ -194,7 +195,11 @@ export default function measureRoutes(kit: JobRouteKit, options: MeasureRoutesOp
     switch (what) {
       case 'take': {
         const against = opt(b.against) ? 'key' : b.against === 'key' || b.against === 'none' ? b.against : null;
+        if (!opt(b.through) && b.through !== 'recording' && b.through !== 'effects')
+          throw bad('through is "recording" or "effects"');
+        const through = b.through === 'effects';
         if (!opt(b.attachment)) {
+          if (through) throw bad('An attached recording has no effects: through is for a track’s take');
           const { path, name } = recording(job, b.attachment);
           const k = keysOf(song)[0] ?? null;
           return {
@@ -217,6 +222,38 @@ export default function measureRoutes(kit: JobRouteKit, options: MeasureRoutesOp
         if (region && !t.regions.some((r) => r.id === region))
           throw new Refusal(404, `No region ${region} on ${t.name}`);
         const grid = opt(b.grid) ? 240 : int(b.grid, 'grid', 10, 3840);
+        const input: ChildInput = {
+          kind: 'take',
+          dataDir,
+          project: song,
+          track: t.id,
+          ...(region ? { region } : {}),
+          ...range,
+          against: ref,
+          grid,
+          ...(through ? { through: 'effects' as const } : {}),
+        };
+        if (through) {
+          // rendered: the track alone through its plugins, over its regions' bars and two bars before
+          let span: { from: number; to: number };
+          try {
+            span = takeSpan(t, { ...(region ? { region } : {}), ...range });
+          } catch (err) {
+            throw new Refusal(422, err instanceof Error ? err.message : String(err));
+          }
+          const estimate = runner.paced(
+            song.id,
+            2 + renderSeconds(song, span.from, span.to) * (0.05 + weight(t) + 0.02 * t.channel.inserts.length),
+          );
+          if (estimate > MAX_RENDER_S) throw tooLong(estimate, 'Measuring the take through its effects there');
+          return {
+            lane: 'render',
+            key: `take:${rev}:${JSON.stringify([t.id, region, from, to, ref, grid, 'effects'])}`,
+            label: `the take on ${t.name} through its effects`,
+            estimate,
+            input,
+          };
+        }
         const seconds = t.regions.reduce(
           (s, r) =>
             s + (r.audio ? tickToSeconds(song.tempo, r.start + r.length) - tickToSeconds(song.tempo, r.start) : 0),
@@ -227,16 +264,7 @@ export default function measureRoutes(kit: JobRouteKit, options: MeasureRoutesOp
           key: `take:${rev}:${JSON.stringify([t.id, region, from, to, ref, grid])}`,
           label: `the take on ${t.name}`,
           estimate: 1 + seconds * 0.015,
-          input: {
-            kind: 'take',
-            dataDir,
-            project: song,
-            track: t.id,
-            ...(region ? { region } : {}),
-            ...range,
-            against: ref,
-            grid,
-          },
+          input,
         };
       }
       case 'mix':

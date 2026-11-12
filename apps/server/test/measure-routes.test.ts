@@ -111,6 +111,55 @@ describe('measuring through the job’s routes', () => {
     }
   });
 
+  it('measures a take through its effects as a render: the track alone over its regions’ bars', async () => {
+    const children: FakeChild[] = [];
+    const runner = new MeasureRunner({
+      budgetMs: 20,
+      spawn: () => {
+        const c = new FakeChild();
+        children.push(c);
+        return c;
+      },
+    });
+    const s = served({ runner });
+    try {
+      const a = (await s.post({ what: 'take', track: s.vocals.id, through: 'effects', against: 'none' })).json();
+      expect(a).toMatchObject({ done: false });
+      const child = children[0] as FakeChild;
+      expect(child.sent[0]).toMatchObject({
+        type: 'run',
+        input: { kind: 'take', track: s.vocals.id, through: 'effects', against: 'none', grid: 240 },
+      });
+      // a render, beside the files: a take as it is is still read at once
+      expect(runner.status().render.running).toBe(a.task);
+      // the recording as it is, asked plainly or by name
+      const plain = await s.post({ what: 'take', track: s.vocals.id, through: 'recording', against: 'none' });
+      expect(plain.statusCode).toBe(200);
+      const refused = async (payload: Record<string, unknown>, status: number, error: RegExp) => {
+        const r = await s.post(payload);
+        expect(r.statusCode, r.body).toBe(status);
+        expect(r.json().error).toMatch(error);
+      };
+      await refused(
+        { what: 'take', track: s.vocals.id, through: 'plugins' },
+        400,
+        /through is "recording" or "effects"/,
+      );
+      await refused(
+        { what: 'take', track: s.vocals.id, through: 'effects', to: BAR },
+        422,
+        /plays nothing of its take/,
+      );
+      await refused(
+        { what: 'take', attachment: 'att_000000000001', through: 'effects' },
+        400,
+        /through is for a track’s take/,
+      );
+    } finally {
+      await s.close();
+    }
+  });
+
   it('answers how far a long one has got, and its answer when asked again by id', async () => {
     const children: FakeChild[] = [];
     const runner = new MeasureRunner({

@@ -156,6 +156,39 @@ describe('measure', () => {
     expect(r.text).toContain('2.3.1 F4 -38c -35 ms -20 dB vibrato 5.4 Hz ±31c drifts -16c');
   });
 
+  it('measures a take through its track’s effects, to check what they did', async () => {
+    const through = {
+      plugins: [
+        { id: 'fx_pc', name: 'Pitch Correction', bypass: false },
+        { id: 'fx_eq', name: 'Channel EQ', bypass: true },
+      ],
+      errors: [],
+    };
+    const api = setup({
+      measured: {
+        take: [
+          { done: false, task: 'msr_4', progress: 0.3, eta: 20, stage: 'Through its effects: Rendering… 30%' },
+          done({ ...take, through }),
+        ],
+      },
+    });
+    const first = await call(api, 'measure', { what: 'take', track: 'Vocals', through: 'effects' });
+    expect(first.text).toContain('Still measuring the take on Vocals through its effects: 30% done, about 20 s left');
+    const r = await call(api, 'measure', { what: 'take', track: 'Vocals', through: 'effects' });
+    expect(r.text).toContain(
+      'Vocals, bar 2: as it comes out of its plugins (Pitch Correction → Channel EQ, bypassed), rendered, measured against the key (D minor)',
+    );
+    await call(api, 'measure', { what: 'take', track: 'Vocals', through: 'recording' });
+    expect(bodies(api)).toEqual([
+      { what: 'take', track: 'trk_vox', grid: 240, through: 'effects' },
+      { what: 'take', track: 'trk_vox', grid: 240, through: 'effects' },
+      { what: 'take', track: 'trk_vox', grid: 240 },
+    ]);
+    expect(await refused(api, 'measure', { what: 'take', attachment: 'att_1', through: 'effects' })).toContain(
+      'An attached recording has no effects',
+    );
+  });
+
   it('names a take’s notes as the song’s key spells them there, with the studio’s middle C', async () => {
     const note = take.notes[0] as TakeMeasure['notes'][number];
     const at = (tick: number, target: number, extra: Partial<TakeMeasure['notes'][number]> = {}) => ({

@@ -158,6 +158,8 @@ export interface MeasureBody {
   against?: string;
   /** take: the grid, in ticks. */
   grid?: number;
+  /** take: "effects" renders it through its track's plugins and measures that; "recording" (the default) reads the files. */
+  through?: 'recording' | 'effects';
   source?: 'render' | 'bounce';
   attachment?: string;
   /** meters: how many seconds of play they cover (8 by default, up to 30); the studio waits until it has watched that much. */
@@ -188,6 +190,9 @@ export interface TakeMeasure {
   kind: 'take';
   track: string | null;
   name: string;
+  /** Measured as it comes out of its track's plugins (rendered): which they were, and what the render reported. */
+  through?: { plugins: { id: string; name: string; bypass: boolean }[]; errors: string[] };
+  unplayable?: UnplayableMeasure;
   regions: string[];
   seconds: number;
   against: { kind: 'key'; keys: string[] } | { kind: 'track'; track: string } | { kind: 'none' };

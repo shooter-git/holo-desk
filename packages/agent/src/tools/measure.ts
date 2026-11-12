@@ -139,9 +139,16 @@ function takeText(r: TakeMeasure, song: Project, middleC: MiddleC): string {
   const gridName = Object.entries({ '1/4': 960, '1/8': 480, '1/16': 240, '1/32': 120, '1/8T': 320, '1/16T': 160 }).find(
     ([, t]) => t === r.grid,
   )?.[0];
+  const through = r.through
+    ? r.through.plugins.length
+      ? ` as it comes out of its plugins (${r.through.plugins.map((p) => `${p.name}${p.bypass ? ', bypassed' : ''}`).join(' → ')}), rendered,`
+      : ' as it comes out of its plugins (it has none: this is its recording as it is),'
+    : '';
   const lines = [
-    `${r.name}, ${span}${r.regions.length > 1 ? ` (${plural(r.regions.length, 'region')})` : ''}: measured against ${against}.`,
+    `${r.name}, ${span}${r.regions.length > 1 ? ` (${plural(r.regions.length, 'region')})` : ''}:${through} measured against ${against}.`,
   ];
+  lines.push(...unplayableLines(r.unplayable, song));
+  if (r.through?.errors.length) lines.push(`The render reported: ${r.through.errors.join('; ')}`);
   if (!notes.length) {
     lines.push(
       'No notes were heard: it may be silent there, too quiet, or more than one line at a time (only one voice or instrument is measured).',
@@ -474,7 +481,7 @@ export const measure: Tool = {
   name: 'measure',
   kind: 'see',
   summary:
-    'Measure how the song sounds, before judging it. "what": "take" (an audio track\'s recording, one line such as a vocal: each note\'s pitch in cents against the song\'s key, or against a track\'s notes with "against", its drift and vibrato, its start against the "grid", and each phrase\'s level; quick), "mix" (the mix\'s loudness in LUFS, true peak, clipping, each section\'s loudness and its balance across octave bands; rendered, or "source": "bounce" for the newest bounce), "tracks" (each track alone: its loudness, peak and where its sound sits; with "track" one track in detail, and with "against" a second track: where the two mask each other), "plugin" (what a plugin on "track" does: an EQ\'s or a reverb\'s response, or a compressor\'s gain reduction on the track\'s own sound), "meters" (the studio\'s meters while the song plays: peaks, gain reduction, clipping; start playback first, then measure the meters: they cover the last "seconds" of playing, 8 unless you say, up to 30, and the studio waits until it has played that long), "file" (an attached recording, or the newest bounce). "from" and "to" limit it to some bars. Rendering is slower than the song plays: a call waits up to 40 s and otherwise says how far it got; call again with the same arguments for the result. Example: {"what": "take", "track": "Vocals", "from": "17", "to": "25"}.',
+    'Measure how the song sounds, before judging it. "what": "take" (an audio track\'s recording, one line such as a vocal: each note\'s pitch in cents against the song\'s key, or against a track\'s notes with "against", its drift and vibrato, its start against the "grid", and each phrase\'s level; quick; with "through": "effects", as it comes out of its track\'s plugins, rendered: measure that to check a Pitch Correction or an effect, never claim what one did without measuring it), "mix" (the mix\'s loudness in LUFS, true peak, clipping, each section\'s loudness and its balance across octave bands; rendered, or "source": "bounce" for the newest bounce), "tracks" (each track alone: its loudness, peak and where its sound sits; with "track" one track in detail, and with "against" a second track: where the two mask each other), "plugin" (what a plugin on "track" does: an EQ\'s or a reverb\'s response, or a compressor\'s gain reduction on the track\'s own sound), "meters" (the studio\'s meters while the song plays: peaks, gain reduction, clipping; start playback first, then measure the meters: they cover the last "seconds" of playing, 8 unless you say, up to 30, and the studio waits until it has played that long), "file" (an attached recording, or the newest bounce). "from" and "to" limit it to some bars. Rendering is slower than the song plays: a call waits up to 40 s and otherwise says how far it got; call again with the same arguments for the result. Example: {"what": "take", "track": "Vocals", "from": "17", "to": "25"}.',
   args: [
     { name: 'what', type: 'enum', values: WHAT, describe: 'What to measure', required: true },
     {
@@ -498,6 +505,13 @@ export const measure: Tool = {
       values: UNITS,
       describe: 'take: the grid starts are measured against',
       default: '1/16',
+    },
+    {
+      name: 'through',
+      type: 'enum',
+      values: ['recording', 'effects'],
+      describe:
+        'take: "effects" measures it as it comes out of its track\'s plugins (rendered, so not at once): to check what a Pitch Correction or another effect did; "recording" (the default) measures the recording as it is',
     },
     {
       name: 'source',
@@ -536,7 +550,10 @@ export const measure: Tool = {
     let label: string = what === 'mix' ? 'the mix' : what;
     switch (what) {
       case 'take': {
+        const through = str(args, 'through');
         if (attachment) {
+          if (through === 'effects')
+            throw new ToolError('An attached recording has no effects: "through" is for a track\'s take');
           body.attachment = attachment;
           if (against && against !== 'key' && against !== 'none')
             throw new ToolError('An attached recording is measured against "key" or "none"');
@@ -566,6 +583,10 @@ export const measure: Tool = {
         } else if (against) body.against = against;
         body.grid = unitTicks(str(args, 'grid') ?? '1/16');
         label = `the take on ${track.name}`;
+        if (through === 'effects') {
+          body.through = 'effects';
+          label = `the take on ${track.name} through its effects`;
+        }
         break;
       }
       case 'mix': {

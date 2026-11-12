@@ -85,7 +85,7 @@ export function apply(ops: Op[], label: string, own = true): Project | null {
     toast(err instanceof Error ? err.message : String(err), 'error');
     return null;
   }
-  store.set({ project: next, ...history.push(s, { project: s.project, label }), saveState: 'dirty' });
+  store.set({ project: next, ...history.push(s, { project: s.project, label, at: Date.now() }), saveState: 'dirty' });
   changed(next);
   if (own) userStep(label);
   return next;
@@ -109,25 +109,33 @@ function changed(project: Project): void {
 }
 
 export function undo(): void {
-  const s = store.get();
-  const back = s.project && history.undo(s, s.project);
-  if (!back) return;
-  const { step } = back;
-  store.set({ project: step.project, ...back.history, selectedNotes: [], saveState: 'dirty' });
-  changed(step.project);
-  toast(`Undo ${step.label}`);
-  if (s.agentReport) reportHistory('undo', step.label, step.job);
+  travel(-1);
 }
 
 export function redo(): void {
+  travel(1);
+}
+
+/**
+ * Several Undos (`n` below 0) or Redos (above 0) at once, as from the history menu: the song goes
+ * straight to where they lead, and the agent hears of each step, as it would of that many presses.
+ */
+export function travel(n: number): void {
   const s = store.get();
-  const again = s.project && history.redo(s, s.project);
-  if (!again) return;
-  const { step } = again;
-  store.set({ project: step.project, ...again.history, selectedNotes: [], saveState: 'dirty' });
-  changed(step.project);
-  toast(`Redo ${step.label}`);
-  if (s.agentReport) reportHistory('redo', step.label, step.job);
+  const moved = s.project && history.travel(s, s.project, n);
+  if (!moved) return;
+  const { steps, project } = moved;
+  const action = n < 0 ? 'undo' : 'redo';
+  const verb = n < 0 ? 'Undo' : 'Redo';
+  store.set({ project, ...moved.history, selectedNotes: [], saveState: 'dirty' });
+  changed(project);
+  toast(steps.length === 1 ? `${verb} ${steps[0]?.label}` : `${verb} ${steps.length} steps`);
+  if (s.agentReport) for (const step of steps) reportHistory(action, step.label, step.job);
+}
+
+/** Go to a step the history menu showed: back to before it, or forward through it. */
+export function travelTo(step: Step): void {
+  travel(history.distance(store.get(), step));
 }
 
 // ---- the agent's changes ----
@@ -189,7 +197,8 @@ function runJob(b: JobBatch): history.JobResult {
   // a gesture still going once the batch was let through: its step so far lands first, and it goes
   // on from the song with the agent's changes in (its own step after theirs)
   if (gesture) {
-    if (gesture.before !== s.project) h = history.push(h, { project: gesture.before, label: gesture.label });
+    if (gesture.before !== s.project)
+      h = history.push(h, { project: gesture.before, label: gesture.label, at: Date.now() });
     gesture.before = next;
     gesture.last = undefined;
   }
@@ -1277,7 +1286,7 @@ export function endGesture(): void {
   const g = gesture;
   gesture = null;
   if (g && s.project && g.before !== s.project) {
-    store.set(history.push(s, { project: g.before, label: g.label }));
+    store.set(history.push(s, { project: g.before, label: g.label, at: Date.now() }));
     changed(s.project);
     userStep(g.label);
   }

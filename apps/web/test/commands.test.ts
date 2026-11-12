@@ -146,7 +146,7 @@ describe('the bar’s commands', () => {
       project,
       selectedTrack: piano,
       playing: true,
-      undo: [{ project, label: 'Quantize' }],
+      undo: [{ project, label: 'Quantize', at: 0 }],
     });
     const table = commandTable(s, recorder().act);
     const title = (id: string) => table.find((c) => c.id === id)?.title;

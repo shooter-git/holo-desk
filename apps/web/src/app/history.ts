@@ -24,11 +24,18 @@ export function push(h: History, step: Step): History {
  * is still on top, the batch joins that step, which keeps the song from before the job. Otherwise
  * (the user edited meanwhile, or the job had finished) it opens a step of its own.
  */
-export function pushOrMergeJob(h: History, before: Project, label: string, job: string, running: boolean): History {
+export function pushOrMergeJob(
+  h: History,
+  before: Project,
+  label: string,
+  job: string,
+  running: boolean,
+  at = Date.now(),
+): History {
   const top = h.undo[h.undo.length - 1];
   // (a redo step would bring back a song without this batch)
   if (running && top?.job === job) return h.redo.length ? { undo: h.undo, redo: [] } : h;
-  return push(h, { project: before, label, job });
+  return push(h, { project: before, label, job, at });
 }
 
 /** A job's steps take its final name, undone or not. */
@@ -42,9 +49,10 @@ export function jobSteps(h: History, job: string): Step[] {
   return h.undo.filter((s) => s.job === job);
 }
 
-/** The same step the other way: the song it takes you to, under the same name and job. */
+/** The same step the other way: the song it takes you to, under the same name, job and time. */
 function across(step: Step, project: Project): Step {
-  return step.job === undefined ? { project, label: step.label } : { project, label: step.label, job: step.job };
+  const { label, at } = step;
+  return step.job === undefined ? { project, label, at } : { project, label, job: step.job, at };
 }
 
 /** Undo from the song as it is now: the step undone (its song is the one to go back to), and the history after. */
@@ -59,6 +67,42 @@ export function redo(h: History, now: Project): { step: Step; history: History }
   const step = h.redo[h.redo.length - 1];
   if (!step) return null;
   return { step, history: { undo: [...h.undo, across(step, now)], redo: h.redo.slice(0, -1) } };
+}
+
+/**
+ * Several Undos (`n` below 0) or Redos (above 0) at once, from the song as it is now, as far as the
+ * history goes: the steps crossed, in the order they were undone or redone, the song they lead to,
+ * and the history after. Null when there's nothing that way.
+ */
+export function travel(
+  h: History,
+  now: Project,
+  n: number,
+): { steps: Step[]; project: Project; history: History } | null {
+  const move = n < 0 ? undo : redo;
+  const steps: Step[] = [];
+  let at = h;
+  let song = now;
+  for (let i = 0; i < Math.abs(n); i++) {
+    const r = move(at, song);
+    if (!r) break;
+    steps.push(r.step);
+    at = r.history;
+    song = r.step.project;
+  }
+  return steps.length ? { steps, project: song, history: at } : null;
+}
+
+/**
+ * How far a step is from the song as it is: below 0, the Undos that take it back (it and everything
+ * after it); above 0, the Redos that bring it back (everything up to it). 0 when it's no longer in
+ * the history (it was dropped, or moved across since it was shown).
+ */
+export function distance(h: History, step: Step): number {
+  const back = h.undo.lastIndexOf(step);
+  if (back >= 0) return back - h.undo.length;
+  const ahead = h.redo.lastIndexOf(step);
+  return ahead >= 0 ? h.redo.length - ahead : 0;
 }
 
 /** What became of a batch of the agent's changes. */

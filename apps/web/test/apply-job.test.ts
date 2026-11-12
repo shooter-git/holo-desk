@@ -60,3 +60,31 @@ describe('a job’s batches in the studio', () => {
     expect(s.undo[0]?.project).toBe(song);
   });
 });
+
+describe('the history menu in the studio', () => {
+  it('takes the song straight to the step picked, back or forward', () => {
+    const song = newProject('Jumps');
+    S.store.set({ project: song, undo: [], redo: [], toasts: [] });
+    for (const title of ['A', 'B', 'C', 'D']) A.apply([{ op: 'setProject', patch: { title } }], `Title ${title}`);
+    // back to before the second change: three Undos in one
+    const second = S.store.get().undo[1];
+    if (!second) throw new Error('no step');
+    A.travelTo(second);
+    let s = S.store.get();
+    expect(s.project?.title).toBe('A');
+    expect(s.undo.map((x) => x.label)).toEqual(['Title A']);
+    expect(s.redo.map((x) => x.label)).toEqual(['Title D', 'Title C', 'Title B']);
+    expect(s.toasts.at(-1)?.text).toBe('Undo 3 steps');
+    // forward through the third: two Redos
+    const third = s.redo[1];
+    if (!third) throw new Error('no step');
+    A.travelTo(third);
+    s = S.store.get();
+    expect(s.project?.title).toBe('C');
+    expect(s.redo.map((x) => x.label)).toEqual(['Title D']);
+    expect(s.toasts.at(-1)?.text).toBe('Redo 2 steps');
+    // one step reads as Undo always has
+    A.undo();
+    expect(S.store.get().toasts.at(-1)?.text).toBe('Undo Title C');
+  });
+});

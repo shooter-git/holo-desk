@@ -1,6 +1,7 @@
 import { applyOps, newProject, newRegion, newTrack, type Op, type Project, parseProject } from '@holo/session';
 import { describe, expect, it } from 'vitest';
 import {
+  distance,
   type History,
   JobQueue,
   type JobResult,
@@ -10,6 +11,7 @@ import {
   pushOrMergeJob,
   redo,
   relabelJob,
+  travel,
   undo,
 } from '../src/app/history.ts';
 
@@ -20,6 +22,12 @@ const titled = (p: Project, title: string): Project => applyOps(p, [{ op: 'setPr
 function studio() {
   let project = newProject('Song');
   let h = empty;
+  // each change a second after the one before
+  let clock = 0;
+  const tick = () => {
+    clock += 1000;
+    return clock;
+  };
   return {
     get project() {
       return project;
@@ -29,12 +37,12 @@ function studio() {
     },
     edit(title: string, label = 'Edit') {
       const next = titled(project, title);
-      h = push(h, { project, label });
+      h = push(h, { project, label, at: tick() });
       project = next;
     },
     agent(title: string, job: string, running = true, label = 'Agent: Notes') {
       const next = titled(project, title);
-      h = pushOrMergeJob(h, project, label, job, running);
+      h = pushOrMergeJob(h, project, label, job, running, tick());
       project = next;
     },
     undo() {
@@ -50,6 +58,13 @@ function studio() {
       h = r.history;
       project = r.step.project;
       return r.step;
+    },
+    travel(n: number) {
+      const r = travel(h, project, n);
+      if (!r) return null;
+      h = r.history;
+      project = r.project;
+      return r.steps;
     },
     relabel(job: string, label: string) {
       h = relabelJob(h, job, label);
@@ -182,6 +197,81 @@ describe('the undo history', () => {
   it('has nothing to undo or redo on empty stacks', () => {
     expect(undo(empty, newProject('x'))).toBeNull();
     expect(redo(empty, newProject('x'))).toBeNull();
+    expect(travel(empty, newProject('x'), -3)).toBeNull();
+    expect(travel(empty, newProject('x'), 3)).toBeNull();
+  });
+
+  it('keeps when a change was made, undone and redone', () => {
+    const s = studio();
+    s.edit('A', 'One');
+    s.agent('B', 'j1');
+    expect(s.history.undo.map((x) => x.at)).toEqual([1000, 2000]);
+    s.undo();
+    s.undo();
+    expect(s.history.redo.map((x) => x.at)).toEqual([2000, 1000]);
+    s.redo();
+    expect(s.history.undo.map((x) => x.at)).toEqual([1000]);
+  });
+});
+
+describe('going through the history several steps at once', () => {
+  /** Five edits, titled A to E, named One to Five. */
+  const five = () => {
+    const s = studio();
+    ['A', 'B', 'C', 'D', 'E'].forEach((t, i) => {
+      s.edit(t, ['One', 'Two', 'Three', 'Four', 'Five'][i]);
+    });
+    return s;
+  };
+
+  it('lands where that many Undos would, crossing the steps newest first', () => {
+    const s = five();
+    const one = studio();
+    ['A', 'B', 'C', 'D', 'E'].forEach((t) => {
+      one.edit(t);
+    });
+    for (let i = 0; i < 3; i++) one.undo();
+    expect(s.travel(-3)?.map((x) => x.label)).toEqual(['Five', 'Four', 'Three']);
+    expect(s.project.title).toBe('B');
+    expect(s.project.title).toBe(one.project.title);
+    expect(s.history.undo.map((x) => x.label)).toEqual(['One', 'Two']);
+    expect(s.history.redo.map((x) => x.label)).toEqual(['Five', 'Four', 'Three']);
+  });
+
+  it('comes forward the same way, oldest first', () => {
+    const s = five();
+    s.travel(-4);
+    expect(s.project.title).toBe('A');
+    expect(s.travel(2)?.map((x) => x.label)).toEqual(['Two', 'Three']);
+    expect(s.project.title).toBe('C');
+    expect(s.history.redo.map((x) => x.label)).toEqual(['Five', 'Four']);
+    // and an Undo from there takes back the last one redone
+    expect(s.undo()?.label).toBe('Three');
+  });
+
+  it('stops at the end of the history', () => {
+    const s = five();
+    expect(s.travel(-50)).toHaveLength(5);
+    expect(s.project.title).toBe('Song');
+    expect(s.travel(-1)).toBeNull();
+    expect(s.travel(50)).toHaveLength(5);
+    expect(s.project.title).toBe('E');
+  });
+
+  it('measures how far a step is: back to before it, or forward through it', () => {
+    const s = five();
+    s.travel(-2);
+    const [four] = s.history.redo.slice(-1);
+    const [two] = s.history.undo.slice(-2);
+    expect(four?.label).toBe('Four');
+    expect(two?.label).toBe('Two');
+    if (!four || !two) return;
+    expect(distance(s.history, four)).toBe(1);
+    expect(distance(s.history, two)).toBe(-2);
+    s.travel(distance(s.history, two));
+    expect(s.project.title).toBe('A');
+    // gone across since: not in the history as it was
+    expect(distance(s.history, two)).toBe(0);
   });
 });
 

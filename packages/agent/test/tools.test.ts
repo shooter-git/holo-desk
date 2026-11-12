@@ -8,8 +8,8 @@ import { TOOLS, toolNamed } from '../src/tools/index.ts';
 import { allOps, BAR, call, lastOps, memoryOf, refused, setup } from './helpers.ts';
 
 describe('the tool list', () => {
-  it('has at most 40 tools, named for MCP, each described', () => {
-    expect(TOOLS.length).toBeLessThanOrEqual(40);
+  it('has at most 48 tools, named for MCP, each described', () => {
+    expect(TOOLS.length).toBeLessThanOrEqual(48);
     const names = TOOLS.map((t) => t.name);
     expect(new Set(names).size).toBe(names.length);
     for (const t of TOOLS) {
@@ -61,6 +61,8 @@ describe('the tool list', () => {
       'ask_permission',
       'hand_off',
       'finish',
+      'regions',
+      'timeline',
     ])
       expect(names.has(n), n).toBe(true);
   });

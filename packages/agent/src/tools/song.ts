@@ -19,6 +19,7 @@ import {
   ticksPerBar,
   tickToBarBeat,
 } from '@holo/session';
+import { ApiError } from '../api.ts';
 import { barOf, barsText, bool, change, need, num, plural, position, str, type Tool, ToolError } from './common.ts';
 
 const at = (project: Project, tick: number): string => {
@@ -101,7 +102,7 @@ export const songSet: Tool = {
   name: 'song_set',
   kind: 'change',
   summary:
-    'Change the song\'s settings: title, tempo (bpm), key ("D minor", "Bb major", "A lydian"; "none" clears it) and meter ("3/4", "6/8", "7/8 2+2+3" with the grouping in eighths). Without "at" they change from the start of the song; with "at" (a position, e.g. "17") a tempo, key or meter change is added there (a meter change only on a bar line). Example: {"tempo": 92, "key": "E minor"}.',
+    'Change the song\'s settings: title, tempo (bpm), key ("D minor", "Bb major", "A lydian"; "none" clears it) and meter ("3/4", "6/8", "7/8 2+2+3" with the grouping in eighths). Without "at" they change from the start of the song; with "at" (a position, e.g. "17") a tempo, key or meter change is added there (a meter change only on a bar line). Also who it\'s by ("artist") and its "album" ("none" clears one): the library keeps those beside the song, so undo doesn\'t take them back, and a creation\'s song has its creation\'s. Example: {"tempo": 92, "key": "E minor"}; {"artist": "Es Claro"}.',
   args: [
     { name: 'title', type: 'string', describe: "The song's title", maxLength: 200 },
     { name: 'tempo', type: 'number', describe: 'Quarter notes per minute, e.g. 96', min: 20, max: 400 },
@@ -112,6 +113,13 @@ export const songSet: Tool = {
       maxLength: 40,
     },
     { name: 'meter', type: 'string', describe: 'e.g. "3/4", "6/8", "7/8 2+2+3"', maxLength: 20 },
+    {
+      name: 'artist',
+      type: 'string',
+      describe: 'Who the song is by; "none" for no one (outside undo)',
+      maxLength: 120,
+    },
+    { name: 'album', type: 'string', describe: 'The album it is on; "none" for none (outside undo)', maxLength: 120 },
     {
       name: 'at',
       type: 'string',
@@ -169,10 +177,38 @@ export const songSet: Tool = {
       }
       done.push(none ? 'no key' : `key ${keyText}${where}`);
     }
-    if (!done.length) throw new ToolError('Say what to set: title, tempo, key or meter');
+    // who it's by and its album: the library's, beside the song (outside undo)
+    const details: { artist?: string | null; album?: string | null } = {};
+    for (const field of ['artist', 'album'] as const) {
+      const v = str(args, field)?.trim();
+      if (v === undefined) continue;
+      details[field] = v === '' || /^(none|no one|nobody|null)$/i.test(v) ? null : v.replace(/\s+/g, ' ');
+    }
+    const outside = Object.keys(details).length > 0;
+    if (!done.length && !outside) throw new ToolError('Say what to set: title, tempo, key, meter, artist or album');
     const label = done.join('; ');
-    await change(ctx, project, [{ op: 'setProject', patch }], label[0]?.toUpperCase() + label.slice(1));
-    return { text: `Set ${label}.`, progress: `Set ${label}` };
+    // (asked first: a creation's song refuses them, and then nothing else changes either)
+    let saved: { artist: string | null; album: string | null } = { artist: null, album: null };
+    if (outside) {
+      try {
+        saved = await ctx.api.details(details);
+      } catch (err) {
+        if (err instanceof ApiError && err.status === 400) throw new ToolError(err.message);
+        throw err;
+      }
+    }
+    if (done.length)
+      await change(ctx, project, [{ op: 'setProject', patch }], label[0]?.toUpperCase() + label.slice(1));
+    if (!outside) return { text: `Set ${label}.`, progress: `Set ${label}` };
+    const said = (['artist', 'album'] as const)
+      .filter((f) => f in details)
+      .map((f) => (saved[f] ? `${f} "${saved[f]}"` : `no ${f}`));
+    const all = [...done, ...said].join('; ');
+    const what = said.length === 1 ? `The ${Object.keys(details)[0]} is` : 'The artist and album are';
+    return {
+      text: `Set ${all}. ${what} kept beside the song, outside undo: undo doesn't take ${said.length === 1 ? 'it' : 'them'} back.`,
+      progress: `Set ${all}`,
+    };
   },
 };
 
@@ -294,6 +330,8 @@ const OPS: Record<Op['op'], Record<string, 'string' | 'number' | 'object' | 'arr
   updateRegion: { track: 'string', region: 'string', patch: 'object' },
   removeRegion: 'confirm',
   moveRegion: { from: 'string', to: 'string', region: 'string' },
+  splitRegion: { track: 'string', region: 'string', at: 'number', id: 'string' },
+  arrange: { edit: 'string', from: 'number', to: 'number' },
   setNotes:
     'setNotes replaces a whole region from your copy, and the user may be editing it: use setNotesIn (only the notes starting in [from, to)) or addNotes',
   addNotes: { track: 'string', region: 'string', notes: 'array' },
@@ -314,7 +352,7 @@ export const opsApply: Tool = {
   name: 'ops_apply',
   kind: 'change',
   summary:
-    'Raw session operations, for what no other tool covers (moving or splitting regions, region names and colors, controller lanes, buses, sends, score marks…). Each is an object {"op": KIND, …} as in HO[LO]\'s session format, with ids from song_show (track ids trk_…, region ids rgn_…, bus ids bus_…); ticks are 960 to a quarter note, and note times are ticks from their region\'s start. Kinds: setProject, addTrack, moveTrack, updateTrack, updateChannel, addPlugin, updatePlugin, removePlugin, movePlugin, addBus, updateBus, addRegion, updateRegion, moveRegion, addNotes, setNotesIn (replaces only the notes starting in [from, to)), setMarksIn, setCC, setAutomation; removeTrack, removeRegion and removeBus only with "confirm": true. They\'re tried first and refused, with the reason, if any would fail. Example: {"ops": [{"op": "updateRegion", "track": "trk_…", "region": "rgn_…", "patch": {"name": "Intro"}}], "label": "Named the intro"}.',
+    'Raw session operations, for what no other tool covers (moving or splitting regions, region names and colors, controller lanes, buses, sends, score marks…). Each is an object {"op": KIND, …} as in HO[LO]\'s session format, with ids from song_show (track ids trk_…, region ids rgn_…, bus ids bus_…); ticks are 960 to a quarter note, and note times are ticks from their region\'s start. Kinds: setProject, addTrack, moveTrack, updateTrack, updateChannel, addPlugin, updatePlugin, removePlugin, movePlugin, addBus, updateBus, addRegion, updateRegion, moveRegion, splitRegion (track, region, at a tick inside it, id for the right half), arrange (edit insert, delete, copy or move; from, to and at in ticks on bar lines), addNotes, setNotesIn (replaces only the notes starting in [from, to)), setMarksIn, setCC, setAutomation; removeTrack, removeRegion, removeBus, and arrange\'s delete and move only with "confirm": true. They\'re tried first and refused, with the reason, if any would fail. Example: {"ops": [{"op": "updateRegion", "track": "trk_…", "region": "rgn_…", "patch": {"name": "Intro"}}], "label": "Named the intro"}.',
   args: [
     {
       name: 'ops',
@@ -325,7 +363,12 @@ export const opsApply: Tool = {
       maxLength: 200,
     },
     { name: 'label', type: 'string', describe: 'What they do, in a few words', required: true, maxLength: 80 },
-    { name: 'confirm', type: 'boolean', describe: 'true to allow removing tracks, regions or buses', default: false },
+    {
+      name: 'confirm',
+      type: 'boolean',
+      describe: 'true to allow removing tracks, regions or buses, or deleting or moving bars',
+      default: false,
+    },
   ],
   async run(ctx, args) {
     const list = (args.ops as Record<string, unknown>[]) ?? [];
@@ -342,6 +385,10 @@ export const opsApply: Tool = {
         rule = CONFIRM_FIELDS[kind] ?? {};
       }
       if (typeof rule === 'string') throw new ToolError(`ops[${i}]: ${rule}`);
+      if (kind === 'arrange' && (op.edit === 'delete' || op.edit === 'move') && !confirm)
+        throw new ToolError(
+          `ops[${i}]: arrange ${op.edit} takes bars out of the song: send "confirm": true if the user wants it`,
+        );
       for (const [field, type] of Object.entries(rule)) {
         const v = op[field];
         const ok =

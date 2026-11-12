@@ -146,6 +146,7 @@ requester's studio has the job's song open.
 | `POST …/permission` | `{kind, detail, pack?}` (detail ≤ 300) | `{ok}`. `kind` is `install-pack` (with `pack`), `send-creation`, `bounce`, `render`, `screen`, `photo` or `microphone`; `render` only for a song that came from a creation (400). The job waits for the user once the turn ends. |
 | `POST …/handoff` | `{brief}` (≤ 4000) | `{ok}`. Lines that mention a secret, hold a link or run a command are flagged (`briefWarnings`). |
 | `POST …/finish` | `{label, reply}` (one line ≤ 80; ≤ 600) | `{ok}`. The agent is asked for one or two short sentences, about 200 characters at most; 600 is the server's limit. |
+| `PUT …/details` | `{artist?, album?}` (each a name, or null to clear) | `{ok, artist, album}`, as `PUT /api/projects/:id/details` answers for the job's song: the library keeps them beside the song (no new revision, outside undo). 400 for a creation's song. |
 
 **Listening.** A harness can cut a tool call at 60 s, so a listen comes in parts: the `listen` tool asks
 for at most 40 s at a time, and the server takes at most 45 s. A listen hears only the requester's
@@ -353,30 +354,33 @@ the last "…and N more changes" when there are more:
 
 ## The agent's tools (`@holo/agent`)
 
-`packages/agent/src/tools/index.ts` lists 39 tools (at most 40), named for MCP (lower-case letters,
-digits and `_`). Changing and asking tools run one at a time, in the order they're called; seeing and
-playing tools run alongside. A change may also post a line under the bar (`…/progress`).
+`packages/agent/src/tools/index.ts` lists 41 tools (at most 48: Claude Code, Codex and Cursor each list and
+call 48 sealed, docs/agent-harnesses.md), named for MCP (lower-case letters, digits and `_`). Changing and
+asking tools run one at a time, in the order they're called; seeing and playing tools run alongside. A
+change may also post a line under the bar (`…/progress`).
 
 | Tool | Kind | What it does |
 |---|---|---|
 | `song_status` | see | Where the user is: the song's settings and tracks, the playhead, the selection, the cycle, the view, how notes are named. |
 | `song_show` | see | The whole song as text: tempo and meter changes, markers, mastering, every track and bus. |
-| `song_set` | change | Title, tempo, key and meter, from the start or as a change at a position. |
+| `song_set` | change | Title, tempo, key and meter, from the start or as a change at a position; who it's by and its album (beside the song, outside undo; a creation's song keeps its creation's). |
 | `marker` | change | Add, rename or remove a marker. |
 | `cycle` | change | Set the cycle, or turn it off. |
 | `looping` | change | Make the song a loop (a game's or an app's music), or an ordinary song again. |
-| `ops_apply` | change | Raw session ops for what no other tool covers; removals only with `confirm`. |
+| `ops_apply` | change | Raw session ops for what no other tool covers; removals, and `arrange` deletes and moves, only with `confirm`. |
+| `timeline` | change | Insert, delete, copy or move whole bars across every track (one `arrange` op); delete and move only with `confirm`. |
 | `notes_show` | see | A track's notes, bar by bar. |
 | `notes_write` | change | Write notes from a position, in the compact notation. |
 | `notes_clear` | change | Remove the notes that start in a span. |
+| `regions` | change | Show, split (chop), delete (with `confirm`), copy, move, repeat, trim, gain, fade, stretch, mute, rename audio and MIDI regions; quantize and transpose MIDI; write a MIDI region's controller and pitch-bend lanes. A region by id, name or "selected". |
 | `track_add` | change | Add a track: a built-in synth, a pack's instrument, or a palette's sound. |
 | `track_set` | change | A track's name, fader, pan, mute, solo, arm, instrument, place and sends. |
 | `synth_set` | change | List or set a built-in synth's knobs. |
 | `kit_set` | change | List or set a sampled kit's microphones, tune and decay. |
 | `instruments` | see | What can play a track: the synths and the installed packs' instruments. |
 | `plugins` | see | The stock plugins, and one's parameters. |
-| `fx` | change | Show, add, set or remove plugins on a track, a bus or the master. |
-| `automate` | change | Write, clear, turn off or read an automation lane. |
+| `fx` | change | Show, add, set, move (reorder) or remove plugins on a track, a bus or the master; a plugin with a key and scale is added in the song's key (an audio effect's automation follows its key changes). |
+| `automate` | change | List what can move on a channel, show a lane, write, clear, turn off or read (back on) a lane; a plugin's parameter by type (`eq.hsGain`), position (`eq#2.hsGain`) or id (`fx_….hsGain`). |
 | `finish_master` | change | How bounces and renders are mastered. |
 | `score_show` | see | The song as score text; with `check`, what a player would stumble on. |
 | `score_parts` | see | The parts' staves, clefs and transpositions. |

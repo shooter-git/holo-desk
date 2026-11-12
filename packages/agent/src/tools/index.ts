@@ -18,19 +18,21 @@ import { trackTools } from './tracks.ts';
 
 // ---- measure ----
 
-// ---- regions ----
-
-// ---- timeline ----
-
 // ---- import ----
 import { importTools } from './import.ts';
+// ---- regions ----
+import { regionTools } from './regions.ts';
+// ---- timeline ----
+import { timelineTools } from './timeline.ts';
 
 export const TOOLS: readonly Tool[] = [
   ...songTools,
   // ---- timeline ----
+  ...timelineTools,
 
   ...noteTools,
   // ---- regions ----
+  ...regionTools,
 
   ...trackTools,
   ...mixTools,

@@ -214,11 +214,11 @@ describe('the MCP server over stdio', () => {
     expect(a).toEqual({ jsonrpc: '2.0', id: a.id, result: {} });
   });
 
-  it('lists at most 40 tools, named for MCP, each with a well-formed input schema', async () => {
+  it('lists at most 48 tools, named for MCP, each with a well-formed input schema', async () => {
     const a = await server.request('tools/list', {});
     const tools = (a.result as { tools: ToolInfo[] }).tools;
     expect(tools.length).toBeGreaterThan(30);
-    expect(tools.length).toBeLessThanOrEqual(40);
+    expect(tools.length).toBeLessThanOrEqual(48);
     for (const t of tools) {
       expect(t.name).toMatch(/^[a-z][a-z0-9_]{0,40}$/);
       expect(t.description.length).toBeGreaterThan(40);

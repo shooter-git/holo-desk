@@ -232,9 +232,10 @@ export function writtenSpans(map: PlayMap | null, a: number, b: number): Pass[] 
 }
 
 // ---- cutting the song into its passes ----
+// (arrange.ts cuts with these too: bars inserted, deleted, copied and moved are passes of their own)
 
 /** A controller lane's points from `a` to `b` (ticks of the region), moved to start at 0, with the value it had at `a`. */
-function cutLane(points: readonly CCPoint[], a: number, b: number): CCPoint[] {
+export function cutLane(points: readonly CCPoint[], a: number, b: number): CCPoint[] {
   const out: CCPoint[] = [];
   let held: CCPoint | undefined;
   for (const pt of points) {
@@ -245,17 +246,17 @@ function cutLane(points: readonly CCPoint[], a: number, b: number): CCPoint[] {
   return out;
 }
 
-interface CutOptions {
+export interface CutOptions {
   /** The written song's tempo (an audio region's place in its file moves by the time cut off). */
   tempo: readonly TempoPoint[];
   /** For the score too: keep the notes' hints and the marks, give the pieces ids of their own. */
   written?: boolean;
 }
 
-const EDGE = 0.005;
+export const EDGE = 0.005;
 
 /** The piece of a region inside a pass, placed where the pass plays (null when none of it is). */
-function cutRegion(r: Region, p: Pass, opts: CutOptions): Region | null {
+export function cutRegion(r: Region, p: Pass, opts: CutOptions): Region | null {
   const a = Math.max(p.from, r.start);
   const b = Math.min(p.to, r.start + r.length);
   if (b <= a) return null;
@@ -293,7 +294,7 @@ function cutRegion(r: Region, p: Pass, opts: CutOptions): Region | null {
 }
 
 /** A track's regions, pass by pass. */
-function cutRegions(regions: readonly Region[], map: PlayMap, opts: CutOptions): Region[] {
+export function cutRegions(regions: readonly Region[], map: PlayMap, opts: CutOptions): Region[] {
   const out: Region[] = [];
   for (const p of map) {
     for (const r of regions) {
@@ -305,7 +306,7 @@ function cutRegions(regions: readonly Region[], map: PlayMap, opts: CutOptions):
 }
 
 /** An automation lane, pass by pass: each pass starts from the value the lane has where it starts in the music. */
-function cutAutomation(lane: AutomationLane, map: PlayMap): [number, number][] {
+export function cutAutomation(lane: AutomationLane, map: PlayMap): [number, number][] {
   const out: [number, number][] = [];
   for (const p of map) {
     const from = automationAt(lane, p.from, lane.param === 'mute');
@@ -320,7 +321,7 @@ function cutAutomation(lane: AutomationLane, map: PlayMap): [number, number][] {
 }
 
 /** Tempo points, pass by pass (`keep` the score's words and ramps: else just the speeds the engines play). */
-function cutTempo(tempo: readonly TempoPoint[], map: PlayMap, keep = false): TempoPoint[] {
+export function cutTempo(tempo: readonly TempoPoint[], map: PlayMap, keep = false): TempoPoint[] {
   const out: TempoPoint[] = [];
   for (const p of map) {
     const inside = tempo.filter((t) => t.tick > p.from && t.tick < p.to);
@@ -340,7 +341,7 @@ function cutTempo(tempo: readonly TempoPoint[], map: PlayMap, keep = false): Tem
 }
 
 /** Meter points, pass by pass: a pass that starts inside a bar (after a pickup) keeps the bar's beat. */
-function cutMeter(meter: readonly MeterPoint[], map: PlayMap): MeterPoint[] {
+export function cutMeter(meter: readonly MeterPoint[], map: PlayMap): MeterPoint[] {
   const out: MeterPoint[] = [];
   const same = (a: MeterPoint, b: MeterPoint) =>
     a.num === b.num && a.den === b.den && (a.groups ?? []).join() === (b.groups ?? []).join();
@@ -365,7 +366,7 @@ function cutMeter(meter: readonly MeterPoint[], map: PlayMap): MeterPoint[] {
 }
 
 /** A written stretch (the cycle, a loop) where it first plays: its end the first time it's reached after its start. */
-function cutRange<T extends { start: number; end: number }>(range: T, map: PlayMap): T {
+export function cutRange<T extends { start: number; end: number }>(range: T, map: PlayMap): T {
   const start = playedAt(map, range.start);
   const ends = playedTimes(map, range.end, true).filter((t) => t > start);
   return { ...range, start, end: ends.length ? Math.min(...ends) : start + (range.end - range.start) };

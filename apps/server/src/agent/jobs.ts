@@ -230,6 +230,11 @@ export class Jobs implements AgentHooks {
   private readonly assigned = new WeakMap<AgentJob, LiveClient>();
   /** What each runner said it has. */
   private readonly reported = new WeakMap<LiveClient, HarnessInfo[]>();
+  /**
+   * A sign-in or an update under way, by harness, as its runner last told it: a studio that opens
+   * Settings later, or again after a reload (a phone does, coming back from the sign-in page), is shown it.
+   */
+  private readonly relays = new Map<HarnessId, { event: Record<string, unknown>; runner: LiveClient; at: number }>();
   /** Songs a request is being started on (it waits for the studio to save first). */
   private readonly starting = new Set<string>();
 
@@ -708,7 +713,10 @@ export class Jobs implements AgentHooks {
     }
     if (msg.type === 'agent-harness') {
       const relay = parseHarnessEvent(msg);
-      if (relay) this.o.live.toDevices({ type: 'agent-harness', ...relay });
+      if (relay) {
+        this.keepRelay(client, relay);
+        this.o.live.toDevices({ type: 'agent-harness', ...relay });
+      }
       return;
     }
     const job = typeof msg.job === 'string' ? this.jobs.get(msg.job) : undefined;
@@ -781,7 +789,8 @@ export class Jobs implements AgentHooks {
 
   gone(client: LiveClient): void {
     if (client.role !== 'runner') return;
-    // its harnesses went with it
+    // its sign-ins and updates under way, and its harnesses, went with it
+    for (const [harness, r] of this.relays) if (r.runner === client) this.relays.delete(harness);
     if (client.keyed && client.caps?.agent && this.reported.has(client)) {
       this.reported.delete(client);
       this.announce(false);
@@ -795,15 +804,38 @@ export class Jobs implements AgentHooks {
 
   // ---- settings, and the song's conversation ----
 
-  /** The settings, as GET /api/agent/settings answers. */
+  /**
+   * Keep a sign-in or an update under way (what it said so far: its link and code stay as later lines
+   * come); one that's over is let go.
+   */
+  private keepRelay(runner: LiveClient, relay: Record<string, unknown>): void {
+    const harness = relay.harness as HarnessId;
+    if (relay.kind === 'refresh') return;
+    if (relay.state !== 'running') {
+      this.relays.delete(harness);
+      return;
+    }
+    const before = this.relays.get(harness);
+    const event = before && before.event.kind === relay.kind ? { ...before.event, ...relay } : relay;
+    this.relays.set(harness, { event, runner, at: Date.now() });
+  }
+
+  /** The settings, as GET /api/agent/settings answers: with any sign-in or update under way. */
   settingsView(): {
     enabled: boolean;
     harness: HarnessId | null;
     model: string;
     effort: string;
     harnesses: HarnessInfo[];
+    relays: Record<string, unknown>[];
   } {
-    return { ...this.o.agentStore.settings(), harnesses: this.harnesses() };
+    const now = Date.now();
+    const relays: Record<string, unknown>[] = [];
+    for (const [harness, r] of this.relays) {
+      if (now - r.at > RELAY_LIFE || !this.o.live.agentRunners().includes(r.runner)) this.relays.delete(harness);
+      else relays.push(r.event);
+    }
+    return { ...this.o.agentStore.settings(), harnesses: this.harnesses(), relays };
   }
 
   /**
@@ -1314,6 +1346,9 @@ export function parseHarnesses(list: unknown): HarnessInfo[] {
 }
 
 /** How a sign-in, update or refresh goes, from the runner, checked before the studios see it. */
+/** How long a sign-in or an update under way is shown to a studio that comes later (a sign-in waits no longer). */
+const RELAY_LIFE = 15 * 60_000;
+
 export function parseHarnessEvent(msg: Record<string, unknown>): Record<string, unknown> | null {
   if (!HARNESSES.includes(msg.harness as HarnessId)) return null;
   if (msg.kind !== 'login' && msg.kind !== 'update' && msg.kind !== 'refresh') return null;

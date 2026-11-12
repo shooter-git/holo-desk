@@ -687,3 +687,27 @@ describe('the agent’s live messages', () => {
     A.agent.dispatch({ type: 'removed' });
   });
 });
+
+describe('a sign-in under way', () => {
+  it('is shown again from the host after a reload, or on a device that didn’t see it start', () => {
+    A.agent.dispatch({ type: 'info', info: ON });
+    const running = {
+      harness: 'claude' as const,
+      kind: 'login' as const,
+      state: 'running' as const,
+      url: 'https://claude.example/oauth',
+      ask: 'code' as const,
+    };
+    const settings = { enabled: true, harness: 'claude' as const, model: '', effort: '', harnesses: [] };
+    A.agent.dispatch({ type: 'settings', settings: { ...settings, relays: [running] } });
+    expect(A.agent.get().harness.claude).toEqual(running);
+    // what this page saw itself, still running, stays as it is
+    const later = { ...running, line: 'Waiting for the code' };
+    A.agent.dispatch({ type: 'harness', event: later });
+    A.agent.dispatch({ type: 'settings', settings: { ...settings, relays: [running] } });
+    expect(A.agent.get().harness.claude).toEqual(later);
+    // none under way: nothing is added
+    A.agent.dispatch({ type: 'settings', settings: { ...settings, relays: [] } });
+    expect(A.agent.get().harness.codex).toBeUndefined();
+  });
+});

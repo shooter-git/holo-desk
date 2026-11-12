@@ -407,6 +407,35 @@ describe('harnesses', () => {
     });
     expect(desk.got('agent-harness')).toHaveLength(2);
 
+    // a studio that opens Settings later, or reloads (a phone, back from the sign-in page), is shown it:
+    // its link and code kept as later lines come, and let go once it's over or its runner has gone
+    const relays = async () =>
+      ((await app.inject({ method: 'GET', url: '/api/agent/settings', headers: auth(token) })).json() as Msg).relays;
+    codex.say({ type: 'agent-harness', harness: 'codex', kind: 'login', state: 'running', line: 'Waiting' });
+    expect(await relays()).toEqual([
+      {
+        harness: 'codex',
+        kind: 'login',
+        state: 'running',
+        url: 'https://auth.openai.com/device',
+        code: 'ABCD-1234',
+        ask: 'code',
+        line: 'Waiting',
+      },
+    ]);
+    codex.say({ type: 'agent-harness', harness: 'codex', kind: 'refresh', state: 'done' });
+    expect(await relays()).toHaveLength(1);
+    codex.say({ type: 'agent-harness', harness: 'codex', kind: 'login', state: 'failed', error: 'Timed out' });
+    expect(await relays()).toEqual([]);
+    codex.say({
+      type: 'agent-harness',
+      harness: 'codex',
+      kind: 'login',
+      state: 'running',
+      url: 'https://auth.openai.com/device',
+    });
+    expect(await relays()).toHaveLength(1);
+
     const code = await app.inject({
       method: 'POST',
       url: '/api/agent/harnesses/codex/login/code',
@@ -441,6 +470,12 @@ describe('harnesses', () => {
       (await app.inject({ method: 'POST', url: '/api/agent/harnesses/codex/update', headers: auth(token) })).json(),
     ).toEqual({ ok: true });
     expect(codex.got('agent-update')).toEqual([{ type: 'agent-update', harness: 'codex' }]);
+
+    // the sign-in still kept goes with its runner
+    expect(await relays()).toHaveLength(1);
+    codex.close();
+    await settle();
+    expect(await relays()).toEqual([]);
   });
 });
 

@@ -35,6 +35,8 @@ export interface AgentSettings {
   model: string;
   effort: string;
   harnesses: HarnessInfo[];
+  /** Sign-ins and updates under way, as the host has them (shown again after a reload, or on another device). */
+  relays?: HarnessEvent[];
 }
 
 /** What the host says of the agent, to anyone: on or off, this device allowed, the first device still to pair. */
@@ -176,8 +178,13 @@ export function reduce(a: AgentState, e: AgentEvent): AgentState {
       return e.info.enabled && e.info.allowed ? { ...a, info: e.info } : { ...EMPTY, info: e.info, me: a.me };
     case 'me':
       return { ...a, me: e.id };
-    case 'settings':
-      return { ...a, settings: e.settings };
+    case 'settings': {
+      // a sign-in or an update under way that this page didn't see start (Settings opened on another
+      // device, or this one reloaded on coming back from the sign-in page): as the host has it
+      const harness = { ...a.harness };
+      for (const r of e.settings.relays ?? []) if (harness[r.harness]?.state !== 'running') harness[r.harness] = r;
+      return { ...a, settings: e.settings, harness };
+    }
     case 'enabled':
       // turned on or off on some device: off, everything of it goes at once
       return a.info ? reduce(a, { type: 'info', info: { ...a.info, enabled: e.enabled } }) : a;

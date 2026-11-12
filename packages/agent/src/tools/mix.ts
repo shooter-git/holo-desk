@@ -4,17 +4,25 @@
  */
 import {
   automationTargets,
+  type Channel,
   formatParam,
+  type KeyPoint,
+  keysOf,
+  keyText,
+  keyTonic,
   newPlugin,
   type Op,
   PLUGINS,
   type Plugin,
   type PluginDef,
+  type Project,
   pluginDef,
+  SCALES,
   tickToBarBeat,
 } from '@holo/session';
 import {
   bool,
+  type ChannelRef,
   change,
   channelRef,
   knobValues,
@@ -27,6 +35,7 @@ import {
   type Tool,
   ToolError,
 } from './common.ts';
+import { posText } from './regions.ts';
 
 const paramLine = (p: PluginDef['params'][number]): string =>
   p.options
@@ -70,30 +79,88 @@ const pluginText = (p: Plugin): string => {
   return `${def?.name ?? p.type} [${p.type}, ${p.id}]${p.bypass ? ' (bypassed)' : ''}: ${values}`;
 };
 
+/**
+ * A plugin in a chain: by its id (fx_…), its type or its name ("eq", "Channel EQ"), the first of
+ * them; "eq#2" is the second of them.
+ */
+export function pluginRef(chain: readonly Plugin[], ref: string): Plugin | undefined {
+  const text = ref.trim();
+  const byId = chain.find((p) => p.id === text);
+  if (byId) return byId;
+  const m = /^(.*?)\s*#\s*(\d+)$/.exec(text);
+  const kind = (m ? (m[1] as string) : text).trim().toLowerCase();
+  const same = chain.filter((p) => p.type.toLowerCase() === kind || pluginDef(p.type)?.name.toLowerCase() === kind);
+  return same[(m ? Number(m[2]) : 1) - 1];
+}
+
+/** How a plugin is named back to the model: its type, and "#2" when it isn't the first of its type there. */
+function pluginLabel(chain: readonly Plugin[], p: Plugin): string {
+  const same = chain.filter((x) => x.type === p.type);
+  const k = same.indexOf(p) + 1;
+  return k > 1 ? `${p.type}#${k}` : p.type;
+}
+
+const NO_KEY = { key: undefined, scale: undefined } as const;
+
+/** The song's key as a plugin's key (0 C … 11 B) and scale (an index in SCALES), from a key point. */
+function keyValues(project: Project, k: KeyPoint | undefined): { key?: number; scale?: number } {
+  if (!k) return NO_KEY;
+  const tonic = keyTonic(k);
+  const letter = 'C D EF G A B'.indexOf(tonic[0] as string);
+  let pc = letter;
+  for (const a of tonic.slice(1)) pc += a === '#' ? 1 : -1;
+  const named: Record<string, string> = {
+    major: 'Major',
+    minor: 'Natural minor',
+    dorian: 'Dorian',
+    phrygian: 'Phrygian',
+    lydian: 'Lydian',
+    mixolydian: 'Mixolydian',
+    locrian: 'Locrian',
+  };
+  let scale = named[k.mode] ?? 'Major';
+  // the song's own words say which minor, at the start
+  if (k.mode === 'minor' && k.tick === 0 && /harmonic/i.test(project.key ?? '')) scale = 'Harmonic minor';
+  if (k.mode === 'minor' && k.tick === 0 && /melodic/i.test(project.key ?? '')) scale = 'Melodic minor';
+  return { key: ((pc % 12) + 12) % 12, scale: SCALES.findIndex((s) => s.name === scale) };
+}
+
 export const fx: Tool = {
   name: 'fx',
   kind: 'change',
   summary:
-    'Plugins on a track, a bus or the master ("target": a track or bus name, or "master"). action "show" lists what\'s there with every value; "add" puts a plugin of "plugin" type on it (audio effects in its inserts, MIDI effects before a track\'s instrument) with optional "params"; "set" changes a plugin\'s "params" or "bypass"; "remove" takes it off. "plugin" is a type ("reverb") or a plugin id from show; params are numbers by parameter id (a choice may be given by its option name). Examples: {"action": "add", "target": "Keys", "plugin": "harmonizer", "params": {"key": 9, "scale": 6, "voice1": 2}}; {"action": "set", "target": "master", "plugin": "limiter", "params": {"ceiling": -1}}.',
+    'Plugins on a track, a bus or the master ("target": a track or bus name, or "master"). action "show" lists what\'s there, in order, with every value; "add" puts a plugin of "plugin" type on it (audio effects in its inserts, MIDI effects before a track\'s instrument) with optional "params" and "index" (1 first); a plugin with a key and scale (Harmonizer, Scale Quantizer, Pitch Correction) takes the song\'s key unless "params" say otherwise; "set" changes a plugin\'s "params" or "bypass"; "move" puts it at "index", or "before" or "after" another; "remove" takes it off. "plugin" is a type ("reverb", the first one there), "eq#2" (the second), or a plugin id from show; params are numbers by parameter id (a choice may be given by its option name). Examples: {"action": "add", "target": "Keys", "plugin": "harmonizer", "params": {"voice1": 2}}; {"action": "move", "target": "Vocal", "plugin": "reverb", "before": "delay"}; {"action": "set", "target": "master", "plugin": "limiter", "params": {"ceiling": -1}}.',
   args: [
-    { name: 'action', type: 'enum', values: ['show', 'add', 'set', 'remove'], describe: 'What to do', required: true },
+    {
+      name: 'action',
+      type: 'enum',
+      values: ['show', 'add', 'set', 'move', 'remove'],
+      describe: 'What to do',
+      required: true,
+    },
     { name: 'target', type: 'string', describe: 'A track or bus name (or id), or "master"', required: true },
-    { name: 'plugin', type: 'string', describe: 'A plugin type ("compressor") or a plugin id (fx_…)' },
+    { name: 'plugin', type: 'string', describe: 'A plugin type ("compressor"), "eq#2", or a plugin id (fx_…)' },
     { name: 'params', type: 'object', describe: 'Parameter values by id, e.g. {"mix": 30, "decay": 2.5}' },
     { name: 'bypass', type: 'boolean', describe: 'With set: bypass the plugin (true) or turn it back on (false)' },
-    { name: 'index', type: 'integer', describe: 'With add: its place in the chain, 1 first', min: 1 },
+    { name: 'index', type: 'integer', describe: 'With add or move: its place in the chain, 1 first', min: 1 },
+    { name: 'before', type: 'string', describe: 'With move: the plugin it goes before' },
+    { name: 'after', type: 'string', describe: 'With move: the plugin it goes after' },
   ],
   async run(ctx, args) {
     const project = await ctx.api.song();
     const target = channelRef(project, str(args, 'target'));
     const action = str(args, 'action');
     const midi = target.track?.midiFx ?? [];
-    const chain = [...midi, ...target.channel.inserts];
+    const inserts = target.channel.inserts;
+    const chain = [...midi, ...inserts];
     if (action === 'show') {
+      if (!chain.length) return { text: `${target.name} has no plugins.` };
       return {
-        text: chain.length
-          ? [`${target.name}:`, ...chain.map((p) => `  ${pluginText(p)}`)].join('\n')
-          : `${target.name} has no plugins.`,
+        text: [
+          `${target.name}:`,
+          ...midi.map((p, i) => `  MIDI ${i + 1}. ${pluginText(p)}`),
+          ...inserts.map((p, i) => `  ${i + 1}. ${pluginText(p)}`),
+        ].join('\n'),
       };
     }
     const ref = need(args, 'plugin');
@@ -103,30 +170,91 @@ export const fx: Tool = {
       if (!def) throw new ToolError(`No plugin type "${ref}": ${PLUGINS.map((p) => p.type).join(', ')}`);
       const slot = def.kind === 'midi' ? 'midiFx' : 'inserts';
       if (slot === 'midiFx' && target.kind !== 'track') throw new ToolError('MIDI effects go on tracks');
-      const plugin = newPlugin(def.type, knobValues(given, def.params, def.name));
+      const values = knobValues(given, def.params, def.name);
+      // a plugin that plays in a key plays in the song's, unless told otherwise
+      const keys = keysOf(project);
+      const hasKey = def.params.some((p) => p.id === 'key');
+      const hasScale = def.params.some((p) => p.id === 'scale');
+      const fromSong = keyValues(project, keys[0]);
+      const filled: string[] = [];
+      if (hasKey && values.key === undefined && fromSong.key !== undefined) {
+        values.key = fromSong.key;
+        filled.push('key');
+      }
+      if (hasScale && values.scale === undefined && fromSong.scale !== undefined && fromSong.scale >= 0) {
+        values.scale = fromSong.scale;
+        filled.push('scale');
+      }
+      const plugin = newPlugin(def.type, values);
       const index = num(args, 'index');
       const label = `${def.name} on ${target.name}`;
-      await change(
-        ctx,
-        project,
-        [{ op: 'addPlugin', target: target.id, slot, plugin, ...(index !== undefined ? { index: index - 1 } : {}) }],
-        label,
-      );
-      return { text: `${label}: ${pluginText(plugin)}.`, progress: label };
+      const ops: Op[] = [
+        { op: 'addPlugin', target: target.id, slot, plugin, ...(index !== undefined ? { index: index - 1 } : {}) },
+      ];
+      const notes: string[] = [];
+      if (filled.length && keys[0]) notes.push(`in the song's key, ${keyText(keys[0])}`);
+      if (filled.length && keys.length > 1) {
+        if (slot === 'inserts') {
+          // the key changes through the song: automation follows them
+          for (const id of filled as ('key' | 'scale')[]) {
+            const points = keys.map((k): [number, number] => [k.tick, keyValues(project, k)[id] ?? 0]);
+            if (points.some((p) => p[1] !== points[0]?.[1]))
+              ops.push({
+                op: 'setAutomation',
+                target: target.id,
+                param: `fx:${plugin.id}:${id}`,
+                points,
+                mode: 'read',
+              });
+          }
+          if (ops.length > 1) notes.push('its automation follows the key changes');
+        } else
+          notes.push(
+            `it stays in ${keyText(keys[0] as KeyPoint)} where the song changes key (a MIDI effect has no automation)`,
+          );
+      }
+      await change(ctx, project, ops, label);
+      return {
+        text: `${label}${notes.length ? `, ${notes.join('; ')}` : ''}: ${pluginText(plugin)}.`,
+        progress: label,
+      };
     }
-    const plugin =
-      chain.find((p) => p.id === ref) ??
-      chain.find((p) => p.type === ref) ??
-      chain.find((p) => pluginDef(p.type)?.name.toLowerCase() === ref.toLowerCase());
+    const plugin = pluginRef(chain, ref);
     if (!plugin)
       throw new ToolError(
-        `No "${ref}" on ${target.name}. It has: ${chain.map((p) => `${p.type} (${p.id})`).join(', ') || 'nothing'}`,
+        `No "${ref}" on ${target.name}. It has: ${chain.map((p) => `${pluginLabel(chain, p)} (${p.id})`).join(', ') || 'nothing'}`,
       );
     const def = pluginDef(plugin.type);
     if (action === 'remove') {
       const label = `Removed ${def?.name ?? plugin.type} from ${target.name}`;
       await change(ctx, project, [{ op: 'removePlugin', target: target.id, plugin: plugin.id }], label);
       return { text: `${label}.`, progress: label };
+    }
+    if (action === 'move') {
+      const list = midi.includes(plugin) ? midi : inserts;
+      const rest = list.filter((p) => p !== plugin);
+      const beforeText = str(args, 'before');
+      const afterText = str(args, 'after');
+      const index = num(args, 'index');
+      let to: number;
+      if (beforeText || afterText) {
+        const other = pluginRef(list, (beforeText ?? afterText) as string);
+        if (!other || other === plugin)
+          throw new ToolError(
+            `No other "${beforeText ?? afterText}" in ${list === midi ? 'the MIDI effects' : 'the inserts'} of ${target.name}: ${list.map((p) => pluginLabel(list, p)).join(', ')}`,
+          );
+        to = rest.indexOf(other) + (beforeText ? 0 : 1);
+      } else if (index !== undefined) to = Math.min(index - 1, rest.length);
+      else throw new ToolError('Say where it goes: "index" (1 first), "before" or "after" another plugin');
+      if (to === list.indexOf(plugin)) return { text: `${def?.name ?? plugin.type} is there already.` };
+      const order = [...rest];
+      order.splice(to, 0, plugin);
+      const label = `Moved ${def?.name ?? plugin.type} on ${target.name} to place ${to + 1}`;
+      await change(ctx, project, [{ op: 'movePlugin', target: target.id, plugin: plugin.id, index: to }], label);
+      return {
+        text: `${label}: ${order.map((p) => pluginDef(p.type)?.name ?? p.type).join(' → ')}.`,
+        progress: label,
+      };
     }
     const params = def ? knobValues(given, def.params, def.name) : {};
     const bypass = bool(args, 'bypass');
@@ -147,20 +275,78 @@ export const fx: Tool = {
   },
 };
 
+/**
+ * A lane's param from the model's words: volume, pan, mute, distance, send:BUS, a plugin's parameter
+ * as TYPE.PARAM (the first of that type), TYPE#2.PARAM (the second), PLUGIN_ID.PARAM, or the lane's
+ * own name (fx:ID:PARAM).
+ */
+function laneParam(project: Project, target: ChannelRef, spec: string): string {
+  if (/^send:/i.test(spec)) {
+    const name = spec.slice(5).trim();
+    const bus = project.buses.find((b) => b.name.toLowerCase() === name.toLowerCase() || b.id === name);
+    if (!bus) throw new ToolError(`No bus "${name}": ${project.buses.map((b) => b.name).join(', ') || 'none'}`);
+    return `send:${bus.id}`;
+  }
+  if (['volume', 'pan', 'mute'].includes(spec)) return spec;
+  if (spec === 'distance') {
+    if (!target.channel.stage)
+      throw new ToolError(`${target.name} isn't on a stage (the mixer's Stage slot puts it on one)`);
+    return spec;
+  }
+  const inserts = target.channel.inserts;
+  const raw = /^fx:([^:]+):([^:]+)$/.exec(spec);
+  const dot = spec.lastIndexOf('.');
+  if (!raw && dot <= 0)
+    throw new ToolError(
+      '"param" is volume, pan, mute, distance, send:BUS, or a plugin\'s TYPE.PARAM (e.g. reverb.mix, eq#2.high_gain, fx_….mix)',
+    );
+  const ref = raw ? (raw[1] as string) : spec.slice(0, dot);
+  const id = raw ? (raw[2] as string) : spec.slice(dot + 1);
+  const plugin = pluginRef(inserts, ref);
+  if (!plugin) {
+    if (target.track && pluginRef(target.track.midiFx, ref))
+      throw new ToolError(`${ref} is a MIDI effect: MIDI effects' settings can't be automated, only audio effects'`);
+    throw new ToolError(
+      `${target.name} has no ${ref}: add it first (fx add). Its effects: ${inserts.map((p) => pluginLabel(inserts, p)).join(', ') || 'none'}`,
+    );
+  }
+  const def = pluginDef(plugin.type);
+  const param =
+    def?.params.find((p) => p.id === id) ?? def?.params.find((p) => p.name.toLowerCase() === id.toLowerCase());
+  if (def && !param) throw new ToolError(`${def.name} has no "${id}": ${def.params.map((p) => p.id).join(', ')}`);
+  return `fx:${plugin.id}:${param?.id ?? id}`;
+}
+
+/** A lane's param in the model's words, the way back. */
+function paramWords(project: Project, channel: Channel, param: string): string {
+  if (param.startsWith('send:')) {
+    const bus = project.buses.find((b) => b.id === param.slice(5));
+    return bus ? `send:${bus.name}` : param;
+  }
+  const fxParam = /^fx:([^:]+):([^:]+)$/.exec(param);
+  if (!fxParam) return param;
+  const plugin = channel.inserts.find((p) => p.id === fxParam[1]);
+  return plugin ? `${pluginLabel(channel.inserts, plugin)}.${fxParam[2]}` : param;
+}
+
 export const automate: Tool = {
   name: 'automate',
   kind: 'change',
   summary:
-    'An automation lane on a track, a bus or the master ("target"; "master" for the master): how a setting moves through the song. "param" is volume (dB), pan (-1..1), mute (0/1), distance (0 near … 1 far, for a channel on a stage), send:BUS (dB, e.g. send:Reverb) or TYPE.PARAM for a plugin\'s parameter (e.g. reverb.mix, on the first reverb there). "points" are position=value pairs, e.g. "9=-24 13=-6 17.3=-6 21=-30"; between them the value moves in a line ("smooth" eases it). "action" clear removes the lane, off keeps it but stops it playing, read turns it back on.',
+    'Automation on a track, a bus or the master ("target"; "master" for the master): how a setting moves through the song. action "list" gives every setting there that can move (with its range, its value now, and its lane if it has one); "show" a lane\'s points; "set" (the default) writes "points", position=value pairs, e.g. "9=-24 13=-6 17.3=-6 21=-30" (between them the value moves in a line; "smooth" eases it); "clear" removes the lane, "off" keeps it but stops it playing, "read" turns it back on. "param" is volume (dB), pan (-1..1), mute (0/1), distance (0 near … 1 far, for a channel on a stage), send:BUS (dB, e.g. send:Reverb), or an audio effect\'s parameter: TYPE.PARAM for the first of that type (reverb.mix), TYPE#2.PARAM for the second (eq#2.high_gain), or PLUGIN_ID.PARAM.',
   args: [
     { name: 'target', type: 'string', describe: 'A track or bus name (or id), or "master"', required: true },
-    { name: 'param', type: 'string', describe: 'volume, pan, mute, distance, send:BUS or TYPE.PARAM', required: true },
+    {
+      name: 'param',
+      type: 'string',
+      describe: 'volume, pan, mute, distance, send:BUS, TYPE.PARAM, TYPE#2.PARAM or fx_ID.PARAM',
+    },
     { name: 'points', type: 'string', describe: 'position=value pairs, e.g. "9=-24 13=-6 17=-6"', maxLength: 4000 },
     { name: 'smooth', type: 'boolean', describe: 'Ease between the points instead of straight lines' },
     {
       name: 'action',
       type: 'enum',
-      values: ['set', 'clear', 'off', 'read'],
+      values: ['set', 'list', 'show', 'clear', 'off', 'read'],
       describe: 'set (the default) writes the points',
       default: 'set',
     },
@@ -168,32 +354,31 @@ export const automate: Tool = {
   async run(ctx, args) {
     const project = await ctx.api.song();
     const target = channelRef(project, str(args, 'target'));
-    const spec = need(args, 'param');
-    let param = spec;
-    if (/^send:/i.test(spec)) {
-      const busName = spec.slice(5).trim().toLowerCase();
-      const bus = project.buses.find((b) => b.name.toLowerCase() === busName || b.id === spec.slice(5).trim());
-      if (!bus)
-        throw new ToolError(`No bus "${spec.slice(5)}": ${project.buses.map((b) => b.name).join(', ') || 'none'}`);
-      param = `send:${bus.id}`;
-    } else if (spec.includes('.')) {
-      const [type, id] = spec.split('.') as [string, string];
-      const plugin = target.channel.inserts.find((p) => p.type === type);
-      if (!plugin) throw new ToolError(`${target.name} has no ${type}: add it first (fx add)`);
-      const def = pluginDef(type);
-      if (def && !def.params.some((p) => p.id === id))
-        throw new ToolError(`${def.name} has no "${id}": ${def.params.map((p) => p.id).join(', ')}`);
-      param = `fx:${plugin.id}:${id}`;
-    } else if (spec === 'distance') {
-      if (!target.channel.stage)
-        throw new ToolError(`${target.name} isn't on a stage (the mixer's Stage slot puts it on one)`);
-    } else if (!['volume', 'pan', 'mute'].includes(spec)) {
-      throw new ToolError('"param" is volume, pan, mute, distance, send:BUS or TYPE.PARAM (e.g. reverb.mix)');
-    }
-    const known = automationTargets(project, target.channel).find((t) => t.param === param);
-    const name = known?.name ?? spec;
     const action = str(args, 'action') ?? 'set';
+    const targets = automationTargets(project, target.channel);
+    if (action === 'list') {
+      const lines = targets.map((t) => {
+        const lane = target.channel.automation?.find((a) => a.param === t.param);
+        const range =
+          t.stepped && t.min === 0 && t.max === 1 ? '0/1' : `${t.min}..${t.max}${t.unit ? ` ${t.unit}` : ''}`;
+        const fxId = /^fx:([^:]+):/.exec(t.param)?.[1];
+        return `  ${paramWords(project, target.channel, t.param)} (${t.name}${fxId ? `, ${fxId}` : ''}): ${range}${t.stepped && t.param !== 'mute' ? ', in steps' : ''}, now ${Math.round(t.value * 1000) / 1000}${lane ? `; lane: ${plural(lane.points.length, 'point')}${lane.mode === 'off' ? ', off' : ''}${lane.curve === 'smooth' ? ', smooth' : ''}` : ''}`;
+      });
+      return { text: [`${target.name}: what can be automated`, ...lines].join('\n') };
+    }
+    const spec = need(args, 'param');
+    const param = laneParam(project, target, spec);
+    const known = targets.find((t) => t.param === param);
+    const name = known?.name ?? spec;
     const lane = target.channel.automation?.find((a) => a.param === param);
+    if (action === 'show') {
+      if (!lane) return { text: `${target.name} has no ${name} automation.` };
+      return {
+        text: `${target.name}: ${name} (${paramWords(project, target.channel, param)}), ${lane.mode === 'off' ? 'off' : 'read'}${lane.curve === 'smooth' ? ', smooth' : ''}: ${lane.points
+          .map(([t, v]) => `${posText(project, t)}=${Math.round(v * 1000) / 1000}`)
+          .join(' ')}`,
+      };
+    }
     if (action !== 'set') {
       if (!lane) throw new ToolError(`${target.name} has no ${spec} automation`);
       const label = `${target.name}: ${name} automation ${action === 'clear' ? 'removed' : action}`;

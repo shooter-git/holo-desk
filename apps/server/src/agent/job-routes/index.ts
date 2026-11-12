@@ -17,10 +17,10 @@ import type { AgentJob, Jobs } from '../jobs.ts';
 
 // ---- measure ----
 
-// ---- details ----
-
 // ---- import ----
 import importRoutes from '../import/routes.ts';
+// ---- details ----
+import details from './details.ts';
 
 /** A job route's handler: the request, the reply, and the job whose token came with it. */
 export type JobHandler = (req: FastifyRequest, reply: FastifyReply, job: AgentJob) => Promise<unknown>;
@@ -61,6 +61,7 @@ export type JobRoutes = (kit: JobRouteKit) => void;
 export const MODULES: readonly JobRoutes[] = [
   // ---- measure ----
   // ---- details ----
+  details,
   // ---- import ----
   importRoutes,
 ];

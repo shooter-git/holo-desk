@@ -50,48 +50,62 @@ function world() {
 }
 
 describe('followCheckout', () => {
-  it('moves a checkout on main with nothing of its own to the release, detached', () => {
-    const { clone, v2 } = world();
-    expect(followCheckout(clone, 'refs/tags/v2')).toBe(v2);
-    expect(git(clone, 'rev-parse', 'HEAD')).toBe(v2);
-    expect(() => git(clone, 'symbolic-ref', '-q', 'HEAD')).toThrow();
-    // the branch itself stays where it was
-    expect(git(clone, 'rev-parse', 'main')).not.toBe(v2);
-  });
-
-  it('moves a detached checkout on, and leaves one already there', () => {
+  it('moves a checkout on no branch forward, and leaves one already there', () => {
     const { clone, v1, v2 } = world();
     git(clone, 'checkout', '-q', '--detach', v1);
     expect(followCheckout(clone, 'refs/tags/v2')).toBe(v2);
+    expect(git(clone, 'rev-parse', 'HEAD')).toBe(v2);
     expect(followCheckout(clone, 'refs/tags/v2')).toBeNull();
   });
 
+  it('never moves a branch by itself; by hand, only main, leaving the branch where it was', () => {
+    const { clone, v1, v2 } = world();
+    expect(followCheckout(clone, 'refs/tags/v2')).toBeNull();
+    expect(git(clone, 'symbolic-ref', '--short', 'HEAD')).toBe('main');
+    expect(followCheckout(clone, 'refs/tags/v2', true)).toBe(v2);
+    expect(() => git(clone, 'symbolic-ref', '-q', 'HEAD')).toThrow();
+    expect(git(clone, 'rev-parse', 'main')).toBe(v1);
+  });
+
+  it('leaves any other branch, pushed and clean or not, even by hand', () => {
+    const { clone, origin } = world();
+    git(clone, 'checkout', '-q', '-b', 'feature', 'v1');
+    git(clone, 'push', '-q', '-u', 'origin', 'feature');
+    expect(followCheckout(clone, 'refs/tags/v2', true)).toBeNull();
+    expect(git(clone, 'symbolic-ref', '--short', 'HEAD')).toBe('feature');
+    expect(git(origin, 'rev-parse', '--verify', 'feature')).toBeTruthy();
+  });
+
   it('counts untracked files (.env, data) as nothing', () => {
-    const { clone, v2 } = world();
+    const { clone, v1, v2 } = world();
+    git(clone, 'checkout', '-q', '--detach', v1);
     writeFileSync(join(clone, '.env'), 'HOLO_PORT=47800\n');
     expect(followCheckout(clone, 'refs/tags/v2')).toBe(v2);
   });
 
   it('leaves a checkout with changes to its files', () => {
     const { clone, v1 } = world();
+    git(clone, 'checkout', '-q', '--detach', v1);
     writeFileSync(join(clone, 'compose.yml'), 'mine');
-    expect(followCheckout(clone, 'refs/tags/v2')).toBeNull();
+    expect(followCheckout(clone, 'refs/tags/v2', true)).toBeNull();
     expect(git(clone, 'rev-parse', 'HEAD')).toBe(v1);
   });
 
-  it('leaves a branch with commits of its own, or with no upstream', () => {
-    const { clone, commit } = world();
-    const mine = commit(clone, 'notes.txt', 'my work');
-    expect(followCheckout(clone, 'refs/tags/v2')).toBeNull();
+  it('leaves commits of its own, and never goes back', () => {
+    const { clone, v1, v2, commit } = world();
+    git(clone, 'checkout', '-q', '--detach', v1);
+    const mine = commit(clone, 'notes.txt', 'my work, on no branch');
+    expect(followCheckout(clone, 'refs/tags/v2', true)).toBeNull();
     expect(git(clone, 'rev-parse', 'HEAD')).toBe(mine);
-    git(clone, 'checkout', '-q', '-b', 'feature', 'v1');
-    expect(followCheckout(clone, 'refs/tags/v2')).toBeNull();
-    expect(git(clone, 'symbolic-ref', '--short', 'HEAD')).toBe('feature');
+    git(clone, 'checkout', '-q', '--detach', v2);
+    expect(followCheckout(clone, 'refs/tags/v1', true)).toBeNull();
+    expect(git(clone, 'rev-parse', 'HEAD')).toBe(v2);
   });
 
   it('does nothing for a target it doesn’t have', () => {
     const { clone, v1 } = world();
-    expect(followCheckout(clone, 'refs/tags/v9')).toBeNull();
+    git(clone, 'checkout', '-q', '--detach', v1);
+    expect(followCheckout(clone, 'refs/tags/v9', true)).toBeNull();
     expect(git(clone, 'rev-parse', 'HEAD')).toBe(v1);
   });
 });

@@ -16,8 +16,9 @@
 //
 // Following a channel also keeps this checkout at the code of the image it runs (a release's tag on
 // stable, main's head on main), so its compose file, its tools and the runner (which runs from it) match
-// the server. Only a checkout that's following moves: no change to its files, and on no branch or on one
-// with nothing its remote lacks. Anything else is someone's work, and stays as it is.
+// the server. Only a checkout that's following moves: no change to its files, on no branch, and only
+// forward. A branch is someone's work: automatic updates never move one, and `pnpm run update` only takes
+// a checkout on main along (once; after that it's on no branch and follows).
 import { execFileSync, spawnSync } from 'node:child_process';
 import { accessSync, constants, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -98,24 +99,28 @@ function git(cwd, ...args) {
 
 /**
  * Move a checkout to `target` (a ref it has, such as `refs/tags/v0.7.1`), detached, if it's following:
- * no change to its tracked files, and on no branch or on one with nothing its upstream lacks. Untracked
- * files (.env, data) don't count. The commit it moved to, or null when it stayed (already there, someone's
- * work, or no such target).
+ * - no change to its tracked files (untracked ones, such as .env and data, don't count);
+ * - on no branch. A branch is someone's work, and is never moved by itself. Only `pnpm run update`,
+ *   asked for by hand (`start`), takes a checkout on main along, leaving the branch main where it is;
+ * - and only forward: its commit is already in the target's history, so nothing of its own is left behind.
+ * The commit it moved to, or null when it stayed (already there, someone's work, or no such target).
  */
-export function followCheckout(cwd, target) {
+export function followCheckout(cwd, target, start = false) {
   const to = git(cwd, 'rev-parse', '-q', '--verify', `${target}^{commit}`);
-  if (!to || git(cwd, 'rev-parse', 'HEAD') === to) return null;
+  const head = git(cwd, 'rev-parse', 'HEAD');
+  if (!to || !head || head === to) return null;
   if (git(cwd, 'status', '--porcelain', '--untracked-files=no') !== '') return null;
-  if (git(cwd, 'symbolic-ref', '-q', 'HEAD') !== null) {
-    // on a branch: only one with an upstream and nothing of its own
-    if (git(cwd, 'rev-parse', '-q', '--verify', '@{upstream}') === null) return null;
-    if (git(cwd, 'rev-list', '--count', '@{upstream}..HEAD') !== '0') return null;
-  }
+  const branch = git(cwd, 'symbolic-ref', '-q', '--short', 'HEAD');
+  if (branch !== null && !(start && branch === 'main')) return null;
+  if (git(cwd, 'merge-base', '--is-ancestor', head, to) === null) return null;
   return git(cwd, 'checkout', '-q', '--detach', to) === null ? null : to;
 }
 
-/** This checkout at the code of the image the server runs; when it moves, the server and the runner start again from it. */
-async function follow(image) {
+/**
+ * This checkout at the code of the image the server runs (`start`: asked for by hand); when it moves,
+ * the server and the runner start again from it.
+ */
+async function follow(image, start = false) {
   let target;
   if (image.endsWith(':main')) {
     if (git(root, 'fetch', '-q', 'origin', 'main') === null) return;
@@ -125,8 +130,12 @@ async function follow(image) {
     if (!version || git(root, 'fetch', '-q', '--tags', 'origin') === null) return;
     target = `refs/tags/v${version}`;
   }
-  const moved = followCheckout(root, target);
-  if (!moved) return;
+  const moved = followCheckout(root, target, start);
+  if (!moved) {
+    if (start && git(root, 'symbolic-ref', '-q', 'HEAD') !== null)
+      console.log('This checkout is on a branch (your work): it stays as it is, so it doesn’t follow the image');
+    return;
+  }
   console.log(`This checkout moved to ${target.replace(/^refs\/(tags|remotes)\//, '')} (${moved.slice(0, 7)})`);
   // its compose file may be new (nothing happens when it isn't), and the runner runs from it
   compose('up', '-d', '--no-build', 'holo');
@@ -143,7 +152,7 @@ async function update(channel) {
   console.log(`Following ${image}`);
   compose('pull', 'holo');
   compose('up', '-d', '--no-build', 'holo');
-  await follow(image);
+  await follow(image, true);
 }
 
 function source() {

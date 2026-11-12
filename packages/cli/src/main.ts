@@ -990,7 +990,10 @@ async function main(): Promise<void> {
     case 'runner': {
       const { runner } = await import('./runner.ts');
       const repo = resolve(dirname(fileURLToPath(import.meta.url)), '../../..');
-      const dir = resolve(repo, String(flag('creations') ?? process.env.HOLO_CREATIONS_DIR ?? '..'));
+      // HOLO_CREATIONS_DIR left empty: where Docker mounts the creations (deploy/compose.yml) when HO[LO]
+      // runs in Docker (HOLO_IMAGE), the folder beside this checkout otherwise
+      const fallback = process.env.HOLO_IMAGE ? 'data/creations' : '..';
+      const dir = resolve(repo, String(flag('creations') ?? (process.env.HOLO_CREATIONS_DIR || fallback)));
       await runner(BASE, dir);
       return;
     }

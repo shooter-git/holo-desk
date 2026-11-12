@@ -49,6 +49,7 @@ Renders run on the computer that has the creation, through the **creation runner
 
 ```bash
 pnpm runner                 # keep it running; renders run one at a time
+pnpm run runner-service on  # or, on Linux, as a service (systemd, as you), started again after each update
 ```
 
 Then press *Hear it as …* (*Songs*, beside *Send*) or run `holo render`. The studio shows how the render

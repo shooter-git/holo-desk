@@ -78,8 +78,6 @@ export interface Command {
   also?: string;
   /** Whether it can do anything now (what it acts on is there); always, when not given. */
   available?: (s: BarState) => boolean;
-  /** Whether it's about what's selected: those come first, before anything is typed. */
-  fits?: (s: BarState) => boolean;
   /** The bar stays open after it runs: what it starts shows there. */
   keepOpen?: boolean;
   run: () => void;
@@ -100,9 +98,6 @@ const WELL = 0.9;
 
 /** The most rows the bar lists: a short list to read at a glance, not a menu to scroll. */
 export const MAX_ROWS = 8;
-
-/** Offered when nothing is typed, after what fits the selection (and the next marker). */
-const COMMON = ['play', 'mixer', 'piano-roll', 'library', 'songs', 'settings'];
 
 /** A group's match counts for less than the title's, as a pack's name does in the Library. */
 const GROUP_WEIGHT = 0.4;
@@ -312,7 +307,6 @@ export function commandTable(s: BarState, act: Actions): Command[] {
       keys: 'Q',
       also: 'grid timing',
       available: quantizes,
-      fits: (x) => someNotes(x) || someRegions(x),
       run: act.quantizeSelection,
     },
     {
@@ -322,7 +316,6 @@ export function commandTable(s: BarState, act: Actions): Command[] {
       keys: 'Ctrl R',
       also: 'copy duplicate loop',
       available: someRegions,
-      fits: someRegions,
       run: act.repeatRegions,
     },
     {
@@ -332,7 +325,6 @@ export function commandTable(s: BarState, act: Actions): Command[] {
       keys: 'Ctrl T',
       also: 'cut',
       available: splits,
-      fits: someRegions,
       run: act.splitAtPlayhead,
     },
     {
@@ -342,7 +334,6 @@ export function commandTable(s: BarState, act: Actions): Command[] {
       keys: '↑',
       also: 'pitch higher',
       available: someNotes,
-      fits: someNotes,
       run: () => act.transposeSelection(1),
     },
     {
@@ -352,7 +343,6 @@ export function commandTable(s: BarState, act: Actions): Command[] {
       keys: '↓',
       also: 'pitch lower',
       available: someNotes,
-      fits: someNotes,
       run: () => act.transposeSelection(-1),
     },
     {
@@ -511,23 +501,6 @@ export function selectionSpan(
   return tracks.size ? { tracks: [...tracks], start, end } : null;
 }
 
-/**
- * The selection in a few words, for the field's right side: "Piano · bars 5–8" (the selected notes,
- * or else the selected regions, and the track they're on), just the track when nothing on it is
- * selected, and nothing when no track is.
- */
-export function selectionHint(s: BarState): string {
-  const p = s.project;
-  if (!p) return '';
-  const span = selectionSpan(p, s.selectedNotes, s.selectedRegions);
-  if (!span) return selected(s)?.name ?? '';
-  const name = span.tracks.length === 1 ? span.tracks[0] : `${span.tracks.length} tracks`;
-  const from = tickToBarBeat(p.meter, span.start).bar;
-  // the last bar the selection reaches into: a note ending on a bar line doesn't reach the next bar
-  const to = tickToBarBeat(p.meter, Math.max(span.start, span.end - 1)).bar;
-  return `${name} · ${from === to ? `bar ${from}` : `bars ${from}–${to}`}`;
-}
-
 const fields = (c: Command): Field[] => [
   { text: c.title, weight: 1 },
   { text: c.group, weight: GROUP_WEIGHT },
@@ -536,7 +509,8 @@ const fields = (c: Command): Field[] => [
 
 /**
  * What the bar lists for what's typed, best first, at most `max` rows.
- *  - Nothing typed: the commands that fit the selection, the next marker, then a few common ones.
+ *  - Nothing typed: nothing but what fits the window open (`extra.suggest`: a scan's tasks, with the
+ *    agent): an open bar is just a field.
  *  - A position ("17", "17.3"): going there (and asking, with `extra.ask`).
  *  - Words: the commands they name; then finding them among the Library's sounds; and with
  *    `extra.ask`, sending them as a request, last, or first when no command fits them well.
@@ -544,19 +518,7 @@ const fields = (c: Command): Field[] => [
 export function barRows(query: string, s: BarState, act: Actions, extra: Extra = {}, max = MAX_ROWS): Command[] {
   const table = commandTable(s, act).filter((c) => c.available?.(s) ?? true);
   const q = words(query);
-  if (!q.length) {
-    const markers = table.filter((c) => c.group === 'Markers');
-    const ticks = [...(s.project?.markers ?? [])].sort((a, b) => a.tick - b.tick).map((m) => m.tick);
-    const next = ticks.findIndex((t) => t > s.playhead);
-    const rows = [
-      ...(extra.suggest ?? []).filter((c) => c.available?.(s) ?? true),
-      ...table.filter((c) => c.fits?.(s)),
-      // the next marker after the playhead, or the first when it's past the last
-      ...(markers.length ? [markers[next < 0 ? 0 : next] as Command] : []),
-      ...COMMON.flatMap((id) => table.filter((c) => c.id === id)),
-    ];
-    return rows.filter((c, i) => rows.indexOf(c) === i).slice(0, max);
-  }
+  if (!q.length) return (extra.suggest ?? []).filter((c) => c.available?.(s) ?? true).slice(0, max);
   const text = query.trim();
   const ask = extra.ask?.(text);
   if (s.project) {

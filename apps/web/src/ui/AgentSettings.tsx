@@ -558,7 +558,7 @@ function Devices() {
     <div className="vstack">
       <div className="list boxed agent-devices">
         {list.devices.map((d) => (
-          <div key={d.id} className="list-item" style={{ cursor: 'default' }}>
+          <div key={d.id} className={`list-item${removing === d.id ? ' agent-ask' : ''}`} style={{ cursor: 'default' }}>
             {removing === d.id ? (
               <>
                 <span className="grow">
@@ -597,7 +597,7 @@ function Devices() {
           </div>
         ))}
         {list.requests.map((r) => (
-          <div key={r.id} className="list-item agent-request" style={{ cursor: 'default' }}>
+          <div key={r.id} className="list-item agent-ask" style={{ cursor: 'default' }}>
             <span className="strong">{r.name}</span>
             <span className="meta">
               asks to join, showing <b className="mono">{r.code}</b>

@@ -4,8 +4,8 @@ import {
   type Actions,
   type BarState,
   barRows,
+  type Command,
   commandTable,
-  selectionHint,
   typedPosition,
 } from '../src/app/commands.ts';
 import { KEY_COMMANDS } from '../src/app/keys.ts';
@@ -97,29 +97,16 @@ describe('the bar’s commands', () => {
     expect(phone.calls).toEqual(['set({"mobileTab":"library","librarySearch":"cello"})']);
   });
 
-  it('offers what fits the selection first when nothing is typed', () => {
+  it('is just a field when nothing is typed: only what fits the window open is offered', () => {
     const { project, region, notes, piano } = song();
-    // nothing selected: the next marker, then the common ones
-    expect(titles('', studio({ project }))).toEqual([
-      'Go to marker: Theme',
-      'Play',
-      'Mixer',
-      'Piano Roll',
-      'Library',
-      'Songs',
-      'Settings',
+    expect(titles('', studio({ project }))).toEqual([]);
+    expect(titles('', studio({ project, selectedTrack: piano, selectedRegions: [region] }))).toEqual([]);
+    expect(titles('', studio({ project, selectedTrack: piano, selectedNotes: notes }))).toEqual([]);
+    // a scan's tasks while its window is open (with the agent): those, and nothing else
+    const read: Command = { id: 'scan-read', title: 'Read this scan', group: 'Agent', run: () => undefined };
+    expect(barRows('', studio({ project }), recorder().act, { suggest: [read] }).map((c) => c.title)).toEqual([
+      'Read this scan',
     ]);
-    // a region: quantize it, repeat it, split it where the playhead is inside it
-    const regions = titles('', studio({ project, selectedTrack: piano, selectedRegions: [region], playhead: 5 * BAR }));
-    expect(regions.slice(0, 3)).toEqual(['Quantize the selection', 'Repeat the region', 'Split at the playhead']);
-    // notes: quantize and transpose them
-    const selected = titles('', studio({ project, selectedTrack: piano, selectedNotes: notes }));
-    expect(selected.slice(0, 3)).toEqual([
-      'Quantize the selection',
-      'Transpose up a semitone',
-      'Transpose down a semitone',
-    ]);
-    expect(selected.length).toBeLessThanOrEqual(8);
   });
 
   it('offers only what can act now', () => {
@@ -203,9 +190,6 @@ describe('the bar’s commands', () => {
     expect(barRows('bridge', s, act)[0]?.title).toBe('Go to marker: Bridge');
     barRows('bridge', s, act)[0]?.run();
     expect(calls).toEqual([`locate(${12 * BAR})`]);
-    // the next marker after the playhead is the one offered before anything is typed
-    expect(titles('', studio({ project, playhead: 5 * BAR }))[0]).toBe('Go to marker: Bridge');
-    expect(titles('', studio({ project, playhead: 20 * BAR }))[0]).toBe('Go to marker: Theme');
     const pick = barRows('piano', s, act).find((c) => c.title === 'Select track: Piano');
     pick?.run();
     expect(calls.at(-1)).toBe(`selectTrack("${piano}")`);
@@ -248,20 +232,5 @@ describe('the bar’s commands', () => {
       `setChannel("${piano}", {"mute":true}, "Mute")`,
       'set({"dialog":"projects"})',
     ]);
-  });
-});
-
-describe('the selection, in a few words', () => {
-  it('names the track and the bars', () => {
-    const { project, region, notes, piano } = song();
-    expect(selectionHint(studio({ project }))).toBe('');
-    expect(selectionHint(studio({ project, selectedTrack: piano }))).toBe('Piano');
-    expect(selectionHint(studio({ project, selectedTrack: piano, selectedRegions: [region] }))).toBe(
-      'Piano · bars 5–8',
-    );
-    expect(selectionHint(studio({ project, selectedTrack: piano, selectedNotes: notes }))).toBe('Piano · bars 5–6');
-    expect(selectionHint(studio({ project, selectedTrack: piano, selectedNotes: [notes[0] as Note] }))).toBe(
-      'Piano · bar 5',
-    );
   });
 });

@@ -176,7 +176,9 @@ or pasted on the bar goes with it (a picture is redrawn on your device first, wi
 data). The reply is a sentence or two under the field, with a button only when the agent needs your
 click: to install a pack, send the song to its creation, share the screen, take a photo or record from
 the microphone. Close the bar and the work goes on: the bar's button shows a turning ring while the
-agent works, then a dot until you open the bar again. The agent works on the open song and nothing else:
+agent works, then a dot until you open the bar again (on a phone, which has no room for the bar's
+button, the View button does, and View's first item opens the bar). The agent works on the open song and
+nothing else:
 
 - its notes, score, tracks, instruments, effects, mix, automation, tempo, key, meter, markers and cycle;
 - playing to you, listening as you play, and reading what you just played (its tempo, meter, key and

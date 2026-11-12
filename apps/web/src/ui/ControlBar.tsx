@@ -1,5 +1,5 @@
 /** The control bar: views, the transport, the display (position, time, tempo, signature, key) and status. */
-import { formatBarBeat, KEYS, keyShort, type MeterPoint, performed, tickToSeconds } from '@holo/session';
+import { formatBarBeat, KEYS, type MeterPoint, performed, tickToSeconds } from '@holo/session';
 import {
   Circle,
   FastForward,
@@ -44,6 +44,7 @@ import { engine } from '../audio/engine.ts';
 import { midi } from '../audio/midi.ts';
 import { startDrag, TAP, Wordmark } from './controls.tsx';
 import { useFrame, useMedia } from './frame.ts';
+import { keyShort } from './key-short.ts';
 import { MetronomeButton } from './Metronome.tsx';
 import { openMenuAt } from './menu.tsx';
 import { jog } from './ruler.ts';

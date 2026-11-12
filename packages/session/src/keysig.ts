@@ -42,19 +42,6 @@ export function keyText(k: Pick<KeyPoint, 'fifths' | 'mode'>): string {
   return `${keyTonic(k)} ${k.mode}`;
 }
 
-/**
- * A key's text as a chord chart writes it, for a display with little room: "D major" as "D", "F#
- * minor" as "F#m", "A lydian" as "A lyd". The tonic keeps the text's spelling; a text that names no
- * key comes back as it is.
- */
-export function keyShort(text: string): string {
-  const k = parseKey(text);
-  const tonic = /^\s*([A-Ga-g][#b♯♭]*)/.exec(text)?.[1];
-  if (!k || !tonic) return text;
-  const name = tonic.charAt(0).toUpperCase() + tonic.slice(1);
-  return name + (k.mode === 'major' ? '' : k.mode === 'minor' ? 'm' : ` ${k.mode.slice(0, 3)}`);
-}
-
 function modeOf(words: string): KeyMode {
   const w = words.toLowerCase();
   for (const mode of ['dorian', 'phrygian', 'lydian', 'mixolydian', 'locrian'] as const)

@@ -189,7 +189,7 @@ export async function buildApp(config: Config): Promise<{ app: FastifyInstance; 
     const editor = live.state().state;
     return {
       ok: true,
-      version: '0.8.1',
+      version: '0.8.2',
       build,
       // a studio playing or recording: an update waits for it (tools/update.mjs)
       busy: editor?.playing === true || editor?.recording === true,

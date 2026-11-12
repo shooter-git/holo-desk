@@ -70,7 +70,7 @@ import {
   record,
   redraw,
 } from '../app/attach.ts';
-import { type Actions, barRows, type Command, type Extra, selectionHint } from '../app/commands.ts';
+import { type Actions, barRows, type Command, type Extra } from '../app/commands.ts';
 import { toggleTyping } from '../app/keys.ts';
 import { isPhone, useLayout } from '../app/layout.ts';
 import { closeBar, openBar, store, useApp } from '../app/store.ts';
@@ -514,7 +514,6 @@ function BarPanel() {
     take(files);
   };
   const at = Math.max(0, Math.min(active, rows.length - 1));
-  const hint = talking ? '' : selectionHint(state);
 
   const run = (c: Command) => {
     if (!c.keepOpen) closeBar();
@@ -625,7 +624,6 @@ function BarPanel() {
             onKeyDown={onKey}
             onPaste={onPaste}
           />
-          {hint && <span className="ctx">{hint}</span>}
         </div>
         {note && (
           <div className="bar-note" role="status">

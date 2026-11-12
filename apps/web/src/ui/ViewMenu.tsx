@@ -5,6 +5,7 @@
  */
 import { Eye, Search } from 'lucide-react';
 import { useEffect, useId, useRef, useState } from 'react';
+import { barSign, isOn, useAgent } from '../app/agent.ts';
 import { isPhone, useLayout } from '../app/layout.ts';
 import { openBar, SHOW_DEFAULTS, type ShowKey, store, useApp } from '../app/store.ts';
 
@@ -91,6 +92,11 @@ export function ViewMenu() {
   const labelId = useId();
   // on a phone the panel is a sheet from the bottom; elsewhere it hangs under the button, kept on screen
   const sheet = isPhone(useLayout());
+  // a phone's bar has no room for the bar's button, so the bar is reached from here, and the agent's only
+  // sign outside the bar shows on this button: a ring while a request of this device's works, a dot after
+  const project = useApp((s) => s.project?.id ?? null);
+  const sign = useAgent((a) => (sheet ? barSign(a, project) : null));
+  const agentOn = useAgent(isOn);
 
   useEffect(() => {
     if (!open) return;
@@ -130,17 +136,24 @@ export function ViewMenu() {
       <button
         ref={button}
         type="button"
-        className={`btn icon ghost${open ? ' on' : ''}`}
+        className={`btn icon ghost view-button${open ? ' on' : ''}`}
         title={
-          hidden ? `View: ${hidden} part${hidden === 1 ? '' : 's'} hidden` : 'View: show or hide parts of the studio'
+          sign === 'busy'
+            ? 'View, and the agent: working on your request'
+            : sign === 'done'
+              ? 'View, and the agent: a reply is waiting'
+              : hidden
+                ? `View: ${hidden} part${hidden === 1 ? '' : 's'} hidden`
+                : 'View: show or hide parts of the studio'
         }
         aria-expanded={open}
         aria-haspopup="true"
         id={labelId}
         onClick={() => setOpen(!open)}
       >
-        <Eye />
+        {sign === 'busy' ? <span className="ring" aria-hidden="true" /> : <Eye />}
         {hidden > 0 && <span className="view-badge">{hidden}</span>}
+        {sign === 'done' && <span className="view-dot" aria-hidden="true" />}
       </button>
       {open && rect && (
         // biome-ignore lint/a11y/useSemanticElements: a fieldset brings its own box and sizing; this is a styled popover
@@ -162,7 +175,7 @@ export function ViewMenu() {
               }}
             >
               <Search aria-hidden="true" />
-              <span className="grow">Commands</span>
+              <span className="grow">{agentOn ? 'Commands, or ask the agent' : 'Commands'}</span>
             </button>
           )}
           <div className="view-group">

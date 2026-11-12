@@ -487,6 +487,34 @@ function DspMeter() {
   );
 }
 
+/**
+ * The bar's button: every command, track and marker, found by name. The agent's only sign outside the
+ * bar is on it: a ring while a request of this device's works, a dot once it has replied.
+ */
+function BarButton() {
+  const project = useApp((s) => s.project?.id ?? null);
+  const sign = useAgent((a) => barSign(a, project));
+  return (
+    <button
+      type="button"
+      className={`btn icon ghost cb-bar${sign ? ` ${sign}` : ''}`}
+      title="Commands (Ctrl /)"
+      aria-label={
+        sign === 'busy'
+          ? 'Commands (Ctrl /): working on your request'
+          : sign === 'done'
+            ? 'Commands (Ctrl /): a reply is waiting'
+            : 'Commands (Ctrl /)'
+      }
+      aria-haspopup="dialog"
+      onClick={openBar}
+    >
+      {sign === 'busy' ? <span className="ring" aria-hidden="true" /> : <Search />}
+      {sign === 'done' && <span className="cb-dot" aria-hidden="true" />}
+    </button>
+  );
+}
+
 export function ControlBar() {
   const layout = useLayout();
   const phone = isPhone(layout);
@@ -498,9 +526,6 @@ export function ControlBar() {
   const ports = useApp((s) => s.midiPorts.filter((p) => p.source === 'device').length);
   const remotes = useApp((s) => s.peers.filter((p) => p.role === 'remote').length);
   const show = useApp((s) => s.show);
-  const project = useApp((s) => s.project?.id ?? null);
-  // the agent's only sign outside the bar: a ring on its button while it works, a dot once it's replied
-  const sign = useAgent((a) => barSign(a, project));
   const narrow = useMedia(NARROW_BAR);
   const [full, setFull] = useState(() => document.fullscreenElement !== null);
   useEffect(() => {
@@ -689,23 +714,7 @@ export function ControlBar() {
           </button>
         )}
         {/* the bar: every command, track and marker, found by name; always here, as it reaches what's hidden */}
-        <button
-          type="button"
-          className={`btn icon ghost cb-bar${sign ? ` ${sign}` : ''}`}
-          title="Commands (Ctrl /)"
-          aria-label={
-            sign === 'busy'
-              ? 'Commands (Ctrl /): working on your request'
-              : sign === 'done'
-                ? 'Commands (Ctrl /): a reply is waiting'
-                : 'Commands (Ctrl /)'
-          }
-          aria-haspopup="dialog"
-          onClick={openBar}
-        >
-          {sign === 'busy' ? <span className="ring" aria-hidden="true" /> : <Search />}
-          {sign === 'done' && <span className="cb-dot" aria-hidden="true" />}
-        </button>
+        <BarButton />
         <ViewMenu />
         <button
           type="button"

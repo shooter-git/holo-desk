@@ -162,6 +162,15 @@ kbd {
   background: var(--bg-0);
 }
 
+/* installed on a phone's home screen: iOS can measure 100dvh short as it starts (turning the phone round
+   fixes it), leaving a band at the bottom. With no browser bars there, 100vh is the whole screen, and stays */
+@media (display-mode: standalone) {
+  .app,
+  .remote {
+    height: 100vh;
+  }
+}
+
 .app-body {
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
@@ -2270,17 +2279,6 @@ button.list-item {
   color: var(--text-3);
 }
 
-/* what the commands act on, quietly: "Piano · bars 5–8" */
-.bar .ctx {
-  flex: 0 1 auto;
-  min-width: 0;
-  overflow: hidden;
-  color: var(--text-3);
-  font-size: 11.5px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .bar .list {
   min-height: 0;
   padding: 5px;
@@ -2675,6 +2673,14 @@ html[data-layout="phone-landscape"] .bar .field input {
   gap: 8px;
 }
 
+/* a device asking to join, or one about to be removed: its words, then its two buttons */
+.agent-devices .agent-ask {
+  flex-wrap: wrap;
+  row-gap: 8px;
+  padding-top: 8px;
+  padding-bottom: 8px;
+}
+
 .agent-error {
   color: var(--danger);
 }
@@ -2699,6 +2705,14 @@ html[data-layout="phone-landscape"] .bar .field input {
   /* a phone: the name and version, then its states on a line of their own */
   .agent-harness > .grow {
     flex-basis: 100%;
+  }
+  /* a phone: a device's words on their own lines, then its two buttons side by side, full width */
+  .agent-devices .agent-ask > .grow {
+    flex-basis: 100%;
+  }
+  .agent-devices .agent-ask > .btn {
+    flex: 1 1 0;
+    min-height: 36px;
   }
   .agent-harness .agent-cell {
     min-width: 0;
@@ -4201,8 +4215,25 @@ html[data-layout="phone-landscape"] .toasts {
   }
 }
 
-.btn:has(.view-badge) {
+.btn:has(.view-badge),
+.view-button {
   position: relative;
+}
+
+/* a phone's View button carries the agent's sign: the ring in place of the eye, then a dot */
+.view-button .ring {
+  width: 15px;
+  height: 15px;
+}
+
+.view-dot {
+  position: absolute;
+  top: 4px;
+  left: 4px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
 }
 
 .view-badge {

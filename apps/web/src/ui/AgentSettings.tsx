@@ -1,8 +1,8 @@
 /**
- * Settings › Agent: Off or On, and, once this device is allowed, the harnesses found on the host (each
- * with its version, sign-in and update, and the one the agent runs with), its model and effort, what
- * it asks first and never does, and the devices allowed to use it. Off is the default, and then this
- * section is all there is of it.
+ * Settings › Agent: Off or On, and, once this device is allowed, Claude Code, Codex and Cursor as the
+ * host has them (each installed or not, with its version, sign-in and update, and the one the agent
+ * runs with), its model and effort, what it asks first and never does, and the devices allowed to use
+ * it. Off is the default, and then this section is all there is of it.
  *
  * Turning it on from a device that isn't allowed yet: the first device pairs with the code the runner
  * prints on the host; a later one asks to join, and a device that's allowed approves it. With no
@@ -18,6 +18,7 @@ import {
   isOn,
   loadDevices,
   loadSettings,
+  lookAtHarnesses,
   lookForHarnesses,
   pair,
   pollJoin,
@@ -29,6 +30,7 @@ import {
   useAgent,
 } from '../app/agent.ts';
 import { device } from '../app/live.ts';
+import { choices, harnessRow, installQuestion } from './harness-row.ts';
 
 /**
  * Where turning it on has got to, on a device not allowed yet. `code`: the runner's code is asked for
@@ -45,9 +47,6 @@ type Step =
   | { kind: 'lost' };
 
 const message = (err: unknown) => (err instanceof Error ? err.message : String(err));
-
-/** A model's or an effort's name as a menu shows it ("opus" is "Opus"). */
-const shown = (name: string) => name.charAt(0).toUpperCase() + name.slice(1);
 
 /** The model and effort names the harnesses take (sent as `--opt=value`, so nothing that reads as more). */
 const MODEL = /^[A-Za-z0-9][\w.:\-[\]=]{0,79}$/;
@@ -277,32 +276,30 @@ function Joining({
 function Allowed() {
   const settings = useAgent((a) => a.settings);
   const runner = useAgent((a) => a.info?.runner);
+  // opened: a runner that looked at its harnesses an hour ago or more looks again, quietly (new
+  // versions' models and efforts); what's known shows meanwhile, and the new list comes by itself
+  useEffect(() => {
+    void lookAtHarnesses().catch(() => undefined);
+  }, []);
   if (!settings) return <div className="muted">Reading the agent’s settings…</div>;
-  const found = settings.harnesses.filter((h) => h.found);
+  const listed = settings.harnesses;
+  const found = listed.filter((h) => h.found);
   const usable = found.filter((h) => h.sealed);
   const current = found.find((h) => h.id === settings.harness) ?? usable[0] ?? null;
   return (
     <>
       <div className="agent-grid">
         <span className="agent-key">Harness</span>
-        {found.length ? (
-          <Harnesses found={found} current={current} />
+        {listed.length ? (
+          <Harnesses listed={listed} current={current} />
         ) : (
           <div className="hstack" style={{ flexWrap: 'wrap' }}>
             <span className="muted">
               {runner?.keyed
-                ? 'No harness found on the host: install Claude Code, Codex or Cursor there.'
+                ? 'The runner hasn’t said yet which harnesses the host has.'
                 : 'Start the runner on the host (pnpm runner): it finds Claude Code, Codex and Cursor.'}
             </span>
-            {runner?.keyed && (
-              <button
-                type="button"
-                className="btn ghost"
-                onClick={() => void lookForHarnesses().catch(() => undefined)}
-              >
-                Look again
-              </button>
-            )}
+            {runner?.keyed && <LookAgain />}
           </div>
         )}
         {current && <HarnessRows harness={current} model={settings.model} effort={settings.effort} />}
@@ -323,116 +320,163 @@ function Allowed() {
   );
 }
 
-/** The harnesses found on the host, a row each: its version, sign-in and update, and the one the agent runs with. */
-function Harnesses({ found, current }: { found: HarnessInfo[]; current: HarnessInfo | null }) {
+/** Ask the runner to look for the harnesses again (one installed in a terminal, say). */
+function LookAgain() {
   return (
-    <div className="list boxed agent-harnesses">
-      {found.map((h) => (
-        <HarnessRow key={h.id} harness={h} current={h === current} />
-      ))}
+    <button
+      type="button"
+      className="btn ghost agent-look"
+      onClick={() => void lookForHarnesses().catch(() => undefined)}
+    >
+      Look again
+    </button>
+  );
+}
+
+/**
+ * Claude Code, Codex and Cursor, a row each, installed or not: its version, sign-in and update, and the
+ * one the agent runs with; one that isn't on the host offers Install.
+ */
+function Harnesses({ listed, current }: { listed: HarnessInfo[]; current: HarnessInfo | null }) {
+  return (
+    <div className="vstack agent-harness-list">
+      <div className="list boxed agent-harnesses">
+        {listed.map((h) => (
+          <HarnessRow key={h.id} harness={h} current={h === current} />
+        ))}
+      </div>
+      <LookAgain />
     </div>
   );
 }
 
 /**
- * A harness, plainly: its version, "Signed in" or Sign in, "Up to date" or Update to x.y, and "In use"
- * or Use. Under it, a sign-in or an update under way, and why one that can't be limited to HO[LO]'s
- * tools can't be used.
+ * A harness, plainly (harness-row.ts): "Not installed" and Install; or its version, "Signed in" or
+ * Sign in, "Up to date" or Update to x.y, and "In use" or Use. Install and Update ask first. Under it,
+ * a sign-in, an update or an install under way, and why one can't be used yet.
  */
 function HarnessRow({ harness: h, current }: { harness: HarnessInfo; current: boolean }) {
   const event = useAgent((a) => a.harness[h.id]);
-  const [confirm, setConfirm] = useState(false);
+  const [confirm, setConfirm] = useState<null | 'update' | 'install'>(null);
   const [code, setCode] = useState('');
-  const login = event?.kind === 'login' ? event : null;
-  const update = event?.kind === 'update' ? event : null;
+  const [error, setError] = useState('');
+  const v = harnessRow(h, event, current);
+  const act = (action: 'login' | 'update' | 'install') => {
+    setError('');
+    void harnessAction(h.id, action).catch((err: unknown) => setError(message(err)));
+  };
+  const question = installQuestion(h);
   return (
     <div className="list-item still agent-harness">
       <span className="strong">{h.name}</span>
-      {h.version && <span className="muted mono">{h.version}</span>}
+      {v.label && <span className={v.version ? 'muted mono' : 'muted'}>{v.label}</span>}
       <span className="grow" />
       <span className="agent-cell">
-        {h.signedIn === true ? (
+        {v.signIn === 'signed-in' ? (
           <span className="muted" title={h.account}>
             Signed in
           </span>
-        ) : h.signedIn === false ? (
-          <button
-            type="button"
-            className="btn"
-            disabled={login?.state === 'running'}
-            onClick={() => void harnessAction(h.id, 'login').catch(() => undefined)}
-          >
+        ) : v.signIn ? (
+          <button type="button" className="btn" disabled={v.signIn.busy} onClick={() => act('login')}>
             Sign in
           </button>
         ) : null}
       </span>
       <span className="agent-cell agent-update">
-        {h.update?.available ? (
+        {v.install ? (
           <button
             type="button"
             className="btn"
-            disabled={update?.state === 'running' || confirm}
-            onClick={() => setConfirm(true)}
+            disabled={v.install.busy || confirm !== null}
+            onClick={() => setConfirm('install')}
           >
-            Update to {h.update.latest ?? 'the latest'}
+            {v.install.busy ? 'Installing…' : 'Install'}
           </button>
-        ) : h.update ? (
+        ) : v.update === 'up-to-date' ? (
           <span className="muted">Up to date</span>
+        ) : v.update ? (
+          <button
+            type="button"
+            className="btn"
+            disabled={v.update.busy || confirm !== null}
+            onClick={() => setConfirm('update')}
+          >
+            Update to {v.update.latest}
+          </button>
         ) : null}
       </span>
       <span className="agent-cell agent-use">
-        {current ? (
+        {v.use === 'in-use' ? (
           <span className="muted">In use</span>
-        ) : h.sealed ? (
+        ) : v.use === 'use' ? (
           <button
             type="button"
             className="btn ghost"
             aria-label={`Use ${h.name}`}
             // another harness takes its own models: theirs start from its default
-            onClick={() => void setSettings({ harness: h.id, model: '', effort: '' }).catch(() => undefined)}
+            onClick={() =>
+              void setSettings({ harness: h.id, model: '', effort: '' }).catch((err: unknown) => setError(message(err)))
+            }
           >
             Use
           </button>
         ) : null}
       </span>
-      {!h.sealed && (
-        <span className="agent-more muted">Can’t be limited to HO[LO]’s tools{h.reason ? `: ${h.reason}` : ''}</span>
+      {v.note && <span className="agent-more muted">{v.note}</span>}
+      {confirm === 'install' && (
+        <div className="agent-more hstack agent-confirm" role="alertdialog" aria-label={`Install ${h.name}?`}>
+          <span className="grow">
+            {question.text} (<code className="mono agent-command">{question.command}</code>).
+          </span>
+          <button
+            type="button"
+            className="btn primary"
+            onClick={() => {
+              setConfirm(null);
+              act('install');
+            }}
+          >
+            Install
+          </button>
+          <button type="button" className="btn ghost" onClick={() => setConfirm(null)}>
+            Not now
+          </button>
+        </div>
       )}
-      {confirm && (
-        <div className="agent-more hstack" role="alertdialog" aria-label={`Update ${h.name}?`}>
+      {confirm === 'update' && (
+        <div className="agent-more hstack agent-confirm" role="alertdialog" aria-label={`Update ${h.name}?`}>
           <span className="grow">This updates the {h.name} your terminal uses too.</span>
           <button
             type="button"
             className="btn primary"
             onClick={() => {
-              setConfirm(false);
-              void harnessAction(h.id, 'update').catch(() => undefined);
+              setConfirm(null);
+              act('update');
             }}
           >
             Update
           </button>
-          <button type="button" className="btn ghost" onClick={() => setConfirm(false)}>
+          <button type="button" className="btn ghost" onClick={() => setConfirm(null)}>
             Not now
           </button>
         </div>
       )}
-      {update?.line && <span className="agent-more muted">{update.line}</span>}
-      {update?.state === 'failed' && (
-        <span className="agent-more agent-error">{update.error ?? 'The update failed'}</span>
-      )}
-      {login && h.signedIn === false && (
+      {v.progress?.line && <span className="agent-more muted">{v.progress.line}</span>}
+      {v.progress?.error && <span className="agent-more agent-error">{v.progress.error}</span>}
+      {error && <span className="agent-more agent-error">{error}</span>}
+      {v.signin && (
         <div className="agent-more vstack">
-          {login.url && (
+          {v.signin.url && (
             <div className="agent-signin">
-              <a className="btn" href={login.url} target="_blank" rel="noopener noreferrer">
+              <a className="btn" href={v.signin.url} target="_blank" rel="noopener noreferrer">
                 Open the sign-in page
               </a>
               <span className="muted">
-                {login.code ? (
+                {v.signin.code ? (
                   <>
-                    and enter <b className="mono">{login.code}</b>
+                    and enter <b className="mono">{v.signin.code}</b>
                   </>
-                ) : login.ask === 'code' ? (
+                ) : v.signin.askCode ? (
                   'then paste the code it shows here'
                 ) : (
                   'on any device'
@@ -440,7 +484,7 @@ function HarnessRow({ harness: h, current }: { harness: HarnessInfo; current: bo
               </span>
             </div>
           )}
-          {login.ask === 'code' && login.state === 'running' && (
+          {v.signin.askCode && v.signin.waiting && (
             <div className="agent-signin">
               <input
                 className="input"
@@ -456,7 +500,7 @@ function HarnessRow({ harness: h, current }: { harness: HarnessInfo; current: bo
                 onClick={() =>
                   void sendLoginCode(h.id, code.trim()).then(
                     () => setCode(''),
-                    () => undefined,
+                    (err: unknown) => setError(message(err)),
                   )
                 }
               >
@@ -464,20 +508,25 @@ function HarnessRow({ harness: h, current }: { harness: HarnessInfo; current: bo
               </button>
             </div>
           )}
-          {login.line && <span className="muted">{login.line}</span>}
-          {login.state === 'failed' && (
-            <span className="agent-error">{login.error ?? 'The sign-in didn’t finish'}</span>
-          )}
+          {v.signin.line && <span className="muted">{v.signin.line}</span>}
+          {v.signin.error && <span className="agent-error">{v.signin.error}</span>}
         </div>
       )}
     </div>
   );
 }
 
-/** The model and effort the agent runs the harness with. */
+/**
+ * The model and effort the agent runs the harness with: the harness's own lists, as the runner last
+ * read them; one saved that it no longer offers shows as such (a run uses its default instead).
+ */
 function HarnessRows({ harness: h, model, effort }: { harness: HarnessInfo; model: string; effort: string }) {
   const [typed, setTyped] = useState(model);
   useEffect(() => setTyped(model), [model]);
+  const models = choices(h.models ?? [], model);
+  const efforts = choices(h.efforts ?? [], effort);
+  const modelGone = models.some((c) => c.gone);
+  const effortGone = efforts.some((c) => c.gone);
   return (
     <>
       <span className="agent-key">Model</span>
@@ -490,9 +539,9 @@ function HarnessRows({ harness: h, model, effort }: { harness: HarnessInfo; mode
             onChange={(e) => void setSettings({ model: e.target.value }).catch(() => undefined)}
           >
             <option value="">{h.name}’s default</option>
-            {h.models.map((m) => (
-              <option key={m} value={m}>
-                {shown(m)}
+            {models.map((c) => (
+              <option key={c.value} value={c.value}>
+                {c.label}
               </option>
             ))}
           </select>
@@ -515,10 +564,14 @@ function HarnessRows({ harness: h, model, effort }: { harness: HarnessInfo; mode
           />
         )}
         <span className="muted">
-          {h.models?.length ? `${h.name}’s names, or its default` : 'A model’s name, or empty for the default'}
+          {modelGone
+            ? `${h.name} no longer offers it: it runs with its default`
+            : h.models?.length
+              ? `${h.name}’s names, or its default`
+              : 'A model’s name, or empty for the default'}
         </span>
       </div>
-      {h.efforts?.length ? (
+      {h.efforts?.length || effortGone ? (
         <>
           <span className="agent-key">Effort</span>
           <div className="hstack" style={{ flexWrap: 'wrap', gap: 10 }}>
@@ -529,14 +582,21 @@ function HarnessRows({ harness: h, model, effort }: { harness: HarnessInfo; mode
               onChange={(e) => void setSettings({ effort: e.target.value }).catch(() => undefined)}
             >
               <option value="">{h.name}’s default</option>
-              {h.efforts.map((x) => (
-                <option key={x} value={x}>
-                  {shown(x)}
+              {efforts.map((c) => (
+                <option key={c.value} value={c.value}>
+                  {c.label}
                 </option>
               ))}
             </select>
-            <span className="muted">{h.efforts.join(', ')}</span>
+            <span className="muted">
+              {effortGone ? `${h.name} no longer offers it: it runs with its default` : (h.efforts ?? []).join(', ')}
+            </span>
           </div>
+        </>
+      ) : h.efforts ? (
+        <>
+          <span className="agent-key">Effort</span>
+          <span className="muted">Part of the model with {h.name}: a model’s name says its effort</span>
         </>
       ) : null}
     </>

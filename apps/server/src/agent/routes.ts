@@ -1,7 +1,7 @@
 /**
  * The agent's HTTP routes (docs/agent.md): turning it on and pairing a device with the runner's code
  * (the first, or one that lost its way back in), devices asking to join, settings, the harnesses'
- * sign-in and updates, requests and their jobs, threads; and the job-scoped routes its tools call
+ * sign-in, updates and installs, requests and their jobs, threads; and the job-scoped routes its tools call
  * (`/api/agent/jobs/:job/*`, with the job's token).
  *
  * Only `GET /api/agent`, pairing, and asking to join are open; everything else needs an allowed
@@ -373,6 +373,11 @@ export function agentRoutes(app: FastifyInstance, o: AgentOptions): { jobs: Jobs
       return { ok: true };
     }),
   );
+  // Settings › Agent was opened: a runner that looked an hour ago or more looks again, quietly
+  app.post(
+    '/api/agent/harnesses/look',
+    forDevice(async () => ({ ok: true, asked: theJobs.look() })),
+  );
   app.post(
     '/api/agent/harnesses/:id/login',
     forDevice(async (req) => {
@@ -395,6 +400,14 @@ export function agentRoutes(app: FastifyInstance, o: AgentOptions): { jobs: Jobs
     '/api/agent/harnesses/:id/update',
     forDevice(async (req) => {
       theJobs.relay('update', harnessId((req.params as Params).id));
+      return { ok: true };
+    }),
+  );
+  // the vendor's official installer, on the runner's computer: the runner runs its own fixed command
+  app.post(
+    '/api/agent/harnesses/:id/install',
+    forDevice(async (req) => {
+      theJobs.relay('install', harnessId((req.params as Params).id));
       return { ok: true };
     }),
   );

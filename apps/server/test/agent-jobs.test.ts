@@ -1,6 +1,6 @@
 import { describeChanges, type Project } from '@holo/session';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { briefWarnings } from '../src/agent/jobs.ts';
+import { briefWarnings, LOOK_EVERY_MS, parseHarnesses } from '../src/agent/jobs.ts';
 import { agentApp, agentWorld, auth, CLAUDE, type Msg, settle, waitFor } from './agent-fakes.ts';
 
 let close: (() => Promise<void>) | null = null;
@@ -478,6 +478,198 @@ describe('harnesses', () => {
     codex.close();
     await settle();
     expect(await relays()).toEqual([]);
+  });
+
+  it('installs a harness that isn’t there, on a runner that offers its installer, and keeps the install for a reload', async () => {
+    const { app, token, desk, runner, run } = await setup();
+    const install = (id: string, as = token) =>
+      app.inject({ method: 'POST', url: `/api/agent/harnesses/${id}/install`, headers: auth(as) });
+    // the runner there has Claude Code: HO[LO] never installs over one (Update is for that)
+    const installed = await install('claude');
+    expect(installed.statusCode).toBe(409);
+    expect(installed.json().error).toBe('Claude Code is installed already');
+    expect((await install('vim')).statusCode).toBe(404);
+    // a runner without the installer (it can't run one there) isn't asked
+    const none = runner([{ id: 'cursor', name: 'Cursor', found: false, sealed: false }], 'windows runner');
+    expect((await install('cursor')).json()).toMatchObject({ error: 'HO[LO] can’t install Cursor on this computer' });
+    expect(none.got('agent-install')).toEqual([]);
+    const host = runner(
+      [
+        {
+          id: 'codex',
+          name: 'Codex',
+          found: false,
+          sealed: false,
+          host: 'r430',
+          installer: 'curl -fsSL https://chatgpt.com/codex/install.sh | sh',
+        },
+      ],
+      'codex runner',
+    );
+    expect((await install('codex')).json()).toEqual({ ok: true });
+    // the runner runs its own fixed command: the message names the harness only
+    expect(host.got('agent-install')).toEqual([{ type: 'agent-install', harness: 'codex' }]);
+    expect(run.got('agent-install')).toEqual([]);
+    // the studios see it as it goes, and a reload finds it under way
+    host.say({
+      type: 'agent-harness',
+      harness: 'codex',
+      kind: 'install',
+      state: 'running',
+      line: 'Installing Codex on r430',
+    });
+    expect(desk.got('agent-harness').at(-1)).toEqual({
+      type: 'agent-harness',
+      harness: 'codex',
+      kind: 'install',
+      state: 'running',
+      line: 'Installing Codex on r430',
+    });
+    const settings = async () =>
+      (await app.inject({ method: 'GET', url: '/api/agent/settings', headers: auth(token) })).json() as Msg & {
+        relays: Msg[];
+        harnesses: Msg[];
+      };
+    expect((await settings()).relays).toEqual([
+      { harness: 'codex', kind: 'install', state: 'running', line: 'Installing Codex on r430' },
+    ]);
+    expect((await settings()).harnesses.find((h) => h.id === 'codex')).toMatchObject({
+      found: false,
+      host: 'r430',
+      installer: 'curl -fsSL https://chatgpt.com/codex/install.sh | sh',
+    });
+    // found now: its version and sign-in, then the install is over
+    host.say({
+      type: 'harnesses',
+      list: [
+        { id: 'codex', name: 'Codex', found: true, sealed: true, signedIn: false, version: '0.168.0', host: 'r430' },
+      ],
+    });
+    host.say({
+      type: 'agent-harness',
+      harness: 'codex',
+      kind: 'install',
+      state: 'done',
+      line: 'Codex 0.168.0 is installed',
+    });
+    const after = await settings();
+    expect(after.relays).toEqual([]);
+    expect(after.harnesses.find((h) => h.id === 'codex')).toMatchObject({
+      found: true,
+      signedIn: false,
+      version: '0.168.0',
+    });
+    expect((await install('codex')).statusCode).toBe(409);
+    // with the agent off, nothing is installed
+    await app.inject({ method: 'PUT', url: '/api/agent/settings', headers: auth(token), payload: { enabled: false } });
+    expect((await install('cursor')).json()).toMatchObject({ reason: 'off' });
+  });
+
+  it('has a runner look again when Settings › Agent is opened, at most once an hour, and never unasked', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-11-12T10:00:00Z'));
+    const { app, token, run } = await setup();
+    const look = async () =>
+      ((await app.inject({ method: 'POST', url: '/api/agent/harnesses/look', headers: auth(token) })).json() as Msg)
+        .asked;
+    const refreshes = () => run.got('agent-refresh');
+    // it reported a moment ago: nothing to ask
+    expect(await look()).toBe(0);
+    vi.setSystemTime(Date.now() + LOOK_EVERY_MS - 60_000);
+    expect(await look()).toBe(0);
+    expect(refreshes()).toEqual([]);
+    // an hour on, the first look asks, quietly; the next ones don't
+    vi.setSystemTime(Date.now() + 60_000);
+    expect(await look()).toBe(1);
+    expect(refreshes()).toEqual([{ type: 'agent-refresh', light: true }]);
+    expect(await look()).toBe(0);
+    vi.setSystemTime(Date.now() + 30 * 60_000);
+    expect(await look()).toBe(0);
+    // its answer counts as its look: an hour from that
+    run.say({
+      type: 'harnesses',
+      list: [{ id: 'claude', name: 'Claude Code', found: true, sealed: true, signedIn: true, version: '2.1.0' }],
+    });
+    vi.setSystemTime(Date.now() + LOOK_EVERY_MS - 1);
+    expect(await look()).toBe(0);
+    vi.setSystemTime(Date.now() + 1);
+    expect(await look()).toBe(1);
+    expect(refreshes()).toHaveLength(2);
+    // nobody looks: nothing is asked, however long it's been
+    vi.setSystemTime(Date.now() + 10 * LOOK_EVERY_MS);
+    expect(refreshes()).toHaveLength(2);
+    // Look again (the full refresh) counts as a look too
+    expect(
+      (await app.inject({ method: 'POST', url: '/api/agent/harnesses/refresh', headers: auth(token) })).statusCode,
+    ).toBe(200);
+    expect(refreshes().at(-1)).toEqual({ type: 'agent-refresh' });
+    expect(await look()).toBe(0);
+  });
+
+  it('keeps what a runner says of a harness as it should be: its computer, an installer only for one not found, a seal not yet checked', () => {
+    const [codex, claude, cursor] = parseHarnesses([
+      {
+        id: 'codex',
+        name: 'Codex',
+        found: false,
+        sealed: false,
+        host: 'r430',
+        installer: 'curl -fsSL https://chatgpt.com/codex/install.sh | sh',
+      },
+      {
+        id: 'claude',
+        name: 'Claude Code',
+        found: true,
+        sealed: true,
+        host: 'bad host; rm',
+        installer: 'curl x | sh',
+        sealUnknown: true,
+      },
+      {
+        id: 'cursor',
+        name: 'Cursor',
+        found: true,
+        sealed: false,
+        signedIn: false,
+        sealUnknown: true,
+        host: 'x'.repeat(65),
+      },
+    ]);
+    expect(codex).toMatchObject({ host: 'r430', installer: 'curl -fsSL https://chatgpt.com/codex/install.sh | sh' });
+    expect(claude?.host).toBeUndefined();
+    expect(claude?.installer).toBeUndefined();
+    expect(claude?.sealUnknown).toBeUndefined();
+    expect(cursor).toMatchObject({ sealUnknown: true, signedIn: false });
+    expect(cursor?.host).toBeUndefined();
+  });
+
+  it('says a harness whose seal waits on its sign-in is signed out, not unsealed', async () => {
+    const t = await agentApp();
+    close = t.close;
+    const r = t.runner([
+      {
+        id: 'cursor',
+        name: 'Cursor',
+        found: true,
+        sealed: false,
+        sealUnknown: true,
+        signedIn: false,
+        reason: 'Sign in to Cursor: it checks its sign-in before HO[LO] can check it limits it to its tools',
+      },
+    ]);
+    const { token } = await t.pair(r);
+    const s = await t.song();
+    t.studio(token, s.id);
+    const asked = await t.app.inject({
+      method: 'POST',
+      url: '/api/agent/requests',
+      headers: auth(token),
+      payload: { project: s.id, text: 'hi' },
+    });
+    expect(asked.json()).toMatchObject({
+      reason: 'signed-out',
+      error: 'Cursor is signed out: sign in in Settings › Agent',
+    });
   });
 });
 

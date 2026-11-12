@@ -256,15 +256,18 @@ export function codexSealedTools(stdout: string): { sealed: boolean; reason?: st
     : { sealed: true };
 }
 
+/** How long the catalog's models are taken as they are (a look in Settings › Agent comes at most hourly). */
+const CATALOG_TTL = 3_600_000;
+
 export function codexSpec(): Spec {
-  // models() and efforts() both read the catalog: once per version (and every 6 hours)
+  // models() and efforts() both read the catalog: once per version, and again after an hour
   let catalog: { version: string | null; at: number; models: Promise<CodexModel[]> } | null = null;
   const probeDir = (ctx: Context) => privateDir(join(ctx.root, '.probe'));
   const envFor = (ctx: Context, extra: Record<string, string> = {}) =>
     harnessEnv('codex', extra, ctx.env, ctx.platform);
 
   function models(ctx: Context): Promise<CodexModel[]> {
-    if (catalog && catalog.version === ctx.version && Date.now() - catalog.at < 6 * 3_600_000) return catalog.models;
+    if (catalog && catalog.version === ctx.version && Date.now() - catalog.at < CATALOG_TTL) return catalog.models;
     const opts = { cwd: probeDir(ctx), env: envFor(ctx), timeoutMs: 20_000 };
     const list = (async () => {
       const fresh = parseCodexModels((await capture(ctx.bin, ['debug', 'models'], opts)).stdout);
@@ -344,6 +347,8 @@ export function codexSpec(): Spec {
     // a link and a one-time code, entered on any device: no TTY, no localhost callback
     login: { args: ['login', '--device-auth'], asksCode: false, parse: parseCodexLogin },
     updateArgs: ['update'],
+    // https://developers.openai.com/codex/cli (standalone install): ~/.local/bin/codex
+    installer: 'curl -fsSL https://chatgpt.com/codex/install.sh | sh',
     prepare(ctx, job) {
       agentsFile(job.workspace, job.instructions);
       return { args: codexArgs(job, serverFor(ctx, job)), env: {} };

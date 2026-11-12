@@ -69,8 +69,16 @@ keeps it to the open song:
   of a brief that mentions a secret, holds a link or runs a command. Screenshots, photos and
   recordings are sent only after the user's click, and pictures are redrawn in the browser first,
   without their location data. Attachments are kept on the host for 7 days. HO[LO] itself never reads
-  or writes the user's harness configuration (`~/.claude`, `~/.codex`, `~/.cursor`), never signs a
-  harness out or switches its account, and updates one only when the user clicks Update.
+  or writes the user's harness configuration (`~/.claude`, `~/.codex`, `~/.cursor`), and never signs a
+  harness out or switches its account. Two things change a harness, each only when an allowed device's
+  user clicks it and confirms: **Update**, which runs the harness's own updater (`claude update`,
+  `codex update`, `cursor-agent update`), and **Install**, offered only for a harness the host doesn't
+  have, which runs its vendor's official installer, a fixed command in the runner's code (Claude Code's
+  `curl -fsSL https://claude.ai/install.sh | bash`, Codex's `curl -fsSL https://chatgpt.com/codex/install.sh | sh`,
+  Cursor's `curl https://cursor.com/install -fsS | bash`, by `bash -o pipefail -c`). Nothing from the
+  studio, the server or a request reaches either command: the server only names the harness. Both run
+  as the user, with the user's own home and the harness's allowlisted environment, never while that
+  harness has a job, and the confirmation says on which computer and what runs.
 - **Attachments and imports.** Only an allowed device can send a file, and its token is checked
   before a byte of the body is read. A recording may be up to 200 MB and anything else 25 MB (a text
   100 KB): the body goes straight to disk and is cut off, and removed, past its type's limit, and a

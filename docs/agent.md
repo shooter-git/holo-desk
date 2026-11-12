@@ -80,12 +80,14 @@ Turning the agent off cancels every job, so the job-scoped routes answer 403.
 | `GET /api/agent/devices` | | `{devices:[{id, name, added, seen, current}], requests:[{id, name, code, created}]}`. `current` is the device asking; `requests` are those waiting. |
 | `POST /api/agent/devices/requests/:id/approve` and `/deny` | | `{ok}`; 404 if none of that id is waiting. |
 | `DELETE /api/agent/devices/:id` | | `{ok}`; 404. It takes effect at once: the device's studios get `agent-removed` and lose agent access, its jobs (running or waiting for a click) are cancelled, and allowed devices get `agent-devices`. |
-| `GET /api/agent/settings` | | `{enabled, harness, model, effort, harnesses:[HarnessInfo]}` |
+| `GET /api/agent/settings` | | `{enabled, harness, model, effort, harnesses:[HarnessInfo], relays:[…]}`. `relays` are the sign-ins, updates and installs under way, each as its runner last told it (its `agent-harness` message, less `type`), for a studio that opens Settings later or reloads; one is let go when it ends, after 15 minutes, or when its runner goes. |
 | `PUT /api/agent/settings` | `{enabled?, harness?, model?, effort?}` | The settings, as GET. `harness` is an id or null (the first that can be sealed). `model` and `effort` must match `^[A-Za-z0-9][\w.:\-\[\]=]{0,79}$` or be empty (the harness's own). Off stops every job; on sends `agent-on` to the runners; any change is announced as `agent-settings`. |
-| `POST /api/agent/harnesses/refresh` | | `{ok}`. The runners look again (`agent-refresh`). 409 `no-runner`. |
+| `POST /api/agent/harnesses/refresh` | | `{ok}`. **Look again**: the runners look again (`agent-refresh`), a seal check that failed for a version included. 409 `no-runner`. |
+| `POST /api/agent/harnesses/look` | | `{ok, asked}`. Settings › Agent was opened: each runner whose last look (its last `harnesses`, or the last time it was asked) is an hour old or more is sent `agent-refresh {light:true}`; `asked` is how many. At most once an hour per runner, and only when a studio asks. |
 | `POST /api/agent/harnesses/:id/login` | | `{ok}`. Sent to the runner that has it; progress arrives as `agent-harness` live messages. 404 for an unknown harness; 409 `no-harness`, `busy` (a job runs on it), or no reason when it's signed in already (HO[LO] never signs out or switches accounts). |
 | `POST /api/agent/harnesses/:id/login/code` | `{code}` (printable, ≤ 200) | `{ok}`, for a sign-in that asks for a pasted code. |
 | `POST /api/agent/harnesses/:id/update` | | `{ok}`. 409 `no-harness` or `busy`. |
+| `POST /api/agent/harnesses/:id/install` | | `{ok}`. Sent as `agent-install {harness}` to a runner that reported the harness not found, with an `installer`; progress arrives as `agent-harness` with `kind:'install'`. 404 for an unknown harness; 409 `no-runner`, `busy` (a job runs on it), or no reason when a runner has it already (Update is for that) or none can install it (a Windows host). The body is empty: the runner runs its own fixed command. |
 | `POST /api/agent/requests` | `{project, text, attachments?:[id], context?, preset?}` | `{job}`. `text` is 1 to 4000 characters (empty with a preset). At most 10 attachments, each this device's for this song (400 otherwise). 404 for no such song, or a preset's scan that isn't the song's; 409 `not-open`, `busy`, `no-runner`, `no-harness`, `not-sealed`, `signed-out`. |
 | `POST /api/agent/jobs/:job/cancel` | | `{ok}`. Any allowed device may stop a job; one waiting for a click is dismissed (`cancelled`). 404; 409 once it has ended. |
 | `POST /api/agent/jobs/:job/permission` | `{grant:boolean, result?, attachments?:[id]}` | `{ok, job?}`, `job` being the follow-up's id. Only the device that asked may answer (403), only while the job is `awaiting` (409). `result` is at most 1000 characters; `attachments` as in a request (a screenshot, a photo, a recording). Granting can be refused as a request is (`not-open`, `busy`, `no-harness`), and with 409 when the conversation was started over since the job asked. With a job token, the same path is the tools' (below). |
@@ -108,14 +110,56 @@ server). Scan's own Read in, which needs no agent, uses `GET /api/scans/:id/engi
 step. That isn't an agent route.
 
 **`HarnessInfo`** is:
-`{id:'claude'|'codex'|'cursor', name, found, version?, signedIn?, account?, update?:{available, latest?}, sealed, reason?, models?:string[], efforts?:string[]}`.
+`{id:'claude'|'codex'|'cursor', name, found, version?, signedIn?, account?, update?:{available, latest?}, sealed, sealUnknown?, reason?, models?:string[], efforts?:string[], host?, installer?}`.
+- The runner reports all three, found or not.
 - `sealed: false` means the harness can't be locked down to HO[LO]'s tools. The studio shows it as
   unavailable, with `reason`.
+- `sealUnknown: true` (with `signedIn: false`) means the seal couldn't be checked yet: the harness asks
+  for its sign-in before it reads its options (Cursor 2026.11.11-b912975). The studio offers Sign in;
+  a request is refused `signed-out`, not `not-sealed`. The first look after the sign-in checks the seal.
+- `host` is the runner's computer (its host name: letters, digits, `.`, `-`, `_`, ≤ 64).
+- `installer` is given only when the harness isn't found and the runner can run its installer (Linux
+  and macOS): the command Install runs there, as the confirmation shows it (≤ 200 characters).
 - `update` is looked up at most every 6 hours, and never installed unasked. Claude Code's is read from
   its `stable` channel (npm's `stable` tag for an npm install, `downloads.claude.ai/claude-code-releases/stable`
   for the native one), so Update never offers a version `claude update` won't install. Codex's is
   npm's `latest`; Cursor's is what `cursor-agent about` says.
-- At most 500 `models` and 50 `efforts` are kept, each checked as settings check them.
+- At most 500 `models` and 50 `efforts` are kept, each checked as settings check them. They're the
+  harness's own lists, read on the host (docs/agent-harnesses.md, "Models and efforts"): HO[LO]'s server
+  never asks a vendor for them, it keeps what the runner reports.
+
+### Settings › Agent
+
+An allowed device's Settings › Agent lists Claude Code, Codex and Cursor as the host has them, a row
+each (`apps/web/src/ui/harness-row.ts`), through a harness's whole life:
+
+1. **Not installed**, with **Install** when the runner gave an `installer`. Install asks first: "This
+   downloads and runs *Harness*'s official installer on *host* (*command*)", then **Install** or **Not
+   now**. Without an installer (a Windows host), the row says to install it there and Look again.
+2. **Installing**: the installer's lines under the row (a few a second), then how it ended. The runner
+   looks again before it says `done`, so the row shows the version and Sign in at once; an install that
+   finished but left nothing the runner can find fails with "Installed in ~/.local/bin, which the
+   runner doesn't see: run `pnpm run runner-service on` again on the host".
+3. **Signed out**: **Sign in**, whatever the seal (a harness that can't be sealed keeps Sign in, and says
+   why it can't be used). The sign-in is each harness's own relay: Claude Code's page and a pasted code,
+   Codex's page and a one-time code, Cursor's page while it waits. A harness signed out isn't offered
+   as **Use**.
+4. **Signed in**: **Use**, or **In use** for the one the agent runs with.
+5. **Update to x.y** when a newer version is out; it asks first ("This updates the *Harness* your
+   terminal uses too"), then shows its lines. The runner looks again before it says `done`, so the new
+   version's models and efforts show with it. **Up to date** otherwise.
+
+**Look again**, under the list, asks every runner for a fresh look (`POST …/harnesses/refresh`).
+
+**Opening Settings › Agent** asks the host to have its runners look again if their last look is an
+hour old or more (`POST …/harnesses/look`): the lists show at once as they were, and change when the
+new `harnesses` report comes (as `agent-settings`). Nothing is asked while nobody opens it, and nothing
+is polled.
+
+**Model and Effort** list the harness's own names. A saved model or effort the harness no longer
+offers stays selected, labelled "(no longer offered)", and a run uses the harness's default instead of
+failing (the adapter drops it before the run). Cursor has no Effort list: its model names carry their
+effort, and the row says so.
 
 ## REST: `/api/agent/jobs/:job/*`
 
@@ -224,7 +268,9 @@ agent's other traffic uses the existing `state`, `played`, `ack`, `transport`, `
 - `agent-done {job, reply?}`. `reply` (one line, ≤ 600) stands as the reply only when the agent never
   called `finish`.
 - `agent-failed {job, error}`
-- `agent-harness {harness, kind:'login'|'update'|'refresh', state:'running'|'done'|'failed', url?, code?, ask?:'code', line?, error?}`
+- `agent-harness {harness, kind:'login'|'update'|'install'|'refresh', state:'running'|'done'|'failed', url?, code?, ask?:'code', line?, error?}`.
+  A sign-in, an update or an install says `done` or `failed` only after the runner has looked at its
+  harnesses again (its `harnesses` comes first).
 
 All of these but `hello` are taken only from a keyed runner. The `agent-*` messages about a job are
 taken only from the runner it was handed to, while it runs.
@@ -241,8 +287,13 @@ taken only from the runner it was handed to, while it runs.
 - `agent-login {harness}`
 - `agent-login-code {harness, code}`
 - `agent-update {harness}`
-- `agent-refresh {}`. The runner answers `harnesses`, then `agent-harness {kind:'refresh', state:'done'}`
-  for each harness.
+- `agent-install {harness}`: run the harness's official installer (the runner's own fixed command),
+  then look again.
+- `agent-refresh {light?}`. Without `light` (Look again), the runner forgets any seal check that failed
+  for a version, looks again, and answers `harnesses`, then `agent-harness {kind:'refresh', state:'done'}`
+  for each harness. With `light: true` (Settings › Agent was opened), it looks again quietly, unless a
+  look is under way: versions, sign-ins, models and efforts as they are now, each seal as remembered for
+  its version; it answers `harnesses` only.
 - `pairing-code {code, expires}` (the runner prints it)
 
 **Studio → server**

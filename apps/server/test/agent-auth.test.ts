@@ -205,6 +205,8 @@ describe('allowed devices', () => {
       ['POST', '/api/agent/harnesses/claude/login'],
       ['POST', '/api/agent/harnesses/claude/login/code'],
       ['POST', '/api/agent/harnesses/claude/update'],
+      ['POST', '/api/agent/harnesses/claude/install'],
+      ['POST', '/api/agent/harnesses/look'],
       ['POST', '/api/agent/requests'],
       ['POST', `${J}/cancel`],
       ['POST', `${J}/permission`],

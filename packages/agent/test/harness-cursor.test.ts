@@ -1,11 +1,13 @@
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
+import { remember } from '../src/harness/adapter.ts';
 import {
   cursorFlagsWork,
   cursorHarness,
   cursorReader,
+  cursorWantsSignIn,
   parseCursorAbout,
   parseCursorAuth,
   parseCursorModels,
@@ -54,11 +56,18 @@ bad id with spaces - Nope
 Tip: use --model <id> (or /model <id> in interactive mode) to switch.`;
 const PROBE =
   'Invalid --allowed-tools value(s): holo_probe. Expected one of: shell_tool_call, delete_tool_call, mcp_tool_call, read_mcp_resource_tool_call, get_mcp_tools_tool_call, web_fetch_tool_call';
+/** What Cursor 2026.11.11-b912975 answers the probe with while it's signed out, before it reads its options. */
+const AUTH =
+  "Error: Authentication required. Please run 'agent login' first, or set CURSOR_API_KEY environment variable.";
 
 let s: Sandbox;
 afterEach(() => s?.cleanup());
 
-function fake(o: { run?: string; signedIn?: boolean; probe?: string } = {}) {
+/** How many times the flag probe ran. */
+const probes = () =>
+  existsSync(join(s.rec, 'probes')) ? readFileSync(join(s.rec, 'probes'), 'utf8').split('\n').length - 1 : 0;
+
+function fake(o: { run?: string; signedIn?: boolean; probe?: string; probeSignedOut?: string } = {}) {
   const signed = q(join(s.rec, 'signed-in'));
   if (o.signedIn) writeFileSync(join(s.rec, 'signed-in'), '');
   const path = fakeBinary(
@@ -72,7 +81,11 @@ function fake(o: { run?: string; signedIn?: boolean; probe?: string } = {}) {
       },
       { when: 'about\\ --format\\ json', run: `echo ${q(ABOUT)}; exit 0` },
       { when: 'models', run: `cat <<'EOF'\n${MODELS}\nEOF\nexit 0` },
-      { when: '*--allowed-tools=holo_probe*', run: `echo ${q(o.probe ?? PROBE)} >&2; exit 1` },
+      {
+        when: '*--allowed-tools=holo_probe*',
+        run: `echo probe >> ${q(join(s.rec, 'probes'))}
+if [ -f ${signed} ]; then echo ${q(o.probe ?? PROBE)} >&2; else echo ${q(o.probeSignedOut ?? o.probe ?? PROBE)} >&2; fi; exit 1`,
+      },
       {
         when: 'login',
         run: `touch ${q(join(s.rec, 'login-ran'))}; env -0 > ${q(join(s.rec, 'login-env'))}
@@ -137,7 +150,69 @@ describe('Cursor: finding it', () => {
     expect(info.reason).toContain('Linux');
   });
 
+  it('takes a refusal for want of a sign-in as signed out with its seal unknown, remembers nothing, and probes again once signed in', async () => {
+    s = sandbox();
+    const h = fake({ probeSignedOut: AUTH });
+    const before = await h.info();
+    expect(before).toMatchObject({ found: true, signedIn: false, sealed: false, sealUnknown: true });
+    expect(before.reason).toContain('Sign in to Cursor');
+    expect(before.reason).not.toContain('no longer');
+    expect(remember(s.root).get('sealed:cursor')).toBeUndefined();
+    // nothing remembered: the next look probes again
+    await h.info(true);
+    expect(probes()).toBe(2);
+    const { events, on } = collect();
+    await h.login(on);
+    expect(events.at(-1)).toEqual({ state: 'done', line: 'Cursor is signed in' });
+    const after = await h.info(true);
+    expect(after).toMatchObject({ signedIn: true, sealed: true });
+    expect(after.sealUnknown).toBeUndefined();
+    expect(after.reason).toBeUndefined();
+    expect(probes()).toBe(3);
+    // remembered for this version now
+    await h.info(true);
+    expect(probes()).toBe(3);
+  });
+
+  it('checks a seal that failed for this version again after a sign-in or Look again, and an earlier adapter’s no at once', async () => {
+    s = sandbox();
+    const memory = remember(s.root);
+    const no = {
+      version: '2026.11.11-043ef28',
+      sealed: false,
+      reason: 'This Cursor no longer takes the option that limits it to HO[LO]’s tools',
+    };
+    // an earlier adapter took the refusal for a missing option and remembered it: probed again
+    memory.set('sealed:cursor', no);
+    const h = fake({ signedIn: true });
+    expect((await h.info()).sealed).toBe(true);
+    expect(probes()).toBe(1);
+    // a no this adapter concluded stands for the version…
+    memory.set('sealed:cursor', { ...no, probe: 2 });
+    expect((await h.info(true)).sealed).toBe(false);
+    expect(probes()).toBe(1);
+    // …until Look again
+    h.recheck();
+    expect((await h.info(true)).sealed).toBe(true);
+    expect(probes()).toBe(2);
+    // …or a sign-in
+    memory.set('sealed:cursor', { ...no, probe: 2 });
+    rmSync(join(s.rec, 'signed-in'));
+    const { events, on } = collect();
+    await h.login(on);
+    expect(events.at(-1)?.state).toBe('done');
+    expect((await h.info(true)).sealed).toBe(true);
+    expect(probes()).toBe(3);
+    // a yes isn't forgotten by either
+    h.recheck();
+    await h.info(true);
+    expect(probes()).toBe(3);
+  });
+
   it('reads status, models, about and the probe', () => {
+    expect(cursorWantsSignIn(AUTH)).toBe(true);
+    expect(cursorWantsSignIn(PROBE)).toBe(false);
+    expect(cursorWantsSignIn("error: unknown option '--allowed-tools=holo_probe'")).toBe(false);
     expect(parseCursorAuth(STATUS_IN)).toEqual({ signedIn: true, account: 'user@example.com' });
     expect(parseCursorAuth(STATUS_OUT)).toEqual({ signedIn: false });
     expect(parseCursorModels(MODELS)).toContain('composer-2.5');

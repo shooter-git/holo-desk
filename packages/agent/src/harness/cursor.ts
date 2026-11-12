@@ -164,6 +164,25 @@ export function cursorFlagsWork(output: string): boolean {
   return CURSOR_TOOLS.every((t) => names.has(t));
 }
 
+/**
+ * Whether Cursor refused for want of a sign-in before it looked at its options (2026.11.11-b912975:
+ * "Error: Authentication required. Please run 'agent login' first, or set CURSOR_API_KEY …").
+ */
+export function cursorWantsSignIn(output: string): boolean {
+  return (
+    /Authentication required/i.test(output) ||
+    /run '?(?:cursor-)?agent login'? first/i.test(output) ||
+    /\bnot (?:logged|signed) in\b/i.test(output)
+  );
+}
+
+/**
+ * What the flag probe concluded, as remembered per version. `probe` marks how it was concluded: an
+ * answer without it (an earlier adapter's) that said no is probed again, since that one took a refusal
+ * for want of a sign-in for a missing option.
+ */
+const PROBE = 2;
+
 export function cursorSpec(): Spec {
   const probeHome = (ctx: Context) => {
     const h = privateDir(join(ctx.root, '.cursor-home'));
@@ -212,8 +231,8 @@ export function cursorSpec(): Spec {
           reason: 'HO[LO] keeps Cursor’s own settings out of a run on Linux only, so far',
         };
       const memory = remember(ctx.root);
-      const known = memory.get<{ version: string; sealed: boolean; reason?: string }>('sealed:cursor');
-      if (known && ctx.version && known.version === ctx.version)
+      const known = memory.get<{ version: string; sealed: boolean; reason?: string; probe?: number }>('sealed:cursor');
+      if (known && ctx.version && known.version === ctx.version && (known.sealed || known.probe === PROBE))
         return known.reason ? { sealed: known.sealed, reason: known.reason } : { sealed: known.sealed };
       // a value it doesn't know makes it list the ones it does, before anything else (and no prompt is given)
       const p = probe(ctx);
@@ -229,13 +248,27 @@ export function cursorSpec(): Spec {
         ],
         { ...p, timeoutMs: 30_000 },
       );
-      const result = cursorFlagsWork(`${out.stdout}\n${out.stderr}`)
-        ? { sealed: true }
-        : {
-            sealed: false,
-            reason: 'This Cursor no longer takes the option that limits it to HO[LO]’s tools',
-          };
-      if (ctx.version) memory.set('sealed:cursor', { version: ctx.version, ...result });
+      const said = `${out.stdout}\n${out.stderr}`;
+      if (cursorFlagsWork(said)) {
+        if (ctx.version) memory.set('sealed:cursor', { version: ctx.version, sealed: true, probe: PROBE });
+        return { sealed: true };
+      }
+      // signed out, it asks for a sign-in before it reads its options: nothing is known yet, and
+      // nothing is remembered (the first look once it's signed in probes again)
+      if (cursorWantsSignIn(said))
+        return {
+          sealed: false,
+          signedOut: true,
+          reason: 'Sign in to Cursor: it checks its sign-in before HO[LO] can check it limits it to its tools',
+        };
+      // no answer at all (it timed out, or couldn't start): tried again at the next look
+      if (out.timedOut || out.code === null)
+        return { sealed: false, reason: 'Cursor didn’t answer the check that limits it to HO[LO]’s tools' };
+      const result = {
+        sealed: false,
+        reason: 'This Cursor no longer takes the option that limits it to HO[LO]’s tools',
+      };
+      if (ctx.version) memory.set('sealed:cursor', { version: ctx.version, ...result, probe: PROBE });
       return result;
     },
     async models(ctx) {
@@ -257,6 +290,8 @@ export function cursorSpec(): Spec {
       parse: (text) => ({ ...(firstUrl(text) ? { url: firstUrl(text) } : {}) }),
     },
     updateArgs: ['update'],
+    // https://cursor.com/docs/cli/installation: ~/.local/bin/cursor-agent (and `agent`)
+    installer: 'curl https://cursor.com/install -fsS | bash',
     prepare(ctx, job) {
       const { home: privateHome } = cursorFiles(job.workspace, serverFor(ctx, job), job.instructions);
       const known = remember(ctx.root).get<{ version: string | null; works: boolean }>(sandboxKey);

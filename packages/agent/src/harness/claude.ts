@@ -24,6 +24,7 @@ import { candidates, capture, findBinary, home, plain } from './process.ts';
 import type { Harness, Job } from './types.ts';
 import { claudeFiles, privateDir } from './workspace.ts';
 
+/** The efforts when `--help` doesn't list them (it does: "--effort <level> … (low, medium, …)"). */
 export const CLAUDE_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
 
 /** The aliases every recent Claude Code takes; `--help` may name newer ones. */
@@ -167,8 +168,25 @@ export function claudeModels(help: string): string[] {
   return [...new Set([...named, ...ALIASES])];
 }
 
+/**
+ * The efforts `--help` lists for `--effort`: "(low, medium, high, xhigh, max)", or as commander puts
+ * choices, `(choices: "low", "medium", …)`. The usual ones when it lists none.
+ */
+export function claudeEfforts(help: string): string[] {
+  const list = /^\s*--effort\b[^\n(]*(?:\n(?!\s*--)[^\n(]*){0,3}?\(([^)]{1,300})\)/m.exec(help)?.[1] ?? '';
+  const quoted = [...list.matchAll(/["']([a-z][a-z0-9-]{0,19})["']/g)].map((m) => m[1] as string);
+  const words = quoted.length
+    ? quoted
+    : list
+        .replace(/^\s*(choices|one of|e\.g\.)\s*:?\s*/i, '')
+        .split(/\s*(?:,|\||\bor\b)\s*/)
+        .map((w) => w.trim());
+  const efforts = [...new Set(words.filter((w) => /^[a-z][a-z0-9-]{0,19}$/.test(w)))];
+  return efforts.length ? efforts : [...CLAUDE_EFFORTS];
+}
+
 export function claudeSpec(): Spec {
-  // sealed() and models() both read --help: once per version
+  // sealed(), models() and efforts() all read --help: once per version (a new version is read at once)
   let help: { version: string | null; text: Promise<string> } | null = null;
   const helpText = (ctx: Context): Promise<string> => {
     if (help && help.version === ctx.version) return help.text;
@@ -234,8 +252,8 @@ export function claudeSpec(): Spec {
     async models(ctx) {
       return claudeModels(await helpText(ctx));
     },
-    async efforts() {
-      return [...CLAUDE_EFFORTS];
+    async efforts(ctx) {
+      return claudeEfforts(await helpText(ctx));
     },
     async latest(ctx) {
       // an npm install updates from npm; the native one from Anthropic's release channels. The stable
@@ -261,6 +279,8 @@ export function claudeSpec(): Spec {
       },
     },
     updateArgs: ['update'],
+    // https://code.claude.com/docs/en/setup (native install): ~/.local/bin/claude
+    installer: 'curl -fsSL https://claude.ai/install.sh | bash',
     prepare(ctx, job) {
       const files = claudeFiles(job.workspace, serverFor(ctx, job), job.instructions);
       return { args: claudeArgs(job, files), env: { ...CLAUDE_ENV } };

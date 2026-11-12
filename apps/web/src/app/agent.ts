@@ -24,9 +24,15 @@ export interface HarnessInfo {
   update?: { available: boolean; latest?: string };
   /** It can be limited to HO[LO]'s tools; when not, it can't be used, and `reason` says why. */
   sealed: boolean;
+  /** Whether it can be limited is checked once it's signed in (Cursor asks for its sign-in first). */
+  sealUnknown?: boolean;
   reason?: string;
   models?: string[];
   efforts?: string[];
+  /** The computer it's on (the runner's). */
+  host?: string;
+  /** Not installed: the official installer Install runs there. */
+  installer?: string;
 }
 
 export interface AgentSettings {
@@ -35,7 +41,7 @@ export interface AgentSettings {
   model: string;
   effort: string;
   harnesses: HarnessInfo[];
-  /** Sign-ins and updates under way, as the host has them (shown again after a reload, or on another device). */
+  /** Sign-ins, updates and installs under way, as the host has them (shown again after a reload, or on another device). */
   relays?: HarnessEvent[];
 }
 
@@ -91,10 +97,10 @@ export interface Turn {
   error?: string;
 }
 
-/** How a harness's sign-in, update or new look goes, from the runner (`agent-harness`). */
+/** How a harness's sign-in, update, install or new look goes, from the runner (`agent-harness`). */
 export interface HarnessEvent {
   harness: HarnessId;
-  kind: 'login' | 'update' | 'refresh';
+  kind: 'login' | 'update' | 'install' | 'refresh';
   state: 'running' | 'done' | 'failed';
   url?: string;
   code?: string;
@@ -732,7 +738,7 @@ export async function removeDevice(id: string): Promise<void> {
   else await loadDevices();
 }
 
-export async function harnessAction(harness: HarnessId, action: 'login' | 'update'): Promise<void> {
+export async function harnessAction(harness: HarnessId, action: 'login' | 'update' | 'install'): Promise<void> {
   await call('POST', `/api/agent/harnesses/${harness}/${action}`);
 }
 
@@ -742,6 +748,15 @@ export async function sendLoginCode(harness: HarnessId, code: string): Promise<v
 
 export async function lookForHarnesses(): Promise<void> {
   await call('POST', '/api/agent/harnesses/refresh');
+}
+
+/**
+ * Settings › Agent was opened: the host has a runner that last looked an hour ago or more look again,
+ * quietly (new versions' models and efforts). What's known shows meanwhile; the new list comes as
+ * `agent-settings`.
+ */
+export async function lookAtHarnesses(): Promise<void> {
+  await call('POST', '/api/agent/harnesses/look');
 }
 
 /** The open song's conversation, for the bar. */

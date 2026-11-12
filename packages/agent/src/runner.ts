@@ -1,18 +1,21 @@
 /**
  * The agent's side of the runner (`pnpm runner`): it says which harnesses this computer has, runs the
  * jobs HO[LO]'s server hands it (each in its thread's sealed workspace, through the harness's
- * adapter), relays a sign-in or an update when the user asks for one, and prints the pairing code.
+ * adapter), relays a sign-in, an update or an install when the user asks for one, and prints the
+ * pairing code.
  *
  * The server's messages and the runner's answers are in docs/agent.md ("Live channel"). One job runs
  * per thread at a time, and at most two at once; looking for harnesses never holds up the socket.
  * Neither a job's token nor its prompt is ever printed.
  */
 import { existsSync, readFileSync } from 'node:fs';
+import { hostname } from 'node:os';
 import { join } from 'node:path';
 import { agentRoot, createHarnesses, detectAll } from './harness/index.ts';
 import {
   HARNESS_IDS,
   type Harness,
+  type HarnessAction,
   type HarnessEvent,
   type HarnessId,
   type HarnessInfo,
@@ -41,6 +44,8 @@ export interface AgentRunnerOptions {
   maxJobs?: number;
   /** How the studio names middle C, when the job doesn't say. */
   middleC?: () => Promise<'C3' | 'C4'>;
+  /** This computer's name, as Settings › Agent shows it (an install's confirmation names it). */
+  host?: string;
 }
 
 export interface AgentRunner {
@@ -126,6 +131,7 @@ export function startAgentRunner(o: AgentRunnerOptions): AgentRunner {
   const root = o.root ?? agentRoot(env);
   const harnesses = o.harnesses ?? createHarnesses({ env, root, repo: o.repo });
   const maxJobs = o.maxJobs ?? 2;
+  const host = (o.host ?? hostname()).slice(0, 64);
   const middleC =
     o.middleC ??
     (async (): Promise<'C3' | 'C4'> => {
@@ -145,7 +151,7 @@ export function startAgentRunner(o: AgentRunnerOptions): AgentRunner {
   }
   const running = new Map<string, Running>();
   const waiting: AgentRun[] = [];
-  /** Harnesses signing in or updating: no job starts on them meanwhile, and they take no second one. */
+  /** Harnesses signing in, updating or installing: no job starts on them meanwhile, and they take no second one. */
   const relaying = new Set<HarnessId>();
   let known: HarnessInfo[] | null = null;
   let detecting: Promise<HarnessInfo[]> | null = null;
@@ -153,7 +159,7 @@ export function startAgentRunner(o: AgentRunnerOptions): AgentRunner {
   const harnessBusy = (id: HarnessId) => [...running.values()].some((r) => r.run.harness === id);
 
   function report(list: HarnessInfo[]): void {
-    o.send({ type: 'harnesses', list });
+    o.send({ type: 'harnesses', list: list.map((h) => ({ ...h, host })) });
   }
 
   /** Look for the harnesses (one look at a time), and tell the server what was found. */
@@ -251,8 +257,14 @@ export function startAgentRunner(o: AgentRunnerOptions): AgentRunner {
     }
   }
 
-  function harnessEvent(harness: HarnessId, kind: 'login' | 'update' | 'refresh', e: HarnessEvent): void {
+  function harnessEvent(harness: HarnessId, kind: HarnessAction, e: HarnessEvent): void {
     o.send({ type: 'agent-harness', harness, kind, ...e });
+  }
+
+  /** Look again, then say how it went: the studio reloads its settings on `done`, and finds them as they are. */
+  async function lookThenSay(id: HarnessId, kind: HarnessAction, e: HarnessEvent): Promise<void> {
+    await detect(true).catch(() => undefined);
+    harnessEvent(id, kind, e);
   }
 
   async function login(id: HarnessId): Promise<void> {
@@ -262,16 +274,19 @@ export function startAgentRunner(o: AgentRunnerOptions): AgentRunner {
       return;
     }
     relaying.add(id);
+    const said: { ended: HarnessEvent | null } = { ended: null };
     try {
       log(`Signing in to ${harness.name} (asked from Settings › Agent)…`);
       await harness.login((e) => {
         if (e.url) log(`${harness.name} sign-in: open ${e.url}${e.code ? ` and enter ${e.code}` : ''}`);
-        harnessEvent(id, 'login', e);
+        // how it ended is said once the harness has been looked at again (signed in, its seal checked)
+        if (e.state === 'running') harnessEvent(id, 'login', e);
+        else said.ended = e;
       });
     } finally {
       relaying.delete(id);
       startNext();
-      void detect(true);
+      await lookThenSay(id, 'login', said.ended ?? { state: 'failed', error: 'The sign-in didn’t finish' });
     }
   }
 
@@ -284,19 +299,50 @@ export function startAgentRunner(o: AgentRunnerOptions): AgentRunner {
     relaying.add(id);
     log(`Updating ${harness.name} (asked from Settings › Agent)…`);
     harnessEvent(id, 'update', { state: 'running', line: `Updating ${harness.name}` });
+    let ended: HarnessEvent;
     try {
       await harness.update((line) => harnessEvent(id, 'update', { state: 'running', line }));
       log(`${harness.name} is updated`);
-      harnessEvent(id, 'update', { state: 'done' });
+      ended = { state: 'done' };
     } catch (err) {
       const error = err instanceof Error ? err.message : String(err);
       log(`${harness.name} didn’t update: ${error}`);
-      harnessEvent(id, 'update', { state: 'failed', error });
+      ended = { state: 'failed', error };
     } finally {
       relaying.delete(id);
       startNext();
-      void detect(true);
     }
+    // its new version's models and efforts are read at once
+    await lookThenSay(id, 'update', ended);
+  }
+
+  /** Run a harness's official installer (asked from Settings › Agent), then look again. */
+  async function install(id: HarnessId): Promise<void> {
+    const harness = harnesses[id];
+    if (relaying.has(id) || harnessBusy(id)) {
+      harnessEvent(id, 'install', { state: 'failed', error: `${harness.name} is busy: try once it’s done` });
+      return;
+    }
+    relaying.add(id);
+    log(`Installing ${harness.name} with its official installer (asked from Settings › Agent)…`);
+    harnessEvent(id, 'install', { state: 'running', line: `Installing ${harness.name} on ${host}` });
+    let ended: HarnessEvent;
+    try {
+      await harness.install((line) => harnessEvent(id, 'install', { state: 'running', line }));
+      const info = (await detect(true)).find((h) => h.id === id);
+      const line = `${harness.name}${info?.version ? ` ${info.version}` : ''} is installed`;
+      log(line);
+      ended = { state: 'done', line };
+    } catch (err) {
+      const error = err instanceof Error ? err.message : String(err);
+      log(`${harness.name} wasn’t installed: ${error}`);
+      await detect(true).catch(() => undefined);
+      ended = { state: 'failed', error };
+    } finally {
+      relaying.delete(id);
+      startNext();
+    }
+    harnessEvent(id, 'install', ended);
   }
 
   return {
@@ -355,6 +401,9 @@ export function startAgentRunner(o: AgentRunnerOptions): AgentRunner {
         case 'agent-update':
           if (HARNESS_IDS.includes(msg.harness as HarnessId)) void update(msg.harness as HarnessId);
           return true;
+        case 'agent-install':
+          if (HARNESS_IDS.includes(msg.harness as HarnessId)) void install(msg.harness as HarnessId);
+          return true;
         case 'agent-on':
           // the agent is on (it was turned on, or this runner joined while it is): look, from memory
           // where it's fresh, the first time and after
@@ -363,6 +412,14 @@ export function startAgentRunner(o: AgentRunnerOptions): AgentRunner {
           );
           return true;
         case 'agent-refresh':
+          if (msg.light === true) {
+            // Settings › Agent was opened (the server asks at most hourly): versions, sign-ins, models and
+            // efforts as they are now, with what's remembered for each version (its seal) kept; quietly
+            if (!detecting) void detect(true).catch(() => undefined);
+            return true;
+          }
+          // Look again: a seal check that failed for this version is done again too
+          for (const h of Object.values(harnesses)) h.recheck();
           void detect(true).then((list) => {
             for (const h of list) harnessEvent(h.id, 'refresh', { state: 'done' });
           });

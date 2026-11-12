@@ -137,6 +137,15 @@ export interface Image {
   data: string;
 }
 
+// Each area's types, and its parts of JobApi, httpJobApi, FakeJobApiOptions and fakeJobApi, go in its own
+// labelled block, so the areas added side by side keep their lines apart.
+
+// ---- measure ----
+
+// ---- import ----
+
+// ---- details ----
+
 export interface JobApi {
   /** GET …/song: the song, as the studio last saved or sent it. */
   song(): Promise<Project>;
@@ -186,6 +195,12 @@ export interface JobApi {
   handoff(brief: string): Promise<{ ok: boolean }>;
   /** POST …/finish: the undo step's label (≤ 80) and the reply under the bar (≤ 600). */
   finish(label: string, reply: string): Promise<{ ok: boolean }>;
+
+  // ---- measure ----
+
+  // ---- import ----
+
+  // ---- details ----
 }
 
 /** An answer from HO[LO] that wasn't OK: its own `error` message, and the status. */
@@ -273,6 +288,12 @@ export function httpJobApi(base: string, job: string, tokenFile: string): JobApi
     permission: (body) => json('POST', '/permission', body),
     handoff: (brief) => json('POST', '/handoff', { brief }),
     finish: (label, reply) => json('POST', '/finish', { label, reply }),
+
+    // ---- measure ----
+
+    // ---- import ----
+
+    // ---- details ----
   };
 }
 
@@ -289,6 +310,12 @@ export interface FakeJobApiOptions {
   /** What listening hears: each part, in turn (the last given again once they run out). */
   heard?: PlayedNote[] | ListenPart[];
   attachments?: Record<string, Attachment>;
+
+  // ---- measure ----
+
+  // ---- import ----
+
+  // ---- details ----
 }
 
 /** Every call the fake took, in order. */
@@ -409,6 +436,12 @@ export function fakeJobApi(project: Project, options: FakeJobApiOptions = {}): F
       log('finish', label, reply);
       return { ok: true };
     },
+
+    // ---- measure ----
+
+    // ---- import ----
+
+    // ---- details ----
   };
   return fake;
 }

@@ -1,6 +1,9 @@
 /**
  * Every tool the agent has, in the order the harness lists them: reading first, then changing,
  * playing, scans, and the conversation.
+ *
+ * A module of tools added later goes in its own labelled blocks: its import below, and its tools in the
+ * list (so the modules added side by side keep their lines apart).
  */
 import type { Tool } from './common.ts';
 import { conversationTools } from './conversation.ts';
@@ -13,15 +16,31 @@ import { scoreTools } from './score.ts';
 import { songTools } from './song.ts';
 import { trackTools } from './tracks.ts';
 
+// ---- measure ----
+
+// ---- regions ----
+
+// ---- timeline ----
+
+// ---- import ----
+
 export const TOOLS: readonly Tool[] = [
   ...songTools,
+  // ---- timeline ----
+
   ...noteTools,
+  // ---- regions ----
+
   ...trackTools,
   ...mixTools,
   ...scoreTools,
   ...packTools,
   ...playTools,
+  // ---- measure ----
+
   ...scanTools,
+  // ---- import ----
+
   ...conversationTools,
 ];
 

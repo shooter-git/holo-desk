@@ -39,7 +39,7 @@ import {
 import { barSign, useAgent } from '../app/agent.ts';
 import { TYPING_PORT } from '../app/keys.ts';
 import { isPhone, useLayout } from '../app/layout.ts';
-import { openBar, store, useApp, useShow } from '../app/store.ts';
+import { openBar, openSettings, store, useApp, useShow } from '../app/store.ts';
 import { engine } from '../audio/engine.ts';
 import { midi } from '../audio/midi.ts';
 import { startDrag, TAP, Wordmark } from './controls.tsx';
@@ -434,7 +434,7 @@ function DspMeter() {
   const last = useRef({ width: -1, color: '', pct: -1 });
   const hover = useRef(false);
   const describe = () => {
-    if (box.current) box.current.title = `DSP load: ${dspSummary(engine.dsp())}. Audio & MIDI settings`;
+    if (box.current) box.current.title = `DSP load: ${dspSummary(engine.dsp())}. Settings › Audio`;
   };
   useFrame((now) => {
     const d = engine.dsp();
@@ -465,8 +465,8 @@ function DspMeter() {
       ref={box}
       type="button"
       className="btn dsp-meter"
-      title="DSP load. Audio & MIDI settings"
-      onClick={() => store.set({ dialog: 'settings' })}
+      title="DSP load. Settings › Audio"
+      onClick={() => openSettings('audio')}
       onMouseEnter={() => {
         hover.current = true;
         describe();
@@ -491,7 +491,7 @@ function DspMeter() {
  * The bar's button: every command, track and marker, found by name. The agent's only sign outside the
  * bar is on it: a ring while a request of this device's works, a dot once it has replied.
  */
-function BarButton() {
+export function BarButton() {
   const project = useApp((s) => s.project?.id ?? null);
   const sign = useAgent((a) => barSign(a, project));
   return (
@@ -560,14 +560,14 @@ export function ControlBar() {
         </div>
         <div className="right">
           <UndoRedo button="btn ghost icon" />
-          <MetronomeButton className="btn ghost icon" title="Metronome" />
-          <ViewMenu />
+          {/* the bar, as on a desktop; the metronome and View are in Settings, which has a tab for each */}
+          <BarButton />
           <button
             type="button"
             className="btn ghost icon"
             title="Settings"
             aria-label="Settings"
-            onClick={() => store.set({ dialog: 'settings' })}
+            onClick={() => openSettings()}
           >
             <Settings />
           </button>
@@ -683,7 +683,7 @@ export function ControlBar() {
             className="btn cb-midi"
             title={`MIDI: ${ports} device${ports === 1 ? '' : 's'}`}
             aria-label={`MIDI: ${ports} device${ports === 1 ? '' : 's'}`}
-            onClick={() => store.set({ dialog: 'settings' })}
+            onClick={() => openSettings('midi')}
           >
             <Usb />
             <MidiLight />
@@ -721,7 +721,7 @@ export function ControlBar() {
           className="btn icon ghost cb-settings"
           title="Settings"
           aria-label="Settings"
-          onClick={() => store.set({ dialog: 'settings' })}
+          onClick={() => openSettings()}
         >
           <Settings />
         </button>

@@ -84,6 +84,12 @@ body,
   margin: 0;
 }
 
+/* links in the studio's blue, visited or not (a dark page's own are lavender and violet) */
+a,
+a:visited {
+  color: var(--accent);
+}
+
 body {
   background: var(--bg-0);
   color: var(--text);
@@ -2097,6 +2103,40 @@ button.list-item {
   min-width: 0;
 }
 
+/* Settings keeps one size from tab to tab, so the tabs stay where they are as the pages change */
+.dialog.settings {
+  height: min(82dvh, 660px);
+}
+
+/* its tabs: one strip under the title, in the title's band; where it's too narrow it scrolls sideways */
+.dialog.settings header {
+  padding-bottom: 6px;
+  border-bottom: 0;
+}
+
+.settings-tabs {
+  position: relative;
+  display: flex;
+  flex: none;
+  padding: 4px 16px 12px;
+  overflow-x: auto;
+  border-bottom: 1px solid var(--line);
+  background: var(--bg-3);
+  scrollbar-width: none;
+}
+
+.settings-tabs::-webkit-scrollbar {
+  display: none;
+}
+
+.settings-tabs .seg {
+  flex: none;
+}
+
+.settings-page {
+  gap: 14px;
+}
+
 @media (max-width: 700px) {
   .scrim {
     place-items: end stretch;
@@ -2108,6 +2148,18 @@ button.list-item {
     border-radius: 16px 16px 0 0;
     padding-bottom: var(--safe-bottom);
     animation: sheet 0.22s cubic-bezier(0.2, 0.8, 0.2, 1);
+  }
+  .dialog.settings {
+    height: 92dvh;
+  }
+  /* the tabs share the width (all six fit a phone 375 px wide), and keep their own where they need more:
+     it scrolls then */
+  .settings-tabs .seg {
+    flex: 1 0 auto;
+  }
+  .settings-tabs .btn {
+    flex: 1 0 auto;
+    padding: 0 5px;
   }
 }
 
@@ -2562,7 +2614,7 @@ html[data-layout="phone-landscape"] .bar .field input {
 }
 
 /* the bar's button: the ring in place of its glass while a request of this device's works, a dot after */
-.control-bar .cb-bar {
+.cb-bar {
   position: relative;
 }
 
@@ -4069,14 +4121,11 @@ html[data-layout="phone-landscape"] .toasts {
   /* (the pads go to rows of eight here: PlayPad lays them out, by what the instrument has) */
 }
 
-/* ---------- the View menu: show or hide parts of the studio ---------- */
+/* ---------- View: show or hide parts of the studio (the eye's menu, and Settings › View) ---------- */
 
 .view-menu {
   position: fixed;
   z-index: var(--z-popover);
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 6px 14px;
   width: min(620px, calc(100vw - 16px));
   max-width: calc(100vw - var(--safe-left) - var(--safe-right) - 12px);
   max-height: calc(100dvh - 80px);
@@ -4088,19 +4137,10 @@ html[data-layout="phone-landscape"] .toasts {
   box-shadow: var(--shadow);
 }
 
-/* on a phone: a sheet from the bottom, as the dialogs are */
-.view-menu.sheet {
-  top: auto;
-  right: 0;
-  bottom: 0;
-  left: 0;
-  z-index: var(--z-dialog);
-  width: 100%;
-  max-width: 100%;
-  max-height: 80dvh;
-  border-radius: 16px 16px 0 0;
-  padding-bottom: calc(12px + var(--safe-bottom));
-  animation: sheet 0.22s cubic-bezier(0.2, 0.8, 0.2, 1);
+.view-options {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px 14px;
 }
 
 .view-group {
@@ -4134,27 +4174,17 @@ html[data-layout="phone-landscape"] .toasts {
   background: var(--bg-4);
 }
 
-/* a phone's way to the bar (it has no room for the bar's button): a row like the others, across the top */
-.view-command {
-  grid-column: 1 / -1;
-  width: 100%;
-  border: 0;
-  background: none;
-  text-align: left;
-}
-
-.view-command > svg {
-  width: 15px;
-  height: 15px;
-  color: var(--text-2);
-}
-
 .view-item .grow {
   flex: 1;
 }
 
 .view-item kbd {
   font-size: 10.5px;
+}
+
+/* (no keys to press on a phone) */
+html[data-layout^="phone"] .view-item kbd {
+  display: none;
 }
 
 .view-foot {
@@ -4215,25 +4245,8 @@ html[data-layout="phone-landscape"] .toasts {
   }
 }
 
-.btn:has(.view-badge),
-.view-button {
+.btn:has(.view-badge) {
   position: relative;
-}
-
-/* a phone's View button carries the agent's sign: the ring in place of the eye, then a dot */
-.view-button .ring {
-  width: 15px;
-  height: 15px;
-}
-
-.view-dot {
-  position: absolute;
-  top: 4px;
-  left: 4px;
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--accent);
 }
 
 .view-badge {
@@ -4251,7 +4264,7 @@ html[data-layout="phone-landscape"] .toasts {
 }
 
 @media (max-width: 560px) {
-  .view-menu {
+  .view-options {
     grid-template-columns: 1fr;
   }
 }
@@ -4446,7 +4459,6 @@ html[data-layout="phone-landscape"] .toasts {
   .menu,
   .bar,
   .toast,
-  .view-menu.sheet,
   .plugin-window.sheet,
   .sheet-scrim {
     animation: none;

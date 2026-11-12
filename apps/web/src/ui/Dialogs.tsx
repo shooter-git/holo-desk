@@ -1,6 +1,9 @@
-/** Dialogs: songs (open, new, import, from a creation), settings (audio, MIDI, the agent), key commands. */
+/**
+ * Dialogs: songs (open, new, import, from a creation), settings (in tabs: this device, audio, MIDI, the
+ * metronome, View, the agent), key commands.
+ */
 import { AudioLines, Download, Plus, Send, Upload, X } from 'lucide-react';
-import { type ReactNode, useEffect, useRef, useState, useSyncExternalStore } from 'react';
+import { type ReactNode, useEffect, useId, useRef, useState, useSyncExternalStore } from 'react';
 import {
   bounceSong,
   createProject,
@@ -17,7 +20,7 @@ import {
 import { api, type Creation, type ProjectRow } from '../app/api.ts';
 import { KEY_COMMANDS } from '../app/keys.ts';
 import { device, renameDevice } from '../app/live.ts';
-import { store, toast, useApp } from '../app/store.ts';
+import { type SettingsTab, store, toast, useApp } from '../app/store.ts';
 import { companion, STUDIO_ENGINE } from '../audio/companion.ts';
 import { engine } from '../audio/engine.ts';
 import { midi } from '../audio/midi.ts';
@@ -26,17 +29,27 @@ import { Wordmark } from './controls.tsx';
 import { useFrame } from './frame.ts';
 import { MetronomeSettings } from './Metronome.tsx';
 import { SongGroups } from './Songs.tsx';
+import { SETTINGS_TABS, tabForKey } from './settings-tabs.ts';
+import { ViewOptions } from './ViewMenu.tsx';
 
 function Dialog({
   title,
   children,
   footer,
   wide,
+  tabs,
+  page,
+  className,
 }: {
   title: string;
   children: ReactNode;
   footer?: ReactNode;
   wide?: boolean;
+  /** A strip of tabs under the title (it stays put while the page under it scrolls). */
+  tabs?: ReactNode;
+  /** The tab shown: each starts at its top. */
+  page?: string;
+  className?: string;
 }) {
   const box = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -51,7 +64,7 @@ function Dialog({
     <div className="scrim" onPointerDown={(e) => e.target === e.currentTarget && store.set({ dialog: null })}>
       <div
         ref={box}
-        className={`dialog${wide ? ' wide' : ''}`}
+        className={`dialog${wide ? ' wide' : ''}${className ? ` ${className}` : ''}`}
         role="dialog"
         aria-modal="true"
         aria-label={title}
@@ -75,7 +88,10 @@ function Dialog({
             <X />
           </button>
         </header>
-        <div className="content">{children}</div>
+        {tabs}
+        <div className="content" key={page}>
+          {children}
+        </div>
         {footer && <footer>{footer}</footer>}
       </div>
     </div>
@@ -655,15 +671,134 @@ function RoundTrip() {
   );
 }
 
-function SettingsDialog() {
-  const mode = useApp((s) => s.latencyMode);
-  const lowLatency = useApp((s) => s.lowLatency);
-  const status = useApp((s) => s.midiStatus);
-  const ports = useApp((s) => s.midiPorts);
+/** Settings › General: this device's name and connection, and how notes are named. */
+function GeneralSettings() {
   const middleC = useApp((s) => s.middleC);
   const connection = useApp((s) => s.connection);
   const peers = useApp((s) => s.peers);
   const deviceName = useApp((s) => s.deviceName);
+  return (
+    <>
+      <section className="vstack">
+        <div className="label">This device</div>
+        {/* where there's no room beside the name (a phone), the connection goes under it, in one piece */}
+        <div className="hstack" style={{ flexWrap: 'wrap' }}>
+          <input
+            className="input"
+            style={{ flex: '1 1 180px', maxWidth: 260 }}
+            placeholder={device()}
+            defaultValue={deviceName}
+            aria-label="This device's name"
+            onBlur={(e) => renameDevice(e.currentTarget.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') e.currentTarget.blur();
+              else if (e.key !== 'Escape') e.stopPropagation();
+            }}
+          />
+          <span className="hstack">
+            <span
+              className={`status-dot ${connection === 'online' ? 'ok' : connection === 'offline' ? 'bad' : 'busy'}`}
+            />
+            <span className="muted">
+              {connection === 'online' ? 'Connected to' : connection === 'offline' ? 'Can’t reach' : 'Connecting to'}{' '}
+              HO[LO] on {location.host}
+            </span>
+          </span>
+        </div>
+        {peers.filter((p) => p.name !== device()).length > 0 && (
+          <span className="muted">
+            Also here:{' '}
+            {peers
+              .filter((p) => p.name !== device())
+              .map((p) => `${p.name} (${p.role === 'editor' ? 'studio' : p.role === 'agent' ? 'agent' : 'device'})`)
+              .join(', ')}
+          </span>
+        )}
+        <span className="muted">
+          The name other devices and the agent see for this one, and what its notes are called when it plays into
+          another studio.
+        </span>
+      </section>
+      <section className="vstack">
+        <div className="label">Note names</div>
+        <div className="seg" style={{ alignSelf: 'flex-start' }}>
+          {(['C3', 'C4'] as const).map((c) => (
+            <button
+              key={c}
+              type="button"
+              className={`btn${middleC === c ? ' on' : ''}`}
+              onClick={() => {
+                store.set({ middleC: c });
+                void api.saveSettings({ middleC: c }).catch(() => toast('Couldn’t save the setting', 'error'));
+              }}
+            >
+              Middle C is {c} {c === 'C3' ? '(Logic)' : '(scientific)'}
+            </button>
+          ))}
+        </div>
+      </section>
+    </>
+  );
+}
+
+/** Settings › Audio: latency, HO[LO] Engine, the sound devices, and where the time from key to ear goes. */
+function AudioSettings() {
+  const mode = useApp((s) => s.latencyMode);
+  const lowLatency = useApp((s) => s.lowLatency);
+  return (
+    <section className="vstack">
+      <div className="label">Latency</div>
+      <div className="hstack" style={{ flexWrap: 'wrap' }}>
+        <div className="seg">
+          {(
+            [
+              ['lowest', 'Lowest'],
+              ['balanced', 'Balanced'],
+              ['safe', 'Safe'],
+            ] as const
+          ).map(([m, label]) => (
+            <button
+              key={m}
+              type="button"
+              className={`btn${mode === m ? ' on' : ''}`}
+              onClick={() => void setLatencyMode(m)}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+        <label
+          className="hstack"
+          title="Plugins that hold the sound back (the master limiter's look-ahead) don't while this is on. Bounces always use them in full."
+        >
+          <input
+            type="checkbox"
+            checked={lowLatency}
+            onChange={(e) => {
+              store.set({ lowLatency: e.target.checked });
+              engine.setLowLatency(e.target.checked);
+            }}
+          />
+          Low Latency Mode
+        </label>
+      </div>
+      <EngineLink />
+      <OutputPicker />
+      <InputPicker />
+      <LatencyReadout />
+      <DspReadout />
+      <RoundTrip />
+      <span className="muted">
+        Lowest is best for playing live; if you hear crackles, try Balanced. {platformTip()}
+      </span>
+    </section>
+  );
+}
+
+/** Settings › MIDI: the devices this one plays from (each lit as it plays), and network MIDI. */
+function MidiSettings() {
+  const status = useApp((s) => s.midiStatus);
+  const ports = useApp((s) => s.midiPorts);
   const lights = useRef(new Map<string, HTMLSpanElement>());
   useFrame((now) => {
     for (const [name, el] of lights.current) {
@@ -674,173 +809,142 @@ function SettingsDialog() {
   });
   useEffect(() => midi.onPorts(() => store.set({ midiPorts: midi.ports })), []);
   return (
-    // (no longer only audio and MIDI: the agent's settings are here too)
-    <Dialog title="Settings">
-      <div className="vstack" style={{ gap: 14 }}>
-        <section className="vstack">
-          <div className="label">This device</div>
-          <div className="hstack">
-            <input
-              className="input"
-              style={{ flex: 1, maxWidth: 260 }}
-              placeholder={device()}
-              defaultValue={deviceName}
-              aria-label="This device's name"
-              onBlur={(e) => renameDevice(e.currentTarget.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') e.currentTarget.blur();
-                else if (e.key !== 'Escape') e.stopPropagation();
-              }}
-            />
-            <span
-              className={`status-dot ${connection === 'online' ? 'ok' : connection === 'offline' ? 'bad' : 'busy'}`}
-            />
-            <span className="muted">
-              {connection === 'online' ? 'Connected to' : connection === 'offline' ? 'Can’t reach' : 'Connecting to'}{' '}
-              HO[LO] on {location.host}
-            </span>
+    <>
+      <section className="vstack">
+        <div className="label">MIDI devices</div>
+        {status === 'unsupported' && (
+          <div className="muted">
+            This browser has no MIDI (Safari, and every browser on an iPhone or iPad). Use Chrome, Edge or Firefox on a
+            computer or an Android phone. A keyboard on an iPhone or iPad reaches the studio over network MIDI (below,
+            in the studio’s settings on a computer).
           </div>
-          {peers.filter((p) => p.name !== device()).length > 0 && (
-            <span className="muted">
-              Also here:{' '}
-              {peers
-                .filter((p) => p.name !== device())
-                .map((p) => `${p.name} (${p.role === 'editor' ? 'studio' : p.role === 'agent' ? 'agent' : 'device'})`)
-                .join(', ')}
-            </span>
-          )}
-          <span className="muted">
-            The name other devices and the agent see for this one, and what its notes are called when it plays into
-            another studio.
-          </span>
-        </section>
-        <section className="vstack">
-          <div className="label">Latency</div>
-          <div className="hstack" style={{ flexWrap: 'wrap' }}>
-            <div className="seg">
-              {(
-                [
-                  ['lowest', 'Lowest'],
-                  ['balanced', 'Balanced'],
-                  ['safe', 'Safe'],
-                ] as const
-              ).map(([m, label]) => (
-                <button
-                  key={m}
-                  type="button"
-                  className={`btn${mode === m ? ' on' : ''}`}
-                  onClick={() => void setLatencyMode(m)}
-                >
-                  {label}
-                </button>
-              ))}
-            </div>
-            <label
-              className="hstack"
-              title="Plugins that hold the sound back (the master limiter's look-ahead) don't while this is on. Bounces always use them in full."
-            >
-              <input
-                type="checkbox"
-                checked={lowLatency}
-                onChange={(e) => {
-                  store.set({ lowLatency: e.target.checked });
-                  engine.setLowLatency(e.target.checked);
-                }}
-              />
-              Low Latency Mode
-            </label>
-          </div>
-          <EngineLink />
-          <OutputPicker />
-          <InputPicker />
-          <LatencyReadout />
-          <DspReadout />
-          <RoundTrip />
-          <span className="muted">
-            Lowest is best for playing live; if you hear crackles, try Balanced. {platformTip()}
-          </span>
-        </section>
-        <section className="vstack">
-          <div className="label">Metronome</div>
-          <MetronomeSettings inSettings />
-        </section>
-        <section className="vstack">
-          <div className="label">MIDI devices</div>
-          {status === 'unsupported' && (
-            <div className="muted">
-              This browser has no MIDI (Safari, and every browser on an iPhone or iPad). Use Chrome, Edge or Firefox on
-              a computer or an Android phone. A keyboard on an iPhone or iPad reaches the studio over network MIDI
-              (below, in the studio’s settings on a computer).
-            </div>
-          )}
-          {status === 'denied' && (
-            <div className="muted">
-              MIDI access was refused. Allow it in the browser’s site settings, then try again.
-            </div>
-          )}
-          {status === 'off' && (
-            <button
-              type="button"
-              className="btn primary"
-              style={{ alignSelf: 'flex-start' }}
-              onClick={() => void ensureAudio().then(enableMidi)}
-            >
-              Turn on MIDI
-            </button>
-          )}
-          {status === 'on' && (
-            <div className="list boxed">
-              {ports.length === 0 && (
-                <div className="list-item muted">No MIDI devices yet. Plug one in: it appears here straight away.</div>
-              )}
-              {ports.map((p) => (
-                <div key={p.id} className="list-item" style={{ cursor: 'default' }}>
-                  <span
-                    className="status-dot ok"
-                    ref={(el) => {
-                      if (el) lights.current.set(p.name, el);
-                      else lights.current.delete(p.name);
-                    }}
-                  />
-                  <span className="strong">{p.name}</span>
-                  <span className="meta">
-                    {p.source === 'device'
-                      ? p.manufacturer || 'USB'
-                      : p.source === 'typing'
-                        ? 'computer keyboard'
-                        : p.source === 'ai'
-                          ? 'the agent'
-                          : 'network'}
-                  </span>
-                </div>
-              ))}
-            </div>
-          )}
-          <span className="muted">
-            Live MIDI plays the armed tracks whose input matches; with none armed, the selected track. Set a track’s
-            input and channel in the Inspector.
-          </span>
-        </section>
-        <NetworkMidiPanel />
-        <section className="vstack">
-          <div className="label">Note names</div>
-          <div className="seg" style={{ alignSelf: 'flex-start' }}>
-            {(['C3', 'C4'] as const).map((c) => (
-              <button
-                key={c}
-                type="button"
-                className={`btn${middleC === c ? ' on' : ''}`}
-                onClick={() => {
-                  store.set({ middleC: c });
-                  void api.saveSettings({ middleC: c }).catch(() => toast('Couldn’t save the setting', 'error'));
-                }}
-              >
-                Middle C is {c} {c === 'C3' ? '(Logic)' : '(scientific)'}
-              </button>
+        )}
+        {status === 'denied' && (
+          <div className="muted">MIDI access was refused. Allow it in the browser’s site settings, then try again.</div>
+        )}
+        {status === 'off' && (
+          <button
+            type="button"
+            className="btn primary"
+            style={{ alignSelf: 'flex-start' }}
+            onClick={() => void ensureAudio().then(enableMidi)}
+          >
+            Turn on MIDI
+          </button>
+        )}
+        {status === 'on' && (
+          <div className="list boxed">
+            {ports.length === 0 && (
+              <div className="list-item muted">No MIDI devices yet. Plug one in: it appears here straight away.</div>
+            )}
+            {ports.map((p) => (
+              <div key={p.id} className="list-item" style={{ cursor: 'default' }}>
+                <span
+                  className="status-dot ok"
+                  ref={(el) => {
+                    if (el) lights.current.set(p.name, el);
+                    else lights.current.delete(p.name);
+                  }}
+                />
+                <span className="strong">{p.name}</span>
+                <span className="meta">
+                  {p.source === 'device'
+                    ? p.manufacturer || 'USB'
+                    : p.source === 'typing'
+                      ? 'computer keyboard'
+                      : p.source === 'ai'
+                        ? 'the agent'
+                        : 'network'}
+                </span>
+              </div>
             ))}
           </div>
-        </section>
-        <AgentSettings />
+        )}
+        <span className="muted">
+          Live MIDI plays the armed tracks whose input matches; with none armed, the selected track. Set a track’s input
+          and channel in the Inspector.
+        </span>
+      </section>
+      <NetworkMidiPanel />
+    </>
+  );
+}
+
+/** The tabs under Settings' title: arrows, Home and End move between them, and the one chosen stays in sight. */
+function SettingsTabs({ tab, id }: { tab: SettingsTab; id: string }) {
+  const strip = useRef<HTMLDivElement>(null);
+  const buttons = useRef(new Map<SettingsTab, HTMLButtonElement>());
+  useEffect(() => {
+    // where the strip scrolls sideways (a narrow phone), the chosen tab is scrolled to, as it opens and after
+    const s = strip.current;
+    const b = buttons.current.get(tab);
+    if (!s || !b) return;
+    const edge = 16;
+    if (b.offsetLeft - edge < s.scrollLeft) s.scrollLeft = b.offsetLeft - edge;
+    else if (b.offsetLeft + b.offsetWidth + edge > s.scrollLeft + s.clientWidth)
+      s.scrollLeft = b.offsetLeft + b.offsetWidth + edge - s.clientWidth;
+  }, [tab]);
+  return (
+    <div ref={strip} className="settings-tabs">
+      <div
+        className="seg"
+        role="tablist"
+        aria-label="Settings"
+        onKeyDown={(e) => {
+          const next = tabForKey(tab, e.key);
+          if (!next) return;
+          e.preventDefault();
+          store.set({ settingsTab: next });
+          buttons.current.get(next)?.focus();
+        }}
+      >
+        {SETTINGS_TABS.map(([t, label]) => (
+          <button
+            key={t}
+            ref={(el) => {
+              if (el) buttons.current.set(t, el);
+              else buttons.current.delete(t);
+            }}
+            type="button"
+            role="tab"
+            id={`${id}-${t}`}
+            aria-selected={tab === t}
+            aria-controls={tab === t ? `${id}-page` : undefined}
+            tabIndex={tab === t ? 0 : -1}
+            className={`btn${tab === t ? ' on' : ''}`}
+            onClick={() => store.set({ settingsTab: t })}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/** Settings, in tabs; it opens on the last one shown, or on the one it was opened for (openSettings). */
+function SettingsDialog() {
+  const tab = useApp((s) => s.settingsTab);
+  const id = useId();
+  return (
+    <Dialog title="Settings" className="settings" page={tab} tabs={<SettingsTabs tab={tab} id={id} />}>
+      <div role="tabpanel" id={`${id}-page`} aria-labelledby={`${id}-${tab}`} className="vstack settings-page">
+        {tab === 'general' ? (
+          <GeneralSettings />
+        ) : tab === 'audio' ? (
+          <AudioSettings />
+        ) : tab === 'midi' ? (
+          <MidiSettings />
+        ) : tab === 'metronome' ? (
+          <section className="vstack">
+            <div className="label">Metronome</div>
+            <MetronomeSettings inSettings />
+          </section>
+        ) : tab === 'view' ? (
+          <ViewOptions />
+        ) : (
+          <AgentSettings />
+        )}
       </div>
     </Dialog>
   );

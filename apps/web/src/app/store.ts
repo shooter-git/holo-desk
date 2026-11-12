@@ -22,6 +22,8 @@ export type EditorPane = 'piano' | 'mixer' | null;
 export type NoteView = 'roll' | 'score';
 export type MobileTab = 'tracks' | 'editor' | 'mixer' | 'play' | 'library';
 export type Dialog = null | 'projects' | 'settings' | 'creations' | 'shortcuts' | 'about' | 'remote';
+/** Settings' tabs. */
+export type SettingsTab = 'general' | 'audio' | 'midi' | 'metronome' | 'view' | 'agent';
 
 export interface Toast {
   id: number;
@@ -65,6 +67,8 @@ export interface AppState {
   inspector: boolean;
   library: boolean;
   dialog: Dialog;
+  /** The tab Settings opens on: the last one shown (for this session only), or the one a caller names. */
+  settingsTab: SettingsTab;
   plugin: { target: string; id: string } | null;
   /** The channel whose Stage window is open. */
   stage: string | null;
@@ -120,7 +124,7 @@ export interface AppState {
   toasts: Toast[];
   /** A bounce in progress: what it's doing now. */
   bouncing: string | null;
-  /** Which parts of the studio show (the View menu): everything, until you hide some. */
+  /** Which parts of the studio show (View: the eye's menu, and Settings › View): everything, until you hide some. */
   show: Record<ShowKey, boolean>;
   /** The bar is open (Ctrl /): the studio's commands, tracks and markers, found by name. Never remembered. */
   bar: boolean;
@@ -128,7 +132,7 @@ export interface AppState {
   librarySearch: string | null;
 }
 
-/** The parts of the studio the View menu shows or hides, all shown at first. */
+/** The parts of the studio View shows or hides, all shown at first. */
 export const SHOW_DEFAULTS = {
   barNav: true,
   barTime: true,
@@ -190,6 +194,7 @@ const initial: AppState = {
   inspector: true,
   library: false,
   dialog: null,
+  settingsTab: 'general',
   plugin: null,
   stage: null,
   synth: null,
@@ -316,7 +321,12 @@ export function closeBar(): void {
   if (state.bar) store.set({ bar: false });
 }
 
-/** Whether a part of the studio shows (the View menu). */
+/** Open Settings on the tab named (the DSP meter on Audio, say), or on the last one shown. */
+export function openSettings(tab?: SettingsTab): void {
+  store.set(tab ? { dialog: 'settings', settingsTab: tab } : { dialog: 'settings' });
+}
+
+/** Whether a part of the studio shows (View). */
 export function useShow(key: ShowKey): boolean {
   return useApp((s) => s.show[key]);
 }

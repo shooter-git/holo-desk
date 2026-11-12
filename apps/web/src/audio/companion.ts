@@ -201,7 +201,7 @@ class Companion {
 
   /**
    * Again after a while, less and less often; after a few minutes of nothing there, no more until the
-   * window comes back from a long while away or Audio & MIDI settings ask (each try the browser
+   * window comes back from a long while away or Settings › Audio asks (each try the browser
    * logs as a failed connection).
    */
   private later(): void {

@@ -56,6 +56,7 @@ describe('the tool list', () => {
       'scan_show',
       'scan_status',
       'attachment_get',
+      'import',
       'look',
       'ask_permission',
       'hand_off',

@@ -5,7 +5,7 @@
  */
 import { readFileSync } from 'node:fs';
 import type { Scan, ScanSystem, SystemState } from '@holo/score';
-import { applyOps, describeProject, type Op, type Project, type SampleMic } from '@holo/session';
+import { type AudioFile, applyOps, describeProject, type Op, type Project, type SampleMic } from '@holo/session';
 
 /** What the requester's studio shows: the playhead, the selection, the cycle and the view. */
 export interface StudioState {
@@ -117,7 +117,7 @@ export interface Attachment {
   data?: string;
 }
 
-export type PermissionKind = 'install-pack' | 'send-creation' | 'screen' | 'photo' | 'microphone';
+export type PermissionKind = 'install-pack' | 'send-creation' | 'bounce' | 'render' | 'screen' | 'photo' | 'microphone';
 
 /** One part of a listen (docs/agent.md: POST …/listen). */
 export interface ListenPart {
@@ -143,6 +143,16 @@ export interface Image {
 // ---- measure ----
 
 // ---- import ----
+
+/**
+ * What `POST …/import` brings in of an attachment: a recording as one of the song's audio files (kept
+ * as WAV), or a MIDI or MusicXML file as a song of its own, to merge; or not done yet (the studio is
+ * still converting it: the same call again waits on).
+ */
+export type ImportAnswer =
+  | { done: true; kind: 'audio'; how: 'copied' | 'converted' | 'studio'; file: AudioFile }
+  | { done: true; kind: 'notes'; format: 'midi' | 'musicxml'; name: string; song: Project; warnings: string[] }
+  | { done: false; line: string };
 
 // ---- details ----
 
@@ -199,6 +209,8 @@ export interface JobApi {
   // ---- measure ----
 
   // ---- import ----
+  /** POST …/import: an attachment brought into the song's files (a recording) or read as a song (MIDI, MusicXML). */
+  importAttachment(attachment: string): Promise<ImportAnswer>;
 
   // ---- details ----
 }
@@ -292,6 +304,8 @@ export function httpJobApi(base: string, job: string, tokenFile: string): JobApi
     // ---- measure ----
 
     // ---- import ----
+    // (the server takes at most about 40 s, then says it isn't done; a harness cuts a call at 60)
+    importAttachment: (attachment) => json('POST', '/import', { attachment }, 50_000),
 
     // ---- details ----
   };
@@ -314,6 +328,8 @@ export interface FakeJobApiOptions {
   // ---- measure ----
 
   // ---- import ----
+  /** What importing each attachment brings: an answer, or one a call at a time (the last given again). */
+  imports?: Record<string, ImportAnswer | ImportAnswer[]>;
 
   // ---- details ----
 }
@@ -440,6 +456,14 @@ export function fakeJobApi(project: Project, options: FakeJobApiOptions = {}): F
     // ---- measure ----
 
     // ---- import ----
+    async importAttachment(attachment) {
+      log('importAttachment', attachment);
+      const given = options.imports?.[attachment];
+      if (!given) return missing('attachment');
+      if (!Array.isArray(given)) return given;
+      const i = calls.filter((c) => c.method === 'importAttachment' && c.args[0] === attachment).length - 1;
+      return given[Math.min(i, given.length - 1)] as ImportAnswer;
+    },
 
     // ---- details ----
   };

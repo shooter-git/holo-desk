@@ -91,7 +91,8 @@ depends on the next one), the way Hallowed Lanterns' own code plays it:
 
 An audio track (`"kind": "audio"`) plays recordings instead of notes. Its regions carry `audio`, and
 the recordings themselves are listed in the song's `files` and kept beside the song on the host
-(`data/audio/<song id>/`), never inside the session file:
+(`data/audio/<song id>/`, as WAV: a FLAC or AIFF sent there is made a WAV under the same id), never
+inside the session file:
 
 ```jsonc
 // in the song

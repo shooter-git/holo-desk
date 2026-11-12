@@ -40,6 +40,7 @@ import {
 import Fastify, { type FastifyInstance, type FastifyReply } from 'fastify';
 import { runnerKey } from './agent/keys.ts';
 import { agentRoutes } from './agent/routes.ts';
+import { convertToWav, sweepAudio, TO_WAV } from './audio-files.ts';
 import type { Config } from './config.ts';
 import { Creations, sessionText } from './creations.ts';
 import { type SongDetails, Store } from './db.ts';
@@ -78,11 +79,23 @@ export interface Services {
   packs: Packs;
   live: Live;
   creations: Creations;
+  /** The songs' FLAC and AIFF files made WAV, once, as the server starts: how many. */
+  audioSwept: Promise<number>;
 }
 
 export async function buildApp(config: Config): Promise<{ app: FastifyInstance; services: Services }> {
   const app = Fastify({ logger: { level: process.env.HOLO_LOG ?? 'warn' }, bodyLimit: 64 * 1024 * 1024 });
   const store = new Store(config.dataDir);
+  // audio kept as FLAC or AIFF (before uploads were made WAV) made WAV, so every renderer reads it
+  const audioSwept = sweepAudio(config.dataDir)
+    .then((n) => {
+      if (n) console.log(`${n} audio file${n === 1 ? '' : 's'} made WAV`);
+      return n;
+    })
+    .catch((err: unknown) => {
+      console.warn(`The audio files couldn't be checked (${err instanceof Error ? err.message : String(err)})`);
+      return 0;
+    });
   // the packs' maps (from the packs repository, at the commit packs.lock.json pins) kept in the data folder
   useDataDir(config.dataDir);
   const packs = new Packs(join(config.dataDir, 'packs'));
@@ -836,10 +849,26 @@ export async function buildApp(config: Config): Promise<{ app: FastifyInstance; 
       if (!AUDIO_EXT[ext])
         return reply.code(415).send({ error: `HO[LO] doesn't read ${ext} files: WAV, FLAC, MP3, OGG, M4A or AIFF` });
       const id = newId('aud');
+      if (TO_WAV.has(ext)) {
+        // FLAC and AIFF are kept as WAV, under the same id: the renderers (a bounce, a headless render)
+        // read WAV alone. (Received under a hidden name, which no id finds, then made WAV.)
+        const upload = join(audioDir(req.params.id), `.${id}.upload${ext}`);
+        try {
+          await saveStream(req.body as NodeJS.ReadableStream, upload);
+          const wav = convertToWav(upload, join(audioDir(req.params.id), `${id}.wav`));
+          return reply.code(201).send({ id, name, seconds: wav.seconds, rate: wav.rate, channels: wav.channels });
+        } catch (err) {
+          return reply
+            .code(415)
+            .send({ error: `${name} couldn't be read (${err instanceof Error ? err.message : String(err)})` });
+        } finally {
+          rmSync(upload, { force: true });
+        }
+      }
       const path = join(audioDir(req.params.id), `${id}${ext}`);
       await saveStream(req.body as NodeJS.ReadableStream, path);
-      // WAV and FLAC say how long they are (enough for the command line to place them)
-      const info = ext === '.wav' || ext === '.flac' ? audioInfo(path) : null;
+      // a WAV says how long it is (enough for the command line to place it)
+      const info = ext === '.wav' ? audioInfo(path) : null;
       return reply.code(201).send({
         id,
         name,
@@ -1012,5 +1041,5 @@ export async function buildApp(config: Config): Promise<{ app: FastifyInstance; 
     networkMidi?.close();
     store.close();
   });
-  return { app, services: { store, packs, live, creations } };
+  return { app, services: { store, packs, live, creations, audioSwept } };
 }

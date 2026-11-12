@@ -20,6 +20,7 @@ import type { AgentJob, Jobs } from '../jobs.ts';
 // ---- details ----
 
 // ---- import ----
+import importRoutes from '../import/routes.ts';
 
 /** A job route's handler: the request, the reply, and the job whose token came with it. */
 export type JobHandler = (req: FastifyRequest, reply: FastifyReply, job: AgentJob) => Promise<unknown>;
@@ -61,6 +62,7 @@ export const MODULES: readonly JobRoutes[] = [
   // ---- measure ----
   // ---- details ----
   // ---- import ----
+  importRoutes,
 ];
 
 /** Adds every module's routes (routes.ts calls it once, with the kit). */

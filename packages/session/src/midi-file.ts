@@ -4,6 +4,7 @@
  */
 import { newChannel, newId, newProject, newRegion, TRACK_COLORS } from './defaults.ts';
 import { keysOf, keyText } from './keysig.ts';
+import { barLineAfter, barLineBefore } from './merge.ts';
 import { type CCPoint, type MeterPoint, type Note, PPQ, type Project, type TempoPoint, type Track } from './types.ts';
 
 // ---- writing ----
@@ -285,7 +286,8 @@ export function projectFromMidi(file: MidiFile, title: string): Project {
     const first = project.keys[0];
     project.key = first && first.tick === 0 ? keyText(first) : null;
   }
-  const bar = PPQ * 4;
+  // each region on the file's own bar lines (its meter: a 3/4 file's bars aren't 4/4's)
+  const meter: MeterPoint[] = file.meter[0]?.tick === 0 ? file.meter : [{ tick: 0, num: 4, den: 4 }, ...file.meter];
   project.tracks = file.tracks.map((mt, i): Track => {
     const lastTick = Math.max(
       0,
@@ -293,8 +295,9 @@ export function projectFromMidi(file: MidiFile, title: string): Project {
       ...Object.values(mt.cc).flatMap((pts) => pts.map((pt) => pt[0])),
     );
     const firstTick = Math.min(...mt.notes.map((n) => n.t), lastTick);
-    const start = Math.floor(firstTick / bar) * bar;
-    const region = newRegion(start, Math.max(bar, Math.ceil((lastTick - start) / bar) * bar), mt.name);
+    const start = barLineBefore(meter, firstTick);
+    const end = Math.max(barLineAfter(meter, lastTick), barLineAfter(meter, start + 1));
+    const region = newRegion(start, end - start, mt.name);
     region.notes = mt.notes.map((n) => ({ ...n, t: n.t - start }));
     // a lyric on the top note starting where it falls
     for (const [t, syl] of mt.lyrics ?? []) {

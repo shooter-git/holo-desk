@@ -12,6 +12,7 @@
  * Attachments a device sends are kept a week, each the device's own for the song it was sent for;
  * a job reads only those its request (or an earlier one on its thread) named.
  */
+import { createReadStream } from 'node:fs';
 import { join } from 'node:path';
 import { SCAN_ID, type Scan } from '@holo/score';
 import { describeProject, type Op } from '@holo/session';
@@ -23,11 +24,16 @@ import {
   ATTACHMENT_TYPES,
   Attachments,
   type AttachmentType,
-  MAX_ATTACHMENT,
+  HEAD,
+  isAudio,
+  isScore,
+  MAX_AUDIO,
   MAX_META,
-  MAX_TEXT,
+  maxSize,
   metaSummary,
+  scoreText,
   sniff,
+  tooBigText,
 } from './attachments.ts';
 import { Auth, bearer } from './auth.ts';
 import { type Body, bad, body, CONTROL, ID, int, isObj, line, num, type Params, text } from './check.ts';
@@ -426,9 +432,12 @@ export function agentRoutes(app: FastifyInstance, o: AgentOptions): { jobs: Jobs
   const askPermission = async (req: FastifyRequest, job: AgentJob) => {
     const b = body(req);
     if (!PERMISSION_KINDS.includes(b.kind as PermissionKind))
-      throw bad('kind is install-pack, send-creation, screen, photo or microphone');
+      throw bad('kind is install-pack, send-creation, bounce, render, screen, photo or microphone');
     const kind = b.kind as PermissionKind;
     const detail = line(b.detail, 'detail', 300);
+    // only a creation can render its own song
+    if (kind === 'render' && !store.get(job.view.project)?.origin)
+      throw bad('This song didn’t come from a creation, so there’s none to render it');
     let pack: string | undefined;
     if (b.pack !== undefined && b.pack !== null) {
       if (typeof b.pack !== 'string' || !/^[\w.-]{1,80}$/.test(b.pack)) throw bad('pack is a pack’s id');
@@ -482,17 +491,16 @@ export function agentRoutes(app: FastifyInstance, o: AgentOptions): { jobs: Jobs
 
   // ---- attachments: what a device sends with a request ----
 
-  // any type comes in as bytes (the type it is is in the query, and checked against its first bytes);
-  // the device and the agent being on are checked before the body is read
+  // any type comes in as bytes, straight to disk as they arrive, cut off at the type's limit (the type
+  // it is is in the query, and checked against its first bytes); the device and the agent being on are
+  // checked before the body is read
   app.register(async (scope) => {
     scope.removeAllContentTypeParsers();
-    scope.addContentTypeParser('*', { parseAs: 'buffer', bodyLimit: MAX_ATTACHMENT }, (_req, data, done) =>
-      done(null, data),
-    );
+    scope.addContentTypeParser('*', (_req, payload, done) => done(null, payload));
     scope.post(
       '/api/agent/attachments',
       {
-        bodyLimit: MAX_ATTACHMENT,
+        bodyLimit: MAX_AUDIO,
         onRequest: async (req, reply) => {
           if (!auth.device(req.headers.authorization)) return reply.code(401).send({ error: NOT_ALLOWED });
           if (!agentStore.settings().enabled) return reply.code(409).send({ error: OFF, reason: 'off' });
@@ -506,17 +514,47 @@ export function agentRoutes(app: FastifyInstance, o: AgentOptions): { jobs: Jobs
         if (!ATTACHMENT_TYPES.includes(q.type as AttachmentType))
           throw new Refusal(415, `HO[LO] takes ${ATTACHMENT_TYPES.join(', ')}`);
         const type = q.type as AttachmentType;
-        const data = Buffer.isBuffer(req.body) ? req.body : null;
-        if (!data?.length) throw bad('The file is the body, and it’s empty');
-        if (type === 'text/plain' && data.length > MAX_TEXT)
-          throw new Refusal(413, `A text is ${MAX_TEXT / 1024} KB at most`);
-        const wrong = sniff(type, data);
-        if (wrong) throw new Refusal(415, wrong);
-        const a = attachments.add(device, q.project, name, type, data);
+        const max = maxSize(type);
+        // too big by what it says: not read at all
+        if (Number(req.headers['content-length']) > max) throw new Refusal(413, tooBigText(type));
+        const body = req.body as AsyncIterable<Uint8Array> | null | undefined;
+        const got = body && Symbol.asyncIterator in Object(body) ? await attachments.receive(body, max) : null;
+        if (body && !got) throw new Refusal(413, tooBigText(type));
+        if (!got?.size) {
+          if (got) attachments.discard(got.id);
+          throw bad('The file is the body, and it’s empty');
+        }
+        // a recording by its first bytes; anything else (at most 25 MB) whole
+        const wrong = sniff(type, attachments.head(got.id, isAudio(type) ? HEAD : undefined));
+        if (wrong) {
+          attachments.discard(got.id);
+          throw new Refusal(415, wrong);
+        }
+        const a = attachments.keep(got.id, device, q.project, name, type, got.size);
         return { id: a.id, name: a.name, type: a.type, size: a.size };
       }),
     );
   });
+
+  // a file's bytes, for the device that sent it (the studio imports a recording it can decode); or for
+  // the device whose running job may read it (an earlier request on the job's thread, from another device)
+  app.get(
+    '/api/agent/attachments/:id/data',
+    forDevice(async (req, reply, device) => {
+      const id = (req.params as Params).id ?? '';
+      const a = ATTACHMENT_ID.test(id) ? attachments.get(id) : null;
+      const path = a ? attachments.file(id) : null;
+      if (!a || !path) throw new Refusal(404, 'No such attachment');
+      const job = theJobs.running(a.project);
+      const jobs = !!job && job.view.device === device && theJobs.mayRead(job, id);
+      if (a.device !== device && !jobs) throw new Refusal(403, 'Not this device’s');
+      return reply
+        .type(a.type)
+        .header('content-length', a.size)
+        .header('cache-control', 'no-store')
+        .send(createReadStream(path));
+    }),
+  );
 
   app.put(
     '/api/agent/attachments/:id/meta',
@@ -718,11 +756,15 @@ export function agentRoutes(app: FastifyInstance, o: AgentOptions): { jobs: Jobs
       // only what this job's request (or an earlier one on its thread) named, for its song
       if (a.project !== job.view.project || !theJobs.mayRead(job, id))
         throw new Refusal(403, 'That attachment isn’t this request’s');
-      const whole =
-        a.type.startsWith('image/') ||
-        a.type === 'text/plain' ||
-        (a.type === 'application/vnd.recordare.musicxml+xml' && a.size <= MAX_XML_DATA);
-      const data = whole ? attachments.data(id) : null;
+      const whole = a.type.startsWith('image/') || a.type === 'text/plain';
+      let data = whole ? attachments.data(id) : null;
+      // a score as UTF-8 text, whatever it came as (UTF-16, or zipped in an .mxl), up to MAX_XML_DATA
+      if (isScore(a.type)) {
+        const bytes = attachments.data(id);
+        const xml = bytes ? await scoreText(a.type, bytes).catch(() => null) : null;
+        const utf8 = xml === null ? null : Buffer.from(xml, 'utf8');
+        if (utf8 && utf8.length <= MAX_XML_DATA) data = utf8;
+      }
       return {
         name: a.name,
         type: a.type,

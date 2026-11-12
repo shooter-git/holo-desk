@@ -71,6 +71,15 @@ keeps it to the open song:
   without their location data. Attachments are kept on the host for 7 days. HO[LO] itself never reads
   or writes the user's harness configuration (`~/.claude`, `~/.codex`, `~/.cursor`), never signs a
   harness out or switches its account, and updates one only when the user clicks Update.
+- **Attachments and imports.** Only an allowed device can send a file, and its token is checked
+  before a byte of the body is read. A recording may be up to 200 MB and anything else 25 MB (a text
+  100 KB): the body goes straight to disk and is cut off, and removed, past its type's limit, and a
+  file whose first bytes aren't its type is removed. A file's bytes are given back only to the device
+  that sent it, or to the device whose running job may read it (`GET /api/agent/attachments/:id/data`);
+  a job reads only its conversation's attachments for its own song. The agent's `import` copies or
+  converts such an attachment into that song's own audio folder, or reads a MIDI or MusicXML file into
+  notes: nothing else on disk is read or written, and a file the studio says it converted must be one of
+  that song's.
 
 ## Especially valuable reports
 

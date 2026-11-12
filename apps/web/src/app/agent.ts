@@ -48,7 +48,7 @@ export interface AgentInfo {
 }
 
 export type JobState = 'waiting' | 'running' | 'awaiting' | 'done' | 'failed' | 'cancelled';
-export type PermissionKind = 'install-pack' | 'send-creation' | 'screen' | 'photo' | 'microphone';
+export type PermissionKind = 'install-pack' | 'send-creation' | 'bounce' | 'render' | 'screen' | 'photo' | 'microphone';
 
 export interface Permission {
   kind: PermissionKind;
@@ -356,6 +356,8 @@ export function barSign(a: AgentState, project: string | null): 'busy' | 'done' 
 const ALLOW: Record<PermissionKind, string> = {
   'install-pack': 'Install it',
   'send-creation': 'Send it',
+  bounce: 'Bounce the song',
+  render: 'Hear it as the creation plays it',
   screen: 'Share the screen',
   photo: 'Take a photo',
   microphone: 'Record',
@@ -370,12 +372,15 @@ function diskSize(bytes: number): string {
 
 /**
  * The permission's button: a pack's says what it downloads ("Install it (131 MB)"), or, when the
- * catalog doesn't say, which pack it is ("Install Iowa Flute").
+ * catalog doesn't say, which pack it is ("Install Iowa Flute"); a creation's render, which creation
+ * ("Hear it as my-game").
  */
 export function allowLabel(
   p: Pick<Permission, 'kind' | 'pack'>,
   pack?: { name: string; bytes: number | null; installed?: boolean },
+  creation?: string,
 ): string {
+  if (p.kind === 'render' && creation) return `Hear it as ${creation}`;
   if (p.kind !== 'install-pack') return ALLOW[p.kind];
   if (pack?.bytes && !pack.installed) return `${ALLOW['install-pack']} (${diskSize(pack.bytes)})`;
   const name = pack?.name ?? p.pack;
@@ -769,6 +774,19 @@ export async function upload(file: Ready, project: string): Promise<string> {
     throw new AgentError(data.error ?? `${file.name} couldn’t be sent (${res.status})`, res.status);
   if (file.meta) await call('PUT', `/api/agent/attachments/${data.id}/meta`, file.meta);
   return data.id;
+}
+
+/** A file this device sent (or its running job may read), as the host keeps it: for the studio to import. */
+export async function attachmentData(id: string): Promise<Blob> {
+  const t = token();
+  const res = await fetch(`/api/agent/attachments/${encodeURIComponent(id)}/data`, {
+    headers: t ? { authorization: `Bearer ${t}` } : {},
+  });
+  if (!res.ok) {
+    const data = (await res.json().catch(() => ({}))) as { error?: string };
+    throw new AgentError(data.error ?? `The attachment couldn’t be fetched (${res.status})`, res.status);
+  }
+  return res.blob();
 }
 
 /**

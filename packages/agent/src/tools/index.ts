@@ -23,6 +23,7 @@ import { trackTools } from './tracks.ts';
 // ---- timeline ----
 
 // ---- import ----
+import { importTools } from './import.ts';
 
 export const TOOLS: readonly Tool[] = [
   ...songTools,
@@ -40,6 +41,7 @@ export const TOOLS: readonly Tool[] = [
 
   ...scanTools,
   // ---- import ----
+  ...importTools,
 
   ...conversationTools,
 ];

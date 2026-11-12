@@ -10,6 +10,7 @@ import {
   type MetersMeasure,
   type MixMeasure,
   type TakeMeasure,
+  type TracksMeasure,
 } from '../src/api.ts';
 import { BAR, call, refused, song } from './helpers.ts';
 
@@ -238,6 +239,40 @@ describe('measure', () => {
     expect(second.text).toContain('Verse (bars 1–4) -16.1; Chorus (bars 5–8) -12.9');
     expect(second.text).toContain('63 -22, 125 -20');
     expect(second.text).toContain('tilt -3.2 dB per octave');
+  });
+
+  it('says what was silent, or left out, because it plays a pack that isn’t installed here', async () => {
+    const unplayable = {
+      tracks: [
+        { id: 'trk_strings', name: 'Strings', pack: 'vsco2' },
+        { id: 'trk_bass', name: 'Bass', pack: 'vsco2' },
+      ],
+      plugins: [{ id: 'fx_rep', name: 'Drum Replacer', channel: 'trk_bass', pack: 'drums' }],
+    };
+    const tracks: TracksMeasure = {
+      kind: 'tracks',
+      tick: 0,
+      end: BAR * 4,
+      tracks: [
+        { id: 'trk_strings', name: 'Strings', output: 'master', muted: false, silent: true, missing: 'vsco2' },
+        { id: 'trk_bass', name: 'Bass', output: 'master', muted: false, silent: false, lufs: -20, peak: -6 },
+      ].map((t) => ({ lufs: null, peak: null, truePeak: null, octaves: [], ...t })),
+      masking: null,
+      errors: [],
+      unplayable: { tracks: [], plugins: unplayable.plugins },
+    };
+    const api = setup({ measured: { mix: done({ ...mix, unplayable }), tracks: done(tracks) } });
+    const m = await call(api, 'measure', { what: 'mix' });
+    expect(m.text).toContain(
+      "Strings and Bass play packs that aren't installed here (vsco2), so they're silent in this measurement, as in the studio.",
+    );
+    expect(m.text).toContain(
+      "The Drum Replacer on Bass plays a sound from a pack that isn't installed here (drums), so it's left out of this measurement.",
+    );
+    const t = await call(api, 'measure', { what: 'tracks' });
+    expect(t.text).toContain("Strings: silent (it plays vsco2, a pack that isn't installed here).");
+    expect(t.text).toContain('The Drum Replacer on Bass plays a sound');
+    expect(t.text).not.toContain('Strings and Bass');
   });
 
   it('reads the newest bounce, and says when it’s older than the song', async () => {

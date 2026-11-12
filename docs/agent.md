@@ -171,7 +171,12 @@ waits, the job's line under the bar says how far the measurement has got ("Still
 question about the song as it is now (its revision and the body) joins the measurement under way, or
 is answered from the cache. Renders are `renderSession` with `finish: false`, from two bars before
 `from` (not measured), slower than real time; one estimated past ten minutes is refused (422,
-`reason: 'too-long'`) with what to do instead. A measurement is cancelled when the last job that asked
+`reason: 'too-long'`) with what to do instead. What plays a HO[LO] Pack that isn't installed (asked of
+the same source the render reads) is silent in a measurement, as in the studio: its tracks are muted
+with no instrument to load, and plugins that play such a pack's kit or response are left out, in the
+measured copy only; the result's `unplayable` lists them (`{tracks:[{id, name, pack}], plugins:[{id,
+name, channel, pack}]}`), a silent track's level says `missing: pack`, and a plugin measured on such
+a track, or one playing such a pack itself, fails with why. A measurement is cancelled when the last job that asked
 for it is stopped or fails; when that job's turn simply ends, it runs on (up to 15 minutes) for the
 next turn to collect. A lane's child is let go after a minute with nothing to do, and when the server
 closes.

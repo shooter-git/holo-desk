@@ -216,6 +216,13 @@ export interface TakeMeasure {
   };
 }
 
+/** What of the song plays a HO[LO] Pack that isn't installed here: silent in a render, as in the studio. */
+export interface UnplayableMeasure {
+  tracks: { id: string; name: string; pack: string }[];
+  /** Plugins whose kit or response is in such a pack: left out. */
+  plugins: { id: string; name: string; channel: string; pack: string }[];
+}
+
 /** Loudness (LUFS, LU), peaks (dBTP, dBFS) and samples at full scale; null where silent. */
 export interface LoudnessMeasure {
   seconds: number;
@@ -252,6 +259,7 @@ export interface MixMeasure {
   octaves: (number | null)[];
   tilt: number | null;
   errors: string[];
+  unplayable?: UnplayableMeasure;
 }
 
 export interface TracksMeasure {
@@ -271,9 +279,12 @@ export interface TracksMeasure {
     /** Third-octave bands 25 Hz to 20 kHz (dB), for one track. */
     thirds?: (number | null)[];
     source?: { lufs: number | null; peak: number | null } | null;
+    /** It plays this pack, which isn't installed here: silent, not rendered. */
+    missing?: string;
   }[];
   masking: { a: string; b: string; bands: { hz: number; overlap: number; diff: number }[] } | null;
   errors: string[];
+  unplayable?: UnplayableMeasure;
 }
 
 export interface PluginMeasure {
@@ -298,6 +309,7 @@ export interface PluginMeasure {
     gr: { active: number; median: number; p90: number; max: number } | null;
   };
   errors: string[];
+  unplayable?: UnplayableMeasure;
 }
 
 export interface MetersMeasure {

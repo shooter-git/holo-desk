@@ -5,7 +5,10 @@
  * them in words), and says how far it has got as it goes.
  *
  * Renders are the engine's (renderSession), unmastered (`finish: false`), from two bars before where
- * the measurement starts so reverbs and compressors have settled; those bars aren't measured.
+ * the measurement starts so reverbs and compressors have settled; those bars aren't measured. What
+ * plays a HO[LO] Pack that isn't installed here (an instrument, a Drum Replacer's kit, a Space
+ * Designer's response) is silent in the studio, so it's silent in the measurement too, and the
+ * answer says so (`unplayable`).
  */
 import {
   buildSampler,
@@ -18,6 +21,7 @@ import {
   type PreparedImpulse,
   pluginImpulses,
   prepareImpulse,
+  type RenderSource,
   renderSession,
   type SamplerSpec,
   tickToFrame,
@@ -79,6 +83,14 @@ export type ChildInput =
 /** How far a measurement has got (0–1), and what it's doing. */
 export type Progress = (fraction: number, stage: string) => void;
 
+/** What of the song plays a HO[LO] Pack that isn't installed here, left silent in a measurement. */
+export interface Unplayable {
+  /** Tracks whose instrument (or an articulation's) is in a pack that isn't here. */
+  tracks: { id: string; name: string; pack: string }[];
+  /** Plugins whose kit or response is in a pack that isn't here: left out. */
+  plugins: { id: string; name: string; channel: string; pack: string }[];
+}
+
 export interface TakeResult extends TakeReport {
   kind: 'take';
   /** The track (null: a recording that isn't on one), and its name or the file's. */
@@ -113,6 +125,8 @@ export interface MixResult {
   tilt: number | null;
   /** What the render reported. */
   errors: string[];
+  /** What plays a pack that isn't installed here, silent in the render. */
+  unplayable?: Unplayable;
 }
 
 export interface TrackLevel {
@@ -131,6 +145,8 @@ export interface TrackLevel {
   thirds?: (number | null)[];
   /** An audio track's recordings as they are (their gain in), before its plugins and fader. */
   source?: { lufs: number | null; peak: number | null } | null;
+  /** It plays this pack, which isn't installed here: silent, not rendered. */
+  missing?: string;
 }
 
 export interface TracksResult {
@@ -141,6 +157,7 @@ export interface TracksResult {
   /** Two tracks measured together: where they compete. */
   masking: { a: string; b: string; bands: MaskingBand[] } | null;
   errors: string[];
+  unplayable?: Unplayable;
 }
 
 export interface PluginResult {
@@ -172,6 +189,7 @@ export interface PluginResult {
     gr: { active: number; median: number; p90: number; max: number } | null;
   };
   errors: string[];
+  unplayable?: Unplayable;
 }
 
 export type MeasureResult = TakeResult | MixResult | TracksResult | PluginResult;
@@ -197,6 +215,92 @@ interface Rendered {
   to: number;
   start: number;
   errors: string[];
+}
+
+/**
+ * What of a song plays a pack that isn't installed here, asked of the source a render reads (an
+ * instrument it can't find, a kit or a response it can't read): each pack's instrument is asked once.
+ */
+export async function unplayable(project: Project, source: RenderSource): Promise<Unplayable> {
+  const known = new Map<string, boolean>();
+  const here = async (key: string, look: () => Promise<unknown>): Promise<boolean> => {
+    let ok = known.get(key);
+    if (ok === undefined) {
+      ok = await look().then(
+        () => true,
+        () => false,
+      );
+      known.set(key, ok);
+    }
+    return ok;
+  };
+  const instrumentHere = (pack: string, name: string) => here(`i:${pack}/${name}`, () => source.instrument(pack, name));
+  const out: Unplayable = { tracks: [], plugins: [] };
+  for (const t of project.tracks) {
+    for (const i of [t.instrument, ...t.articulations.map((a) => a.instrument)]) {
+      if ((i.type === 'sampler' || i.type === 'performance') && !(await instrumentHere(i.pack, i.name))) {
+        out.tracks.push({ id: t.id, name: t.name, pack: i.pack });
+        break;
+      }
+    }
+  }
+  const sr = project.sampleRate ?? 48000;
+  const channels: [string, Channel][] = [
+    ['master', project.master],
+    ...project.buses.map((b): [string, Channel] => [b.id, b.channel]),
+    ...project.tracks.map((t): [string, Channel] => [t.id, t.channel]),
+  ];
+  for (const [channel, c] of channels) {
+    for (const p of c.inserts) {
+      const name = PLUGINS.find((d) => d.type === p.type)?.name ?? p.type;
+      const kit = insertKit(p);
+      const [kitPack = '', ...kitName] = (kit ?? '').split('/');
+      let pack: string | null = kit && !(await instrumentHere(kitPack, kitName.join('/'))) ? kitPack : null;
+      for (const want of pluginImpulses(p.type, p.params, p.settings, sr)) {
+        if (pack || want.source.kind !== 'file') continue;
+        const { pack: from, name: response } = want.source;
+        if (!(await here(`r:${from}/${response}`, () => source.impulse(from, response)))) pack = from;
+      }
+      if (pack) out.plugins.push({ id: p.id, name, channel, pack });
+    }
+  }
+  return out;
+}
+
+/**
+ * The song as the studio plays it with those packs missing: their tracks silent (muted, with no
+ * instrument to load) and their plugins left out, with their automation. The song itself is untouched.
+ */
+export function withoutUnplayable(project: Project, u: Unplayable): Project {
+  if (!u.tracks.length && !u.plugins.length) return project;
+  const p = structuredClone(project);
+  const silent = new Set(u.tracks.map((m) => m.id));
+  for (const t of p.tracks) {
+    if (!silent.has(t.id)) continue;
+    t.instrument = { type: 'none' };
+    t.articulations = t.articulations.map((a) => ({ ...a, instrument: { type: 'none' } }));
+    t.channel.mute = true;
+  }
+  const gone = new Set(u.plugins.map((m) => m.id));
+  for (const c of [p.master, ...p.buses.map((b) => b.channel), ...p.tracks.map((t) => t.channel)]) {
+    if (!c.inserts.some((x) => gone.has(x.id))) continue;
+    c.inserts = c.inserts.filter((x) => !gone.has(x.id));
+    c.automation = (c.automation ?? []).filter(
+      (a) => !(a.param.startsWith('fx:') && gone.has(a.param.split(':')[1] ?? '')),
+    );
+  }
+  return p;
+}
+
+/** Said with a result when something it rendered was silent for want of a pack (only `channels`', if given). */
+function unplayableOf(u: Unplayable, channels?: readonly string[]): { unplayable?: Unplayable } {
+  const kept = channels
+    ? {
+        tracks: u.tracks.filter((m) => channels.includes(m.id)),
+        plugins: u.plugins.filter((m) => channels.includes(m.channel)),
+      }
+    : u;
+  return kept.tracks.length || kept.plugins.length ? { unplayable: kept } : {};
 }
 
 /** Where a measurement starts and ends (ticks), and where its render begins: two bars before. */
@@ -510,7 +614,8 @@ async function mix(input: Extract<ChildInput, { kind: 'mix' }>, progress: Progre
     ...(input.from !== undefined ? { from: input.from } : {}),
     ...(input.to !== undefined ? { to: input.to } : {}),
   };
-  const r = await render(structuredClone(input.project), source, range, progress, 0, 0.95);
+  const u = await unplayable(input.project, source);
+  const r = await render(structuredClone(withoutUnplayable(input.project, u)), source, range, progress, 0, 0.95);
   progress(0.96, 'Measuring');
   return {
     kind: 'mix',
@@ -519,6 +624,7 @@ async function mix(input: Extract<ChildInput, { kind: 'mix' }>, progress: Progre
     end: r.to,
     ...mixOf(after(r.channels, r.skip), r.sr, input.project, r.from, r.to),
     errors: r.errors,
+    ...unplayableOf(u),
   };
 }
 
@@ -555,6 +661,8 @@ async function tracks(input: Extract<ChildInput, { kind: 'tracks' }>, progress: 
   const { project } = input;
   const source = measureSource(input.dataDir, project.id);
   const { from, to } = renderRange(project, input.from, input.to);
+  const u = await unplayable(project, source);
+  const playable = withoutUnplayable(project, u);
   const out: TrackLevel[] = [];
   const kept = new Map<string, { channels: Float32Array[]; sr: number }>();
   const errors: string[] = [];
@@ -591,7 +699,8 @@ async function tracks(input: Extract<ChildInput, { kind: 'tracks' }>, progress: 
         src = { lufs: r1(m.integrated()), peak: dbOf(m.samplePeak) };
       } else src = null;
     }
-    if (!plays(t, from, to)) {
+    const missing = u.tracks.find((m) => m.id === t.id)?.pack;
+    if (missing || !plays(t, from, to)) {
       out.push({
         ...base,
         silent: true,
@@ -600,10 +709,11 @@ async function tracks(input: Extract<ChildInput, { kind: 'tracks' }>, progress: 
         truePeak: null,
         octaves: [],
         ...(src !== undefined ? { source: src } : {}),
+        ...(missing ? { missing } : {}),
       });
       continue;
     }
-    const r = await render(soloCopy(project, t.id), source, { from, to }, progress, i / n, (i + 1) / n, `${t.name}: `);
+    const r = await render(soloCopy(playable, t.id), source, { from, to }, progress, i / n, (i + 1) / n, `${t.name}: `);
     errors.push(...r.errors);
     const ch = after(r.channels, r.skip);
     const m = new LoudnessMeter(ch, r.sr);
@@ -629,7 +739,15 @@ async function tracks(input: Extract<ChildInput, { kind: 'tracks' }>, progress: 
       mask = { a, b, bands: masking(x.channels, y.channels, x.sr).slice(0, 6) };
     }
   }
-  return { kind: 'tracks', tick: from, end: to, tracks: out, masking: mask, errors: [...new Set(errors)].slice(0, 5) };
+  return {
+    kind: 'tracks',
+    tick: from,
+    end: to,
+    tracks: out,
+    masking: mask,
+    errors: [...new Set(errors)].slice(0, 5),
+    ...unplayableOf(u, input.tracks),
+  };
 }
 
 async function plugin(input: Extract<ChildInput, { kind: 'plugin' }>, progress: Progress): Promise<PluginResult> {
@@ -646,6 +764,12 @@ async function plugin(input: Extract<ChildInput, { kind: 'plugin' }>, progress: 
   };
   const source = measureSource(input.dataDir, project.id);
   const sr = project.sampleRate ?? 48000;
+  const u = await unplayable(project, source);
+  const itself = u.plugins.find((m) => m.id === p.id);
+  if (itself)
+    throw new Error(
+      `The ${base.plugin.name} plays a sound from ${itself.pack}, a pack that isn't installed here: it's silent in the studio too, and can't be measured until the pack is installed`,
+    );
   if (LINEAR.has(p.type)) {
     progress(0.2, 'Sending an impulse through it');
     const { host } = await hostFor(p, project, source, sr);
@@ -666,11 +790,17 @@ async function plugin(input: Extract<ChildInput, { kind: 'plugin' }>, progress: 
     throw new Error(
       `A ${def?.name ?? p.type} on a bus isn't measured on its sound yet: measure the tracks that feed the bus, or a plugin on a track or the master`,
     );
-  // the sound the plugin hears, then through it
+  const owner = u.tracks.find((m) => m.id === input.channel);
+  if (owner)
+    throw new Error(
+      `${owner.name} plays ${owner.pack}, a pack that isn't installed here: it's silent in the studio too, so its ${base.plugin.name} has nothing to work on until the pack is installed`,
+    );
+  // the sound the plugin hears (what plays a missing pack silent), then through it
+  const playable = withoutUnplayable(project, u);
   let copy: Project;
-  if (found.kind === 'track') copy = soloCopy(project, input.channel, p.id);
+  if (found.kind === 'track') copy = soloCopy(playable, input.channel, p.id);
   else {
-    copy = structuredClone(project);
+    copy = structuredClone(playable);
     const at = copy.master.inserts.findIndex((x) => x.id === p.id);
     copy.master.inserts = copy.master.inserts.slice(0, at);
     const kept = new Set(copy.master.inserts.map((x) => x.id));
@@ -725,6 +855,7 @@ async function plugin(input: Extract<ChildInput, { kind: 'plugin' }>, progress: 
       gr,
     },
     errors: rendered.errors,
+    ...unplayableOf(u, found.kind === 'track' ? [input.channel] : undefined),
   };
 }
 

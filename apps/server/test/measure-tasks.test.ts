@@ -116,6 +116,57 @@ describe('the measurements', () => {
     ).rejects.toThrow('on a bus');
   });
 
+  it('renders what plays a pack that isn’t installed here silent, as the studio does, and says so', async () => {
+    const { dataDir, song, keys } = world();
+    // no packs in this data folder: the piano's (with a compressor) and the Drum Replacer's kit are missing
+    const piano = { ...newTrack('Piano', { type: 'sampler', pack: 'vsco2', name: 'piano' }), id: 'trk_piano' };
+    const r = newRegion(0, BAR * 4, 'Chords');
+    r.notes.push({ t: 0, d: BAR * 4, p: 60, v: 90 });
+    piano.regions.push(r);
+    const comp = newPlugin('compressor');
+    piano.channel.inserts.push(comp);
+    song.tracks.push(piano);
+    const replacer = { ...newPlugin('replacer'), settings: { kit: 'vsco2/kit' } };
+    keys.channel.inserts.push(replacer);
+    keys.channel.automation = [{ param: `fx:${replacer.id}:mix`, points: [[0, 50]], mode: 'read' }];
+    const unplayable = {
+      tracks: [{ id: piano.id, name: 'Piano', pack: 'vsco2' }],
+      plugins: [{ id: replacer.id, name: 'Drum Replacer', channel: keys.id, pack: 'vsco2' }],
+    };
+    const mix = await runTask({ kind: 'mix', dataDir, project: song, from: BAR, to: BAR * 3 }, () => {});
+    if (mix.kind !== 'mix') throw new Error(mix.kind);
+    expect(mix.unplayable).toEqual(unplayable);
+    expect(mix.errors).toEqual([]);
+    // the same as the mix without them
+    const without = structuredClone(song);
+    without.tracks = without.tracks.filter((t) => t.id !== piano.id);
+    const k = without.tracks.find((t) => t.id === keys.id) as Track;
+    k.channel.inserts = k.channel.inserts.filter((p) => p.id !== replacer.id);
+    k.channel.automation = [];
+    const plain = await runTask({ kind: 'mix', dataDir, project: without, from: BAR, to: BAR * 3 }, () => {});
+    if (plain.kind !== 'mix') throw new Error(plain.kind);
+    expect(plain.unplayable).toBeUndefined();
+    expect(mix.loudness.integrated).toBeCloseTo(plain.loudness.integrated ?? 0, 1);
+    // the song itself is left as it is
+    expect(piano.instrument).toEqual({ type: 'sampler', pack: 'vsco2', name: 'piano' });
+    expect(keys.channel.inserts.map((p) => p.id)).toContain(replacer.id);
+    // each track alone: the piano silent, the Keys without its replacer
+    const each = await runTask({ kind: 'tracks', dataDir, project: song, tracks: [piano.id, keys.id] }, () => {});
+    if (each.kind !== 'tracks') throw new Error(each.kind);
+    expect(each.tracks[0]).toMatchObject({ name: 'Piano', silent: true, missing: 'vsco2', lufs: null });
+    expect(each.tracks[1]?.lufs).not.toBeNull();
+    expect(each.unplayable).toEqual(unplayable);
+    const vocalsAlone = await runTask({ kind: 'tracks', dataDir, project: song, tracks: ['trk_vocals'] }, () => {});
+    expect(vocalsAlone.kind === 'tracks' && vocalsAlone.unplayable).toBeUndefined();
+    // a plugin with nothing to work on, or one that plays the missing pack itself, says why
+    await expect(
+      runTask({ kind: 'plugin', dataDir, project: song, channel: piano.id, plugin: comp.id }, () => {}),
+    ).rejects.toThrow("Piano plays vsco2, a pack that isn't installed here");
+    await expect(
+      runTask({ kind: 'plugin', dataDir, project: song, channel: keys.id, plugin: replacer.id }, () => {}),
+    ).rejects.toThrow("The Drum Replacer plays a sound from vsco2, a pack that isn't installed here");
+  });
+
   it('measures a bounce, as the song from its start', async () => {
     const { dataDir, song } = world();
     const dir = join(dataDir, 'bounces', song.id);

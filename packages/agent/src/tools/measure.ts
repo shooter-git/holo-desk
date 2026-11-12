@@ -19,6 +19,7 @@ import type {
   PluginMeasure,
   TakeMeasure,
   TracksMeasure,
+  UnplayableMeasure,
 } from '../api.ts';
 import {
   barsText,
@@ -92,6 +93,31 @@ function loudest(levels: readonly (number | null)[]): string {
 }
 
 // ---- what each measurement says ----
+
+/** "A", "A and B", "A, B and C". */
+const listed = (items: readonly string[]): string =>
+  items.length < 2 ? (items[0] ?? '') : `${items.slice(0, -1).join(', ')} and ${items[items.length - 1]}`;
+
+/** What a render left silent, or out, because it plays a pack that isn't installed here. */
+function unplayableLines(u: UnplayableMeasure | undefined, song: Project): string[] {
+  if (!u) return [];
+  const out: string[] = [];
+  const packs = (list: { pack: string }[]) => listed([...new Set(list.map((m) => m.pack))]);
+  if (u.tracks.length) {
+    const one = u.tracks.length === 1;
+    out.push(
+      `${listed(u.tracks.map((t) => t.name))} ${one ? 'plays a pack' : 'play packs'} that ${one ? "isn't" : "aren't"} installed here (${packs(u.tracks)}), so ${one ? "it's" : "they're"} silent in this measurement, as in the studio.`,
+    );
+  }
+  if (u.plugins.length) {
+    const one = u.plugins.length === 1;
+    const names = listed(u.plugins.map((p) => `the ${p.name} on ${channelName(song, p.channel)}`));
+    out.push(
+      `${names.charAt(0).toUpperCase()}${names.slice(1)} ${one ? 'plays a sound' : 'play sounds'} from a pack that isn't installed here (${packs(u.plugins)}), so ${one ? "it's" : "they're"} left out of this measurement.`,
+    );
+  }
+  return out;
+}
 
 function takeText(r: TakeMeasure, song: Project, middleC: MiddleC): string {
   const s = r.summary;
@@ -240,6 +266,7 @@ function mixText(r: MixMeasure, song: Project): string {
     lines.push(
       `Bounces are mastered on top of this, to ${song.finish.lufs} LUFS with a ${song.finish.ceiling} dBTP ceiling (finish_master).`,
     );
+  lines.push(...unplayableLines(r.unplayable, song));
   if (r.errors.length) lines.push(`The render reported: ${r.errors.join('; ')}`);
   return lines.join('\n');
 }
@@ -250,7 +277,8 @@ function tracksText(r: TracksMeasure, song: Project): string {
   ];
   for (const t of r.tracks) {
     const parts: string[] = [];
-    if (t.silent) parts.push('nothing plays there');
+    if (t.missing) parts.push(`silent (it plays ${t.missing}, a pack that isn't installed here)`);
+    else if (t.silent) parts.push('nothing plays there');
     else {
       parts.push(`${num(t.lufs)} LUFS, peak ${num(t.peak)} dBFS`);
       const where = loudest(t.octaves);
@@ -280,6 +308,8 @@ function tracksText(r: TracksMeasure, song: Project): string {
         : `${a} and ${b} hardly compete: no band has both sounding together a quarter of the time.`,
     );
   }
+  // (each silent track says so on its own line)
+  lines.push(...unplayableLines(r.unplayable && { ...r.unplayable, tracks: [] }, song));
   if (r.errors.length) lines.push(`The render reported: ${r.errors.join('; ')}`);
   return lines.join('\n');
 }
@@ -338,6 +368,7 @@ function pluginText(r: PluginMeasure, song: Project): string {
     if (moved.length)
       lines.push(`Change by octave band (dB): ${moved.map(([c, d]) => `${hz(c)} ${signed(d, 1)}`).join(', ')}.`);
   }
+  lines.push(...unplayableLines(r.unplayable, song));
   if (r.errors.length) lines.push(`The render reported: ${r.errors.join('; ')}`);
   return lines.join('\n');
 }

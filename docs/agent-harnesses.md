@@ -506,8 +506,8 @@ rewrites.
 **MCP handshake** (seen): `initialize` with protocol `2025-11-25`, client `Cursor`, one server process per run.
 It sends `tools/call` with no `_meta`. It once tried `resources/read`; our `-32601` answer was fine.
 
-**Many tools:** MCP tools reach the model through the two meta-tools (search, then call), not one by one. No cap
-showed, but more than 3 tools wasn't tried.
+**Many tools:** MCP tools reach the model through the two meta-tools (search, then call), not one by one. With 48
+and with 96 tools, one GetDynamicTools for `holo` returned them all (see "Tool count").
 
 **Sign-in.**
 - `cursor-agent status --format json` exits 0 either way:
@@ -563,6 +563,38 @@ Cursor unavailable when they fail. What it does instead is the flag probe below.
   skills repositories) with `git fetch`, now over anonymous https with no ssh (see "Every harness's
   environment"), and its worker starts a TypeScript language server with `npx -y typescript-language-server
   --stdio`, which npm downloads into the private home on first use. Neither is offered to the model as a tool.
+
+## Tool count
+
+Can the agent have more than 40 tools? Tried on 2026-11-12 with `tools/agent-spike-tools.mjs`: Claude Code
+2.1.322, Codex CLI 0.167.1, Cursor CLI 2026.11.11-043ef28.
+
+- **The server:** N tools, `tool_01`…, each answering `ok-NN-<nonce>` (a new nonce each time the server
+  starts). Descriptions and schemas are padded to the sizes of HO[LO]'s 38 real tools, cycled. So 48 tools are
+  43.0k characters of `tools/list` (HO[LO]'s 38 are 35.4k), and 96 are 87.1k.
+- **The runs:** each harness ran sealed, with the adapters' own argv, environment and workspace files, imported
+  from `packages/agent/src/harness`. Two differences: no agent instructions, and Codex with `--ephemeral`.
+  Neither changes the tools. The models were the cheapest, as in C0. One prompt: count the holo tools, call the
+  last two, say what they returned. The server's log shows each call.
+
+| | Claude Code (`haiku`, low) | Codex (`gpt-6-luna`, low) | Cursor (`composer-2.5`) |
+|---|---|---|---|
+| 48 tools: seen | 48 (`init` listed 48) | 48 | 48 (one GetDynamicTools returned all) |
+| `tool_45`, `tool_48` | called; both answers reported | called; both reported | called; both reported |
+| 96 tools: seen, `tool_93` and `tool_96` | 96; both called and reported | 96; both | 96; both (one GetDynamicTools, 87k characters) |
+| Warnings about the tool count | none | none | none |
+
+What the tools cost differs:
+- **Claude** sends every tool in every request: about 18.2k prompt tokens with 48 tools and 33.3k with 96, so
+  about 315 tokens per tool of HO[LO]'s weight.
+- **Codex** (code mode) never lists MCP tools in the prompt, at any count (3 or 48, in `debug prompt-input`). It
+  calls them "deferred nested tools", and the model finds them in `ALL_TOOLS`. Its prompt stayed the same size
+  (24k and 23k input tokens).
+- **Cursor** brings them in when the model looks them up: GetDynamicTools without a tool name returned every
+  description and schema (16k and 32k input tokens).
+
+**Verdict:** no limit up to 96 in any harness, so the cap can rise to 48 with twice that in reserve. The
+`--disable-auto-update` flag kept Cursor at its version, and the settings and sign-in files were unchanged.
 
 ## Effects on `docs/agent.md` and the plan
 

@@ -159,6 +159,41 @@ studio, and is heard whole across its parts:
   next part within 15 s, the listen is over and what came after the last part is let go.
 - Done pressed between parts ends the next part at once, with what was played up to Done.
 
+### Measuring (`…/measure`)
+
+`apps/server/src/agent/measure/`. Measurements run in child processes at the lowest priority
+(`runner.ts`, `child.ts`): one lane for files (a take, a bounce, an attachment, a plugin's response)
+and one for renders (the mix, tracks, a plugin on its track's sound), one measurement at a time in
+each. A call waits up to 40 s (the tool's client gives it 50: Cursor cuts a call at 60). The same
+question about the song as it is now (its revision and the body) joins the measurement under way, or
+is answered from the cache. Renders are `renderSession` with `finish: false`, from two bars before
+`from` (not measured), slower than real time; one estimated past ten minutes is refused (422,
+`reason: 'too-long'`) with what to do instead. A measurement is cancelled when the last job that asked
+for it is stopped or fails; when that job's turn simply ends, it runs on (up to 15 minutes) for the
+next turn to collect. A lane's child is let go after a minute with nothing to do, and when the server
+closes.
+
+| Method and path | Body / query | Answer |
+|---|---|---|
+| `POST …/measure` | `{what:'take'\|'mix'\|'tracks'\|'plugin'\|'meters'\|'file', track?, region?, plugin?, from?, to?, against?, grid?, source?:'render'\|'bounce', attachment?}` (ids and ticks) | `{done:true, task, result, cached?}`, or `{done:false, task, progress, eta, stage}` after 40 s (`eta` in seconds). `take`: an audio `track` (or a recording `attachment`), `region?`, `against` `'key'` (default), `'none'` or an instrument track's id, `grid` in ticks (240). `mix`: rendered, or the newest file in `data/bounces/<song>/` with `source:'bounce'` (404 `reason:'no-bounce'` without one; `made` and `stale` say when it was made and whether the song changed after). `tracks`: every track alone, or `track`, and with `against` a second track (masking). `plugin`: `track` is a track's, a bus's id or `master`; EQs, Space Reverb, Space Designer, Tape Delay and Stereo Width by their response to an impulse, the rest on the track's own sound (not on a bus). `file`: an `attachment` (WAV, FLAC or AIFF; 422 for MP3, OGG, M4A), else the newest bounce. `meters` **studio**: asked of the requester's studio as `agent-meters` (3 s). A failed measurement is 422 with its reason. |
+| `GET …/measure/:task` | | As above, for a measurement of the job's song by id (404 once it's forgotten). |
+
+`agent-meters {id}` (server → studio, asked): the studio reads every channel's meter twenty times a
+second while the song plays (`apps/web/src/app/agent-meters.ts`) and acks
+`{playing, seconds, channels:[{id, peak:[l, r], max:[l, r], gr, grMax, clipped}]}`: dBFS of the last
+3 s and since play started (null for silence), the deepest gain reduction (dB), and whether it went
+past full scale. After play stops it answers what the last play showed.
+
+The results (`packages/agent/src/api.ts`, `MeasureResult`) are numbers: a take's notes (`tick`, `pitch`
+with cents, `target`, `cents`, `inKey` or `ref`, `drift`, `vibrato:[Hz, ±cents]`, `grid` ms, `db`), its
+phrases and a summary; the mix's loudness (integrated, momentary and short-term maxima, LRA, true and
+sample peak, samples at full scale), its sections (markers, else every 8 bars) and octave bands with a
+tilt; each track's loudness, peaks, octave bands and (audio tracks) its recordings' own level; a
+plugin's third-octave response, decay, pre-delay and echoes, or its gain reduction and in/out levels.
+The analysis is `@holo/engine/analysis` (packages/engine/src/analysis/): pitch to a cent or two (YIN,
+refined at the full rate), loudness by BS.1770-4 and EBU Tech 3341/3342 with the finish's own
+K-weighting and true-peak interpolator, bands through the engine's FFT.
+
 ## Live channel (`/api/live`)
 
 The server hands the agent only `harnesses`, `agent-progress`, `agent-session`, `agent-done`,
@@ -353,7 +388,7 @@ the last "…and N more changes" when there are more:
 
 ## The agent's tools (`@holo/agent`)
 
-`packages/agent/src/tools/index.ts` lists 39 tools (at most 40), named for MCP (lower-case letters,
+`packages/agent/src/tools/index.ts` lists 40 tools (at most 40), named for MCP (lower-case letters,
 digits and `_`). Changing and asking tools run one at a time, in the order they're called; seeing and
 playing tools run alongside. A change may also post a line under the bar (`…/progress`).
 
@@ -451,3 +486,9 @@ the same id (the `holo audio` command, which sends FLAC, gets the same answer as
 server makes the songs' FLAC and AIFF files kept before this was so WAV once as it starts
 (`apps/server/src/audio-files.ts`): the WAV replaces the file, never sits beside it. A bounce and a
 headless render read only WAV.
+
+### Measuring
+
+| Tool | Kind | What it does |
+|---|---|---|
+| `measure` | see | How the song sounds, measured: a take's pitch (cents against the key's nearest scale tone, or a track's notes), drift, vibrato, timing against the grid and phrase levels; the mix's loudness, peaks, clipping, sections and balance (rendered, or the newest bounce); each track alone, and where two mask each other; what a plugin does; the studio's meters while it plays; an attached recording. A render not done within 40 s says how far it got, and the same call again collects it. |

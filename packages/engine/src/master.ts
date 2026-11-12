@@ -91,7 +91,7 @@ function filt(
 // ---- measurement ----
 
 /** BS.1770 K-weighting, its coefficients worked out for the rate (as pyloudnorm does). */
-function kWeight(x: Float64Array, sr: number): Float64Array {
+export function kWeight(x: Float64Array, sr: number): Float64Array {
   const G = 3.999843853973347;
   const Q = 0.7071752369554196;
   const fc = 1681.974450955533;
@@ -181,7 +181,7 @@ const INTERP4 = (() => {
 })();
 
 /** Each frame's true peak: the largest of the four 4×-interpolated points from it, over the channels. */
-function truePeakEnv(x: Float64Array[]): Float64Array {
+export function truePeakEnv(x: Float64Array[]): Float64Array {
   const n = x[0]?.length ?? 0;
   const env = new Float64Array(n);
   for (const ch of x) {

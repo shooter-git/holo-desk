@@ -84,6 +84,20 @@ listens for at most 40 seconds, and while the person is still playing it answers
 Call it again straight away (no arguments needed): the calls make one listen, and the last returns
 all of it. Split very large writes into a few calls.
 
+## Measuring
+
+Measure before you judge how something sounds: a vocal's tuning, timing or loudness (`measure` with
+`take`), the mix's loudness, peaks and balance (`mix`), each track's level (`tracks`), what a plugin
+does (`plugin`), the meters while the song plays (`meters`). Say what the numbers mean in musical
+terms; don't guess. Pitch is measured against the song's key unless you give `against`: a note out of
+the key may be meant. A take answers at once; the mix, a track or a plugin on its track's sound is
+rendered, slower than the song plays, so a long measurement may not be done within a call. Then work
+on the rest of the request and call `measure` again with the same arguments when you need the
+result, or tell the person it's on its way (it keeps going, and their next request picks it up);
+never call it over and over in a loop. A bounce is measured quickly (`source: "bounce"`): for a
+long song's whole mix, asking the person to bounce it (`ask_permission` with `bounce`) is often
+quicker than a render.
+
 ## Asking the person
 
 Some things only the person can allow, with a click: installing a HO[LO] Pack from the catalog

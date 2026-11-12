@@ -142,6 +142,186 @@ export interface Image {
 
 // ---- measure ----
 
+/** What `measure` measures (docs/agent.md, "Measuring"). */
+export type MeasureWhat = 'take' | 'mix' | 'tracks' | 'plugin' | 'meters' | 'file';
+
+/** POST …/measure: ids and ticks (the tool turns names and positions into these). */
+export interface MeasureBody {
+  what: MeasureWhat;
+  /** A track's id (take, tracks); a track's, a bus's or "master" (plugin). */
+  track?: string;
+  region?: string;
+  plugin?: string;
+  from?: number;
+  to?: number;
+  /** take: "key", "none" or a reference track's id; tracks: a second track's id. */
+  against?: string;
+  /** take: the grid, in ticks. */
+  grid?: number;
+  source?: 'render' | 'bounce';
+  attachment?: string;
+}
+
+/** A measured note of a take (docs/agent.md): ticks (null off the timeline), seconds, MIDI pitches, cents, ms, dB. */
+export interface TakeNoteMeasure {
+  tick: number | null;
+  end: number | null;
+  at: number;
+  length: number;
+  pitch: number;
+  target: number;
+  cents: number;
+  inKey?: boolean;
+  ref?: number | null;
+  drift: number;
+  vibrato: [number, number] | null;
+  grid: number | null;
+  attack: boolean;
+  db: number;
+  peak: number;
+  region: string | null;
+}
+
+export interface TakeMeasure {
+  kind: 'take';
+  track: string | null;
+  name: string;
+  regions: string[];
+  seconds: number;
+  against: { kind: 'key'; keys: string[] } | { kind: 'track'; track: string } | { kind: 'none' };
+  grid: number;
+  notes: TakeNoteMeasure[];
+  phrases: {
+    tick: number | null;
+    end: number | null;
+    at: number;
+    length: number;
+    notes: number;
+    db: number;
+    peak: number;
+  }[];
+  summary: {
+    notes: number;
+    meanAbs: number;
+    bias: number;
+    within10: number;
+    within25: number;
+    sharp: number;
+    flat: number;
+    timing: { mean: number; spread: number; late: number; early: number } | null;
+    vibrato: { notes: number; rate: number; depth: number } | null;
+    drifting: number;
+  };
+}
+
+/** Loudness (LUFS, LU), peaks (dBTP, dBFS) and samples at full scale; null where silent. */
+export interface LoudnessMeasure {
+  seconds: number;
+  integrated: number | null;
+  momentaryMax: number | null;
+  shortTermMax: number | null;
+  range: number | null;
+  truePeak: number | null;
+  samplePeak: number | null;
+  over: number;
+  overRuns: number;
+}
+
+export interface MixMeasure {
+  kind: 'mix';
+  source: 'render' | 'bounce' | 'file';
+  name?: string;
+  /** A bounce: when it was made, and whether the song changed after. */
+  made?: string;
+  stale?: boolean;
+  tick: number | null;
+  end: number | null;
+  loudness: LoudnessMeasure;
+  sections: {
+    name: string | null;
+    tick: number | null;
+    end: number | null;
+    at: number;
+    length: number;
+    lufs: number | null;
+    shortTermMax: number | null;
+  }[];
+  /** Octave bands 31.5 Hz to 16 kHz (dB). */
+  octaves: (number | null)[];
+  tilt: number | null;
+  errors: string[];
+}
+
+export interface TracksMeasure {
+  kind: 'tracks';
+  tick: number;
+  end: number;
+  tracks: {
+    id: string;
+    name: string;
+    output: string;
+    muted: boolean;
+    silent: boolean;
+    lufs: number | null;
+    peak: number | null;
+    truePeak: number | null;
+    octaves: (number | null)[];
+    /** Third-octave bands 25 Hz to 20 kHz (dB), for one track. */
+    thirds?: (number | null)[];
+    source?: { lufs: number | null; peak: number | null } | null;
+  }[];
+  masking: { a: string; b: string; bands: { hz: number; overlap: number; diff: number }[] } | null;
+  errors: string[];
+}
+
+export interface PluginMeasure {
+  kind: 'plugin';
+  channel: string;
+  plugin: { id: string; type: string; name: string; bypass: boolean };
+  method: 'response' | 'signal';
+  response?: {
+    thirds: (number | null)[];
+    latency: number;
+    decay?: number | null;
+    predelay?: number | null;
+    echoes?: [number, number][];
+  };
+  signal?: {
+    tick: number;
+    end: number;
+    in: { lufs: number | null; peak: number | null };
+    out: { lufs: number | null; peak: number | null };
+    octavesIn: (number | null)[];
+    octavesOut: (number | null)[];
+    gr: { active: number; median: number; p90: number; max: number } | null;
+  };
+  errors: string[];
+}
+
+export interface MetersMeasure {
+  kind: 'meters';
+  playing: boolean;
+  seconds: number;
+  channels: {
+    id: string;
+    peak: [number | null, number | null];
+    max: [number | null, number | null];
+    gr: number | null;
+    grMax: number | null;
+    clipped: boolean;
+  }[];
+}
+
+export type MeasureResult = TakeMeasure | MixMeasure | TracksMeasure | PluginMeasure | MetersMeasure;
+
+/** A measurement's answer: its result, or (not done within 40 s) how far it has got and about how many seconds are left. */
+export type MeasureAnswer =
+  | { done: true; task: string; result: MeasureResult; cached?: boolean }
+  | { done: false; task: string; progress: number; eta: number | null; stage: string };
+
+/** A measuring call waits up to 40 s on the server: the client gives it 50 (a harness cuts a call at 60). */
+const MEASURE_TIMEOUT_MS = 50_000;
+
 // ---- import ----
 
 /**
@@ -207,6 +387,10 @@ export interface JobApi {
   finish(label: string, reply: string): Promise<{ ok: boolean }>;
 
   // ---- measure ----
+  /** POST …/measure: waits up to 40 s; not done, the same body again joins it (or GET …/measure/:task). */
+  measure(body: MeasureBody): Promise<MeasureAnswer>;
+  /** GET …/measure/:task: a measurement under way, waited for up to 40 s. */
+  measureTask(task: string): Promise<MeasureAnswer>;
 
   // ---- import ----
   /** POST …/import: an attachment brought into the song's files (a recording) or read as a song (MIDI, MusicXML). */
@@ -302,6 +486,8 @@ export function httpJobApi(base: string, job: string, tokenFile: string): JobApi
     finish: (label, reply) => json('POST', '/finish', { label, reply }),
 
     // ---- measure ----
+    measure: (body) => json('POST', '/measure', body, MEASURE_TIMEOUT_MS),
+    measureTask: (task) => json('GET', `/measure/${seg(task)}`, undefined, MEASURE_TIMEOUT_MS),
 
     // ---- import ----
     // (the server takes at most about 40 s, then says it isn't done; a harness cuts a call at 60)
@@ -326,6 +512,8 @@ export interface FakeJobApiOptions {
   attachments?: Record<string, Attachment>;
 
   // ---- measure ----
+  /** What measuring answers, by what's measured: one answer, or several in turn (the last again once they run out). */
+  measured?: Partial<Record<MeasureWhat, MeasureAnswer | MeasureAnswer[]>>;
 
   // ---- import ----
   /** What importing each attachment brings: an answer, or one a call at a time (the last given again). */
@@ -454,6 +642,22 @@ export function fakeJobApi(project: Project, options: FakeJobApiOptions = {}): F
     },
 
     // ---- measure ----
+    async measure(body) {
+      log('measure', body);
+      const given = options.measured?.[body.what];
+      if (!given) throw new ApiError(404, `Nothing to measure (${body.what})`);
+      if (!Array.isArray(given)) return given;
+      const i = calls.filter((c) => c.method === 'measure' && (c.args[0] as MeasureBody).what === body.what).length - 1;
+      return given[Math.min(i, given.length - 1)] as MeasureAnswer;
+    },
+    async measureTask(task) {
+      log('measureTask', task);
+      for (const given of Object.values(options.measured ?? {})) {
+        const found = (Array.isArray(given) ? given : [given]).find((a) => a.task === task && a.done);
+        if (found) return found;
+      }
+      return missing('measurement');
+    },
 
     // ---- import ----
     async importAttachment(attachment) {

@@ -7,6 +7,7 @@
  */
 import type { Tool } from './common.ts';
 import { conversationTools } from './conversation.ts';
+import { measureTools } from './measure.ts';
 import { mixTools } from './mix.ts';
 import { noteTools } from './notes.ts';
 import { packTools } from './packs.ts';
@@ -38,6 +39,7 @@ export const TOOLS: readonly Tool[] = [
   ...packTools,
   ...playTools,
   // ---- measure ----
+  ...measureTools,
 
   ...scanTools,
   // ---- import ----

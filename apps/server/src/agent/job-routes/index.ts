@@ -16,6 +16,7 @@ import type { Body } from '../check.ts';
 import type { AgentJob, Jobs } from '../jobs.ts';
 
 // ---- measure ----
+import measureRoutes from '../measure/routes.ts';
 
 // ---- details ----
 
@@ -60,6 +61,7 @@ export type JobRoutes = (kit: JobRouteKit) => void;
 /** Every module of job routes, in its area's block. */
 export const MODULES: readonly JobRoutes[] = [
   // ---- measure ----
+  (kit) => measureRoutes(kit),
   // ---- details ----
   // ---- import ----
   importRoutes,

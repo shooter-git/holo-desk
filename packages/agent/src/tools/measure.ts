@@ -7,7 +7,8 @@
  * Rendering is slow (slower than the song plays), so a measurement that renders may not be done within
  * a call: the call answers how far it has got, and the same call again picks it up.
  */
-import { type MiddleC, noteName, type Project, tickToBarBeat } from '@holo/session';
+import { letterOf, spellInKey } from '@holo/score';
+import { type KeyPoint, keyAt, keysOf, type MiddleC, noteName, type Project, tickToBarBeat } from '@holo/session';
 import type {
   MeasureAnswer,
   MeasureBody,
@@ -51,6 +52,17 @@ const clock = (s: number) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60))
 function pos(song: Project, tick: number): string {
   const p = tickToBarBeat(song.meter, tick);
   return `${p.bar}.${p.beat}.${p.div}`;
+}
+
+/**
+ * A note's name as the song's key spells it there (B♭ in D minor, A♯ in B major; sharps with no key),
+ * named the studio's way (middle C is C4 or C3).
+ */
+function keyName(pitch: number, key: KeyPoint | null, middleC: MiddleC): string {
+  if (!key) return noteName(pitch, middleC);
+  const s = spellInKey(Math.round(pitch), key.fifths, key.mode);
+  const accidental = s.alter > 0 ? '#'.repeat(s.alter) : 'b'.repeat(-s.alter);
+  return `${letterOf(s.step)}${accidental}${s.octave - (middleC === 'C3' ? 1 : 0)}`;
 }
 
 /** A channel's name by id. */
@@ -153,13 +165,17 @@ function takeText(r: TakeMeasure, song: Project, middleC: MiddleC): string {
     );
   }
   const MOST = 40;
+  // each note named as the key spells it where it is (an attached recording: as its measurement's key)
+  const keys = keysOf(song);
+  const keyOf = (n: { tick: number | null }) => (n.tick !== null ? keyAt(keys, n.tick) : (keys[0] ?? null));
   lines.push('Notes (where, note, cents, start against the grid, level):');
   for (const n of notes.slice(0, MOST)) {
-    const parts = [where(n), noteName(n.target, middleC), `${signed(n.cents)}c`];
+    const key = keyOf(n);
+    const parts = [where(n), keyName(n.target, key, middleC), `${signed(n.cents)}c`];
     if (n.inKey === false) parts.push('(not in the key)');
     if (n.ref === null) parts.push(`(${channelName(song, (r.against as { track: string }).track)} plays nothing here)`);
     else if (n.ref !== undefined && Math.round(n.target) % 12 !== Math.round(n.ref) % 12)
-      parts.push(`(it plays ${noteName(n.ref, middleC)})`);
+      parts.push(`(it plays ${keyName(n.ref, key, middleC)})`);
     if (n.grid !== null) parts.push(`${signed(n.grid)} ms`);
     parts.push(`${n.db.toFixed(0)} dB`);
     if (n.vibrato) parts.push(`vibrato ${n.vibrato[0].toFixed(1)} Hz ±${n.vibrato[1].toFixed(0)}c`);

@@ -152,6 +152,46 @@ describe('measure', () => {
     expect(r.text).toContain('2.3.1 F4 -38c -35 ms -20 dB vibrato 5.4 Hz ±31c drifts -16c');
   });
 
+  it('names a take’s notes as the song’s key spells them there, with the studio’s middle C', async () => {
+    const note = take.notes[0] as TakeMeasure['notes'][number];
+    const at = (tick: number, target: number, extra: Partial<TakeMeasure['notes'][number]> = {}) => ({
+      ...note,
+      tick,
+      end: tick + 960,
+      target,
+      pitch: target,
+      cents: 0,
+      ...extra,
+    });
+    // D minor, then B major from bar 5: B♭ and C♯ in D minor, A♯ in B major
+    const notes = [at(BAR, 70), at(BAR + 960, 61), at(BAR * 4, 70)];
+    const api = setup({ measured: { take: done({ ...take, notes }) } });
+    api.project.keys = [
+      { tick: 0, fifths: -1, mode: 'minor' },
+      { tick: BAR * 4, fifths: 5, mode: 'major' },
+    ];
+    const r = await call(api, 'measure', { what: 'take', track: 'Vocals' });
+    expect(r.text).toContain('2.1.1 Bb4 0c');
+    expect(r.text).toContain('2.2.1 C#4 0c');
+    expect(r.text).toContain('5.1.1 A#4 0c');
+    expect(r.text).not.toContain('2.1.1 A#4');
+    // Logic's names (middle C is C3), and against a track: what it plays, spelled the same way
+    const ref = {
+      ...take,
+      against: { kind: 'track', track: 'trk_strings' } as const,
+      notes: [at(BAR, 70, { ref: 74 })],
+    };
+    const logic = setup({ measured: { take: done(ref) } });
+    logic.project.key = 'D minor';
+    const c3 = await call(logic, 'measure', { what: 'take', track: 'Vocals' }, 'C3');
+    expect(c3.text).toContain('2.1.1 Bb3 0c');
+    expect(c3.text).toContain('(it plays D4)');
+    // with no key, sharps
+    const none = setup({ measured: { take: done({ ...take, notes: [at(BAR, 70)] }) } });
+    none.project.key = null;
+    expect((await call(none, 'measure', { what: 'take', track: 'Vocals' })).text).toContain('2.1.1 A#4 0c');
+  });
+
   it('finds the take: the only audio track, a region by name, the selected one', async () => {
     const api = setup({
       measured: { take: done(take) },

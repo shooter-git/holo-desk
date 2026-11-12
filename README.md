@@ -41,6 +41,7 @@ Open <http://localhost:47800> and press **Start the studio**.
 cp .env.example .env
 pnpm run update             # pull ghcr.io/shooter-git/holo-desk:stable and start it (or: pnpm run update main)
 pnpm run autoupdate on      # then it keeps itself up to date (Linux: a systemd timer, as you)
+pnpm run runner-service on  # and the runner, for creations' renders and the agent (Linux: a service, as you)
 ```
 
 Install sample packs from the studio's Library (**More packs → Install**; browse them at
@@ -48,7 +49,10 @@ Install sample packs from the studio's Library (**More packs → Install**; brow
 CI with a signed record of what built it: `stable` and the version on each release, `main` on every
 change merged, `sha-<commit>` always. The timer looks every 15 minutes and never restarts HO[LO] while a
 studio is playing or recording; an open studio offers to reload when its host has been updated. Songs
-and packs live in `./data`, outside the image, so an update never touches them.
+and packs live in `./data`, outside the image, so an update never touches them. An update also moves this
+checkout to the code of the image it started (a release's tag, or main's head), so its compose file, its
+tools and the runner match the server, and starts the runner again; a checkout with changes or commits of
+your own stays as it is. (A checkout older than v0.7.1 doesn't move itself yet: bring it up to date once.)
 
 To run your own changes instead, `pnpm run up` builds from this checkout (`holo-desk:local`); automatic
 updates wait until you `pnpm run update` again.
@@ -154,7 +158,9 @@ Claude reads and writes notation too (`holo score show`, `holo score write`).
 The studio can take requests in plain words too, in its bar (<kbd>Ctrl /</kbd>). This is off until you
 turn it on in **Settings › Agent**, and while it's off nothing in the studio mentions it. The agent runs
 your own Claude Code, Codex or Cursor on the host, signed in as you, so install one there and keep the
-runner going (`pnpm runner`, the one that also renders [creations](docs/creations.md)).
+runner going (`pnpm runner`, the one that also renders [creations](docs/creations.md); on Linux,
+`pnpm run runner-service on` keeps it running as a service). A harness you install later is found once
+you run `pnpm run runner-service on` again.
 
 The first device pairs with a 6-digit code the runner prints; the code works once, for 10 minutes. A
 later device asks to join, and a device already allowed approves it in its own Settings › Agent, where

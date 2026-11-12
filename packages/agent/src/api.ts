@@ -20,6 +20,8 @@ export interface StudioState {
   cycle?: { on: boolean; start: number; end: number };
   /** The scan open in the Scan window, if one is. */
   scan?: string | null;
+  /** Who the song is by, its album and its creation, in words (the library keeps them beside the song). */
+  about?: string[];
   [key: string]: unknown;
 }
 

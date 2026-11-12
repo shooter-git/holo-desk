@@ -54,7 +54,9 @@ describe('a request', () => {
     const { prompt, ...rest } = sent;
     expect(JSON.stringify(rest)).not.toContain('ZEBRA');
     expect(prompt).toContain('HO[LO]');
-    expect(prompt).toContain('## What the studio shows\n- The view in front: arrange.\n- The playhead is at 1.1.1.');
+    expect(prompt).toContain(
+      '## What the studio shows\n- No artist or album is set for it.\n- The view in front: arrange.\n- The playhead is at 1.1.1.',
+    );
     expect(prompt.endsWith(`## The request\n${words}\n`)).toBe(true);
     // a new thread: nothing to say since a last reply
     expect(prompt).not.toContain('Since your last reply');
@@ -526,6 +528,25 @@ describe('the scan tools', () => {
     );
     expect((await tool(job, token, 'GET', '/packs')).json()).toEqual(expect.any(Array));
     expect((await tool(job, token, 'GET', '/instruments/nopack/piano')).statusCode).toBe(404);
+  });
+});
+
+describe('the song’s artist, album and creation', () => {
+  it('are in the request, and in what the agent reads of the song', async () => {
+    const { start, tool, s, app } = await setup();
+    // the library keeps them beside the song: set as the Songs window does
+    const set = await app.inject({
+      method: 'PUT',
+      url: `/api/projects/${s.id}/details`,
+      payload: { artist: 'Es Claro', album: 'Night "Drives"' },
+    });
+    expect(set.statusCode).toBe(200);
+    const { job, token: jobToken, run } = await start({ project: s.id, text: 'Who is this by?' });
+    expect(run.prompt).toContain('## What the studio shows\n- By "Es Claro", on the album "Night “Drives“".');
+    const state = (await tool(job, jobToken, 'GET', '/state')).json() as { about: string[] };
+    expect(state.about).toEqual(['By "Es Claro", on the album "Night “Drives“".']);
+    const described = (await tool(job, jobToken, 'GET', '/describe')).json() as { text: string };
+    expect(described.text.startsWith('By "Es Claro", on the album "Night “Drives“".\n')).toBe(true);
   });
 });
 

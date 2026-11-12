@@ -30,6 +30,7 @@ import {
   readRules,
   type ScanPreset,
   sinceLines,
+  songLines,
 } from './prompt.ts';
 import { type AgentStore, HARNESSES, type HarnessId, type ThreadRow, type TurnExtra } from './store.ts';
 import { parseExtra, type Threads } from './threads.ts';
@@ -358,7 +359,7 @@ export class Jobs implements AgentHooks {
       buildPrompt({
         rules: readRules(this.o.repoDir),
         since: this.since(thread.id, now),
-        context: contextLines(req.context, now),
+        context: contextLines(req.context, now, this.about(req.project)),
         attachments,
         request: req.preset ? presetRequest(req.preset) : req.text,
       }),
@@ -904,6 +905,11 @@ export class Jobs implements AgentHooks {
     return song;
   }
 
+  /** Who a song is by, its album and its creation, in words (the library keeps them beside the song). */
+  about(project: string): string[] {
+    return songLines(this.o.store.row(project));
+  }
+
   /** What the requester's studio shows: the playhead, the selection, the cycle, the view. */
   studioState(job: AgentJob): Record<string, unknown> {
     const studio = this.studio(job);
@@ -921,6 +927,8 @@ export class Jobs implements AgentHooks {
       middleC: s.middleC,
       ...(typeof extra.view === 'string' ? { view: extra.view.slice(0, 40) } : {}),
       ...(typeof extra.scan === 'string' && SCAN_ID.test(extra.scan) ? { scan: extra.scan } : {}),
+      // who the song is by, its album, its creation: the library's, beside the song
+      about: this.about(job.view.project),
     };
   }
 

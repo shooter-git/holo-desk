@@ -34,9 +34,18 @@ export interface HarnessInfo {
   update?: { available: boolean; latest?: string };
   /** False when it can't be limited to HO[LO]'s tools here; `reason` says why. */
   sealed: boolean;
+  /**
+   * The seal couldn't be checked yet: the harness asks for its sign-in before it reads its options
+   * (Cursor). It's signed out; once it's signed in, the next look checks the seal.
+   */
+  sealUnknown?: boolean;
   reason?: string;
   models?: string[];
   efforts?: string[];
+  /** The computer the runner that reports it is on (its host name). */
+  host?: string;
+  /** Not found: the official installer Install runs there (fixed in the adapter, never from input). */
+  installer?: string;
 }
 
 /** What to start for a harness: the program, and any arguments before ours (a Windows shim's script). */
@@ -80,7 +89,10 @@ export interface Run {
   cancel(): void;
 }
 
-/** How a sign-in, an update or a refresh goes (the `agent-harness` message, less its harness and kind). */
+/** What a harness's relay is (the `agent-harness` message's `kind`). */
+export type HarnessAction = 'login' | 'update' | 'install' | 'refresh';
+
+/** How a sign-in, an update, an install or a refresh goes (the `agent-harness` message, less its harness and kind). */
 export interface HarnessEvent {
   state: 'running' | 'done' | 'failed';
   url?: string;
@@ -116,6 +128,14 @@ export interface Harness {
   checkUpdate(): Promise<{ available: boolean; latest?: string } | null>;
   /** Run the harness's own updater (only when the user clicks Update), relaying its lines. */
   update(onLine: (line: string) => void): Promise<void>;
+  /**
+   * Run its vendor's official installer (only when the user clicks Install, and only while it isn't
+   * found), relaying its lines, then look again. Throws when it's installed already, when the
+   * installer fails, or when what it installed still can't be found.
+   */
+  install(onLine: (line: string) => void): Promise<void>;
+  /** Forget a seal check that failed for this version (Look again): the next look checks it again. */
+  recheck(): void;
   models(): Promise<string[]>;
   /** The efforts a model takes (none: effort is part of the model, or there's no such setting). */
   efforts(model?: string): Promise<string[]>;

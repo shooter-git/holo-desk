@@ -159,17 +159,22 @@ Claude reads and writes notation too (`holo score show`, `holo score write`).
 
 The studio can take requests in plain words too, in its bar (<kbd>Ctrl /</kbd>). This is off until you
 turn it on in **Settings › Agent**, and while it's off nothing in the studio mentions it. The agent runs
-your own Claude Code, Codex or Cursor on the host, signed in as you, so install one there and keep the
-runner going (`pnpm runner`, the one that also renders [creations](docs/creations.md); on Linux,
-`pnpm run runner-service on` keeps it running as a service). A harness you install later is found once
-you run `pnpm run runner-service on` again.
+your own Claude Code, Codex or Cursor on the host, signed in as you, with the runner going there
+(`pnpm runner`, the one that also renders [creations](docs/creations.md); on Linux,
+`pnpm run runner-service on` keeps it running as a service). Settings › Agent lists all three: one the
+host doesn't have has an **Install** button, which runs its vendor's official installer there once you
+confirm (it says what runs, and where). One you install yourself in a terminal shows up with **Look
+again**, or, if it went somewhere the runner doesn't look, once you run `pnpm run runner-service on`
+again.
 
 The first device pairs with a 6-digit code the runner prints; the code works once, for 10 minutes. A
 later device asks to join, and a device already allowed approves it in its own Settings › Agent, where
 any device can also be removed, at once. A device that has lost its way back in (its site data
 cleared, or the only allowed device lost) pairs with a new code from the runner, the same way. The
-harness, its model and effort, its sign-in and its updates are there too. An update runs only when you
-click it, and it updates the same harness your terminal uses.
+harness, its model and effort, its install, its sign-in and its updates are there too. An install or
+an update runs only when you click it and confirm, and it's the same harness your terminal uses. The
+models and efforts are the harness's own, as it lists them on the host, and they're looked at again
+when you open Settings › Agent an hour or more after the last look.
 
 Type a request and press Enter. A picture, a recording, a MIDI or MusicXML file or a text file dropped
 or pasted on the bar goes with it (a picture is redrawn on your device first, without its location

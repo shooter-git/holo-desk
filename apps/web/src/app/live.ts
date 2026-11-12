@@ -57,6 +57,7 @@ import { store, toast } from './store.ts';
 // ---- measure ----
 
 // ---- import ----
+import './agent-import.ts';
 
 /** Scans this studio has heard of (so a phone's new one is offered once). */
 const seenScans = new Set<string>();

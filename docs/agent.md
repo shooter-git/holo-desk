@@ -92,8 +92,9 @@ Turning the agent off cancels every job, so the job-scoped routes answer 403.
 | `POST /api/agent/jobs/:job/done-listening` | | `{ok}`. The user pressed Done. Only the device that asked (403); 409 once the job has ended. |
 | `GET /api/agent/threads/:project` | | `{thread, job}`. `thread` is `{id, harness, turns:[{job, request, reply, label, state, at, permission?, brief?, briefWarnings?, error?}]}`, or null. `job` is the song's job that's running or waiting for a click (a `JobView`), or null: after a reload, its button comes back. |
 | `POST /api/agent/threads/:project/reset` | | `{ok}`. The next request starts a new thread. 409 `busy` while a job runs on the song. |
-| `POST /api/agent/attachments` | `?project=&name=&type=` and the file as the body (≤ 25 MB; text ≤ 100 KB, 413) | `{id, name, type, size}`. Allowed types: `image/png`, `image/jpeg`, `image/webp`, `audio/wav`, `audio/x-wav`, `audio/flac`, `audio/mpeg`, `audio/ogg`, `audio/mp4`, `audio/midi`, `application/vnd.recordare.musicxml+xml`, `text/plain`. Its first bytes must be what the type says (415); text and MusicXML must be UTF-8. 404 for no such song. Kept 7 days, the device's own, for that song. |
+| `POST /api/agent/attachments` | `?project=&name=&type=` and the file as the body (a recording ≤ 200 MB, anything else ≤ 25 MB, text ≤ 100 KB; 413) | `{id, name, type, size}`. Allowed types: `image/png`, `image/jpeg`, `image/webp`, `audio/wav`, `audio/x-wav`, `audio/flac`, `audio/aiff`, `audio/mpeg`, `audio/ogg`, `audio/mp4`, `audio/midi`, `application/vnd.recordare.musicxml+xml`, `application/vnd.recordare.musicxml` (`.mxl`), `text/plain`. The body goes to disk as it arrives, and is cut off at the type's limit (one whose `content-length` says it's over isn't read at all). Its first bytes must be what the type says (415): a recording's first 64 KB are checked; text must be UTF-8, MusicXML UTF-8 or UTF-16, and an `.mxl` a zip with a score in it. 404 for no such song. Kept 7 days, the device's own, for that song. |
 | `PUT /api/agent/attachments/:id/meta` | JSON object (≤ 64 KB) | `{ok}`. The browser stores what it measured here. Only the device's own (403). |
+| `GET /api/agent/attachments/:id/data` | | The file's bytes, as its type, `no-store`: for the studio to decode a recording the agent imports (below). Only the device that sent it, or the device whose running job may read it (an earlier request on the job's thread, from another device); 403 otherwise, 404 once it's gone. |
 
 **`context`** in a request is what the studio sees:
 `{view, selection:{track, regions, notes, from?, to?}, playhead, cycle:{on, start, end}, scan?}`.
@@ -139,9 +140,10 @@ requester's studio has the job's song open.
 | `GET …/scans/:id` | | The scan. 403 if it's another song's. |
 | `GET …/scans/:id/strip/:page/:system` | | The system's strip (PNG). |
 | `PATCH …/scans/:id/systems/:page/:system` | `{state?:'new'|'read'|'checked'|'approved', written?:[first, last], flags?:[line]}` (≤ 40 flags) | As `PATCH /api/scans/:id/systems/:page/:k`. |
-| `GET …/attachments/:id` | | `{name, type, size, meta, data?}`. `data` (base64) comes for pictures, text, and MusicXML up to 1 MB; `meta` is what the browser measured, or null. Only an attachment that the job's request, or an earlier one on its thread, named (403). 404 once it's gone. |
+| `GET …/attachments/:id` | | `{name, type, size, meta, data?}`. `data` (base64) comes for pictures, text, and MusicXML up to 1 MB (as UTF-8 text, whether it came as UTF-16 or zipped in an `.mxl`); `meta` is what the browser measured, or null. Only an attachment that the job's request, or an earlier one on its thread, named (403). 404 once it's gone. |
+| `POST …/import` **studio** | `{attachment}` | What importing it brings (below): `{done:true, kind:'audio', how:'copied'|'converted'|'studio', file:AudioFile}`, `{done:true, kind:'notes', format:'midi'|'musicxml', name, song:Project, warnings}`, or after about 40 s of the studio still converting, `{done:false, line}` (the same call again waits on). 403 as `…/attachments/:id`; 415 for a picture or a text; 400 for a file that can't be read; 409 with the studio's reason, 504 when it never answered. |
 | `POST …/progress` | `{line}` (≤ 200) | `{ok}`. The line under the bar. |
-| `POST …/permission` | `{kind, detail, pack?}` (detail ≤ 300) | `{ok}`. `kind` is `install-pack` (with `pack`), `send-creation`, `screen`, `photo` or `microphone`. The job waits for the user once the turn ends. |
+| `POST …/permission` | `{kind, detail, pack?}` (detail ≤ 300) | `{ok}`. `kind` is `install-pack` (with `pack`), `send-creation`, `bounce`, `render`, `screen`, `photo` or `microphone`; `render` only for a song that came from a creation (400). The job waits for the user once the turn ends. |
 | `POST …/handoff` | `{brief}` (≤ 4000) | `{ok}`. Lines that mention a secret, hold a link or run a command are flagged (`briefWarnings`). |
 | `POST …/finish` | `{label, reply}` (one line ≤ 80; ≤ 600) | `{ok}`. The agent is asked for one or two short sentences, about 200 characters at most; 600 is the server's limit. |
 
@@ -212,6 +214,10 @@ taken only from the runner it was handed to, while it runs.
 - `agent-flush {id}`: save now; ack `{revision}`.
 - `agent-played {id, seconds}`: ack `{notes:[PlayedNote]}` from the last minute of what was played here.
 - `agent-compare {id, job, from, to}`: ack once it has started playing.
+- `agent-import-audio {id, project, attachment, name}`: ack `{file:AudioFile}` once the studio has
+  fetched the attachment (`GET /api/agent/attachments/:id/data`), decoded it and uploaded it as a WAV
+  (`POST /api/projects/:id/files`), or `{ok:false, error}` (another song open, a recording the browser
+  can't read). Up to 10 minutes.
 - `transport {id, action, at?}`, the existing message.
 
 **Server → studio**, told:
@@ -246,7 +252,8 @@ of the stretch `played` asked for); `length` is ms (null while still held).
 ## A request's life
 
 1. **Request.** The studio makes each file ready (a picture redrawn in the browser at up to 2048 px on
-   its long side, a recording measured, a MIDI file read into notes). It posts each to
+   its long side, a recording up to 25 MB measured when the browser decodes it, a MIDI file read into
+   notes). It posts each to
    `/api/agent/attachments`, then what it measured to `…/meta`, then posts `/api/agent/requests` with
    their ids and the context.
 2. **Server.** Checks the song is open in this device's studio (`not-open`), that no other job runs on
@@ -281,6 +288,10 @@ of the stretch `played` asked for); `length` is ms (null while still held).
    code:
    - `install-pack`: the Library's install queue;
    - `send-creation`: `sendToCreation`;
+   - `bounce` ("Bounce the song"): `bounceSong`, kept with the song on the host and not downloaded;
+     the result says its length and its path under `bounces/`;
+   - `render` ("Hear it as my-game"): the creation renders the song (`POST /api/projects/:id/render`),
+     and the studio waits (up to 30 minutes) until it's back as a soloed audio track, or failed;
    - `screen`: one frame of what the user picks to share (a phone, which can't, takes a photo instead),
      shown before Send;
    - `photo`: the camera or a picture, redrawn as a JPEG, shown before Send;
@@ -342,7 +353,7 @@ the last "…and N more changes" when there are more:
 
 ## The agent's tools (`@holo/agent`)
 
-`packages/agent/src/tools/index.ts` lists 38 tools (at most 40), named for MCP (lower-case letters,
+`packages/agent/src/tools/index.ts` lists 39 tools (at most 40), named for MCP (lower-case letters,
 digits and `_`). Changing and asking tools run one at a time, in the order they're called; seeing and
 playing tools run alongside. A change may also post a line under the bar (`…/progress`).
 
@@ -382,10 +393,61 @@ playing tools run alongside. A change may also post a line under the bar (`…/p
 | `scan_show` | see | A scan's pages and systems, or one system's strip as an image. |
 | `scan_status` | change | Mark how far a scanned system's reading got. |
 | `attachment_get` | see | An attachment: a picture, a recording's measurements and notes, a MIDI file's notes, a text. |
+| `import` | change | Bring an attachment into the song: a recording onto an audio track, a MIDI or MusicXML file as tracks (below). |
 | `look` | ask | Ask for a screenshot, a photo or a recording (a permission: it ends the turn). |
-| `ask_permission` | ask | Ask to install a pack, send to the creation, or for a screenshot, a photo or a recording. |
+| `ask_permission` | ask | Ask to install a pack, send to the creation, bounce the song, have the creation render it, or for a screenshot, a photo or a recording. |
 | `hand_off` | ask | A brief for the user's own coding agent, only for a change to HO[LO] Desk's code, holo-packs or a creation (no commands or code in it; never to read or send files, keys, passwords or tokens). |
 | `finish` | ask | End the turn: the undo step's label and the reply (one or two short sentences, about 200 characters at most: what changed and where). |
 
-There are no tools for opening, creating, importing or exporting songs, rendering to a file, or
-creations, except `ask_permission {kind:'send-creation'}`.
+There are no tools for opening, creating or exporting songs, or for creations. What the user attached
+comes into the open song through `import`; a bounce, sending the song to its creation and the
+creation's own render each need the user's click (`ask_permission` with `bounce`, `send-creation` or
+`render`).
+
+### Bringing things in: `import`, a bounce, a creation's render
+
+**`import {attachment, at?, track?, name?, tempo?, parts?}`** brings an attachment of the
+conversation's into the song (`POST …/import`, `apps/server/src/agent/import/`), then sends its changes
+as one batch, one undo step with the rest of the request (`addFile`, `addTrack`, `addRegion`;
+`ops_apply` still refuses `addFile`).
+- **A recording** becomes one of the song's audio files, kept as WAV so every renderer reads it. A WAV
+  the engine's reader takes (PCM of 8 to 32 bits, or float) is copied as it is, its rate and channels
+  kept; FLAC and AIFF are decoded on the host (`decodeInput`) and written as 32-bit float WAV; MP3, Ogg,
+  M4A and any other WAV go to the requester's studio (`agent-import-audio`), which decodes them and
+  uploads them as WAV. It goes from `at` (the playhead when unsaid) on the audio track `track` names,
+  or a new audio track named `name` (or the file's name). A job asking again for the same attachment
+  gets the same file.
+- **A MIDI or MusicXML file** (`.mid`, `.musicxml`/`.xml` in UTF-8 or UTF-16, `.mxl`) is read on the
+  host (`projectFromMidi(readMidi(…))`, `readMusicXml(await scoreText(…))`) and merged by
+  `mergeOps(song, file, {at, tempo, parts, into?, name?})` (`packages/session/src/merge.ts`):
+  - `parts` chooses the file's parts by name (or the start of one) or number from 1; every part with
+    notes when unsaid. Each becomes a new track, or the one part goes onto `track` (an instrument
+    track) as a region.
+  - Everything gets new ids: tracks, regions, plugins, articulations.
+  - The song keeps its meter and key. The notes keep their beats from `at` (the playhead's bar when
+    unsaid), and each region starts and ends on the song's bar lines. A file with a pickup lands with
+    its first full bar at `at`, the pickup just before (at `at` when there's no room).
+  - A send goes to the song's bus of the same name, or is left out: never to a bus the song lacks. A
+    channel's output to such a bus goes to the master.
+  - Automation, a performance's dynamics and clef changes move with the notes; a staff's first clef
+    stays at the start.
+  - `tempo:'keep'` (the default) leaves the song's tempo; `'adopt'` puts the file's tempo map from
+    where it lands to the bar line after it ends, and the song's own tempo back there if the song goes
+    on past it.
+  - What wasn't brought (markers, chord symbols, repeats, a different meter, the file's tempo) is said
+    in the tool's answer.
+- **Time.** A tool call must finish within about 50 s: the client gives `…/import` 50 s and the server
+  answers within about 40. A studio still converting by then answers `{done:false}`, and the tool asks
+  the agent to call it again with the same arguments; the conversion carries on meanwhile (up to 10
+  minutes).
+
+**`bounce` and `render`** are permission kinds: the agent asks, the user clicks, and the studio does it
+(`bounceSong`, or the creation's render through `renderForAgent`). The follow-up turn hears what
+happened: the bounce's length and path (`bounces/<song>/<file>.wav`, which a measurement reads), or
+that the creation's render is back as a soloed audio track.
+
+**Audio files are WAV.** `POST /api/projects/:id/files` makes a FLAC or AIFF a 32-bit float WAV under
+the same id (the `holo audio` command, which sends FLAC, gets the same answer as before), and the
+server makes the songs' FLAC and AIFF files kept before this was so WAV once as it starts
+(`apps/server/src/audio-files.ts`): the WAV replaces the file, never sits beside it. A bounce and a
+headless render read only WAV.

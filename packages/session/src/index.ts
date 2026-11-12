@@ -6,6 +6,7 @@ export * from './form.ts';
 export * from './format.ts';
 export * from './instruments.ts';
 export * from './keysig.ts';
+export * from './merge.ts';
 export * from './midi-file.ts';
 export * from './notation.ts';
 export * from './ops.ts';

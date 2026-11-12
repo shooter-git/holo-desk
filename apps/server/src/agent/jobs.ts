@@ -1382,6 +1382,8 @@ export function parseHarnessEvent(msg: Record<string, unknown>): Record<string, 
 export const PERMISSION_KINDS: readonly PermissionKind[] = [
   'install-pack',
   'send-creation',
+  'bounce',
+  'render',
   'screen',
   'photo',
   'microphone',

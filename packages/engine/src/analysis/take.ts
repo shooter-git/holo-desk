@@ -11,7 +11,13 @@
  * - A note's pitch is that of its held part (its first 60 ms, its attack, left out): the median, or
  *   with a vibrato the mean over whole cycles. Its drift is how far a straight line through the held
  *   part moves; its vibrato the rate and depth (±cents) of what swings around that line.
- * - It starts where its sound does (from silence), or where the pitch moves (out of the note before).
+ * - Out of the note before, it starts where the pitch moves. From silence, it starts where its voice
+ *   does, as a singer counts it: going back from its loudest in its first 80 ms, the note goes on as
+ *   long as its level (over one period) stays within 20 dB of that and the sound is still voiced (it
+ *   repeats itself at a period within three semitones of the note's). So a soft or swelled attack, and
+ *   a scoop up into the pitch, count from their beginning, not from where they reach full voice; a
+ *   breath or an unvoiced consonant before it (an s, a t, an h) doesn't count: singers put those
+ *   before the beat and the vowel on it.
  *
  * The take's regions are placed on the timeline as the engine plays them (compile.ts compileClips):
  * each region's offset and stretch, the tempo map, and where takes overlap, the later one heard.
@@ -60,6 +66,12 @@ const STEP = 0.7;
 const STEP_S = 0.03;
 /** A gap in the pitch this long ends a note. */
 const GAP_S = 0.02;
+/** A note from silence starts where its level comes within this much of its attack's loudest (dB). */
+const ONSET_DB = 20;
+/** How far around the note's period its start is still the note (a scoop up into it: three semitones). */
+const ONSET_RANGE = 2 ** (3 / 12);
+/** The most a voiced sound's normalized difference at its period may be (noise is near 1). */
+const VOICED = 0.35;
 
 /** The samples' channels as one (their mean). */
 export function monoOf(channels: readonly Float32Array[]): Float32Array {
@@ -132,6 +144,32 @@ function refinePeriod(x: Float32Array, sr: number, center: number, p0: number): 
   const den = p - 2 * b + q;
   const shift = den > 0 ? (p - q) / (2 * den) : 0;
   return t + Math.max(-1, Math.min(1, shift));
+}
+
+/**
+ * Whether the sound around `center` (samples of `x`) is voiced near a period of `p0` samples: it
+ * repeats itself (its normalized squared difference under VOICED) at some shift within ONSET_RANGE of
+ * it, over a window of two and a half periods (5 ms at least; kept inside the samples). Noise, and
+ * silence, don't.
+ */
+function voicedNear(x: Float32Array, rate: number, center: number, p0: number): boolean {
+  const lo = Math.max(2, Math.floor(p0 / ONSET_RANGE));
+  const hi = Math.ceil(p0 * ONSET_RANGE);
+  const w = Math.round(Math.max(0.005 * rate, 2.5 * p0));
+  const a = Math.max(0, Math.min(x.length - w - hi - 1, Math.round(center - (w + p0) / 2)));
+  if (a < 0) return false;
+  for (let tau = lo; tau <= hi; tau++) {
+    let d = 0;
+    let m = 0;
+    for (let j = 0; j < w; j++) {
+      const u = x[a + j] as number;
+      const s = x[a + j + tau] as number;
+      d += (u - s) * (u - s);
+      m += u * u + s * s;
+    }
+    if (m > 0 && d / m < VOICED) return true;
+  }
+  return false;
 }
 
 /** The vibrato in what swings around a note's line (cents, every FINE_S): rate (Hz) and depth (± cents), or null. */
@@ -364,22 +402,31 @@ export function lineNotes(samples: Float32Array, sampleRate: number): LineNote[]
     let start = time(s.a);
     const stop = time(s.b);
     if (!legato) {
-      // from silence: where the sound rises to 30% of its power in the note's first 80 ms
+      // from silence: where its voice starts (the header says how), back from its loudest in its first 80 ms
       const floorT = Math.max(prev ? time(prev.b) : 0, start - 0.15);
+      const heard: number[] = [];
+      for (let k = s.a; k < s.b; k++) if (!Number.isNaN(smooth[k] as number)) heard.push(smooth[k] as number);
+      const period = heard.length ? 1 / (440 * 2 ** ((median(heard) - 69) / 12)) : 0.005;
+      // the level over one period (2 ms at least), so it doesn't dip inside a wave
+      const half = Math.max(0.001, period / 2);
+      const level = (t: number) => envAt(t, half);
       let top = 0;
       let topT = start;
       for (let t = start; t < Math.min(stop, start + 0.08); t += 0.001) {
-        const e = envAt(t, 0.0025);
+        const e = level(t);
         if (e > top) {
           top = e;
           topT = t;
         }
       }
+      const quiet = top * 10 ** (-ONSET_DB / 10);
+      const voiced = (t: number) => voicedNear(x, lr, t * lr, period * lr);
       let t = topT;
-      while (t - 0.001 > floorT && envAt(t - 0.001, 0.0025) >= 0.3 * top) t -= 0.001;
-      const e0 = envAt(t - 0.001, 0.0025);
-      const e1 = envAt(t, 0.0025);
-      start = t - 0.001 + (e1 > e0 ? (0.001 * (0.3 * top - e0)) / (e1 - e0) : 0.001);
+      while (t - 0.001 > floorT && level(t - 0.001) >= quiet && voiced(t - 0.001)) t -= 0.001;
+      // where the level crosses, between the last millisecond in and the first out
+      const e0 = level(t - 0.001);
+      const e1 = level(t);
+      start = t - 0.001 > floorT && e0 < quiet && e1 > e0 ? t - 0.001 + (0.001 * (quiet - e0)) / (e1 - e0) : t;
       start = Math.max(floorT, Math.min(topT, start));
     }
     const dur = stop - start;

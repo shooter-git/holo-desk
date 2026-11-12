@@ -155,6 +155,79 @@ describe('a take on the timeline', () => {
     expect(report.grid).toBe(240);
   });
 
+  it('starts a softly sung note where its voice starts: a fade-in and a scoop on the beat read on the beat', () => {
+    // as a singer's "ah" (the e2e run's test vocal): a voice's harmonics through vowel formants,
+    // fading in over 50 ms while scooping up from 40 cents under over 60 ms, a vibrato coming in
+    // after 0.35 s; notes 1.2 s long every two beats at 84 bpm, exactly on the beat, some off pitch;
+    // a breath in some gaps, and before one note an unvoiced "s" up to the beat
+    const bpm = 84;
+    const beat = 60 / bpm;
+    const formants: [number, number, number][] = [
+      [730, 90, 1],
+      [1090, 110, 0.5],
+      [2440, 170, 0.25],
+      [3400, 250, 0.08],
+    ];
+    const gain = (f: number) => formants.reduce((g, [fc, bw, a]) => g + a / (1 + ((f - fc) / bw) ** 2), 0.02);
+    const sungNote = (midi: number, seconds: number): Float32Array => {
+      const out = new Float32Array(Math.round(seconds * SR));
+      const hz = 440 * 2 ** ((midi - 69) / 12);
+      const harmonics: number[] = [];
+      for (let k = 1; k * hz < 8000; k++) harmonics.push(gain(k * hz) / k);
+      let phase = 0;
+      let top = 0;
+      for (let i = 0; i < out.length; i++) {
+        const t = i / SR;
+        const scoop = -40 * Math.max(0, 1 - t / 0.06);
+        const vibrato = 20 * Math.min(1, Math.max(0, (t - 0.35) / 0.3)) * Math.sin(2 * Math.PI * 5.5 * t);
+        phase += (hz * 2 ** ((scoop + vibrato) / 1200)) / SR;
+        let v = 0;
+        harmonics.forEach((g, k) => {
+          v += g * Math.sin(2 * Math.PI * (k + 1) * phase + 0.3 * (k + 1));
+        });
+        out[i] = v;
+        top = Math.max(top, Math.abs(v));
+      }
+      for (let i = 0; i < out.length; i++) {
+        const t = i / SR;
+        const env = Math.max(0, Math.min(1, t / 0.05, (seconds - t) / 0.07));
+        out[i] = 0.3 * ((out[i] as number) / top + 0.004 * noise()) * env;
+      }
+      return out;
+    };
+    const pitches = [62, 64.7, 69, 67.25, 65, 63.65, 62, 69.4, 70, 68.8, 67, 65.3];
+    const file = silence(beat * 2 * pitches.length + 1);
+    pitches.forEach((p, i) => {
+      const at = Math.round(i * 2 * beat * SR);
+      const note = sungNote(p, 1.2);
+      for (let k = 0; k < note.length; k++) file[at + k] = (file[at + k] as number) + (note[k] as number);
+      if (i % 3 === 2) {
+        // a breath, 30 ms after the note, 160 ms long, 26 dB under it
+        const b0 = at + Math.round(1.23 * SR);
+        const bn = Math.round(0.16 * SR);
+        for (let k = 0; k < bn; k++) file[b0 + k] = 0.015 * noise() * Math.sin((Math.PI * k) / bn) ** 2;
+      }
+    });
+    // an unvoiced "h" before note 6 (noise about 9 dB under the vowel): from 90 ms before the beat,
+    // fading out over the vowel's first 30 ms, as a consonant runs into the vowel after it (counted by
+    // its level alone, it would start the note 90 ms early)
+    const h0 = Math.round((5 * 2 * beat - 0.09) * SR);
+    for (let k = 0; k < Math.round(0.12 * SR); k++) {
+      const fade = Math.min(1, (0.12 - k / SR) / 0.04);
+      file[h0 + k] = (file[h0 + k] as number) + 0.1 * fade * noise();
+    }
+    const tempo = [{ tick: 0, bpm }];
+    const { song, track, decode } = takeSong(file, [{ start: BAR, length: BAR * 7 }], { key: 'D minor', tempo });
+    const report = measureTake(song, track, decode);
+    expect(report.notes).toHaveLength(pitches.length);
+    report.notes.forEach((n, i) => {
+      expect(Math.abs(n.grid ?? 99), `note ${i + 1} (${n.grid} ms)`).toBeLessThanOrEqual(10);
+      expect(Math.abs(n.pitch - (pitches[i] as number)) * 100, `note ${i + 1}`).toBeLessThan(2);
+    });
+    expect(Math.abs(report.summary.timing?.mean ?? 99)).toBeLessThanOrEqual(10);
+    expect(report.summary.timing?.late).toBe(0);
+  });
+
   it('places a region’s notes through its offset, its stretch and a tempo change', () => {
     // 120 bpm, then 60 from bar 3; the region starts at bar 2, 1 s into its file, played twice as long
     const file = placed(4, [

@@ -192,7 +192,9 @@ sample peak, samples at full scale), its sections (markers, else every 8 bars) a
 tilt; each track's loudness, peaks, octave bands and (audio tracks) its recordings' own level; a
 plugin's third-octave response, decay, pre-delay and echoes, or its gain reduction and in/out levels.
 The analysis is `@holo/engine/analysis` (packages/engine/src/analysis/): pitch to a cent or two (YIN,
-refined at the full rate), loudness by BS.1770-4 and EBU Tech 3341/3342 with the finish's own
+refined at the full rate); a note from silence starts where its voice does (its level within 20 dB
+of its attack's loudest, and voiced: a soft attack or a scoop counts from its beginning, a breath or
+an unvoiced consonant before it doesn't), out of the note before where the pitch moves; loudness by BS.1770-4 and EBU Tech 3341/3342 with the finish's own
 K-weighting and true-peak interpolator, bands through the engine's FFT.
 
 ## Live channel (`/api/live`)

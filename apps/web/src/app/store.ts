@@ -13,6 +13,8 @@ export interface Step {
   label: string;
   /** The agent's job whose changes this step holds (they merge into one step while it runs). */
   job?: string;
+  /** When the change was made (ms since the epoch), undone or not: the history menu says how long ago. */
+  at: number;
 }
 
 export type SaveState = 'saved' | 'dirty' | 'saving' | 'offline' | 'conflict' | 'error';

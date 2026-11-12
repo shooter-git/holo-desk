@@ -3,7 +3,16 @@ import { Check } from 'lucide-react';
 import { type ReactNode, useEffect, useLayoutEffect, useRef, useSyncExternalStore } from 'react';
 
 export type MenuEntry =
-  | { label: string; onSelect: () => void; hint?: string; icon?: ReactNode; checked?: boolean; disabled?: boolean }
+  | {
+      label: string;
+      onSelect: () => void;
+      hint?: string;
+      icon?: ReactNode;
+      checked?: boolean;
+      disabled?: boolean;
+      /** The keyboard starts here, scrolled into view, not on the first item (a long menu's middle). */
+      focus?: boolean;
+    }
   | { heading: string }
   | 'sep';
 
@@ -43,6 +52,7 @@ export function closeMenu(): void {
 }
 
 const ITEMS = '.item:not(:disabled)';
+const START = '.item[data-focus]:not(:disabled)';
 
 export function MenuHost() {
   const state = useSyncExternalStore(
@@ -63,7 +73,11 @@ export function MenuHost() {
     const y = state.y + r.height > window.innerHeight - 6 ? Math.max(6, window.innerHeight - r.height - 6) : state.y;
     el.style.left = `${x}px`;
     el.style.top = `${y}px`;
-    (el.querySelector(ITEMS) as HTMLElement | null)?.focus({ preventScroll: true });
+    const start = el.querySelector<HTMLElement>(START) ?? el.querySelector<HTMLElement>(ITEMS);
+    start?.focus({ preventScroll: true });
+    // (the menu is its items' offset parent: it scrolls, the page doesn't)
+    if (start && start.offsetTop + start.offsetHeight > el.clientHeight)
+      el.scrollTop = start.offsetTop - (el.clientHeight - start.offsetHeight) / 2;
   }, [state]);
 
   useEffect(() => {
@@ -134,6 +148,7 @@ export function MenuHost() {
               role={radio ? 'menuitemradio' : 'menuitem'}
               aria-checked={radio ? item.checked : undefined}
               disabled={item.disabled}
+              data-focus={item.focus || undefined}
               onClick={() => {
                 closeMenu();
                 item.onSelect();

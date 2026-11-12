@@ -238,10 +238,27 @@ export class Jobs implements AgentHooks {
   private readonly relays = new Map<HarnessId, { event: Record<string, unknown>; runner: LiveClient; at: number }>();
   /** Songs a request is being started on (it waits for the studio to save first). */
   private readonly starting = new Set<string>();
+  /** Told when a job ends, however it ends (its state says how). */
+  private readonly endings: ((job: AgentJob) => void)[] = [];
 
   constructor(options: JobsOptions) {
     this.o = options;
     this.limits = { ...LIMITS, ...options.limits };
+  }
+
+  /** Something to do when a job ends (a measurement it started stops, or runs on for its next turn). */
+  onJobEnd(fn: (job: AgentJob) => void): void {
+    this.endings.push(fn);
+  }
+
+  private ended(job: AgentJob): void {
+    for (const fn of this.endings) {
+      try {
+        fn(job);
+      } catch {
+        // (one listener's trouble isn't the job's)
+      }
+    }
   }
 
   get(id: string): AgentJob | null {
@@ -640,6 +657,7 @@ export class Jobs implements AgentHooks {
     });
     this.saveTurn(job);
     this.tell(job);
+    this.ended(job);
   }
 
   /** The harness finished its turn: the studio saves, and the song as saved is what the agent saw. */
@@ -660,6 +678,7 @@ export class Jobs implements AgentHooks {
     job.view.finished = Date.now();
     this.saveTurn(job);
     this.tell(job);
+    this.ended(job);
   }
 
   /** The turn's row as the job now stands: its state, reply and label, and what it asked, wrote and attached. */

@@ -55,6 +55,7 @@ import { store, toast } from './store.ts';
 // each area's in its block
 
 // ---- measure ----
+import './agent-meters.ts';
 
 // ---- import ----
 import './agent-import.ts';

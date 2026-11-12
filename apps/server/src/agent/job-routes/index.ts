@@ -13,12 +13,11 @@ import type { Store } from '../../db.ts';
 import type { Live } from '../../live.ts';
 import type { Attachments } from '../attachments.ts';
 import type { Body } from '../check.ts';
-import type { AgentJob, Jobs } from '../jobs.ts';
-
-// ---- measure ----
-
 // ---- import ----
 import importRoutes from '../import/routes.ts';
+import type { AgentJob, Jobs } from '../jobs.ts';
+// ---- measure ----
+import measureRoutes from '../measure/routes.ts';
 // ---- details ----
 import details from './details.ts';
 
@@ -60,6 +59,7 @@ export type JobRoutes = (kit: JobRouteKit) => void;
 /** Every module of job routes, in its area's block. */
 export const MODULES: readonly JobRoutes[] = [
   // ---- measure ----
+  (kit) => measureRoutes(kit),
   // ---- details ----
   details,
   // ---- import ----

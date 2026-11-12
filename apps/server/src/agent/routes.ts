@@ -30,6 +30,8 @@ import {
   sniff,
 } from './attachments.ts';
 import { Auth, bearer } from './auth.ts';
+import { type Body, bad, body, CONTROL, ID, int, isObj, line, num, type Params, text } from './check.ts';
+import { type JobHandler, type JobRouteKit, type OwnMethod, registerJobRoutes } from './job-routes/index.ts';
 import { type AgentJob, Jobs, type Limits, MODEL, PERMISSION_KINDS, Refusal } from './jobs.ts';
 import type { PermissionKind, RequestContext, ScanPreset } from './prompt.ts';
 import { AgentStore, HARNESSES, type HarnessId } from './store.ts';
@@ -52,53 +54,7 @@ const OFF = 'The agent is off: turn it on in Settings › Agent';
 /** MusicXML is passed on whole (as text) up to this size; past it, only what was measured. */
 const MAX_XML_DATA = 1024 * 1024;
 
-type Body = Record<string, unknown>;
-type Params = Record<string, string>;
-
-// ---- checking what comes in ----
-
-const isObj = (v: unknown): v is Body => typeof v === 'object' && v !== null && !Array.isArray(v);
-const bad = (message: string) => new Refusal(400, message);
-/** Control characters (tabs and line breaks aside). */
-const CONTROL = /(?![\t\n])\p{Cc}/u;
-const ID = /^[\w-]{1,64}$/;
-
-/** A body's fields (none: an empty one). */
-function body(req: FastifyRequest): Body {
-  if (req.body === undefined || req.body === null) return {};
-  if (!isObj(req.body)) throw bad('The body is a JSON object');
-  return req.body;
-}
-
-/** A line of text: trimmed, 1 to `max` characters, no line breaks or control characters. */
-function line(v: unknown, what: string, max: number): string {
-  if (typeof v !== 'string') throw bad(`${what} is text`);
-  const text = v.trim();
-  if (!text || text.length > max || CONTROL.test(text) || /[\n\r]/.test(text))
-    throw bad(`${what} is one line of at most ${max} characters`);
-  return text;
-}
-
-/** Text that may run over several lines: trimmed, 1 to `max` characters. */
-function text(v: unknown, what: string, max: number, optional = false): string {
-  if (optional && (v === undefined || v === null || v === '')) return '';
-  if (typeof v !== 'string') throw bad(`${what} is text`);
-  const t = v.replace(/\r\n?/g, '\n').trim();
-  if ((!t && !optional) || t.length > max || CONTROL.test(t)) throw bad(`${what} is at most ${max} characters`);
-  return t;
-}
-
-function int(v: unknown, what: string, lo: number, hi: number): number {
-  if (typeof v !== 'number' || !Number.isInteger(v) || v < lo || v > hi)
-    throw bad(`${what} is a whole number from ${lo} to ${hi}`);
-  return v;
-}
-
-function num(v: unknown, what: string, lo: number, hi: number): number {
-  if (typeof v !== 'number' || !Number.isFinite(v) || v < lo || v > hi)
-    throw bad(`${what} is a number from ${lo} to ${hi}`);
-  return v;
-}
+// ---- checking what comes in (the checks every route uses are in check.ts) ----
 
 /** What the studio sees, as a request carries it: each part checked, anything else left out. */
 function context(v: unknown): RequestContext | undefined {
@@ -231,7 +187,6 @@ export function agentRoutes(app: FastifyInstance, o: AgentOptions): { jobs: Jobs
       }
     };
 
-  type JobHandler = (req: FastifyRequest, reply: FastifyReply, job: AgentJob) => Promise<unknown>;
   /**
    * A route for a job's tools: its token, while it runs (403 otherwise); with `studio`, only while the
    * requester's studio has the job's song open.
@@ -254,11 +209,11 @@ export function agentRoutes(app: FastifyInstance, o: AgentOptions): { jobs: Jobs
     };
 
   /** One of the server's own routes, asked from here (the tools get exactly what the studio does). */
-  const own = async (method: 'GET' | 'PATCH', url: string, payload?: Body) => {
+  const own = async (method: OwnMethod, url: string, payload?: Body) => {
     const res = await app.inject({ method, url, ...(payload ? { payload } : {}) });
     return res;
   };
-  const relayJson = async (reply: FastifyReply, method: 'GET' | 'PATCH', url: string, payload?: Body) => {
+  const relayJson = async (reply: FastifyReply, method: OwnMethod, url: string, payload?: Body) => {
     const res = await own(method, url, payload);
     return reply.code(res.statusCode).type('application/json; charset=utf-8').send(res.body);
   };
@@ -801,12 +756,31 @@ export function agentRoutes(app: FastifyInstance, o: AgentOptions): { jobs: Jobs
     }),
   );
 
+  // the rest of the job's tools: each area's routes in its own module (job-routes/index.ts lists them)
+  const closing: (() => void)[] = [];
+  const kit: JobRouteKit = {
+    app,
+    J,
+    forJob,
+    jobs: theJobs,
+    live,
+    store,
+    attachments,
+    dataDir: o.dataDir,
+    scans: o.scans,
+    own,
+    relayJson,
+    onClose: (fn) => closing.push(fn),
+  };
+  registerJobRoutes(kit);
+
   return {
     jobs: theJobs,
     auth,
     close: () => {
       theJobs.close();
       attachments.stop();
+      for (const fn of closing) fn();
     },
   };
 }

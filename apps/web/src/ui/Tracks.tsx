@@ -93,6 +93,7 @@ import {
 } from './gesture.ts';
 import { type MenuEntry, openMenu, openMenuAt } from './menu.tsx';
 import { pressToReorder, type ReorderList } from './reorder.ts';
+import { rulerHold } from './ruler.ts';
 import { DOUBLE_TAP_MS, gridStep, TouchPan, Viewport, WHEEL_ZOOM, ZOOM } from './view.ts';
 import { drawClipWave, drawFades, fadeTo, trimEnd, trimStart } from './wave.ts';
 
@@ -241,8 +242,13 @@ function LaneSelect({ track }: { track: Track }) {
 
 /** Room under the last track, for the New track button: the list scrolls this far past it, and a fitted top keeps it. */
 const LIST_TAIL = 60;
+/**
+ * A track's height under a finger: its header stacks the name and what it plays (33 px), then its
+ * buttons (4 + 32), with room above and below so a row's buttons don't meet the next track's name.
+ */
+const TOUCH_ROW = 78;
 /** A track's height as drawn: rows are taller under a finger. */
-const rowHeight = (h: number) => (isTouch() ? Math.max(66, h) : h);
+const rowHeight = (h: number) => (isTouch() ? Math.max(TOUCH_ROW, h) : h);
 /** The track list with every track in it. */
 const listHeight = (tracks: number, row: number) => tracks * row + LIST_TAIL;
 /** The track list on screen (there's one tracks area at a time), for spareTrackRoom. */
@@ -1502,31 +1508,35 @@ export function TracksArea() {
     });
   };
 
-  // ruler: top half sets or moves the cycle, bottom half moves the playhead
+  // ruler: top half sets or moves the cycle, bottom half moves the playhead (on a phone, a finger
+  // moves the playhead anywhere but at the cycle's edges: rulerHold)
   const onRulerDown = (e: ReactPointerEvent<HTMLDivElement>) => {
     const rect = e.currentTarget.getBoundingClientRect();
     const x = e.clientX - rect.left;
     const y = e.clientY - rect.top;
     const tick = tracksView.xToTick(x);
     const snap = snapTicks();
+    const finger = phone && e.pointerType === 'touch';
+    const playheadAt = (px: number) => locate(quantize(tracksView.xToTick(px), ticksPerBeat(m)));
     menuAt.current = null;
-    if (y > rect.height / 2) {
-      locate(quantize(tick, ticksPerBeat(m)));
+    const c = project.cycle;
+    const edges = { x0: tracksView.tickToX(c.start), x1: tracksView.tickToX(c.end) };
+    const mode = rulerHold(x, y, rect.height, edges, finger);
+    if (mode === 'playhead') {
+      playheadAt(x);
       start(e, {
         threshold: 0,
-        onMove: (ev) => locate(quantize(tracksView.xToTick(ev.clientX - rect.left), ticksPerBeat(m))),
+        onMove: (ev) => playheadAt(ev.clientX - rect.left),
       });
       return;
     }
-    const c = project.cycle;
-    const x0 = tracksView.tickToX(c.start);
-    const x1 = tracksView.tickToX(c.end);
-    const mode = Math.abs(x - x0) < 8 ? 'start' : Math.abs(x - x1) < 8 ? 'end' : x > x0 && x < x1 ? 'move' : 'new';
     const anchor = quantize(tick, snap);
     let next = { start: c.start, end: c.end };
     start(e, {
-      threshold: 0,
-      onMove: (ev) => {
+      // a finger's edge is a drag only once it travels: a tap there moves the playhead (onUp)
+      threshold: finger ? undefined : 0,
+      onMove: (ev, g) => {
+        if (!g.moved) return;
         const t = quantize(tracksView.xToTick(ev.clientX - rect.left), snap);
         if (mode === 'start') next = { start: Math.min(t, c.end - snap), end: c.end };
         else if (mode === 'end') next = { start: c.start, end: Math.max(t, c.start + snap) };
@@ -1538,9 +1548,13 @@ export function TracksArea() {
         cyclePreview.current = { on: true, ...next };
         redraw();
       },
-      onUp: () => {
+      onUp: (_ev, g) => {
         cyclePreview.current = null;
         redraw();
+        if (finger && !g.moved) {
+          playheadAt(x);
+          return;
+        }
         if (mode === 'new' && next.start === c.start && next.end === c.end) {
           apply([{ op: 'setProject', patch: { cycle: { ...c, on: !c.on } } }], 'Cycle');
           return;

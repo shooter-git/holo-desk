@@ -648,7 +648,13 @@ a.btn {
   }
 }
 
-/* the tempo drag must keep the pointer, or a finger's scroll takes it after a few pixels */
+/* the position's drag (a jog, a bar at a time) and the tempo's must keep the pointer, or a finger's
+   scroll takes it after a few pixels */
+.lcd .lcd-pos {
+  cursor: ew-resize;
+  touch-action: none;
+}
+
 .lcd .editable {
   cursor: ns-resize;
   touch-action: none;
@@ -1153,6 +1159,11 @@ a.btn {
   overflow: hidden;
   touch-action: none;
   contain: layout paint;
+}
+
+/* the ruler moves the playhead, pressed or dragged */
+.roll .ruler-cell {
+  cursor: pointer;
 }
 
 .roll .lane-label {
@@ -3132,6 +3143,42 @@ html[data-layout="phone-landscape"] .bar .field input {
 .phone-transport.top {
   border-bottom: 1px solid var(--line);
   background: var(--bg-3);
+  container: phone-transport / inline-size;
+}
+
+/* on its side the row has the back and forward buttons and the key: the buttons and the display
+   keep their size, and the song's name gives way first (then the parts go, below) */
+.phone-transport.top .transport {
+  flex: none;
+}
+
+.phone-transport.top .lcd {
+  flex: 1 0 auto;
+}
+
+/* (the cells that are buttons sit as close as the others, here) */
+.phone-transport.top .lcd > .cell {
+  padding: 0 8px;
+}
+
+.phone-transport.top .lcd .value.key {
+  width: auto;
+  min-width: 2ch;
+  max-width: 6ch;
+}
+
+/* most phones: stop pressed again goes to the beginning, so that button is the first to go, then
+   back and forward (the position's drag still moves a bar at a time) */
+@container phone-transport (max-width: 719px) {
+  .tp-start {
+    display: none;
+  }
+}
+
+@container phone-transport (max-width: 619px) {
+  .tp-nav {
+    display: none;
+  }
 }
 
 /* the song's name in the landscape transport row: it gives way before the display does */
@@ -3211,17 +3258,35 @@ html[data-layout="phone-landscape"] .bar .field input {
   border-top: 0;
 }
 
+/* a phone on its side is short (as little as 354 px above the home bar): the tabs sit close, and
+   the tools below pair up, so the rail holds all of them */
 .side-rail .tabbar button {
-  padding: 9px 0;
+  gap: 2px;
+  padding: 5px 0 4px;
+  line-height: 1.2;
 }
 
-/* undo, redo, settings and About at the foot of the side rail */
+/* undo and redo side by side, then settings, then About: at the foot of the side rail */
 .rail-tools {
   display: grid;
-  justify-items: center;
+  grid-template-columns: 1fr 1fr;
   gap: 2px;
-  padding: 6px 0;
+  padding: 6px 2px;
   border-top: 1px solid var(--line);
+}
+
+.rail-tools .btn {
+  width: auto;
+  min-width: 0;
+}
+
+.rail-tools .wide,
+.rail-tools .mark {
+  grid-column: 1 / -1;
+}
+
+.rail-tools .mark {
+  height: 24px;
 }
 
 .rail-tools .mark .wordmark {

@@ -25,6 +25,7 @@ import {
   apply,
   deleteNotes,
   ensureAudio,
+  locate,
   quantizeSelection,
   replaceNotes,
   transposeSelection,
@@ -1056,7 +1057,22 @@ export function PianoRoll() {
   return (
     <div className="roll" style={{ ['--lane' as string]: `${laneHeight}px`, ['--keys' as string]: `${keysWidth}px` }}>
       <div className="corner" />
-      <div className="cell" ref={rulerBox} style={{ borderBottom: '1px solid var(--line)' }}>
+      <div
+        className="cell ruler-cell"
+        ref={rulerBox}
+        style={{ borderBottom: '1px solid var(--line)' }}
+        title="Click or drag to move the playhead"
+        onPointerDown={(e) => {
+          if (e.button !== 0) return;
+          const rect = e.currentTarget.getBoundingClientRect();
+          const m = project.meter[0] ?? { tick: 0, num: 4, den: 4 };
+          const playheadAt = (px: number) =>
+            locate(quantize(rollView.xToTick(px), gridStep(rollView.pxPerTick, 14, ticksPerBeat(m), ticksPerBar(m))));
+          menuAt.current = null;
+          playheadAt(e.clientX - rect.left);
+          start(e, { threshold: 0, onMove: (ev) => playheadAt(ev.clientX - rect.left) });
+        }}
+      >
         <canvas ref={rulerCanvas} />
       </div>
       <div

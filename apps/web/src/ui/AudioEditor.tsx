@@ -286,9 +286,23 @@ export function AudioEditor() {
       <div
         className="cell ruler-cell"
         ref={rulerBox}
+        title="Click or drag to move the playhead"
         onPointerDown={(e) => {
+          if (e.button !== 0) return;
           const rect = e.currentTarget.getBoundingClientRect();
-          locate(snapTo(audioView.xToTick(e.clientX - rect.left), false));
+          const playheadAt = (px: number) => locate(snapTo(audioView.xToTick(px), false));
+          playheadAt(e.clientX - rect.left);
+          gesture.current?.abort();
+          gesture.current = capture(e, {
+            threshold: 0,
+            onMove: (ev) => playheadAt(ev.clientX - rect.left),
+            onUp: () => {
+              gesture.current = null;
+            },
+            onAbort: () => {
+              gesture.current = null;
+            },
+          });
         }}
       >
         <canvas ref={rulerCanvas} />

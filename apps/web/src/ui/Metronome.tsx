@@ -1,13 +1,14 @@
 /**
  * The metronome button, and what it sounds like: a click toggles it; a right-click (or a finger held
- * on it) opens its sound, volume and count-in. Settings has the same controls.
+ * on it) opens its sound, volume and count-in. Settings › Metronome has the same controls (on a phone,
+ * which has no metronome button, it's the only place).
  */
 import type { ClickSound } from '@holo/engine';
 import { Metronome } from 'lucide-react';
 import { useEffect, useId, useRef, useState, useSyncExternalStore } from 'react';
 import { setMetronomeLevel, setMetronomeSound, syncMetronome, toggleMetronome } from '../app/actions.ts';
 import { isPhone, useLayout } from '../app/layout.ts';
-import { store, useApp } from '../app/store.ts';
+import { openSettings, store, useApp } from '../app/store.ts';
 import { companion } from '../audio/companion.ts';
 import { playsClickSounds } from '../audio/engine-features.ts';
 import { LONG_PRESS_MS } from './gesture.ts';
@@ -26,8 +27,8 @@ const COUNT_IN: [number, string][] = [
 ];
 
 /**
- * The metronome's sound, volume and count-in (each choice heard as it's made). `inSettings`: in the
- * Audio & MIDI settings, which have HO[LO] Engine's download themselves.
+ * The metronome's sound, volume and count-in (each choice heard as it's made). `inSettings`: in
+ * Settings › Metronome, where Off and On turn it off and on; the button's menu has a checkbox for it.
  */
 export function MetronomeSettings({ inSettings = false }: { inSettings?: boolean }) {
   const on = useApp((s) => s.metronome);
@@ -49,11 +50,45 @@ export function MetronomeSettings({ inSettings = false }: { inSettings?: boolean
   }, []);
   return (
     <div className="vstack metro-settings">
-      <label className="hstack">
-        <input type="checkbox" checked={on} onChange={toggleMetronome} />
-        Click while playing
-        <kbd>K</kbd>
-      </label>
+      {inSettings ? (
+        // the same switch as the button and K
+        <div className="hstack">
+          <div className="seg" role="radiogroup" aria-label="Metronome">
+            {/* biome-ignore lint/a11y/useSemanticElements: the studio's segmented buttons, as a radio group */}
+            <button
+              type="button"
+              role="radio"
+              aria-checked={!on}
+              className={`btn${on ? '' : ' on'}`}
+              onClick={() => {
+                if (on) toggleMetronome();
+              }}
+            >
+              Off
+            </button>
+            {/* biome-ignore lint/a11y/useSemanticElements: the studio's segmented buttons, as a radio group */}
+            <button
+              type="button"
+              role="radio"
+              aria-checked={on}
+              className={`btn${on ? ' on' : ''}`}
+              onClick={() => {
+                if (!on) toggleMetronome();
+              }}
+            >
+              On
+            </button>
+          </div>
+          <span className="muted">Click while playing</span>
+          <kbd>K</kbd>
+        </div>
+      ) : (
+        <label className="hstack">
+          <input type="checkbox" checked={on} onChange={toggleMetronome} />
+          Click while playing
+          <kbd>K</kbd>
+        </label>
+      )}
       <div className="vstack">
         <span className="muted">Sound</span>
         <div className="seg" role="radiogroup" aria-label="Metronome sound">
@@ -74,17 +109,11 @@ export function MetronomeSettings({ inSettings = false }: { inSettings?: boolean
         {beepOnly && (
           <span className="engine-stale" role="status">
             HO[LO] Engine on this computer ({engine.version || 'an older one'}) is from before these sounds, so it plays
-            the beep whichever is chosen.{' '}
-            {inSettings ? (
-              'Quit it and start the new one (its download is above).'
-            ) : (
-              <>
-                Quit it and start the new one:{' '}
-                <button type="button" className="btn ghost" onClick={() => store.set({ dialog: 'settings' })}>
-                  Audio &amp; MIDI settings
-                </button>
-              </>
-            )}
+            the beep whichever is chosen. Quit it and start the new one:{' '}
+            <button type="button" className="btn ghost" onClick={() => openSettings('audio')}>
+              Settings › Audio
+            </button>{' '}
+            has its download.
           </span>
         )}
       </div>

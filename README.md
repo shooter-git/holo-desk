@@ -7,7 +7,7 @@
 ## What it does
 
 - **Write and edit.** Tracks and regions on a timeline. A Piano Roll with the keyboard down the left: drag notes to new pitches and times, stretch them, set velocities, and draw any controller (mod wheel, expression, sustain, pitch bend, aftertouch, any CC). Quantize, transpose, split, repeat, undo everything.
-- **Play it live.** USB MIDI keyboards and drum pads through Web MIDI, delivered to the audio engine through shared memory: a key you press sounds in the next 128-frame block. You can also play the computer keyboard (Musical Typing) or the touch keyboard and drum pads on a phone. Record with count-in, cycle and metronome (right-click the metronome for its sound and volume). For the shortest time from key to ear, run [HO[LO] Engine](#play-it-in-a-few-milliseconds-holo-engine) on the computer you play on.
+- **Play it live.** USB MIDI keyboards and drum pads through Web MIDI, delivered to the audio engine through shared memory: a key you press sounds in the next 128-frame block. You can also play the computer keyboard (Musical Typing) or the touch keyboard and drum pads on a phone. Record with count-in, cycle and metronome (right-click the metronome, or open Settings › Metronome, for its sound and volume). For the shortest time from key to ear, run [HO[LO] Engine](#play-it-in-a-few-milliseconds-holo-engine) on the computer you play on.
 - **Scores.** Any track as notation (press <kbd>N</kbd>): the score and the Piano Roll are the same notes, so an edit in either shows in both. Write by typing letters and note values, playing a MIDI keyboard, or clicking on a staff; add dynamics, articulations, slurs, lyrics, chord symbols, repeats and endings, D.C. and D.S. jumps, guitar tab and drum parts. Markings sound as they read, and playback follows the repeats. MusicXML goes in and out (MuseScore, Sibelius, Finale, Dorico), and the full score or each part prints, or saves as a PDF.
 - **Scan sheet music.** Photograph a page with your phone or open an image or a PDF: HO[LO] straightens it, finds the systems and shows each line of the page above the bars it became, for a quick review. Optional open-source recognition engines (Audiveris and homr, `pnpm omr on`) read it into the song as one undo step, and read it again to flag the bars where they differ from what's written. The agent, if you turn it on, can read it too.
 - **Record and edit audio.** Audio tracks record a microphone or an instrument through an audio interface (lined up with what you heard, using this device's measured round trip), or take WAV, FLAC, MP3, Ogg and AIFF files dropped on the tracks. Trim from either edge, drag fades, set gain, normalize, and time-stretch without changing pitch (Alt-drag a region's end, as in Logic) in the tracks area or the Audio Editor.
@@ -73,7 +73,7 @@ HO[LO] is hosted on one machine and played on others. Plug your keyboard or drum
 (or other computer, or Android phone) you'll play on, open that address in Chrome, Edge or Firefox
 there, and wear your headphones on that device. The notes never cross the network: only the song and
 the samples come from the host (once; the device keeps the samples). Give each device a name in
-**Audio & MIDI** settings so the others and the AI know which is which. If the host goes away, the
+**Settings › General** so the others and the AI know which is which. If the host goes away, the
 studio keeps working and saves your changes when it's back.
 
 ### A studio, a screen and a remote
@@ -111,7 +111,7 @@ on. It plays the studio's sound itself, with native audio (WASAPI exclusive mode
 on macOS), and reads every USB MIDI instrument natively: keyboards, drum pads, controllers, an
 interface carrying several instruments. The browser stays the screen.
 
-1. Download it for that computer from the studio itself: **Audio & MIDI** settings → **Download it for…**
+1. Download it for that computer from the studio itself: **Settings › Audio** → **Download it for…**
    links the build that carries the studio's own engine. CI builds one for Windows, macOS and Linux
    whenever the engine changes on `main`, and publishes it as a pre-release named for the engine
    (`engine-<fingerprint>`); a build of your own checkout (`pnpm engine:build --release`) is offered
@@ -122,15 +122,15 @@ interface carrying several instruments. The browser stays the screen.
    anyway**. On a Mac, unzip it and the first time right-click it and choose **Open**. A small window
    says it's waiting for the studio.
 3. Open HO[LO] Desk in the browser on that computer. The studio finds it by itself, plays through it
-   and keeps the browser's own audio quiet (it doesn't even need **Start the studio**). **Audio & MIDI**
-   settings says so and shows its numbers. Close the window and the browser plays again.
+   and keeps the browser's own audio quiet (it doesn't even need **Start the studio**). **Settings ›
+   Audio** says so and shows its numbers. Close the window and the browser plays again.
 
 It plays the same engine as the studio (the same code, the same sound) and opens every MIDI device it
 finds, as they're plugged in. It tells the studio which engine it carries: when HO[LO] has moved on (new
 instruments, say) and the Engine hasn't, the studio says so and offers the matching one. Notes go where the browser would send them: armed tracks by their input and
 channel, else the selected track. What you play comes back to the studio, timed as you heard it, for
 recording. On Windows it has the sound device to itself while the studio is open (exclusive mode: other
-apps are silent); tick **Share the sound device with other apps** in Audio & MIDI settings to let them
+apps are silent); tick **Share the sound device with other apps** in Settings › Audio to let them
 play too, for a few milliseconds more. How deep it buffers is its own business: it keeps a period in hand, deepens when the device runs short or the computer comes close, opens the device at a longer period when that persists, and remembers what each device needed. [Latency and devices](docs/latency-and-devices.md#holo-engine)
 has the details.
 
@@ -176,9 +176,8 @@ or pasted on the bar goes with it (a picture is redrawn on your device first, wi
 data). The reply is a sentence or two under the field, with a button only when the agent needs your
 click: to install a pack, send the song to its creation, share the screen, take a photo or record from
 the microphone. Close the bar and the work goes on: the bar's button shows a turning ring while the
-agent works, then a dot until you open the bar again (on a phone, which has no room for the bar's
-button, the View button does, and View's first item opens the bar). The agent works on the open song and
-nothing else:
+agent works, then a dot until you open the bar again (a phone has the bar's button too, at the top). The
+agent works on the open song and nothing else:
 
 - its notes, score, tracks, instruments, effects, mix, automation, tempo, key, meter, markers and cycle;
 - playing to you, listening as you play, and reading what you just played (its tempo, meter, key and
@@ -284,8 +283,8 @@ They follow Logic's (Ctrl in place of ⌘): Space play/stop, R record, C cycle, 
 P Piano Roll, I Inspector, Y Library, Q quantize, Ctrl T split, Ctrl R repeat, Ctrl Z undo, Ctrl K
 Musical Typing, A automation, Ctrl B bounce. N shows the Score and Shift N writes in it: letters for
 notes, 1–7 for values (as in MuseScore), Shift L lyrics, Shift Q chord symbols. Ctrl / opens the bar,
-where every command, track and marker is found by name (the search button in the control bar, or on a
-phone View › Commands or a swipe down on the top bar). Press <kbd>?</kbd> in the studio for the whole
+where every command, track and marker is found by name (the search button in the control bar, or a
+swipe down on a phone's top bar). Press <kbd>?</kbd> in the studio for the whole
 list.
 
 ## Development

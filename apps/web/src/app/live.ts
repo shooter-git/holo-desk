@@ -70,7 +70,7 @@ function deviceKind(): 'phone' | 'tablet' | 'computer' {
   return /iPhone|Android.+Mobile/.test(ua) ? 'phone' : /iPad|Android/.test(ua) ? 'tablet' : 'computer';
 }
 
-/** This device's name for the others: the one set in Audio & MIDI settings, or the browser and kind. */
+/** This device's name for the others: the one set in Settings › General, or the browser and kind. */
 export function device(): string {
   const named = store.get().deviceName.trim();
   if (named) return named;

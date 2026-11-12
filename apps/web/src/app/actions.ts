@@ -573,7 +573,7 @@ export function findCompanion(): void {
     if (m === false && !staleSaid) {
       staleSaid = true;
       toast(
-        'HO[LO] Engine on this computer was built with another engine than this studio, so it may play the newest instruments wrong. Audio & MIDI settings has the matching one.',
+        'HO[LO] Engine on this computer was built with another engine than this studio, so it may play the newest instruments wrong. Settings › Audio has the matching one.',
         'error',
         12000,
       );
@@ -921,7 +921,7 @@ function finishRecording(): void {
 /**
  * How far behind a recording is: the sound you played along to took the output's time to reach you,
  * and your playing took the input's time to come back. Measured on this device when it has been
- * (Audio & MIDI settings), otherwise worked out from what the browser reports.
+ * (Settings › Audio), otherwise worked out from what the browser reports.
  */
 export function roundTripFrames(sr: number): number {
   const measured = store.get().roundTrip;
@@ -966,7 +966,7 @@ engine.onError((message) => {
 });
 engine.onInputError((message) =>
   toast(
-    `The audio input couldn’t open: ${message}. Allow the microphone for this site, or choose another input in Audio & MIDI settings.`,
+    `The audio input couldn’t open: ${message}. Allow the microphone for this site, or choose another input in Settings › Audio.`,
     'error',
     9000,
   ),

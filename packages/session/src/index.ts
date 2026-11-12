@@ -1,8 +1,22 @@
+export { type ArrangeEdit, type Arrangement, arrange, meterBefore, onBarLine } from './arrange.ts';
+export * from './audio-region.ts';
 export * from './automation.ts';
 export * from './defaults.ts';
 export * from './diff.ts';
 export * from './drummer.ts';
-export * from './form.ts';
+// (form.ts's cut helpers stay inside the package)
+export {
+  type Pass,
+  type PlayMap,
+  performed,
+  playedAt,
+  playedLength,
+  playedTimes,
+  playMap,
+  unrollOps,
+  writtenAt,
+  writtenSpans,
+} from './form.ts';
 export * from './format.ts';
 export * from './instruments.ts';
 export * from './keysig.ts';

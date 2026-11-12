@@ -336,6 +336,12 @@ export type ImportAnswer =
 
 // ---- details ----
 
+/** Who a song is by and its album, as the library keeps them beside the song (null: none). */
+export interface SongDetails {
+  artist: string | null;
+  album: string | null;
+}
+
 export interface JobApi {
   /** GET …/song: the song, as the studio last saved or sent it. */
   song(): Promise<Project>;
@@ -397,6 +403,11 @@ export interface JobApi {
   importAttachment(attachment: string): Promise<ImportAnswer>;
 
   // ---- details ----
+  /**
+   * PUT …/details: who the song is by and its album (each one given is set, null clears it). Outside
+   * undo; refused (400) for a creation's song.
+   */
+  details(body: { artist?: string | null; album?: string | null }): Promise<{ ok: boolean } & SongDetails>;
 }
 
 /** An answer from HO[LO] that wasn't OK: its own `error` message, and the status. */
@@ -494,6 +505,7 @@ export function httpJobApi(base: string, job: string, tokenFile: string): JobApi
     importAttachment: (attachment) => json('POST', '/import', { attachment }, 50_000),
 
     // ---- details ----
+    details: (body) => json('PUT', '/details', body),
   };
 }
 
@@ -520,6 +532,8 @@ export interface FakeJobApiOptions {
   imports?: Record<string, ImportAnswer | ImportAnswer[]>;
 
   // ---- details ----
+  /** Who the song is by and its album at first; `refuse`: the 400 a creation's song gets. */
+  details?: Partial<SongDetails> & { refuse?: string };
 }
 
 /** Every call the fake took, in order. */
@@ -670,6 +684,16 @@ export function fakeJobApi(project: Project, options: FakeJobApiOptions = {}): F
     },
 
     // ---- details ----
+    async details(body) {
+      log('details', body);
+      // (kept in the options, as the library keeps them beside the song)
+      options.details ??= {};
+      const about = options.details;
+      if (about.refuse) throw new ApiError(400, about.refuse);
+      for (const field of ['artist', 'album'] as const)
+        if (body[field] !== undefined) about[field] = body[field] ?? null;
+      return { ok: true, artist: about.artist ?? null, album: about.album ?? null };
+    },
   };
   return fake;
 }

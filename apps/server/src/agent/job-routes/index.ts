@@ -13,15 +13,13 @@ import type { Store } from '../../db.ts';
 import type { Live } from '../../live.ts';
 import type { Attachments } from '../attachments.ts';
 import type { Body } from '../check.ts';
-import type { AgentJob, Jobs } from '../jobs.ts';
-
-// ---- measure ----
-import measureRoutes from '../measure/routes.ts';
-
-// ---- details ----
-
 // ---- import ----
 import importRoutes from '../import/routes.ts';
+import type { AgentJob, Jobs } from '../jobs.ts';
+// ---- measure ----
+import measureRoutes from '../measure/routes.ts';
+// ---- details ----
+import details from './details.ts';
 
 /** A job route's handler: the request, the reply, and the job whose token came with it. */
 export type JobHandler = (req: FastifyRequest, reply: FastifyReply, job: AgentJob) => Promise<unknown>;
@@ -63,6 +61,7 @@ export const MODULES: readonly JobRoutes[] = [
   // ---- measure ----
   (kit) => measureRoutes(kit),
   // ---- details ----
+  details,
   // ---- import ----
   importRoutes,
 ];

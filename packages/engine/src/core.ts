@@ -507,6 +507,11 @@ class Strip {
   sendGains(s: Strip['sends'][number], n: number, out: Float64Array): void {
     if (!s.lane) {
       const gain = s.gain;
+      // (arrived at its level: the same number every frame, as stepping would give)
+      if (gain.still) {
+        out.fill(gain.value, 0, n);
+        return;
+      }
       for (let i = 0; i < n; i++) {
         gain.step();
         out[i] = gain.value;
@@ -549,6 +554,23 @@ class Strip {
     }
     const on = this.audible && !this.mute && !this.autoMute ? 1 : 0;
     const { volLane, panLane, volFrames, panFrames, vol, panL, panR } = this;
+    vol.land();
+    panL.land();
+    panR.land();
+    if (!volLane && !panLane && vol.still && panL.still && panR.still) {
+      // the fader and the balance where they were set (as nearly always): the same three numbers
+      // for every frame, multiplied in the same order as when they move
+      const { l, r } = this;
+      const v = vol.value * on;
+      const pl = panL.value;
+      const pr = panR.value;
+      for (let i = 0; i < n; i++) {
+        l[i] = (l[i] as number) * v * pl;
+        r[i] = (r[i] as number) * v * pr;
+      }
+      if (this.near && this.far) this.seat(this.near, this.far, n);
+      return;
+    }
     // a lane's gain, worked out again only when its value moves
     let lastDb = Number.NaN;
     let lastGain = 0;

@@ -10,6 +10,7 @@ import {
   compileClips,
   compileTempo,
   detectHits,
+  encodeWav,
   frameToTick,
   isClickSound,
   kitSource,
@@ -18,6 +19,7 @@ import {
 } from '@holo/engine';
 import type { LiveRoute } from '@holo/engine/companion';
 import {
+  type AudioFile,
   applyOps,
   barToTick,
   type ChannelPatch,
@@ -60,6 +62,7 @@ import { audioFiles } from '../audio/files.ts';
 import { midi } from '../audio/midi.ts';
 import { instrumentManifest } from '../audio/pack-files.ts';
 import { library } from '../audio/samples.ts';
+import { takes as keptTakes, type TakePlan, uploadTake } from '../audio/takes.ts';
 import { holdDuringDrags } from '../ui/gesture.ts';
 import { NOTE_EFFECTS, playsHits } from '../ui/pads.ts';
 import { ApiError, api } from './api.ts';
@@ -68,6 +71,7 @@ import * as history from './history.ts';
 // (live.ts imports this module too: neither uses the other while loading, so the cycle is harmless)
 import { reconnectSoon, reportHistory } from './live.ts';
 import { type Step, store, toast } from './store.ts';
+import { TakeSender } from './take-sender.ts';
 
 // ---- editing ----
 
@@ -390,6 +394,8 @@ export function load(project: Project): void {
   }
   engine.stop();
   engine.sync(project);
+  // takes recorded for this song that never reached it (the server away, the tab closed): sent now
+  sendKeptTakes();
   engine.locate(0);
   loadInstruments(project);
   refreshRouting();
@@ -940,6 +946,62 @@ export function roundTripFrames(sr: number): number {
   return Math.round(((l.base + l.output + input) / 1000) * sr) + 128;
 }
 
+/** A take's regions into the open song, where it was played (false: its song isn't the one open). */
+function placeTake(take: TakePlan, file: AudioFile): boolean {
+  const p = store.get().project;
+  if (!p || p.id !== take.project) return false;
+  const ops: Op[] = [{ op: 'addFile', file }];
+  const track = p.tracks.find((t) => t.id === take.track);
+  if (track) {
+    for (const r of take.regions) {
+      const region = newRegion(r.from, r.length, r.name);
+      region.audio = { file: file.id, offset: r.offset, gain: 0, fadeIn: 0, fadeOut: 0, stretch: 1 };
+      ops.push({ op: 'addRegion', track: track.id, region });
+    }
+  }
+  apply(ops, 'Record Audio');
+  toast(
+    track
+      ? `Recorded ${take.name} (${file.seconds.toFixed(1)} s)`
+      : `${take.name} is in the song’s files: the track it was recorded on is gone`,
+  );
+  return true;
+}
+
+/** A take as a file for the person to keep (when it couldn't be sent). */
+function saveCopy(name: string, wav: Blob): void {
+  const url = URL.createObjectURL(wav);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = name;
+  link.click();
+  window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
+}
+
+const takeSender = new TakeSender({
+  takes: keptTakes,
+  upload: uploadTake,
+  place: placeTake,
+  say: toast,
+  save: saveCopy,
+  wait: (ms) => new Promise((done) => window.setTimeout(done, ms)),
+});
+
+/** Takes kept on this device for the open song are sent again every so often until none wait. */
+let takesTimer = 0;
+function sendKeptTakes(): void {
+  const id = store.get().project?.id;
+  if (!id) return;
+  void takeSender.resume(id).then((left) => {
+    if (left > 0 && !takesTimer) takesTimer = window.setInterval(sendKeptTakes, 20_000);
+    if (left === 0 && takesTimer) {
+      window.clearInterval(takesTimer);
+      takesTimer = 0;
+    }
+  });
+}
+if (typeof window !== 'undefined') window.addEventListener('online', sendKeptTakes);
+
 async function keepTake(take: RecordedTake): Promise<void> {
   const p = store.get().project;
   const track = p?.tracks.find((t) => t.id === take.trackId);
@@ -949,23 +1011,26 @@ async function keepTake(take: RecordedTake): Promise<void> {
   const skip = Math.min(roundTripFrames(sr), first.length - 1);
   const n = track.regions.filter((r) => r.audio).length + 1;
   const name = `${track.name} #${String(n).padStart(2, '0')}`;
-  try {
-    const file = await audioFiles.uploadRecording(p.id, take.channels, sr, `${name}.wav`);
-    // (ticks of the song as played: where it repeats, the take is cut where each pass was played over)
-    const start = Math.max(0, Math.round(frameToTick(engine.segments, take.frame)));
-    const end = Math.round(frameToTick(engine.segments, take.frame + first.length - skip));
-    const ops: Op[] = [{ op: 'addFile', file }];
-    for (const span of writtenSpans(engine.playMap, start, Math.max(start + 1, end))) {
-      const into = (tickToFrame(engine.segments, span.at) - take.frame) / sr;
-      const region = newRegion(span.from, span.to - span.from, span.n > 1 ? `${name} (time ${span.n})` : name);
-      region.audio = { file: file.id, offset: skip / sr + into, gain: 0, fadeIn: 0, fadeOut: 0, stretch: 1 };
-      ops.push({ op: 'addRegion', track: track.id, region });
-    }
-    apply(ops, 'Record Audio');
-    toast(`Recorded ${name} (${file.seconds.toFixed(1)} s)`);
-  } catch (err) {
-    toast(`The recording couldn’t be kept: ${err instanceof Error ? err.message : String(err)}`, 'error', 8000);
-  }
+  // (ticks of the song as played: where it repeats, the take is cut where each pass was played over)
+  const start = Math.max(0, Math.round(frameToTick(engine.segments, take.frame)));
+  const end = Math.round(frameToTick(engine.segments, take.frame + first.length - skip));
+  const plan: TakePlan = {
+    project: p.id,
+    track: track.id,
+    name,
+    rate: sr,
+    channels: take.channels.length,
+    seconds: first.length / sr,
+    regions: writtenSpans(engine.playMap, start, Math.max(start + 1, end)).map((span) => ({
+      from: span.from,
+      length: span.to - span.from,
+      name: span.n > 1 ? `${name} (time ${span.n})` : name,
+      offset: skip / sr + (tickToFrame(engine.segments, span.at) - take.frame) / sr,
+    })),
+  };
+  // as it was captured (32-bit float, nothing lost); kept on this device before anything is sent
+  const wav = new Blob([encodeWav(take.channels, sr, 'float32') as BlobPart], { type: 'audio/wav' });
+  if (!(await takeSender.record(plan, wav))) sendKeptTakes();
 }
 
 engine.onTake((take) => void keepTake(take));

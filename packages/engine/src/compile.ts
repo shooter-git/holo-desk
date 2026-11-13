@@ -22,6 +22,8 @@ import {
   type GraphSpec,
   type InstrumentSpec,
   type MeterSpan,
+  type MixChange,
+  type PluginSpec,
   type TempoSegment,
   type TrackSpec,
 } from './protocol.ts';
@@ -319,4 +321,88 @@ export function songImpulses(project: Project, rate: number): { key: string; sou
     }
   }
   return [...out].map(([key, source]) => ({ key, source }));
+}
+
+/**
+ * A strip's spec with the settings a `mix` message carries taken out: what's left must be the same
+ * for one to do. (Kept for each spec: the graph last sent is compared against again and again.)
+ */
+function withoutSettings(c: ChannelSpec | TrackSpec): string {
+  let text = restOf.get(c);
+  if (text === undefined) {
+    text = JSON.stringify({
+      ...c,
+      volume: 0,
+      pan: 0,
+      mute: false,
+      sends: c.sends.map((x) => [x.bus, x.pre]),
+      inserts: c.inserts.map((p) => [p.id, p.type, p.bypass, p.settings ?? null]),
+    });
+    restOf.set(c, text);
+  }
+  return text;
+}
+const restOf = new WeakMap<ChannelSpec, string>();
+
+const sameParams = (a: Record<string, number>, b: Record<string, number>): boolean => {
+  if (a === b) return true;
+  const keys = Object.keys(a);
+  if (keys.length !== Object.keys(b).length) return false;
+  for (const k of keys) if (a[k] !== b[k]) return false;
+  return true;
+};
+
+/**
+ * What moved between two graphs when only the mixer's settings did (faders, balances, mutes, solos,
+ * sends' levels, plugins' knobs): the `mix` message that says it, with no changes when nothing
+ * moved. Null when anything else differs (a strip, a plugin, the routing, a lane, an instrument):
+ * that takes the whole graph.
+ */
+export function mixChanges(
+  prev: GraphSpec,
+  next: GraphSpec,
+): { changes: MixChange[]; soloed?: string[] | null } | null {
+  if (prev.tracks.length !== next.tracks.length || prev.buses.length !== next.buses.length) return null;
+  const changes: MixChange[] = [];
+  const strip = (a: ChannelSpec, b: ChannelSpec): boolean => {
+    if (a === b) return true;
+    if (a.num !== b.num || a.id !== b.id) return false;
+    if (a.sends.length !== b.sends.length || a.inserts.length !== b.inserts.length) return false;
+    if (withoutSettings(a) !== withoutSettings(b)) return false;
+    const change: MixChange = { num: b.num };
+    let moved = false;
+    if (a.volume !== b.volume) {
+      change.volume = b.volume;
+      moved = true;
+    }
+    if (a.pan !== b.pan) {
+      change.pan = b.pan;
+      moved = true;
+    }
+    if (a.mute !== b.mute) {
+      change.mute = b.mute;
+      moved = true;
+    }
+    const sends = b.sends.flatMap((s, index) => (s.level !== a.sends[index]?.level ? [{ index, level: s.level }] : []));
+    if (sends.length) {
+      change.sends = sends;
+      moved = true;
+    }
+    const params = b.inserts.flatMap((p, i) =>
+      sameParams(p.params, (a.inserts[i] as PluginSpec).params) ? [] : [{ id: p.id, params: p.params }],
+    );
+    if (params.length) {
+      change.params = params;
+      moved = true;
+    }
+    if (moved) changes.push(change);
+    return true;
+  };
+  for (let i = 0; i < next.tracks.length; i++)
+    if (!strip(prev.tracks[i] as TrackSpec, next.tracks[i] as TrackSpec)) return null;
+  for (let i = 0; i < next.buses.length; i++)
+    if (!strip(prev.buses[i] as ChannelSpec, next.buses[i] as ChannelSpec)) return null;
+  if (!strip(prev.master, next.master)) return null;
+  const soloed = JSON.stringify(prev.soloed) !== JSON.stringify(next.soloed);
+  return soloed ? { changes, soloed: next.soloed } : { changes };
 }

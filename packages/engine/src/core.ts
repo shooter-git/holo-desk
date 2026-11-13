@@ -44,6 +44,7 @@ import {
   METER_CHANNELS,
   METER_FLOATS,
   type MeterSpan,
+  type MixChange,
   type PluginSpec,
   RING_EVENTS,
   RING_HEADER,
@@ -405,6 +406,36 @@ class Strip {
     this.applyStage(spec);
   }
 
+  /** A `mix` message's settings for this strip: as `apply` would take them from the whole spec. */
+  adjust(c: MixChange): void {
+    if (c.volume !== undefined) this.vol.set(dbToGain(c.volume));
+    if (c.pan !== undefined) {
+      this.panL.set(Math.min(1, 1 - c.pan));
+      this.panR.set(Math.min(1, 1 + c.pan));
+    }
+    if (c.mute !== undefined) this.mute = c.mute;
+    for (const x of c.sends ?? []) {
+      const send = this.sends[x.index];
+      if (!send) continue;
+      send.gain.set(dbToGain(x.level));
+      send.lastDb = Number.NaN;
+      send.lastGain = 0;
+    }
+    for (const x of c.params ?? []) {
+      const ins = this.inserts.find((i) => i.id === x.id);
+      if (!ins) continue;
+      const json = JSON.stringify([x.params, ins.settings ?? null]);
+      if (ins.json !== json) {
+        ins.effect.setParams(x.params, ins.settings);
+        ins.json = json;
+        ins.params = x.params;
+        ins.owned = false;
+      }
+      // a lane on one of its settings has the last word again from the next block (as after a graph)
+      for (const lane of this.lanes) if (lane.insert === ins) lane.last = Number.NaN;
+    }
+  }
+
   /** The stage's seats, kept (filters and all) while they stay as they are. */
   private applyStage(spec: ChannelSpec): void {
     const st = spec.stage;
@@ -507,6 +538,11 @@ class Strip {
   sendGains(s: Strip['sends'][number], n: number, out: Float64Array): void {
     if (!s.lane) {
       const gain = s.gain;
+      // (arrived at its level: the same number every frame, as stepping would give)
+      if (gain.still) {
+        out.fill(gain.value, 0, n);
+        return;
+      }
       for (let i = 0; i < n; i++) {
         gain.step();
         out[i] = gain.value;
@@ -549,6 +585,23 @@ class Strip {
     }
     const on = this.audible && !this.mute && !this.autoMute ? 1 : 0;
     const { volLane, panLane, volFrames, panFrames, vol, panL, panR } = this;
+    vol.land();
+    panL.land();
+    panR.land();
+    if (!volLane && !panLane && vol.still && panL.still && panR.still) {
+      // the fader and the balance where they were set (as nearly always): the same three numbers
+      // for every frame, multiplied in the same order as when they move
+      const { l, r } = this;
+      const v = vol.value * on;
+      const pl = panL.value;
+      const pr = panR.value;
+      for (let i = 0; i < n; i++) {
+        l[i] = (l[i] as number) * v * pl;
+        r[i] = (r[i] as number) * v * pr;
+      }
+      if (this.near && this.far) this.seat(this.near, this.far, n);
+      return;
+    }
     // a lane's gain, worked out again only when its value moves
     let lastDb = Number.NaN;
     let lastGain = 0;
@@ -998,6 +1051,9 @@ export class EngineCore implements Host {
       case 'graph':
         this.applyGraph(msg.graph);
         break;
+      case 'mix':
+        this.applyMix(msg.changes, msg.soloed);
+        break;
       case 'sequence': {
         const t = this.tracks.get(msg.num);
         if (t) {
@@ -1161,6 +1217,27 @@ export class EngineCore implements Host {
         // and what plugins play themselves (a Drum Replacer's hits)
         for (const s of this.allStrips) for (const ins of s.inserts) ins.effect.silence?.();
         break;
+    }
+  }
+
+  /**
+   * The mixer's settings alone, moved: each strip takes what's there for it, as it would from the
+   * whole graph (the same numbers), and nothing else is touched. A strip that rests wakes: what
+   * was set may give it something to say.
+   */
+  private applyMix(changes: MixChange[], soloed?: string[] | null): void {
+    for (const c of changes) {
+      const s = c.num === 0 ? this.master : (this.tracks.get(c.num) ?? this.buses.find((b) => b.num === c.num));
+      if (!s) continue;
+      s.adjust(c);
+      s.heard = this.tick;
+    }
+    if (soloed !== undefined) {
+      const heard = soloed ? new Set(soloed) : null;
+      for (const t of this.trackOrder) {
+        t.audible = !heard || heard.has(t.id);
+        t.heard = this.tick;
+      }
     }
   }
 
@@ -1958,12 +2035,12 @@ export class EngineCore implements Host {
 
   /**
    * Something a plugin was waiting for has arrived (a hall's response, a kit's samples): each plugin
-   * told, and every strip awake a while (a hall plays and is timed with its response from here on,
-   * not as the empty thing it was while it waited).
+   * told, and the strips timed afresh (a hall is timed with its response from here on, not as the
+   * empty thing it was while it waited). A resting strip rests on: nothing is sent to it, and what
+   * arrived makes no sound of its own.
    */
   private refreshed(): void {
     for (const s of this.allStrips) {
-      s.heard = this.tick;
       if (s.role !== ROLE_NONE) for (const ins of s.inserts) ins.effect.refresh?.();
     }
     this.timeAfresh();

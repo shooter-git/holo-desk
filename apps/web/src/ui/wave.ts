@@ -40,6 +40,7 @@ export function drawClipWave(
 ): boolean {
   const peaks = audioFiles.peaks.get(clip.file);
   if (!peaks) {
+    audioFiles.know(project.files ?? []);
     audioFiles.ensurePeaks(project.id, clip.file, engine.ctx ?? undefined);
     return false;
   }

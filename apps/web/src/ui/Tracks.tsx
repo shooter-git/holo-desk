@@ -550,6 +550,22 @@ function pitchRange(r: Region): { lo: number; hi: number } {
   return range;
 }
 
+/**
+ * What of a song the timeline and the ruler draw, as a list to compare with the last one's (the
+ * song shares whatever an edit leaves alone): everything but the mixer (each track's and bus's
+ * channel, the master), which only the lanes show. With the lanes showing, the whole song.
+ */
+export function drawnOf(project: Project, lanes: boolean): unknown[] {
+  if (lanes) return [project];
+  const out: unknown[] = [];
+  for (const [key, value] of Object.entries(project)) {
+    if (key === 'tracks' || key === 'buses' || key === 'master' || key === 'revision' || key === 'modified') continue;
+    out.push(key, value);
+  }
+  for (const t of project.tracks) out.push(t.id, t.name, t.color, t.kind, t.regions);
+  return out;
+}
+
 function drawTimeline(ctx: CanvasRenderingContext2D, d: Draw): void {
   const { project, w, h, trackHeight, show } = d;
   const v = tracksView;
@@ -903,11 +919,18 @@ export function TracksArea() {
     dirty.current = true;
   };
 
-  // everything the timeline and ruler read: a change to any of it redraws them
+  // everything the timeline and ruler read: a change to any of it redraws them. Of the song, that's
+  // what's drawn (drawnOf): a fader, a knob or a mute moving redraws nothing here
+  const drawnNow = project ? drawnOf(project, automationView) : [];
+  const drawnBefore = useRef<unknown[]>([]);
+  if (drawnNow.length !== drawnBefore.current.length || drawnNow.some((x, i) => x !== drawnBefore.current[i])) {
+    drawnBefore.current = drawnNow;
+    dirty.current = true;
+  }
   // biome-ignore lint/correctness/useExhaustiveDependencies: the list is what drawing reads, not what the effect touches
   useEffect(() => {
     dirty.current = true;
-  }, [project, selectedTrack, selectedRegions, trackHeight, show, automationView, autoParam, size, rulerSize]);
+  }, [selectedTrack, selectedRegions, trackHeight, show, automationView, autoParam, size, rulerSize]);
 
   // waveforms arrive after the regions
   useEffect(

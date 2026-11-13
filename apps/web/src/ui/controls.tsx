@@ -292,14 +292,34 @@ const meterPos = (g: number) => {
   return Math.max(0, Math.min(1, (db - METER_MIN) / (6 - METER_MIN)));
 };
 
-/** A stereo peak meter, drawn every frame from the audio thread's shared numbers. */
+/** How often a meter is drawn, at most (ms): thirty times a second reads as a meter on any screen. */
+const METER_EVERY = 32;
+
+/**
+ * A stereo peak meter, drawn from the audio thread's shared numbers: thirty times a second at most
+ * (a 144 Hz screen would have every strip's drawn five times as often), and not at all while it's
+ * scrolled out of sight.
+ */
 export function Meter({ id, width = 14, height }: { id: string; width?: number; height: number }) {
   const canvas = useRef<HTMLCanvasElement>(null);
   const hold = useRef({ l: 0, r: 0, t: 0 });
   // what the last frame drew, to the half pixel: a quiet meter is not repainted
   const drawn = useRef({ w: 0, h: 0, l: -1, r: -1, hl: -1, hr: -1, over: -1 });
   const grad = useRef<{ h: number; fill: CanvasGradient } | null>(null);
+  const seen = useRef(true);
+  const last = useRef(0);
+  useEffect(() => {
+    const el = canvas.current;
+    if (!el || typeof IntersectionObserver === 'undefined') return;
+    const watch = new IntersectionObserver((entries) => {
+      for (const e of entries) seen.current = e.isIntersecting;
+    });
+    watch.observe(el);
+    return () => watch.disconnect();
+  }, []);
   useFrame((now) => {
+    if (!seen.current || now - last.current < METER_EVERY) return;
+    last.current = now;
     const ctx = prepare(canvas.current, width, height);
     if (!ctx) return;
     const [l, r] = engine.meter(id);

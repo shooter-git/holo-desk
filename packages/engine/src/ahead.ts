@@ -57,6 +57,15 @@ const C_HEADERS = C_PROGRESS + METER_CHANNELS;
 const METERS = METER_CHANNELS * METER_FLOATS;
 const SIGNAL = AHEAD_BLOCK * 2;
 
+/**
+ * Whether the shared memory has a place for this channel number (its progress, its cost, its
+ * meters). A strip numbered past it is played by the audio thread (aheadOwners), as before there
+ * were workers.
+ */
+export function aheadHasRoom(num: number): boolean {
+  return num >= 0 && num < METER_CHANNELS;
+}
+
 /** The counters and loads: allocated once, for as long as the workers run. */
 export function aheadControl(slots = AHEAD_SLOTS): SharedArrayBuffer {
   const sab = new SharedArrayBuffer((C_HEADERS + slots + AHEAD_MAX_WORKERS + METER_CHANNELS) * 4);
@@ -166,14 +175,26 @@ export class AheadLink {
   }
   /** Blocks a strip's sound is out for. */
   progress(num: number): number {
-    return Atomics.load(this.ctl, C_PROGRESS + num);
+    return aheadHasRoom(num) ? Atomics.load(this.ctl, C_PROGRESS + num) : 0;
   }
+  /**
+   * A strip's sound is out for `blocks` blocks. The count only goes up: when a strip changes hands,
+   * the worker it left may still be finishing the blocks before the change after the one it went to
+   * has played well past it, and whoever waits for the later blocks must not see them taken back.
+   */
   publish(num: number, blocks: number): void {
-    Atomics.store(this.ctl, C_PROGRESS + num, blocks);
-    Atomics.notify(this.ctl, C_PROGRESS + num);
+    if (!aheadHasRoom(num)) return;
+    const at = C_PROGRESS + num;
+    for (;;) {
+      const v = Atomics.load(this.ctl, at);
+      if (v >= blocks) return;
+      if (Atomics.compareExchange(this.ctl, at, v, blocks) === v) break;
+    }
+    Atomics.notify(this.ctl, at);
   }
   /** Wait (a worker only: it blocks) until a strip's sound is out for `blocks` blocks. */
   await(num: number, blocks: number): void {
+    if (!aheadHasRoom(num)) return;
     for (;;) {
       const v = Atomics.load(this.ctl, C_PROGRESS + num);
       if (v >= blocks) return;
@@ -195,10 +216,10 @@ export class AheadLink {
   }
   /** A strip's share of a block's time where it's played (smoothed). */
   cost(num: number): number {
-    return this.flt[this.costAt + num] as number;
+    return aheadHasRoom(num) ? (this.flt[this.costAt + num] as number) : 0;
   }
   setCost(num: number, v: number): void {
-    this.flt[this.costAt + num] = v;
+    if (aheadHasRoom(num)) this.flt[this.costAt + num] = v;
   }
 }
 
@@ -397,7 +418,10 @@ export function aheadOwners(graph: GraphSpec, workers: number, cost: (num: numbe
       .map((c) => c.to)
       .filter((to) => to > i && to < strips.length),
   );
-  const costs = strips.map((s) => Math.max(1e-4, cost(s.num)));
+  const costs = strips.map((s) => {
+    const c = cost(s.num);
+    return Number.isFinite(c) ? Math.max(1e-4, c) : 1e-4;
+  });
   const order = [
     ...graph.buses.map((_, i) => tracks + i).reverse(),
     ...graph.tracks.map((_, i) => i).sort((a, b) => (costs[b] as number) - (costs[a] as number) || a - b),
@@ -438,7 +462,8 @@ export function aheadOwners(graph: GraphSpec, workers: number, cost: (num: numbe
   }
   const at = best.at;
   strips.forEach((s, i) => {
-    owners[s.num] = at[i] as number;
+    // (a strip with no place in the shared memory: the audio thread's, and so whatever it feeds)
+    owners[s.num] = aheadHasRoom(s.num) ? (at[i] as number) : -1;
   });
   return owners;
 }
@@ -893,6 +918,24 @@ export class AheadWorker {
             await this.waitWhile(C_CONSUMED, c);
             if (this.stopped) return;
           }
+        }
+        // never a whole ring past the slowest worker: a block's place (its messages' count, the sound
+        // handed over in it) is used again a ring later, and a worker still to play the earlier block
+        // would read the later one's. (The audio thread only takes a block every worker has finished,
+        // so this waits only after it skips ahead: a song starting from a stop.)
+        for (;;) {
+          let slowest = -1;
+          let least = k;
+          for (let j = 1; j < this.core.aheadWorkers; j++) {
+            const d = link.done(j);
+            if (d < least) {
+              least = d;
+              slowest = j;
+            }
+          }
+          if (slowest < 0 || k - least < link.slots) break;
+          await this.waitWhile(C_DONE + slowest, least);
+          if (this.stopped) return;
         }
         // a turn of the event loop now and then, for messages, when it never has to wait
         if ((k & 7) === 0) await this.pause();

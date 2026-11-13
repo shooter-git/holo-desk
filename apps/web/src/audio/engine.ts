@@ -126,6 +126,8 @@ export class AudioEngine {
   private transport: Float64Array<ArrayBufferLike> = new Float64Array(TRANSPORT_FLOATS);
   private nums = new Map<string, number>();
   private nextNum = 1;
+  /** Numbers whose track or bus has left the song: used again, lowest first (the engine has room for METER_CHANNELS). */
+  private freeNums: number[] = [];
   private sentTracks = new Map<string, Track['regions']>();
   /** The tempo and meter lists the audio thread has (the session shares what an edit leaves alone, so the same lists are the same tempo). */
   private sentTempo: { tempo: Project['tempo']; meter: Project['meter'] } | null = null;
@@ -404,10 +406,34 @@ export class AudioEngine {
   numOf(id: string): number {
     let n = this.nums.get(id);
     if (n === undefined) {
-      n = this.nextNum++;
+      n = this.freeNums.pop() ?? this.nextNum++;
       this.nums.set(id, n);
     }
     return n;
+  }
+
+  /**
+   * The numbers of tracks and buses no longer in the song, free to be used again: a tab that opens
+   * song after song (or a song whose tracks come and go) stays within the numbers the engine has
+   * room for. The engine takes a number under another track's id as a new track.
+   */
+  private releaseNums(project: Project): void {
+    const kept = new Set<string>();
+    for (const t of project.tracks) kept.add(t.id);
+    for (const b of project.buses) kept.add(b.id);
+    let freed = false;
+    for (const [id, n] of this.nums) {
+      if (kept.has(id)) continue;
+      this.nums.delete(id);
+      this.freeNums.push(n);
+      // (should it come back, an undo say, it is a new track to the engine: its notes go out again)
+      this.sentTracks.delete(id);
+      this.sentArts.delete(id);
+      this.sentParts.delete(id);
+      freed = true;
+    }
+    // (lowest first: pop takes from the end)
+    if (freed) this.freeNums.sort((a, b) => b - a);
   }
 
   /** Bring the audio thread up to date with the session: only what changed is sent. */
@@ -476,6 +502,7 @@ export class AudioEngine {
           master: project.master,
           tempoGen: this.tempoGen,
         };
+        this.releaseNums(project);
         const graph = compileGraph(project, (id) => this.numOf(id), this.segments);
         // (the graph is built afresh each time: its text says whether anything in it changed)
         const graphKey = JSON.stringify(graph);

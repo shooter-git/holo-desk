@@ -578,6 +578,120 @@ describe('rendering ahead', () => {
   }, 60_000);
 });
 
+describe('the shared memory between engines', () => {
+  it("keeps a strip's progress from going back when the worker it left finishes late", () => {
+    const control = aheadControl();
+    const link = new AheadLink(control, aheadData(64), 64);
+    // the worker a strip went to has played well past the change; the one it left then finishes the block before it
+    link.publish(5, 811);
+    link.publish(5, 779);
+    expect(link.progress(5)).toBe(811);
+    link.publish(5, 812);
+    expect(link.progress(5)).toBe(812);
+  });
+
+  it('has no place for a channel number past its room, and writes nothing for one', () => {
+    const control = aheadControl();
+    const link = new AheadLink(control, aheadData(64), 64);
+    const before = Array.from(new Int32Array(control));
+    for (const num of [512, 560, 600, 5000]) {
+      link.publish(num, 1234);
+      link.setCost(num, 0.5);
+      link.await(num, 99);
+      expect(link.progress(num)).toBe(0);
+      expect(link.cost(num)).toBe(0);
+    }
+    expect(Array.from(new Int32Array(control))).toEqual(before);
+  });
+
+  it('leaves strips numbered past its room to the audio thread, and lays the rest out as ever', () => {
+    const q = light();
+    const nums = numbering();
+    const graph = graphOf(q, nums);
+    const far = { ...graph, tracks: graph.tracks.map((t, i) => (i === 0 ? { ...t, num: 700 } : t)) };
+    const owners = aheadOwners(far, 3, () => 0.1);
+    expect(owners[700]).toBe(-1);
+    for (const s of [...far.tracks.slice(1), ...far.buses]) expect(owners[s.num]).toBeGreaterThanOrEqual(0);
+    // a cost that isn't a number (a strip never timed, say) doesn't pile every strip onto one worker
+    const lost = aheadOwners(graph, 3, () => Number.NaN);
+    const used = new Set([...graph.tracks, ...graph.buses].map((s) => lost[s.num]));
+    expect(used.size).toBeGreaterThan(1);
+  });
+});
+
+describe('strips changing hands while the song renders ahead', () => {
+  it('goes on playing however often they move, with a worker behind the others', async () => {
+    const p = song();
+    const nums = numbering();
+    const messages = setup(p, nums);
+    const graph = graphOf(p, nums);
+    const workers = 3;
+    const control = aheadControl();
+    const room = aheadRoom(64);
+    const data = aheadData(room);
+    const link = new AheadLink(control, data, room);
+    const errors: string[] = [];
+    const threads = Array.from({ length: workers }, (_, self) => {
+      const w = new Worker(new URL('../bench/ahead-thread.ts', import.meta.url), {
+        workerData: { sr: SR, ahead: { control, data, edges: room, workers, self } },
+      });
+      w.on('message', (m: { type: string; message?: string }) => {
+        if (m.type === 'error') errors.push(m.message ?? '');
+      });
+      w.on('error', (e) => errors.push(String(e)));
+      return w;
+    });
+    const core = new EngineCore(SR, (m) => {
+      if (m.type === 'error') errors.push(m.message);
+    });
+    core.receive({
+      type: 'init',
+      ring: null,
+      meters: null,
+      transport: null,
+      ahead: { control, data, edges: room, workers, self: -1 },
+    });
+    const player = new AheadPlayer(core, link, workers);
+    const send = (m: ToWorklet) => {
+      for (const t of threads) t.postMessage(m);
+      player.receive(structuredClone(m));
+    };
+    // the strips dealt out anew each time, by turns in the order sound flows and against it
+    const base = aheadOwners(graph, workers, () => 0.1);
+    const dealt = (turn: number) => base.map((o, i) => (o < 0 ? o : (i * 7 + turn * (1 + (turn % 2))) % workers));
+    send({ type: 'ahead', owners: dealt(0) });
+    for (const m of messages) send(m);
+    const l = new Float32Array(AHEAD_BLOCK);
+    const r = new Float32Array(AHEAD_BLOCK);
+    const BLOCKS = 1500;
+    const deadline = Date.now() + 40_000;
+    let k = 0;
+    let turn = 0;
+    let waits = 0;
+    while (k < BLOCKS && !errors.length && Date.now() < deadline) {
+      if (player.process(l, r, undefined, k * AHEAD_BLOCK)) {
+        k++;
+        waits = 0;
+        // every strip to another worker, and the audio thread held up a moment so the workers that
+        // can run on to the lead while the slowest is still on the blocks before the change
+        if (k % 25 === 0) {
+          send({ type: 'ahead', owners: dealt(++turn) });
+          await new Promise((done) => setTimeout(done, 8));
+        }
+      } else {
+        waits++;
+        await new Promise((done) => setTimeout(done, 1));
+      }
+    }
+    for (const t of threads) t.postMessage({ type: 'aheadQuit' });
+    await Promise.all(threads.map((t) => t.terminate()));
+    expect(errors).toEqual([]);
+    expect(waits).toBeLessThan(2000);
+    expect(k).toBe(BLOCKS);
+    expect(turn).toBeGreaterThan(50);
+  }, 60_000);
+});
+
 describe('starting while the song renders ahead', () => {
   it("starts from a stop at once, not after what's been played ahead", async () => {
     const q = light();

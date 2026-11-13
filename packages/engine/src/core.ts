@@ -321,6 +321,8 @@ class Strip {
   plan: EdgePlan[] = [];
   /** Connections it hands to another engine (its progress is published once they're out). */
   hands = false;
+  /** It was another worker's to hand over until the block about to play: that one finishes its blocks first. */
+  handover = false;
   /** It has been played here (its plugins' state is its own), and for how many blocks it has been timed. */
   ran = false;
   timed = 0;
@@ -699,6 +701,17 @@ interface Split {
   /** The block being played: its place in the ring. */
   block: number;
   warned: boolean;
+  /** Workers in the pool. */
+  workers: number;
+  /**
+   * Who handed each strip's sound over (by channel number; only strips that were handed) under the
+   * owners in force at the last block played here, and under the ones now: a strip that comes to
+   * this engine from another waits for that one to finish the blocks before the change.
+   */
+  handedBefore: Map<number, number>;
+  handedNow: Map<number, number>;
+  /** A block has been played since the owners (or the graph) last changed. */
+  played: boolean;
 }
 
 export class EngineCore implements Host {
@@ -901,6 +914,10 @@ export class EngineCore implements Host {
               owners: [],
               block: 0,
               warned: false,
+              workers: a.workers,
+              handedBefore: new Map(),
+              handedNow: new Map(),
+              played: false,
             }
           : null;
         if (this.split) this.planSplit();
@@ -1088,7 +1105,11 @@ export class EngineCore implements Host {
     const next = new Map<number, TrackNode>();
     const order: TrackNode[] = [];
     for (const spec of g.tracks) {
-      const node = this.tracks.get(spec.num) ?? new TrackNode(this.sr);
+      // (a channel number is used again once its track has gone: another track's is a new track)
+      const had = this.tracks.get(spec.num);
+      const other = had?.id ? had.id !== spec.id : false;
+      if (had && other) for (const i of had.instruments) i?.allNotesOff(true);
+      const node = had && !other ? had : new TrackNode(this.sr);
       this.dormant = !this.mayPlay(spec.num);
       node.apply(spec, this);
       this.dormant = false;
@@ -1807,6 +1828,11 @@ export class EngineCore implements Host {
     return this.playing;
   }
 
+  /** Rendering ahead: the workers in the pool (0: none). */
+  get aheadWorkers(): number {
+    return this.split?.workers ?? 0;
+  }
+
   /** Rendering ahead: the block about to be played (its place in the ring). */
   aheadBlock(k: number): void {
     if (this.split) this.split.block = k;
@@ -1844,6 +1870,12 @@ export class EngineCore implements Host {
         this.recast(s, was);
       }
     });
+    // (the owners in force at the last block played: several changes may come before the next one)
+    if (sp.played) {
+      sp.handedBefore = sp.handedNow;
+      sp.played = false;
+    }
+    sp.handedNow = new Map();
     strips.forEach((s, i) => {
       s.plan = (plan?.edges[i] ?? []).map((e) => ({
         kind: e.kind,
@@ -1853,6 +1885,12 @@ export class EngineCore implements Host {
         slot: e.slot,
       }));
       s.hands = s.role === ROLE_OWN && s.plan.some((e) => e.mode === EDGE_HAND);
+      // (as its owner sees it: the same connections, the same room)
+      const o = owner(i);
+      if (o >= 0 && (plan?.edges[i] ?? []).some((e) => e.slot >= 0 && e.slot < sp.link.edges))
+        sp.handedNow.set(s.num, o);
+      const before = sp.handedBefore.get(s.num);
+      s.handover = s.hands && before !== undefined && before !== sp.self;
     });
   }
 
@@ -1901,6 +1939,7 @@ export class EngineCore implements Host {
     sp: Split,
   ): void {
     if (n !== AHEAD_BLOCK) throw new Error(`Rendering ahead plays blocks of ${AHEAD_BLOCK} frames, not ${n}`);
+    sp.played = true;
     const k = sp.block;
     const live = sp.self < 0;
     this.measureLatency();
@@ -2019,7 +2058,19 @@ export class EngineCore implements Host {
           break;
       }
     }
-    if (s.hands) link.publish(s.num, k + 1);
+    if (s.hands) {
+      if (s.handover) {
+        // it was another worker's until this block: that one's blocks before it are out first (it may
+        // be behind), so whoever takes those in never finds this one's count in their place
+        s.handover = false;
+        if (link.progress(s.num) < k) {
+          const t0 = this.clock ? this.clock() : 0;
+          link.await(s.num, k);
+          if (this.clock) this.waited += this.clock() - t0;
+        }
+      }
+      link.publish(s.num, k + 1);
+    }
   }
 
   /** The channels of the connection `produce` worked out last. */

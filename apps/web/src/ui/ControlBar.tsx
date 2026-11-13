@@ -83,13 +83,15 @@ const SIGNATURES: [number, number, number[]?][] = [
 
 /**
  * The display. Compact (a narrow bar, a phone) shortens the position and leaves out the time and the
- * key, unless `keyCell` asks for the key (a phone on its side has the room).
+ * key, unless `keyCell` asks for the key (a phone on its side has the room). There a tap on the
+ * position shows the time in its place, and another the position again.
  */
 export function Lcd({ compact = false, keyCell = !compact }: { compact?: boolean; keyCell?: boolean }) {
   const project = useApp((s) => s.project);
   const showTime = useShow('barTime');
   const showSig = useShow('barSig');
   const showKey = useShow('barKey');
+  const asTime = useApp((s) => s.positionTime) && compact;
   const pos = useRef<HTMLSpanElement>(null);
   const time = useRef<HTMLSpanElement>(null);
   const [editingTempo, setEditingTempo] = useState(false);
@@ -109,13 +111,17 @@ export function Lcd({ compact = false, keyCell = !compact }: { compact?: boolean
     const p = store.get().project;
     if (!p) return;
     const tick = engine.positionTick();
+    // (the time it's been playing: where the song repeats, the second time through is later)
+    const played = () => formatTime(tickToSeconds(performed(p).tempo, Math.max(0, engine.playedPosition())));
     if (pos.current) {
-      const text = padPosition(tick < 0 ? `-${formatBarBeat(p.meter, 0)}` : formatBarBeat(p.meter, tick, !compact));
+      const text =
+        compact && store.get().positionTime
+          ? played()
+          : padPosition(tick < 0 ? `-${formatBarBeat(p.meter, 0)}` : formatBarBeat(p.meter, tick, !compact));
       if (pos.current.textContent !== text) pos.current.textContent = text;
     }
     if (time.current) {
-      // (the time it's been playing: where the song repeats, the second time through is later)
-      const text = formatTime(tickToSeconds(performed(p).tempo, Math.max(0, engine.playedPosition())));
+      const text = played();
       if (time.current.textContent !== text) time.current.textContent = text;
     }
   });
@@ -132,24 +138,37 @@ export function Lcd({ compact = false, keyCell = !compact }: { compact?: boolean
     <section className={`lcd${compact ? ' compact' : ''}`} aria-label="Song position and tempo">
       <div
         className="lcd-pos"
-        title="Position (bar, beat, division, tick): drag sideways to move a bar at a time. Double-click: go to the beginning"
+        title={
+          compact
+            ? `${asTime ? 'Time' : 'Position (bar, beat, division)'}: tap to show the ${asTime ? 'position' : 'time'}, drag sideways to move a bar at a time. Double-tap: go to the beginning`
+            : 'Position (bar, beat, division, tick): drag sideways to move a bar at a time. Double-click: go to the beginning'
+        }
         onPointerDown={(e) => {
           if (e.button !== 0) return;
           // a jog: each bar's worth of travel moves the playhead a bar (where the back and forward
           // buttons don't fit, a phone held upright, this is how to get around)
           let travel = 0;
+          let tx = 0;
+          let ty = 0;
           startDrag(e, {
             onMove: (dx, dy) => {
+              tx += dx;
+              ty += dy;
               const { bars, rest } = jog(travel + dx - dy);
               travel = rest;
               if (bars) moveBars(bars);
+            },
+            // a tap, where the time has no cell of its own, shows it here instead (or the position again)
+            onEnd: (wasCanceled) => {
+              if (compact && !wasCanceled && Math.hypot(tx, ty) < TAP)
+                store.set((s) => ({ positionTime: !s.positionTime }));
             },
           });
         }}
         onDoubleClick={() => locate(0)}
       >
         <span className="value pos" ref={pos} />
-        <span className="caption">{compact ? 'position' : 'bar beat div tick'}</span>
+        <span className="caption">{compact ? (asTime ? 'time' : 'position') : 'bar beat div tick'}</span>
       </div>
       {!compact && showTime && (
         <div className="lcd-time" title="Time">

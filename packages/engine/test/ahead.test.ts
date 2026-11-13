@@ -704,6 +704,22 @@ describe('strips with nothing to play', () => {
     expect(peak(rested[0] as Float32Array, at(10) * AHEAD_BLOCK, at(11.5) * AHEAD_BLOCK)).toBe(0);
   });
 
+  it("rest on when a hall's response arrives: it makes no sound of its own", () => {
+    const hall = setup(p, nums).find((m) => m.type === 'impulse') as ToWorklet;
+    const counts: number[] = [];
+    one(
+      new Map<number, ToWorklet[]>([
+        [0, setup(p, nums)],
+        [at(10), [hall]],
+      ]),
+      at(10) + 40,
+      true,
+      (_k, core) => counts.push(core.resting),
+    );
+    expect(counts[at(10) - 1]).toBe(5);
+    expect(counts[at(10) + 20]).toBe(5);
+  });
+
   it('rest the same split between engines as on one: the same numbers', () => {
     for (const workers of [1, 2]) {
       const owners = aheadOwners(graph, workers, () => 0.1);

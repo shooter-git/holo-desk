@@ -64,7 +64,7 @@ import {
   writtenAt,
 } from '@holo/session';
 import { aheadThreads, loadAheadScale, loadAheadTimings, saveAhead, startAhead, warmAhead } from './ahead.ts';
-import { companion } from './companion.ts';
+import { companion, STUDIO_ENGINE } from './companion.ts';
 import { audioFiles } from './files.ts';
 import ImpulseWorker from './impulse.worker.ts?worker';
 import { instrumentManifest, sampleFile } from './pack-files.ts';
@@ -184,7 +184,6 @@ export class AudioEngine {
   private audioSent = new Set<string>();
   /** Space Designer responses the audio thread has (or is being given), by key. */
   private impulsesSent = new Set<string>();
-  private impulseWorker: Worker | null = null;
   private sentInputs = '';
   /** The track list the inputs were last worked out from. */
   private inputTracks: Project['tracks'] | null = null;
@@ -679,23 +678,36 @@ export class AudioEngine {
     for (const { key, source } of songImpulses(project, ctx.sampleRate)) {
       if (this.impulsesSent.has(key)) continue;
       this.impulsesSent.add(key);
-      if (!this.impulseWorker) {
-        this.impulseWorker = new ImpulseWorker();
-        this.impulseWorker.onmessage = (e: MessageEvent<{ key: string; data?: PreparedImpulse; error?: string }>) => {
-          const { key: k, data, error } = e.data;
-          if (data && this.impulsesSent.has(k)) {
-            if (this.ahead) this.post({ type: 'impulse', key: k, data: sharedImpulse(data) });
-            else this.post({ type: 'impulse', key: k, data }, impulseBuffers(data));
-          }
-          if (error) {
-            this.impulsesSent.delete(k);
-            for (const fn of this.errorListeners) fn(error);
-          }
-        };
-      }
-      this.impulseWorker.postMessage({ key, source, rate: ctx.sampleRate });
+      this.impulseMaker().postMessage({ key, source, rate: ctx.sampleRate, engine: STUDIO_ENGINE });
     }
   }
+
+  /**
+   * A worker to make a hall: up to three of them, taken in turn (a song's halls are made side by
+   * side, each a few seconds of work, where one worker made them one after another).
+   */
+  private impulseMaker(): Worker {
+    const most = Math.max(1, Math.min(3, (navigator.hardwareConcurrency || 2) - 2));
+    if (this.impulseWorkers.length < most) {
+      const w = new ImpulseWorker();
+      w.onmessage = (e: MessageEvent<{ key: string; data?: PreparedImpulse; error?: string }>) => {
+        const { key: k, data, error } = e.data;
+        if (data && this.impulsesSent.has(k)) {
+          if (this.ahead) this.post({ type: 'impulse', key: k, data: sharedImpulse(data) });
+          else this.post({ type: 'impulse', key: k, data }, impulseBuffers(data));
+        }
+        if (error) {
+          this.impulsesSent.delete(k);
+          for (const fn of this.errorListeners) fn(error);
+        }
+      };
+      this.impulseWorkers.push(w);
+      return w;
+    }
+    return this.impulseWorkers[this.impulseTurn++ % this.impulseWorkers.length] as Worker;
+  }
+  private impulseWorkers: Worker[] = [];
+  private impulseTurn = 0;
 
   /** Audio tracks that are armed or monitoring listen to this device's input. */
   private syncInputs(project: Project): void {

@@ -77,6 +77,8 @@ export interface AppState {
   /** The track whose synth's knobs are open (Fat, Ethereal). */
   synth: string | null;
   mobileTab: MobileTab;
+  /** The compact display (a phone, a narrow bar), which has room for one: the time instead of the position. */
+  positionTime: boolean;
 
   tool: Tool;
   grid: keyof typeof DIVISIONS;
@@ -201,6 +203,7 @@ const initial: AppState = {
   stage: null,
   synth: null,
   mobileTab: 'tracks',
+  positionTime: false,
   tool: 'pointer',
   grid: '1/16',
   zoom: 40,
@@ -271,6 +274,7 @@ const REMEMBER: (keyof AppState)[] = [
   'typingOctave',
   'typingVelocity',
   'mobileTab',
+  'positionTime',
   'automationView',
   'deviceName',
   'show',

@@ -549,6 +549,13 @@ export interface AheadThread {
   close(): void;
 }
 
+/**
+ * Blocks the audio thread may be kept waiting for between two looks at the layout (a couple of
+ * seconds: some 750 blocks) with the strips' timings still counting: past it the workers are far
+ * enough behind that what they time is the waiting as much as the work.
+ */
+const CLEAN_STALLS = 20;
+
 /** What a strip's timing was taken with: the same strip, the same plugins in its chain, the same instrument. */
 function madeOf(s: GraphSpec['tracks'][number] | GraphSpec['buses'][number]): string {
   const plugins = s.inserts.map((p) => (p.bypass ? '' : p.type)).join();
@@ -612,6 +619,8 @@ export class AheadPool {
   private stallsSeen = 0;
   /** Whether the song was playing when the timings were last kept (remember). */
   private wasPlaying = false;
+  /** Whether the audio thread was kept waiting in the stretch before the last look (check). */
+  private waitedBefore = false;
   /** Instruments' guesses from their notes or plans, by channel number (what's to come is known). */
   private parts = new Map<number, number>();
   /** When the strips last moved (ms). */
@@ -646,9 +655,9 @@ export class AheadPool {
    * track times at next to nothing while the song is stopped).
    */
   cost(num: number): number {
-    // (a track is timed only while it has something to play, a bus while it sounds: a timing is
-    // what the strip takes at work)
-    const timed = Math.max(this.link.cost(num), this.seen.get(num) ?? 0);
+    // (its timing as the song played, while the workers kept up: a track's while it had something
+    // to play, a bus's while it sounded)
+    const timed = this.seen.get(num) ?? 0;
     if (timed > 0) return timed;
     // not timed yet: the guess, in this computer's own terms (next to timings, a guess from another
     // computer's speed would weigh its strip several times too heavy or too light)
@@ -681,7 +690,7 @@ export class AheadPool {
     const graph = this.graph;
     if (!graph) return out;
     for (const s of [...graph.tracks, ...graph.buses]) {
-      const share = Math.max(this.link.cost(s.num), this.seen.get(s.num) ?? 0);
+      const share = this.seen.get(s.num) ?? 0;
       const made = this.made.get(s.num);
       if (share > 0 && made !== undefined) out.set(s.num, { share, made });
     }
@@ -697,19 +706,26 @@ export class AheadPool {
   }
 
   /**
-   * Keep each strip's heaviest timing: call every couple of seconds. It is the heaviest the strip
-   * has been since the song last started (the layout has to hold through the busiest passage), and
-   * each new start lets it fade a little, so a strip that has grown lighter (fewer notes) is found
-   * out over a few plays. Playing also says how far this computer's timings run from the guesses.
+   * Keep each strip's heaviest timing: call every couple of seconds. Only what's timed while the song
+   * plays and the workers keep up counts (`clean`): a song being loaded, or workers falling behind
+   * and waiting on each other, time a strip at several times what it takes, and a layout made from
+   * that is worse than one made from the guesses. It is the heaviest the strip has been since the
+   * song last started (the layout has to hold through the busiest passage), and each new start lets
+   * it fade a little, so a strip that has grown lighter (fewer notes) is found out over a few
+   * plays. The same timings say how far this computer runs from the guesses.
    */
-  remember(playing = true): void {
+  remember(playing = true, clean = true): void {
     const graph = this.graph;
     if (!graph) return;
-    const fade = playing && !this.wasPlaying ? 0.85 : 1;
+    const starting = playing && !this.wasPlaying;
     this.wasPlaying = playing;
-    for (const s of [...graph.tracks, ...graph.buses])
-      this.seen.set(s.num, Math.max(this.link.cost(s.num), (this.seen.get(s.num) ?? 0) * fade));
-    if (!playing) return;
+    if (starting) for (const [num, share] of this.seen) this.seen.set(num, share * 0.85);
+    // (the engines time their strips afresh as the song starts: by the next look, what's there is this play's)
+    if (!playing || starting || !clean) return;
+    for (const s of [...graph.tracks, ...graph.buses]) {
+      const now = this.link.cost(s.num);
+      if (now > 0) this.seen.set(s.num, Math.max(now, this.seen.get(s.num) ?? 0));
+    }
     // the strips timed so far against their guesses, all together (the heavy ones count for what they are)
     const sum = { tracks: [0, 0, 0], buses: [0, 0, 0] };
     for (const s of [...graph.tracks, ...graph.buses]) {
@@ -732,18 +748,23 @@ export class AheadPool {
   }
 
   /**
-   * Every couple of seconds (`now` in ms): the timings kept, and the strips laid out again by how long
-   * each takes when a worker has too much to do. While the song plays, only when the audio thread is
-   * being kept waiting, and not often: a strip that moves starts afresh where it lands (its notes
-   * and its plugins' tails cut), which is worth it once the sound is breaking up and not before. A
-   * layout that could be better waits for the song to start again (rebalance).
+   * Every couple of seconds (`now` in ms): the timings kept, and the strips laid out again when a
+   * worker has too much to do. A strip that moves starts afresh where it lands (its notes and its
+   * plugins' tails cut, a hall built again), which itself costs blocks: so while the song plays,
+   * only when the audio thread has been kept waiting two looks running, and at most every half
+   * minute; stopped, at most every ten seconds. A layout that could be better waits for the song
+   * to start again (rebalance).
    */
   check(playing: boolean, now: number): ToWorklet[] {
-    this.remember(playing);
     const stalls = this.link.stalls();
-    const waiting = stalls > this.stallsSeen;
+    const fresh = stalls - this.stallsSeen;
     this.stallsSeen = stalls;
-    if (playing ? !waiting || now - this.moved < 10_000 : Math.max(...this.loads()) < 0.75) return [];
+    // (a few blocks late now and then still time true; a worker far behind doesn't)
+    this.remember(playing, fresh <= CLEAN_STALLS);
+    const waiting = fresh > 0 && this.waitedBefore;
+    this.waitedBefore = fresh > 0;
+    if (playing ? !waiting || now - this.moved < 30_000 : Math.max(...this.loads()) < 0.75 || now - this.moved < 10_000)
+      return [];
     const msgs = this.rebalance(1.2);
     if (msgs.length) this.moved = now;
     return msgs;

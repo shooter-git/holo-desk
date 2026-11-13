@@ -63,6 +63,10 @@ wraps `EngineCore` from `@holo/engine`):
   and the per-sample helpers pass their numbers through fields and typed arrays rather than returning
   them: a call the JavaScript engine doesn't inline boxes every raw double it takes or returns, and the
   garbage that makes costs a collection pause every few blocks.
+- **A generated hall is made once on a device.** A Space Designer's space (or a Shimmer's) is a few
+  seconds of work: the studio makes a song's halls on up to three workers, side by side, and keeps
+  each prepared response in the device's cache under the engine that made it, so a song opened again
+  has its halls at once.
 - **Convolution is spread over the period.** A hall's long partitions take their forward transform,
   the sum over the spectrum and the inverse transform in about-equal pieces, one or two per block,
   so no single block pays for a 32768-point transform; the output lands in the same block as before,

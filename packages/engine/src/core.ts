@@ -2035,12 +2035,12 @@ export class EngineCore implements Host {
 
   /**
    * Something a plugin was waiting for has arrived (a hall's response, a kit's samples): each plugin
-   * told, and every strip awake a while (a hall plays and is timed with its response from here on,
-   * not as the empty thing it was while it waited).
+   * told, and the strips timed afresh (a hall is timed with its response from here on, not as the
+   * empty thing it was while it waited). A resting strip rests on: nothing is sent to it, and what
+   * arrived makes no sound of its own.
    */
   private refreshed(): void {
     for (const s of this.allStrips) {
-      s.heard = this.tick;
       if (s.role !== ROLE_NONE) for (const ins of s.inserts) ins.effect.refresh?.();
     }
     this.timeAfresh();

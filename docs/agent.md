@@ -429,6 +429,11 @@ of the stretch `played` asked for); `length` is ms (null while still held).
 - **Finishing:** when `agent-status` says the job ended with a label, its steps, undone or not, are
   relabelled "Agent: <label>".
 - **Undo and redo** keep `job`, and are reported as `history`.
+- **A reload** brings the history back as this device kept it (`kept-history.ts`; docs/architecture.md,
+  "Sessions and operations"), `job` and all. A running job's next batch still merges into its step,
+  and Undo of it after the reload stops the job as before. A job that ended while the page was away
+  never told it its label: the steps take the label from the song's thread
+  (`GET /api/agent/threads/:project`).
 - **A/B** (`apps/web/src/app/compare.ts`) plays the bars from the song under the job's first step still
   in the undo history, then from the song now. Stop, or a change to the song, ends it.
 - **The existing `ops` message** (from the `holo` command) is unchanged: one step per command,

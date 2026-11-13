@@ -775,6 +775,26 @@ export async function loadThread(project: string): Promise<void> {
   }
 }
 
+/**
+ * The names the song's conversation gave these jobs' steps, for steps kept from before a reload (a
+ * job that ended while the page was away never told this one). Empty while the agent isn't on here.
+ */
+export async function jobLabels(project: string, jobs: readonly string[]): Promise<Map<string, string>> {
+  const labels = new Map<string, string>();
+  try {
+    if (!state.info) await refreshAgent();
+    if (!isOn(state)) return labels;
+    const r = await call<{ thread: { turns: Turn[] } | null }>(
+      'GET',
+      `/api/agent/threads/${encodeURIComponent(project)}`,
+    );
+    for (const t of r.thread?.turns ?? []) if (t.label && jobs.includes(t.job)) labels.set(t.job, t.label);
+  } catch {
+    // the steps keep the names they have
+  }
+  return labels;
+}
+
 /** Send a file that goes with a request (or a permission's answer): its id. What was measured of it follows. */
 export async function upload(file: Ready, project: string): Promise<string> {
   const t = token();

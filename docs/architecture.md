@@ -188,6 +188,16 @@ studio, the server and the CLI all apply operations through the same function, s
 and yours behave identically. In the studio each one is an undo step; the studio saves after a short
 pause. The server keeps every revision a few minutes apart, so earlier versions can be recovered.
 
+The undo history is kept on the device too (`apps/web/src/app/kept-history.ts`, in the browser's
+IndexedDB), with the revision it leads up to, a moment after each save: a reload, or the song opened
+there again later, brings back Undo and Redo as they were. It comes back only when the song opens at
+that same revision. Once the song has been saved somewhere else (another device, a creation, a scan
+read on the host), the history no longer lines up and starts afresh; so it does after an update that
+changed the code for songs (the session and engine's fingerprint), as its steps hold songs as the code
+before wrote them. A step holds the whole song from before it, but an edit shares every part of the
+song it didn't change, and the database stores a shared part once, so a long history costs about one
+song and what its steps changed. The last 20 songs' histories are kept.
+
 ## The live channel
 
 The open studio connects to `/api/live`. It reports its playhead, selection and devices a few times

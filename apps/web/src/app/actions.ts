@@ -54,7 +54,7 @@ import {
   writtenSpans,
 } from '@holo/session';
 import { bounce, bounceRange } from '../audio/bounce.ts';
-import { companion } from '../audio/companion.ts';
+import { companion, STUDIO_ENGINE } from '../audio/companion.ts';
 import { engine, type RecordedTake, warmEngine } from '../audio/engine.ts';
 import { audioFiles } from '../audio/files.ts';
 import { midi } from '../audio/midi.ts';
@@ -62,9 +62,11 @@ import { instrumentManifest } from '../audio/pack-files.ts';
 import { library } from '../audio/samples.ts';
 import { holdDuringDrags } from '../ui/gesture.ts';
 import { NOTE_EFFECTS, playsHits } from '../ui/pads.ts';
+import { jobLabels } from './agent.ts';
 import { ApiError, api } from './api.ts';
 import { comparePlan, type Pass } from './compare.ts';
 import * as history from './history.ts';
+import { browserShelf, Keeper, stepJobs } from './kept-history.ts';
 // (live.ts imports this module too: neither uses the other while loading, so the cycle is harmless)
 import { reconnectSoon, reportHistory } from './live.ts';
 import { type Step, store, toast } from './store.ts';
@@ -371,6 +373,33 @@ export async function resolveConflict(keep: 'mine' | 'theirs'): Promise<void> {
 
 // ---- opening ----
 
+/** The open song's undo history, kept on this device (kept-history.ts). */
+const keeper = new Keeper(typeof window === 'undefined' ? null : browserShelf(), { made: STUDIO_ENGINE });
+
+/** Keep the open song's undo history as it changes, and before the page goes. */
+function keepHistory(): void {
+  store.subscribe(() => keeper.changed(store.get()));
+  addEventListener('pagehide', () => void keeper.flush());
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') void keeper.flush();
+  });
+}
+
+/**
+ * The song's undo history as this device kept it, when the song opened at the revision it was kept
+ * at: a reload's Undo and Redo, the agent's steps with them.
+ */
+async function bringBackHistory(project: Project): Promise<void> {
+  const h = await keeper.restore(project);
+  const s = store.get();
+  // (edited, or another song opened, meanwhile: what's there stands)
+  if (!h || s.project !== project || s.undo.length || s.redo.length) return;
+  store.set({ undo: h.undo, redo: h.redo });
+  // a job that ended while the page was away: its steps take the name it ended with
+  const jobs = stepJobs(h);
+  if (jobs.length) for (const [job, label] of await jobLabels(project.id, jobs)) relabelJob(job, label);
+}
+
 export function load(project: Project): void {
   store.set({
     project,
@@ -394,6 +423,7 @@ export function load(project: Project): void {
   loadInstruments(project);
   refreshRouting();
   document.title = `${project.title} · HO[LO] Desk`;
+  void bringBackHistory(project);
 }
 
 export async function openProject(id: string): Promise<void> {
@@ -468,6 +498,7 @@ export function exportMidi(): void {
 }
 
 export async function startup(): Promise<void> {
+  keepHistory();
   void library.refresh();
   warmEngine();
   void api

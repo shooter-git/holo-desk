@@ -23,6 +23,8 @@ port.on('message', (msg: ToAheadThread | ToWorklet) => {
     });
     core.receive({ type: 'init', ring: null, meters: null, transport: null, ahead });
     core.clock = () => performance.now();
+    // (playing live: a strip with nothing to play rests)
+    core.rest = true;
     const link = new AheadLink(ahead.control, ahead.data, ahead.edges);
     runner = new AheadWorker(core, link, ahead.self, () => performance.now(), pause);
     void runner.run();

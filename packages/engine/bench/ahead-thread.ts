@@ -8,13 +8,15 @@ import { AheadLink, AheadWorker } from '../src/ahead.ts';
 import { EngineCore } from '../src/core.ts';
 import type { AheadSpec, ToWorklet } from '../src/protocol.ts';
 
-const { sr, ahead } = workerData as { sr: number; ahead: AheadSpec };
+const { sr, ahead, rest } = workerData as { sr: number; ahead: AheadSpec; rest?: boolean };
 const port = parentPort;
 const core = new EngineCore(sr, (msg) => {
   if (msg.type === 'error') port?.postMessage(msg);
 });
 core.receive({ type: 'init', ring: null, meters: null, transport: null, ahead });
 core.clock = () => performance.now();
+// (as the studio plays live: strips with nothing to play rest; the tests that compare numbers leave it off)
+core.rest = rest === true;
 const pause = () => new Promise<void>((done) => setImmediate(done));
 const runner = new AheadWorker(
   core,

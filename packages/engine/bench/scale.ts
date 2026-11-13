@@ -7,6 +7,8 @@
  *   pnpm bench --seconds 4 --rate 44100 --only 3,4 --json results.json
  *   pnpm bench --session song.json --from 9 [--ahead 4]   a real song (its samples from the data folder)
  *   pnpm bench --effects             each audio plugin on its own, against a block's time
+ *   pnpm bench --no-rest             every strip played through every block (as a bounce does): the
+ *                                    studio lets a strip with nothing to play rest
  *
  * A song here is made up, nothing recorded: built-in synths playing chords and runs (so many voices
  * sound at once), plugins on every track, automation lanes on every track, sends to buses, and
@@ -36,18 +38,7 @@ import {
   projectEnd,
   SYNTH_PRESETS,
 } from '@holo/session';
-import {
-  AheadLink,
-  AheadPlayer,
-  aheadControl,
-  aheadData,
-  aheadGuess,
-  aheadOwners,
-  aheadPartGuess,
-  aheadPlan,
-  aheadRoom,
-  aheadTrackGuess,
-} from '../src/ahead.ts';
+import { AheadPlayer, AheadPool, aheadPartGuess, aheadTrackGuess } from '../src/ahead.ts';
 import {
   clipKey,
   compileClips,
@@ -126,6 +117,9 @@ const PRESETS = [
   'Ethereal Pad',
   'Ethereal Keys',
 ].filter((p) => (SYNTH_PRESETS as readonly string[]).includes(p) && !DRUM_PRESETS.includes(p));
+
+/** As the studio plays live, strips with nothing to play rest (--no-rest: every strip played through, as a bounce). */
+const REST = !process.argv.includes('--no-rest');
 
 function arg(name: string): string | undefined {
   const i = process.argv.indexOf(`--${name}`);
@@ -364,6 +358,7 @@ function stats(name: string, times: Float64Array, total: number, sr: number, wal
 /** One engine on one thread, as the audio thread plays without rendering ahead. */
 function measureOne(name: string, played: Played, seconds: number, sr: number): Result {
   const core = new EngineCore(sr, () => undefined);
+  core.rest = REST;
   core.receive({ type: 'init', ring: null, meters: null, transport: null });
   for (const m of played.messages) core.receive(m);
   const l = new Float32Array(BLOCK);
@@ -397,54 +392,51 @@ function measureOne(name: string, played: Played, seconds: number, sr: number): 
  * again by how long each took (as the studio does when it starts playing).
  */
 async function measureAhead(name: string, played: Played, seconds: number, sr: number, count: number): Promise<Result> {
-  const control = aheadControl();
   const graph = played.graph;
-  const guess = new Map<number, number>([
-    ...graph.tracks.map((t) => [t.num, aheadGuess(t, played.parts.get(t.num))] as const),
-    ...graph.buses.map((b) => [b.num, aheadGuess(b)] as const),
-  ]);
-  let owners = aheadOwners(graph, count, (num) => guess.get(num) ?? 0.01);
-  const room = aheadRoom(
-    Math.max(
-      64,
-      aheadPlan(
-        graph,
-        aheadOwners(graph, count, () => 1),
-      ).handed * 2,
-    ),
-  );
-  const data = aheadData(room);
-  const link = new AheadLink(control, data, room);
   const errors: string[] = [];
-  const threads = Array.from({ length: count }, (_, self) => {
-    const w = new Worker(new URL('./ahead-thread.ts', import.meta.url), {
-      workerData: { sr, ahead: { control, data, edges: room, workers: count, self } },
-    });
+  const threads: Worker[] = [];
+  // the studio's own pool: its layout, its timings, its rules for when strips move
+  const pool = new AheadPool(count, (ahead) => {
+    const w = new Worker(new URL('./ahead-thread.ts', import.meta.url), { workerData: { sr, ahead, rest: REST } });
     w.on('message', (m: { type: string; message?: string }) => {
       if (m.type === 'error') errors.push(m.message ?? '');
     });
-    return w;
+    threads.push(w);
+    return { post: (m) => w.postMessage(m), close: () => undefined };
   });
+  // (--scale 0.3,0.6: as a device that has already learned how its timings run from the guesses)
+  const preset = arg('scale')?.split(',').map(Number);
+  if (preset) pool.setCalibration({ tracks: preset[0], buses: preset[1] ?? preset[0] });
+  const link = pool.link;
   const core = new EngineCore(sr, (m) => {
     if (m.type === 'error') errors.push(m.message);
   });
-  core.receive({
-    type: 'init',
-    ring: null,
-    meters: null,
-    transport: null,
-    ahead: { control, data, edges: room, workers: count, self: -1 },
-  });
+  core.rest = REST;
+  core.receive({ type: 'init', ring: null, meters: null, transport: null, ahead: pool.spec(-1) });
   const player = new AheadPlayer(core, link, count);
   const send = (m: ToWorklet) => {
-    for (const t of threads) t.postMessage(m);
+    pool.post(m);
     player.receive(m);
   };
-  send({ type: 'ahead', owners });
-  // everything but the start: as in the studio, the song is loaded and stopped, and laid out again
-  // when it starts by what has been timed meanwhile
+  const sendAll = (list: ToWorklet[]) => {
+    for (const m of list) send(m);
+  };
+  // everything but the start: as in the studio, the song is loaded and stopped (each instrument's
+  // notes saying how busy it will be), and laid out again when it starts by what has been timed
   const go = played.messages.at(-1) as ToWorklet;
-  for (const m of played.messages.slice(0, -1)) send(shared(m));
+  let length = 0;
+  for (const m of played.messages)
+    if (m.type === 'sequence')
+      for (let i = 0; i < m.events.length; i += EVENT_SIZE) length = Math.max(length, m.events[i] as number);
+  for (const m of played.messages.slice(0, -1)) {
+    send(shared(m));
+    if (m.type === 'graph') sendAll(pool.layout(m.graph, false));
+    if (m.type === 'sequence') {
+      const t = graph.tracks.find((x) => x.num === m.num);
+      const part = played.parts.get(m.num);
+      if (t) pool.setPart(m.num, part ?? aheadTrackGuess(m.events, t.instrument, length, sr));
+    }
+  }
   const l = new Float32Array(BLOCK);
   const r = new Float32Array(BLOCK);
   const budget = (BLOCK / sr) * 1000;
@@ -479,15 +471,15 @@ async function measureAhead(name: string, played: Played, seconds: number, sr: n
     }
     return total;
   };
-  // stopped a moment, then laid out by how long each strip took (and the planned parts by their plans)
-  await play(Math.round((2 * sr) / BLOCK));
-  // (a planned part's guess counts all along: it knows its busiest passages before they come)
-  const planCost = (num: number) => {
-    const g = guess.get(num) ?? 0.01;
-    return played.parts.has(num) ? Math.max(link.cost(num), g) : link.cost(num) || g;
-  };
-  owners = aheadOwners(graph, count, planCost);
-  send({ type: 'ahead', owners });
+  // stopped a moment, then laid out by what's known of each strip (rebalance, as the studio starts a song)
+  const every = Math.round((2 * sr) / BLOCK);
+  let now = 0;
+  await play(every);
+  now += 2000;
+  sendAll(pool.check(false, now));
+  sendAll(pool.rebalance(1.25));
+  const planCost = (num: number) => pool.cost(num);
+  let owners = pool.laidOut;
   send(go);
   if (process.argv.includes('--trace')) {
     const planned = new Array<number>(count).fill(0);
@@ -505,11 +497,23 @@ async function measureAhead(name: string, played: Played, seconds: number, sr: n
         .join(', ')}`,
     );
   }
-  await play(Math.round((2 * sr) / BLOCK));
+  await play(every);
+  now += 2000;
+  sendAll(pool.check(true, now));
   const blocks = Math.floor((seconds * sr) / BLOCK);
   const times = new Float64Array(blocks);
   const start = performance.now();
-  const total = await play(blocks, times);
+  // (the pool looks at the layout every couple of seconds, as the studio's timer has it do)
+  let total = 0;
+  let moves = 0;
+  for (let at = 0; at < blocks; at += every) {
+    total += await play(Math.min(every, blocks - at), times.subarray(at));
+    now += 2000;
+    const msgs = pool.check(true, now);
+    if (msgs.some((m) => m.type === 'ahead')) moves++;
+    sendAll(msgs);
+  }
+  owners = pool.laidOut;
   const wall = performance.now() - start;
   const res = stats(name, times, total, sr, wall);
   res.workers = Array.from({ length: count }, (_, j) => link.load(j));
@@ -525,6 +529,19 @@ async function measureAhead(name: string, played: Played, seconds: number, sr: n
       ...graph.tracks.map((t) => [t.id, t.num] as const),
       ...graph.buses.map((b) => [b.id, b.num] as const),
     ];
+    // each worker's own time against the sum of its strips' (what the layout goes by): the gap is work no strip is timed for
+    const sums = new Array<number>(count).fill(0);
+    for (const [, num] of strips) {
+      const o = owners[num] ?? -1;
+      if (o >= 0) sums[o] = (sums[o] as number) + link.cost(num);
+    }
+    console.error(
+      `  each worker, its thread / its strips: ${sums.map((x, j) => `${pct(link.load(j))} / ${pct(x)}`).join(', ')}`,
+    );
+    const learned = pool.calibration();
+    console.error(
+      `  timings against the guesses: instruments ${learned.tracks.toFixed(2)}×, plugins alone ${learned.buses.toFixed(2)}×; strips moved while playing: ${moves} time${moves === 1 ? '' : 's'}`,
+    );
     const top = strips.map(([id, num]) => ({ id, num, cost: link.cost(num), owner: owners[num], plan: planCost(num) }));
     top.sort((a, b) => b.cost - a.cost);
     for (const s of top.slice(0, 14))

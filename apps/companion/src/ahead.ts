@@ -12,6 +12,7 @@ import { availableParallelism } from 'node:os';
 import type { Worker } from 'node:worker_threads';
 import {
   AheadPool,
+  type AheadScale,
   type AheadSpec,
   aheadPartGuess,
   aheadShared,
@@ -102,6 +103,12 @@ export class AheadRelay {
   }
 }
 
+/**
+ * How far this computer's timings run from the engine's guesses, as the songs played so far have
+ * shown (AheadPool.calibration): the next studio's song is laid out with it from the start.
+ */
+let learned: AheadScale = { tracks: 1, buses: 1 };
+
 /** One studio's song on the threads: who plays what, and the guesses that lay it out before it's timed. */
 export class CompanionAhead {
   readonly pool: AheadPool;
@@ -127,6 +134,7 @@ export class CompanionAhead {
         close: () => w.postMessage({ type: 'aheadStop' } satisfies ToAheadThread),
       };
     });
+    this.pool.setCalibration(learned);
     // when a worker has too much to do (the first layout is a guess), the strips laid out again; and
     // while the song is stopped, as soon as its parts' plans have come (they follow the graph), so
     // that it isn't laid out again as it starts (a strip that moves starts afresh: a stall then)
@@ -206,6 +214,7 @@ export class CompanionAhead {
 
   close(): void {
     clearInterval(this.timer);
+    learned = this.pool.calibration();
     this.pool.close();
   }
 }

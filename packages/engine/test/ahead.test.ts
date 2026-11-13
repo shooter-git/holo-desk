@@ -16,6 +16,7 @@ import {
   AHEAD_LEAD,
   AheadLink,
   AheadPlayer,
+  AheadPool,
   aheadControl,
   aheadData,
   aheadOwners,
@@ -404,14 +405,21 @@ function edits(p: Project, nums: (id: string) => number): Map<number, ToWorklet[
 }
 
 /** One engine, the whole mix: what a bounce plays. */
-function one(batches: Map<number, ToWorklet[]>, blocks: number): Float32Array[] {
+function one(
+  batches: Map<number, ToWorklet[]>,
+  blocks: number,
+  rest = false,
+  each?: (k: number, core: EngineCore) => void,
+): Float32Array[] {
   const core = new EngineCore(SR, (m) => {
     if (m.type === 'error') throw new Error(m.message);
   });
+  core.rest = rest;
   core.receive({ type: 'init', ring: null, meters: null, transport: null });
   return run(blocks, (k, l, r) => {
     for (const m of batches.get(k) ?? []) core.receive(structuredClone(m));
     core.process(l, r, undefined, k * AHEAD_BLOCK);
+    each?.(k, core);
   });
 }
 
@@ -438,6 +446,7 @@ function split(
   workers: number,
   owners: number[],
   live?: (k: number, core: EngineCore) => void,
+  rest = false,
 ): Float32Array[] {
   const control = aheadControl();
   const room = 256;
@@ -448,6 +457,7 @@ function split(
     const core = new EngineCore(SR, (m) => {
       if (m.type === 'error') throw new Error(m.message);
     });
+    core.rest = rest;
     core.receive({
       type: 'init',
       ring: null,
@@ -575,6 +585,303 @@ describe('rendering ahead', () => {
     const out = await threaded(going, BLOCKS, 3, shuffled, 12);
     expect(out.played.some((b, k) => b > k)).toBe(true);
     expect(same(out.channels, replayed(out, all))).toBe(true);
+  }, 60_000);
+});
+
+describe('the shared memory between engines', () => {
+  it("keeps a strip's progress from going back when the worker it left finishes late", () => {
+    const control = aheadControl();
+    const link = new AheadLink(control, aheadData(64), 64);
+    // the worker a strip went to has played well past the change; the one it left then finishes the block before it
+    link.publish(5, 811);
+    link.publish(5, 779);
+    expect(link.progress(5)).toBe(811);
+    link.publish(5, 812);
+    expect(link.progress(5)).toBe(812);
+  });
+
+  it('has no place for a channel number past its room, and writes nothing for one', () => {
+    const control = aheadControl();
+    const link = new AheadLink(control, aheadData(64), 64);
+    const before = Array.from(new Int32Array(control));
+    for (const num of [512, 560, 600, 5000]) {
+      link.publish(num, 1234);
+      link.setCost(num, 0.5);
+      link.await(num, 99);
+      expect(link.progress(num)).toBe(0);
+      expect(link.cost(num)).toBe(0);
+    }
+    expect(Array.from(new Int32Array(control))).toEqual(before);
+  });
+
+  it('leaves strips numbered past its room to the audio thread, and lays the rest out as ever', () => {
+    const q = light();
+    const nums = numbering();
+    const graph = graphOf(q, nums);
+    const far = { ...graph, tracks: graph.tracks.map((t, i) => (i === 0 ? { ...t, num: 700 } : t)) };
+    const owners = aheadOwners(far, 3, () => 0.1);
+    expect(owners[700]).toBe(-1);
+    for (const s of [...far.tracks.slice(1), ...far.buses]) expect(owners[s.num]).toBeGreaterThanOrEqual(0);
+    // a cost that isn't a number (a strip never timed, say) doesn't pile every strip onto one worker
+    const lost = aheadOwners(graph, 3, () => Number.NaN);
+    const used = new Set([...graph.tracks, ...graph.buses].map((s) => lost[s.num]));
+    expect(used.size).toBeGreaterThan(1);
+  });
+});
+
+/** A song with long silences: a lead that plays a bar, waits five and plays again; a pad that only comes in then; a room; a recording late on. */
+function sparse(): Project {
+  const p = newProject('Sparse');
+  p.tempo = [{ tick: 0, bpm: 120 }];
+  const room = newBus('Room');
+  room.channel.inserts = [newPlugin('space', { space: 0, decay: 0.5, dry: -60, wet: -6 })];
+  const echo = newBus('Echo');
+  echo.channel.inserts = [newPlugin('delay')];
+  p.buses = [room, echo];
+  p.master.inserts = [];
+  const lead = newTrack('Lead', { type: 'synth', preset: 'Soft Keys' });
+  lead.regions = [{ ...newRegion(0, BAR * 8), notes: [0, 6].map((b) => ({ t: b * BAR, d: BAR / 2, p: 64, v: 90 })) }];
+  lead.channel.inserts = [newPlugin('eq', { b2Gain: 3 }), newPlugin('compressor')];
+  lead.channel.sends = [
+    { bus: room.id, level: -10, pre: false },
+    { bus: echo.id, level: -14, pre: false },
+  ];
+  const pad = newTrack('Pad', { type: 'synth', preset: 'Warm Pad' });
+  pad.regions = [{ ...newRegion(0, BAR * 8), notes: [{ t: 6 * BAR, d: BAR, p: 52, v: 80 }] }];
+  pad.channel.inserts = [newPlugin('eq', { b2Gain: 3 })];
+  pad.channel.sends = [{ bus: room.id, level: -12, pre: false }];
+  const take = newAudioTrack('Take');
+  take.regions = [
+    {
+      ...newRegion(BAR * 6.5, BAR),
+      audio: { file: 'aud_sparse', offset: 0, gain: 0, fadeIn: 0, fadeOut: 0, stretch: 1 },
+    },
+  ];
+  take.channel.sends = [{ bus: room.id, level: -9, pre: false }];
+  p.tracks = [lead, pad, take];
+  return p;
+}
+
+describe('strips with nothing to play', () => {
+  const p = sparse();
+  const nums = numbering();
+  const batches = new Map<number, ToWorklet[]>([[0, setup(p, nums)]]);
+  const graph = graphOf(p, nums);
+  // sixteen seconds: a bar played, ten seconds of nothing, then everything at once
+  const BLOCKS = Math.round((16 * SR) / AHEAD_BLOCK);
+  const at = (seconds: number) => Math.round((seconds * SR) / AHEAD_BLOCK);
+  const through = one(batches, BLOCKS);
+  const resting: number[] = [];
+  const rested = one(batches, BLOCKS, true, (_k, core) => resting.push(core.resting));
+
+  it('has a song with a long silence in it, and something after', () => {
+    expect(peak(through[0] as Float32Array, 0, at(1) * AHEAD_BLOCK)).toBeGreaterThan(0.01);
+    expect(peak(through[0] as Float32Array, at(9) * AHEAD_BLOCK, at(11) * AHEAD_BLOCK)).toBeLessThan(1e-5);
+    expect(peak(through[0] as Float32Array, at(12.2) * AHEAD_BLOCK, at(14) * AHEAD_BLOCK)).toBeGreaterThan(0.01);
+  });
+
+  it('rest once they have been silent a few seconds, and wake when something comes', () => {
+    // while the lead's note and the room's and the echo's tails sound, only what never played rests
+    expect(resting[at(0.5)]).toBe(0);
+    // (the pad and the recording have had nothing yet: asleep four seconds in)
+    expect(resting[at(4.5)]).toBeGreaterThanOrEqual(2);
+    // deep in the silence: every track and both buses
+    expect(resting[at(11)]).toBe(5);
+    // everything plays again
+    expect(resting[at(13.5)]).toBe(0);
+  });
+
+  it('play what they would have, to within what no one can hear', () => {
+    let worst = 0;
+    for (let c = 0; c < 2; c++) {
+      const a = through[c] as Float32Array;
+      const b = rested[c] as Float32Array;
+      for (let i = 0; i < a.length; i++) worst = Math.max(worst, Math.abs((a[i] as number) - (b[i] as number)));
+    }
+    // (-120 dB: the tails given up were below -140 dB before the fader, a few strips of them)
+    expect(worst).toBeLessThan(1e-6);
+    // and nothing at all comes out of a mix at rest
+    expect(peak(rested[0] as Float32Array, at(10) * AHEAD_BLOCK, at(11.5) * AHEAD_BLOCK)).toBe(0);
+  });
+
+  it('rest the same split between engines as on one: the same numbers', () => {
+    for (const workers of [1, 2]) {
+      const owners = aheadOwners(graph, workers, () => 0.1);
+      expect(same(split(batches, BLOCKS, workers, owners, undefined, true), rested)).toBe(true);
+    }
+  }, 120_000);
+
+  it('are played through, every block, where nothing rests (a bounce): the numbers of before', () => {
+    const again = one(batches, BLOCKS, false);
+    expect(same(again, through)).toBe(true);
+  });
+});
+
+describe('laying a song out by what its strips take on this computer', () => {
+  const p = song();
+  const nums = numbering();
+  const graph = graphOf(p, nums);
+  const strips = [...graph.tracks, ...graph.buses];
+  /** A pool whose threads take their messages and do nothing. */
+  const pool = (workers = 3) => {
+    const made = new AheadPool(workers, () => ({ post: () => undefined, close: () => undefined }));
+    return made;
+  };
+  /** As timed here: the tracks at a fifth of their guesses, one hall as heavy as all of them. */
+  const timedHere = (num: number) =>
+    num === graph.buses[0]?.num ? 0.3 : graph.tracks.some((t) => t.num === num) ? 0.02 : 0.03;
+  const play = (a: AheadPool, rounds = 12) => {
+    for (const s of strips) a.link.setCost(s.num, timedHere(s.num));
+    for (let i = 0; i < rounds; i++) a.remember(true);
+  };
+  const busiest = (owners: number[], workers: number) => {
+    const load = new Array<number>(workers).fill(0);
+    for (const s of strips) {
+      const o = owners[s.num] ?? -1;
+      if (o >= 0) load[o] = (load[o] as number) + timedHere(s.num);
+    }
+    return Math.max(...load);
+  };
+  const ownersOf = (msgs: ToWorklet[]) => msgs.flatMap((m) => (m.type === 'ahead' ? [m.owners] : [])).at(-1);
+
+  it('learns how far the guesses run from its timings, and lays the song out in its own terms', () => {
+    const a = pool();
+    const first = ownersOf(a.layout(graph, false)) as number[];
+    for (const t of graph.tracks) a.setPart(t.num, 0.1);
+    expect(a.calibration()).toEqual({ tracks: 1, buses: 1 });
+    play(a);
+    // the tracks take a fifth of what was guessed for them: the guesses still to be used are brought down
+    expect(a.calibration().tracks).toBeLessThan(0.5);
+    const again = ownersOf(a.rebalance(1)) ?? first;
+    expect(busiest(again, 3)).toBeLessThanOrEqual(busiest(first, 3));
+    // the heavy hall has a worker nearly to itself
+    expect(busiest(again, 3)).toBeLessThan(0.3 + 0.1);
+  });
+
+  it("keeps a song's timings for the next time it's opened, for the strips that are still what they were", () => {
+    const a = pool();
+    a.layout(graph, false);
+    for (const t of graph.tracks) a.setPart(t.num, 0.1);
+    play(a);
+    const kept = a.timings();
+    expect(kept.size).toBe(strips.length);
+    const settled = ownersOf(a.rebalance(1));
+    // a fresh pool (the song opened again): laid out by the kept timings at once
+    const b = pool();
+    b.setCalibration(a.calibration());
+    for (const t of graph.tracks) b.setPart(t.num, 0.1);
+    const opened = ownersOf(b.layout(graph, false, kept)) as number[];
+    if (settled) expect(busiest(opened, 3)).toBeCloseTo(busiest(settled, 3), 5);
+    expect(busiest(opened, 3)).toBeLessThan(0.3 + 0.1);
+    // a strip that has other plugins now is guessed afresh: its kept timing says nothing of it
+    const hall = graph.buses[0] as GraphSpec['buses'][number];
+    const other = { ...graph, buses: [{ ...hall, inserts: [] }, ...graph.buses.slice(1)] };
+    const c = pool();
+    c.layout(other, false, kept);
+    expect(c.timings().has(hall.num)).toBe(false);
+    expect(c.timings().size).toBe(strips.length - 1);
+  });
+
+  it('forgets what it knew of a channel number when another strip takes it', () => {
+    const a = pool();
+    a.layout(graph, false);
+    play(a);
+    const t0 = graph.tracks[0] as GraphSpec['tracks'][number];
+    expect(a.timings().has(t0.num)).toBe(true);
+    const taken = { ...graph, tracks: [{ ...t0, id: 'trk_another' }, ...graph.tracks.slice(1)] };
+    a.layout(taken, false);
+    expect(a.timings().has(t0.num)).toBe(false);
+    expect(a.link.cost(t0.num)).toBe(0);
+  });
+
+  it('moves no strip while the song plays unless the audio thread is kept waiting', () => {
+    const a = pool();
+    a.layout(graph, false);
+    for (const t of graph.tracks) a.setPart(t.num, 0.1);
+    for (const s of strips) a.link.setCost(s.num, timedHere(s.num));
+    // a worker nearly out of time, and a better layout there to be had
+    for (let j = 0; j < 3; j++) a.link.setLoad(j, 0.95);
+    for (let i = 0; i < 6; i++) expect(a.check(true, 20_000 + i * 2000)).toEqual([]);
+    // the audio thread waited for a block: now the strips are laid out again, by the timings
+    a.link.stall();
+    const moved = a.check(true, 40_000);
+    expect(ownersOf(moved)).toBeDefined();
+    // and not again straight away
+    a.link.stall();
+    expect(a.check(true, 42_000)).toEqual([]);
+  });
+});
+
+describe('strips changing hands while the song renders ahead', () => {
+  it('goes on playing however often they move, with a worker behind the others', async () => {
+    const p = song();
+    const nums = numbering();
+    const messages = setup(p, nums);
+    const graph = graphOf(p, nums);
+    const workers = 3;
+    const control = aheadControl();
+    const room = aheadRoom(64);
+    const data = aheadData(room);
+    const link = new AheadLink(control, data, room);
+    const errors: string[] = [];
+    const threads = Array.from({ length: workers }, (_, self) => {
+      const w = new Worker(new URL('../bench/ahead-thread.ts', import.meta.url), {
+        workerData: { sr: SR, ahead: { control, data, edges: room, workers, self } },
+      });
+      w.on('message', (m: { type: string; message?: string }) => {
+        if (m.type === 'error') errors.push(m.message ?? '');
+      });
+      w.on('error', (e) => errors.push(String(e)));
+      return w;
+    });
+    const core = new EngineCore(SR, (m) => {
+      if (m.type === 'error') errors.push(m.message);
+    });
+    core.receive({
+      type: 'init',
+      ring: null,
+      meters: null,
+      transport: null,
+      ahead: { control, data, edges: room, workers, self: -1 },
+    });
+    const player = new AheadPlayer(core, link, workers);
+    const send = (m: ToWorklet) => {
+      for (const t of threads) t.postMessage(m);
+      player.receive(structuredClone(m));
+    };
+    // the strips dealt out anew each time, by turns in the order sound flows and against it
+    const base = aheadOwners(graph, workers, () => 0.1);
+    const dealt = (turn: number) => base.map((o, i) => (o < 0 ? o : (i * 7 + turn * (1 + (turn % 2))) % workers));
+    send({ type: 'ahead', owners: dealt(0) });
+    for (const m of messages) send(m);
+    const l = new Float32Array(AHEAD_BLOCK);
+    const r = new Float32Array(AHEAD_BLOCK);
+    const BLOCKS = 1500;
+    const deadline = Date.now() + 40_000;
+    let k = 0;
+    let turn = 0;
+    let waits = 0;
+    while (k < BLOCKS && !errors.length && Date.now() < deadline) {
+      if (player.process(l, r, undefined, k * AHEAD_BLOCK)) {
+        k++;
+        waits = 0;
+        // every strip to another worker, and the audio thread held up a moment so the workers that
+        // can run on to the lead while the slowest is still on the blocks before the change
+        if (k % 25 === 0) {
+          send({ type: 'ahead', owners: dealt(++turn) });
+          await new Promise((done) => setTimeout(done, 8));
+        }
+      } else {
+        waits++;
+        await new Promise((done) => setTimeout(done, 1));
+      }
+    }
+    for (const t of threads) t.postMessage({ type: 'aheadQuit' });
+    await Promise.all(threads.map((t) => t.terminate()));
+    expect(errors).toEqual([]);
+    expect(waits).toBeLessThan(2000);
+    expect(k).toBe(BLOCKS);
+    expect(turn).toBeGreaterThan(50);
   }, 60_000);
 });
 

@@ -102,7 +102,7 @@ export const songSet: Tool = {
   name: 'song_set',
   kind: 'change',
   summary:
-    'Change the song\'s settings: title, tempo (bpm), key ("D minor", "Bb major", "A lydian"; "none" clears it) and meter ("3/4", "6/8", "7/8 2+2+3" with the grouping in eighths). Without "at" they change from the start of the song; with "at" (a position, e.g. "17") a tempo, key or meter change is added there (a meter change only on a bar line). Also who it\'s by ("artist") and its "album" ("none" clears one): the library keeps those beside the song, so undo doesn\'t take them back, and a creation\'s song has its creation\'s. Example: {"tempo": 92, "key": "E minor"}; {"artist": "Es Claro"}.',
+    'Change the song\'s settings: title, tempo (bpm), key ("D minor", "Bb major", "A lydian"; "none" clears it) and meter ("3/4", "6/8", "7/8 2+2+3" with the grouping in eighths). Without "at" they change from the start of the song; with "at" (a position, e.g. "17") a tempo, key or meter change is added there (a meter change only on a bar line). Also who it\'s by ("artist") and its "album" ("none" clears one): the library keeps those beside the song, so undo doesn\'t take them back, and a creation\'s song has its creation\'s. Example: {"tempo": 92, "key": "E minor"}; {"artist": "Example Artist"}.',
   args: [
     { name: 'title', type: 'string', describe: "The song's title", maxLength: 200 },
     { name: 'tempo', type: 'number', describe: 'Quarter notes per minute, e.g. 96', min: 20, max: 400 },

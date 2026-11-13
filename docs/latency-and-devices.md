@@ -183,6 +183,11 @@ recording back by that much, so it lands where you played it. It uses the round 
 device (**Measure with the microphone**) when there is one, and otherwise what the browser reports.
 Measure again after changing the output, the input or the latency setting.
 
+A take is kept on the device the moment it's recorded, before it's sent to the song. If the server
+doesn't answer, the take stays there and is sent again by itself (while the song is open, and the
+next time it's opened), then placed where it was played; the notice that says so has a button to
+save a copy as a WAV file.
+
 Input monitoring (the headphones button on an audio track) plays the input through the track and its
 plugins, which adds that same round trip to what you hear. For singing or playing with no delay at
 all, use your audio interface's own direct monitoring and leave HO[LO]'s off.

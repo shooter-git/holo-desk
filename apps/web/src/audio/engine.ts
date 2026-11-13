@@ -6,6 +6,7 @@
 
 import {
   type AheadPool,
+  type AheadTiming,
   aheadPartGuess,
   aheadTrackGuess,
   type ClickSound,
@@ -62,7 +63,7 @@ import {
   type Track,
   writtenAt,
 } from '@holo/session';
-import { aheadThreads, startAhead, warmAhead } from './ahead.ts';
+import { aheadThreads, loadAheadScale, loadAheadTimings, saveAhead, startAhead, warmAhead } from './ahead.ts';
 import { companion } from './companion.ts';
 import { audioFiles } from './files.ts';
 import ImpulseWorker from './impulse.worker.ts?worker';
@@ -276,9 +277,15 @@ export class AudioEngine {
       this.ahead = startAhead(threads, ctx.sampleRate, (message) => {
         for (const fn of this.errorListeners) fn(message);
       });
-      // when a worker has too much to do (the first layout is a guess), the strips laid out again
+      // what this device learned of its own speed the last time (the layout's guesses come from another's)
+      this.ahead.setCalibration(loadAheadScale() ?? {});
+      this.aheadSong = null;
+      // when a worker has too much to do (the first layout is a guess), the strips laid out again;
+      // and what the strips take as they play, kept for the next time the song is opened here
+      let ticks = 0;
       this.aheadTimer = setInterval(() => {
         for (const m of this.ahead?.check(this.playing, performance.now()) ?? []) this.post(m);
+        if (this.playing && ++ticks % 8 === 0) this.keepAhead();
       }, 2000);
     }
     this.port = node.port;
@@ -509,7 +516,12 @@ export class AudioEngine {
         if (graphKey !== this.sentGraph) {
           this.post({ type: 'graph', graph });
           this.sentGraph = graphKey;
-          if (this.ahead) for (const m of this.ahead.layout(graph, this.playing)) this.post(m);
+          if (this.ahead) {
+            // the first layout of a song: by what its strips took the last time it played here
+            const known = this.aheadSong === project.id ? undefined : this.knownAhead(project.id, graph);
+            this.aheadSong = project.id;
+            for (const m of this.ahead.layout(graph, this.playing, known)) this.post(m);
+          }
           this.pruneSamplers(graph);
         }
         this.syncAudio(project);
@@ -936,6 +948,35 @@ export class AudioEngine {
     const frame = this.songFrame();
     this.post({ type: 'stop', cmd: ++this.cmd });
     this.told = { frame, playing: false };
+    this.keepAhead();
+  }
+
+  /** The song whose strips' timings the workers' layout began from (null: none yet on these workers). */
+  private aheadSong: string | null = null;
+
+  /** A song's strips as they were last timed playing here, by the numbers they have now. */
+  private knownAhead(project: string, graph: GraphSpec): Map<number, AheadTiming> | undefined {
+    const kept = loadAheadTimings(project, this.sampleRate);
+    if (!kept) return undefined;
+    const known = new Map<number, AheadTiming>();
+    for (const s of [...graph.tracks, ...graph.buses]) {
+      const t = kept.get(s.id);
+      if (t) known.set(s.num, t);
+    }
+    return known;
+  }
+
+  /** What the song's strips take as they play here, kept for the next time it's opened (and how this device runs against the guesses). */
+  private keepAhead(): void {
+    const project = this.project;
+    if (!this.ahead || !project || this.aheadSong !== project.id) return;
+    const ids = new Map([...this.nums].map(([id, n]) => [n, id]));
+    const strips = new Map<string, AheadTiming>();
+    for (const [num, t] of this.ahead.timings()) {
+      const id = ids.get(num);
+      if (id) strips.set(id, t);
+    }
+    saveAhead(project.id, this.sampleRate, strips, this.ahead.calibration());
   }
 
   /** The playhead to a tick of the song as written. */

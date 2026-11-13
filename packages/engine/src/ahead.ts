@@ -536,6 +536,38 @@ export interface AheadThread {
   close(): void;
 }
 
+/** What a strip's timing was taken with: the same strip, the same plugins in its chain, the same instrument. */
+function madeOf(s: GraphSpec['tracks'][number] | GraphSpec['buses'][number]): string {
+  const plugins = s.inserts.map((p) => (p.bypass ? '' : p.type)).join();
+  if (!('instrument' in s)) return `${s.id}|${plugins}`;
+  const i = s.instrument;
+  return `${s.id}|${plugins}|${i.kind}|${i.kind === 'synth' ? i.preset : i.kind === 'sampler' ? i.key : ''}`;
+}
+
+/** The middle one of some numbers (0 for none). */
+function median(values: number[]): number {
+  if (!values.length) return 0;
+  const sorted = [...values].sort((a, b) => a - b);
+  const mid = sorted.length >> 1;
+  return sorted.length % 2 ? (sorted[mid] as number) : ((sorted[mid - 1] as number) + (sorted[mid] as number)) / 2;
+}
+
+/**
+ * How far this computer's timings run from the guesses (aheadGuess, made on one computer years ago):
+ * the timed share of a block over the guessed one, for instruments and for strips that are plugins
+ * alone. 1: as guessed.
+ */
+export interface AheadScale {
+  tracks: number;
+  buses: number;
+}
+
+/** A strip's share of a block as it was timed playing, and what the strip was then (its plugins, its instrument). */
+export interface AheadTiming {
+  share: number;
+  made: string;
+}
+
 /** What the owners are laid out for: the strips and where each one's sound goes. */
 function shapeOf(graph: GraphSpec): string {
   const strip = (s: GraphSpec['buses'][number]) => [
@@ -567,12 +599,16 @@ export class AheadPool {
   private guesses = new Map<number, number>();
   /** Each strip's heaviest timing lately (a track idle while stopped still costs what it did playing). */
   private seen = new Map<number, number>();
+  /** What each strip was when it was timed (madeOf): another strip under its number, or other plugins, is timed afresh. */
+  private made = new Map<number, string>();
+  /** The guesses brought to this computer's speed (AheadScale): learned as songs play, or handed in by whoever kept it. */
+  private scale: AheadScale = { tracks: 1, buses: 1 };
+  /** Stalls when the layout was last looked at (check). */
+  private stallsSeen = 0;
   /** Instruments' guesses from their notes or plans, by channel number (what's to come is known). */
   private parts = new Map<number, number>();
   /** When the strips last moved (ms). */
   private moved = Number.NEGATIVE_INFINITY;
-  /** The owners were laid out from guesses (strips not yet timed): laid out again as soon as they all have been. */
-  private guessed = false;
 
   constructor(count: number, start: (spec: AheadSpec) => AheadThread) {
     this.count = count;
@@ -604,9 +640,39 @@ export class AheadPool {
    */
   private cost(num: number): number {
     const timed = Math.max(this.link.cost(num), this.seen.get(num) ?? 0);
-    const guess = this.guesses.get(num) ?? 0.01;
+    // (the guess in this computer's own terms: next to timings, a guess from another computer's
+    // speed would weigh its strip several times too heavy or too light)
+    const guess = (this.guesses.get(num) ?? 0.01) * (this.parts.has(num) ? this.scale.tracks : this.scale.buses);
     if (this.parts.has(num)) return Math.max(timed, guess);
     return timed > 0.002 ? timed : guess;
+  }
+
+  /** How far this computer's timings run from the guesses, as learned so far (to keep for the next song, or the next visit). */
+  calibration(): AheadScale {
+    return { ...this.scale };
+  }
+
+  /** The same, as kept from before. */
+  setCalibration(scale: Partial<AheadScale>): void {
+    const ok = (x: unknown): x is number => typeof x === 'number' && Number.isFinite(x) && x > 0;
+    if (ok(scale.tracks)) this.scale.tracks = Math.min(4, Math.max(0.02, scale.tracks));
+    if (ok(scale.buses)) this.scale.buses = Math.min(4, Math.max(0.02, scale.buses));
+  }
+
+  /**
+   * Each strip's timing as it played, with what it was then (by channel number; only strips that
+   * have been timed): to keep with the song, and hand to `layout` the next time it's opened.
+   */
+  timings(): Map<number, AheadTiming> {
+    const out = new Map<number, AheadTiming>();
+    const graph = this.graph;
+    if (!graph) return out;
+    for (const s of [...graph.tracks, ...graph.buses]) {
+      const share = Math.max(this.link.cost(s.num), this.seen.get(s.num) ?? 0);
+      const made = this.made.get(s.num);
+      if (share > 0.002 && made !== undefined) out.set(s.num, { share, made });
+    }
+    return out;
   }
 
   /** An instrument's guess from its notes or its plans (aheadTrackGuess, aheadPartGuess; null: none). */
@@ -617,50 +683,51 @@ export class AheadPool {
     if (t) this.guesses.set(num, aheadGuess(t, this.parts.get(num)));
   }
 
-  /** Keep each strip's heaviest timing, fading by half in about half a minute: call every couple of seconds. */
-  remember(): void {
+  /**
+   * Keep each strip's heaviest timing: call every couple of seconds. While the song plays it fades by
+   * half in about half a minute (the song moves on); stopped, it is kept as it is (a stopped strip
+   * times at next to nothing, and the song starts again with what its strips took playing). Playing
+   * also says how far this computer's timings run from the guesses.
+   */
+  remember(playing = true): void {
     const graph = this.graph;
     if (!graph) return;
+    const fade = playing ? 0.95 : 1;
     for (const s of [...graph.tracks, ...graph.buses])
-      this.seen.set(s.num, Math.max(this.link.cost(s.num), (this.seen.get(s.num) ?? 0) * 0.95));
+      this.seen.set(s.num, Math.max(this.link.cost(s.num), (this.seen.get(s.num) ?? 0) * fade));
+    if (!playing) return;
+    const tracks: number[] = [];
+    const buses: number[] = [];
+    for (const s of [...graph.tracks, ...graph.buses]) {
+      const now = this.link.cost(s.num);
+      const guess = this.guesses.get(s.num) ?? 0;
+      // (a strip sounding now, and one whose guess says something: an empty strip's says nothing)
+      if (now <= 0.002 || guess <= 0.004) continue;
+      (this.parts.has(s.num) ? tracks : buses).push((this.seen.get(s.num) as number) / guess);
+    }
+    // (half way to the middle one each time: a couple of seconds' timings don't swing it)
+    const toward = (was: number, ratios: number[], least: number) =>
+      ratios.length >= least ? Math.min(4, Math.max(0.02, was + (median(ratios) - was) * 0.5)) : was;
+    this.scale.tracks = toward(this.scale.tracks, tracks, 3);
+    this.scale.buses = toward(this.scale.buses, buses, 1);
   }
 
   /**
-   * Every couple of seconds (`now` in ms): the timings kept, and when a worker has too much to do
-   * (the first layout is a guess), the strips laid out again by how long each takes: while playing
-   * only when it's falling behind, and not often (a strip that moves starts afresh).
+   * Every couple of seconds (`now` in ms): the timings kept, and the strips laid out again by how long
+   * each takes when a worker has too much to do. While the song plays, only when the audio thread is
+   * being kept waiting, and not often: a strip that moves starts afresh where it lands (its notes
+   * and its plugins' tails cut), which is worth it once the sound is breaking up and not before. A
+   * layout that could be better waits for the song to start again (rebalance).
    */
   check(playing: boolean, now: number): ToWorklet[] {
-    this.remember();
-    const busiest = Math.max(...this.loads());
-    // a layout from guesses (they run far from the mark): once every strip has been timed playing,
-    // laid out by the timings without waiting for a worker to fall behind
-    if (this.guessed && playing && this.allTimed()) {
-      this.guessed = false;
-      const msgs = this.rebalance(1.2);
-      if (msgs.length) this.moved = now;
-      return msgs;
-    }
-    if (busiest < 0.75 || (playing && now - this.moved < 10_000)) return [];
+    this.remember(playing);
+    const stalls = this.link.stalls();
+    const waiting = stalls > this.stallsSeen;
+    this.stallsSeen = stalls;
+    if (playing ? !waiting || now - this.moved < 10_000 : Math.max(...this.loads()) < 0.75) return [];
     const msgs = this.rebalance(1.2);
     if (msgs.length) this.moved = now;
     return msgs;
-  }
-
-  /** Whether every strip a worker plays has been timed there. */
-  private allTimed(): boolean {
-    const graph = this.graph;
-    if (!graph) return false;
-    for (const s of [...graph.tracks, ...graph.buses]) {
-      if ((this.owners[s.num] ?? -1) >= 0 && this.link.cost(s.num) <= 0) return false;
-    }
-    return true;
-  }
-
-  /** Whether a strip's share is still a guess (it hasn't been timed playing, and its notes say nothing). */
-  private isGuess(num: number): boolean {
-    const timed = Math.max(this.link.cost(num), this.seen.get(num) ?? 0);
-    return !this.parts.has(num) && timed <= 0.002;
   }
 
   /** How long the busiest worker would take a block for, with these owners. */
@@ -676,16 +743,45 @@ export class AheadPool {
   /**
    * Messages for the graph as it now is: room for more connections if they need it, and new owners
    * when the strips or their routing change. While playing, the strips keep their players (a strip
-   * that moves starts afresh where it lands); only new ones are laid out.
+   * that moves starts afresh where it lands); only new ones are laid out. `known`: each strip's
+   * timing from the last time this song played here (timings), when whoever runs the pool kept them.
    */
-  layout(graph: GraphSpec, playing: boolean): ToWorklet[] {
+  layout(graph: GraphSpec, playing: boolean, known?: Map<number, AheadTiming>): ToWorklet[] {
     this.graph = graph;
+    // what's known of a strip goes with it: a number given to another strip, or a strip with other
+    // plugins or another instrument, is guessed and timed afresh
+    const here = new Set<number>();
+    for (const s of [...graph.tracks, ...graph.buses]) {
+      here.add(s.num);
+      const made = madeOf(s);
+      const was = this.made.get(s.num);
+      if (was !== undefined && was !== made) {
+        this.seen.delete(s.num);
+        this.link.setCost(s.num, 0);
+        if (!was.startsWith(`${s.id}|`)) this.parts.delete(s.num);
+      }
+      this.made.set(s.num, made);
+    }
+    for (const num of [...this.made.keys()]) {
+      if (here.has(num)) continue;
+      this.made.delete(num);
+      this.seen.delete(num);
+      this.parts.delete(num);
+      this.guesses.delete(num);
+      this.link.setCost(num, 0);
+    }
+    // what the song's strips took the last time it played here, for those that are still what they were
+    if (known) {
+      for (const [num, t] of known) {
+        if (this.made.get(num) !== t.made || !Number.isFinite(t.share) || t.share <= 0) continue;
+        this.seen.set(num, Math.max(this.seen.get(num) ?? 0, Math.min(8, t.share)));
+      }
+    }
     for (const t of graph.tracks) this.guesses.set(t.num, aheadGuess(t, this.parts.get(t.num)));
     for (const b of graph.buses) this.guesses.set(b.num, aheadGuess(b));
     const shape = shapeOf(graph);
-    if (shape === this.shape) return [];
+    if (shape === this.shape && !known?.size) return [];
     this.shape = shape;
-    this.guessed = [...graph.tracks, ...graph.buses].some((s) => this.isGuess(s.num));
     const fresh = aheadOwners(graph, this.count, (num) => this.cost(num));
     const kept =
       playing && this.owners.length

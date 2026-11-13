@@ -16,6 +16,7 @@ import {
   AHEAD_LEAD,
   AheadLink,
   AheadPlayer,
+  AheadPool,
   aheadControl,
   aheadData,
   aheadOwners,
@@ -616,6 +617,101 @@ describe('the shared memory between engines', () => {
     const lost = aheadOwners(graph, 3, () => Number.NaN);
     const used = new Set([...graph.tracks, ...graph.buses].map((s) => lost[s.num]));
     expect(used.size).toBeGreaterThan(1);
+  });
+});
+
+describe('laying a song out by what its strips take on this computer', () => {
+  const p = song();
+  const nums = numbering();
+  const graph = graphOf(p, nums);
+  const strips = [...graph.tracks, ...graph.buses];
+  /** A pool whose threads take their messages and do nothing. */
+  const pool = (workers = 3) => {
+    const made = new AheadPool(workers, () => ({ post: () => undefined, close: () => undefined }));
+    return made;
+  };
+  /** As timed here: the tracks at a fifth of their guesses, one hall as heavy as all of them. */
+  const timedHere = (num: number) =>
+    num === graph.buses[0]?.num ? 0.3 : graph.tracks.some((t) => t.num === num) ? 0.02 : 0.03;
+  const play = (a: AheadPool, rounds = 12) => {
+    for (const s of strips) a.link.setCost(s.num, timedHere(s.num));
+    for (let i = 0; i < rounds; i++) a.remember(true);
+  };
+  const busiest = (owners: number[], workers: number) => {
+    const load = new Array<number>(workers).fill(0);
+    for (const s of strips) {
+      const o = owners[s.num] ?? -1;
+      if (o >= 0) load[o] = (load[o] as number) + timedHere(s.num);
+    }
+    return Math.max(...load);
+  };
+  const ownersOf = (msgs: ToWorklet[]) => msgs.flatMap((m) => (m.type === 'ahead' ? [m.owners] : [])).at(-1);
+
+  it('learns how far the guesses run from its timings, and lays the song out in its own terms', () => {
+    const a = pool();
+    const first = ownersOf(a.layout(graph, false)) as number[];
+    for (const t of graph.tracks) a.setPart(t.num, 0.1);
+    expect(a.calibration()).toEqual({ tracks: 1, buses: 1 });
+    play(a);
+    // the tracks take a fifth of what was guessed for them: the guesses still to be used are brought down
+    expect(a.calibration().tracks).toBeLessThan(0.5);
+    const again = ownersOf(a.rebalance(1)) ?? first;
+    expect(busiest(again, 3)).toBeLessThanOrEqual(busiest(first, 3));
+    // the heavy hall has a worker nearly to itself
+    expect(busiest(again, 3)).toBeLessThan(0.3 + 0.1);
+  });
+
+  it("keeps a song's timings for the next time it's opened, for the strips that are still what they were", () => {
+    const a = pool();
+    a.layout(graph, false);
+    for (const t of graph.tracks) a.setPart(t.num, 0.1);
+    play(a);
+    const kept = a.timings();
+    expect(kept.size).toBe(strips.length);
+    const settled = ownersOf(a.rebalance(1));
+    // a fresh pool (the song opened again): laid out by the kept timings at once
+    const b = pool();
+    b.setCalibration(a.calibration());
+    for (const t of graph.tracks) b.setPart(t.num, 0.1);
+    const opened = ownersOf(b.layout(graph, false, kept)) as number[];
+    if (settled) expect(busiest(opened, 3)).toBeCloseTo(busiest(settled, 3), 5);
+    expect(busiest(opened, 3)).toBeLessThan(0.3 + 0.1);
+    // a strip that has other plugins now is guessed afresh: its kept timing says nothing of it
+    const hall = graph.buses[0] as GraphSpec['buses'][number];
+    const other = { ...graph, buses: [{ ...hall, inserts: [] }, ...graph.buses.slice(1)] };
+    const c = pool();
+    c.layout(other, false, kept);
+    expect(c.timings().has(hall.num)).toBe(false);
+    expect(c.timings().size).toBe(strips.length - 1);
+  });
+
+  it('forgets what it knew of a channel number when another strip takes it', () => {
+    const a = pool();
+    a.layout(graph, false);
+    play(a);
+    const t0 = graph.tracks[0] as GraphSpec['tracks'][number];
+    expect(a.timings().has(t0.num)).toBe(true);
+    const taken = { ...graph, tracks: [{ ...t0, id: 'trk_another' }, ...graph.tracks.slice(1)] };
+    a.layout(taken, false);
+    expect(a.timings().has(t0.num)).toBe(false);
+    expect(a.link.cost(t0.num)).toBe(0);
+  });
+
+  it('moves no strip while the song plays unless the audio thread is kept waiting', () => {
+    const a = pool();
+    a.layout(graph, false);
+    for (const t of graph.tracks) a.setPart(t.num, 0.1);
+    for (const s of strips) a.link.setCost(s.num, timedHere(s.num));
+    // a worker nearly out of time, and a better layout there to be had
+    for (let j = 0; j < 3; j++) a.link.setLoad(j, 0.95);
+    for (let i = 0; i < 6; i++) expect(a.check(true, 20_000 + i * 2000)).toEqual([]);
+    // the audio thread waited for a block: now the strips are laid out again, by the timings
+    a.link.stall();
+    const moved = a.check(true, 40_000);
+    expect(ownersOf(moved)).toBeDefined();
+    // and not again straight away
+    a.link.stall();
+    expect(a.check(true, 42_000)).toEqual([]);
   });
 });
 

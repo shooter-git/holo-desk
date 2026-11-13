@@ -2,7 +2,7 @@
  * Rendering ahead, as the page runs it: worker threads on the other cores that play the song a
  * little ahead of the playhead (@holo/engine's ahead.ts, whose AheadPool lays out who plays what).
  */
-import { AheadPool, aheadWorkersFor } from '@holo/engine';
+import { AheadPool, type AheadScale, type AheadTiming, aheadWorkersFor } from '@holo/engine';
 import AheadWorkerScript from './ahead.worker.ts?worker';
 import aheadWorkerUrl from './ahead.worker.ts?worker&url';
 
@@ -33,4 +33,63 @@ export function startAhead(count: number, sr: number, onError: (message: string)
       },
     };
   });
+}
+
+// ---- what this device has learned about its own speed, kept between visits ----
+
+const SCALE_KEY = 'holo:ahead:scale';
+const SONG_KEY = 'holo:ahead:song:';
+const SONGS_KEY = 'holo:ahead:songs';
+/** Songs whose strips' timings are kept (the most lately played). */
+const SONGS_KEPT = 24;
+
+function read<T>(key: string): T | null {
+  try {
+    const text = localStorage.getItem(key);
+    return text ? (JSON.parse(text) as T) : null;
+  } catch {
+    return null;
+  }
+}
+
+function write(key: string, value: unknown): void {
+  try {
+    localStorage.setItem(key, JSON.stringify(value));
+  } catch {
+    // (no storage, or no room: the layout starts from guesses next time, as it always did)
+  }
+}
+
+/** How far this device's timings run from the engine's guesses, as last learned here (null: never). */
+export function loadAheadScale(): Partial<AheadScale> | null {
+  return read<Partial<AheadScale>>(SCALE_KEY);
+}
+
+/**
+ * A song's strips as they were last timed playing on this device, by track or bus id (null: never,
+ * or at another sample rate, where a block is another length of time).
+ */
+export function loadAheadTimings(project: string, rate: number): Map<string, AheadTiming> | null {
+  const kept = read<{ rate: number; strips: Record<string, AheadTiming> }>(SONG_KEY + project);
+  if (!kept || kept.rate !== rate || !kept.strips || typeof kept.strips !== 'object') return null;
+  const out = new Map<string, AheadTiming>();
+  for (const [id, t] of Object.entries(kept.strips))
+    if (t && typeof t.share === 'number' && typeof t.made === 'string') out.set(id, t);
+  return out;
+}
+
+/** Keep what a song's strips took as it played here, and how this device runs against the guesses. */
+export function saveAhead(project: string, rate: number, strips: Map<string, AheadTiming>, scale: AheadScale): void {
+  write(SCALE_KEY, scale);
+  if (!strips.size) return;
+  write(SONG_KEY + project, { rate, strips: Object.fromEntries(strips) });
+  const songs = [project, ...(read<string[]>(SONGS_KEY) ?? []).filter((id) => id !== project)];
+  for (const old of songs.slice(SONGS_KEPT)) {
+    try {
+      localStorage.removeItem(SONG_KEY + old);
+    } catch {
+      // (as above)
+    }
+  }
+  write(SONGS_KEY, songs.slice(0, SONGS_KEPT));
 }

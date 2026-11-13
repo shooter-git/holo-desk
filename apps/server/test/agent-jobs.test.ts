@@ -542,7 +542,15 @@ describe('harnesses', () => {
     host.say({
       type: 'harnesses',
       list: [
-        { id: 'codex', name: 'Codex', found: true, sealed: true, signedIn: false, version: '0.168.0', host: 'studio-pc' },
+        {
+          id: 'codex',
+          name: 'Codex',
+          found: true,
+          sealed: true,
+          signedIn: false,
+          version: '0.168.0',
+          host: 'studio-pc',
+        },
       ],
     });
     host.say({
@@ -635,7 +643,10 @@ describe('harnesses', () => {
         host: 'x'.repeat(65),
       },
     ]);
-    expect(codex).toMatchObject({ host: 'studio-pc', installer: 'curl -fsSL https://chatgpt.com/codex/install.sh | sh' });
+    expect(codex).toMatchObject({
+      host: 'studio-pc',
+      installer: 'curl -fsSL https://chatgpt.com/codex/install.sh | sh',
+    });
     expect(claude?.host).toBeUndefined();
     expect(claude?.installer).toBeUndefined();
     expect(claude?.sealUnknown).toBeUndefined();

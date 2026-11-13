@@ -408,7 +408,9 @@ describe('song_set: who it’s by and its album', () => {
     expect(r.text).toBe(
       'Set title "Night Drive"; artist "Example Artist"; album "Example Album". The artist and album are kept beside the song, outside undo: undo doesn\'t take them back.',
     );
-    expect(api.calls.find((c) => c.method === 'details')?.args).toEqual([{ artist: 'Example Artist', album: 'Example Album' }]);
+    expect(api.calls.find((c) => c.method === 'details')?.args).toEqual([
+      { artist: 'Example Artist', album: 'Example Album' },
+    ]);
     expect(lastOps(api)).toEqual([{ op: 'setProject', patch: { title: 'Night Drive' } }]);
     const cleared = await call(api, 'song_set', { album: 'none' });
     expect(cleared.text).toBe(

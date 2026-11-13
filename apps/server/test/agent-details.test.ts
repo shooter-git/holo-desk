@@ -33,7 +33,11 @@ describe('the agent setting who the song is by and its album', () => {
       'By "Example Artist", on the album "Night Drives".',
     ]);
     // null clears one, the other stays
-    expect((await put(job, token, { album: null })).json()).toEqual({ ok: true, artist: 'Example Artist', album: null });
+    expect((await put(job, token, { album: null })).json()).toEqual({
+      ok: true,
+      artist: 'Example Artist',
+      album: null,
+    });
   });
 
   it('checks what it is given, and needs the job’s token while the job runs', async () => {

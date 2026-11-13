@@ -125,15 +125,19 @@ export class CompanionAhead {
   constructor(threads: Worker[], sr: number, toRenderer: (msg: ToRenderer) => void) {
     this.sr = sr;
     this.toRenderer = toRenderer;
-    this.pool = new AheadPool(threads.length, (ahead) => {
-      const w = threads[ahead.self] as Worker;
-      const start: ToAheadThread = { type: 'aheadStart', sr, ahead };
-      w.postMessage(start);
-      return {
-        post: (msg) => w.postMessage(msg),
-        close: () => w.postMessage({ type: 'aheadStop' } satisfies ToAheadThread),
-      };
-    });
+    this.pool = new AheadPool(
+      threads.length,
+      (ahead) => {
+        const w = threads[ahead.self] as Worker;
+        const start: ToAheadThread = { type: 'aheadStart', sr, ahead };
+        w.postMessage(start);
+        return {
+          post: (msg) => w.postMessage(msg),
+          close: () => w.postMessage({ type: 'aheadStop' } satisfies ToAheadThread),
+        };
+      },
+      sr,
+    );
     this.pool.setCalibration(learned);
     // when a worker has too much to do (the first layout is a guess), the strips laid out again; and
     // while the song is stopped, as soon as its parts' plans have come (they follow the graph), so

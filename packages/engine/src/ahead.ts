@@ -550,11 +550,11 @@ export interface AheadThread {
 }
 
 /**
- * Blocks the audio thread may be kept waiting for between two looks at the layout (a couple of
- * seconds: some 750 blocks) with the strips' timings still counting: past it the workers are far
- * enough behind that what they time is the waiting as much as the work.
+ * The share of blocks the audio thread may be kept waiting for between two looks at the layout with
+ * the strips' timings still counting (20 of the 750 blocks in two seconds at 48 kHz): past it the
+ * workers are far enough behind that what they time is the waiting as much as the work.
  */
-const CLEAN_STALLS = 20;
+const CLEAN_STALLS = 20 / 750;
 
 /** What a strip's timing was taken with: the same strip, the same plugins in its chain, the same instrument. */
 function madeOf(s: GraphSpec['tracks'][number] | GraphSpec['buses'][number]): string {
@@ -600,6 +600,9 @@ function shapeOf(graph: GraphSpec): string {
  */
 export class AheadPool {
   readonly count: number;
+  private readonly rate: number;
+  /** When the layout was last looked at (ms; check). */
+  private looked = Number.NaN;
   private readonly threads: AheadThread[];
   private readonly control: SharedArrayBuffer;
   private data: SharedArrayBuffer;
@@ -626,8 +629,10 @@ export class AheadPool {
   /** When the strips last moved (ms). */
   private moved = Number.NEGATIVE_INFINITY;
 
-  constructor(count: number, start: (spec: AheadSpec) => AheadThread) {
+  /** `rate`: the engines' sample rate (how many blocks pass between two looks at the layout). */
+  constructor(count: number, start: (spec: AheadSpec) => AheadThread, rate = 48000) {
     this.count = count;
+    this.rate = rate;
     this.control = aheadControl();
     this.edges = aheadRoom(64);
     this.data = aheadData(this.edges);
@@ -759,8 +764,12 @@ export class AheadPool {
     const stalls = this.link.stalls();
     const fresh = stalls - this.stallsSeen;
     this.stallsSeen = stalls;
+    // the blocks since the last look (two seconds' worth the first time)
+    const since = Number.isNaN(this.looked) ? 2000 : Math.max(1, now - this.looked);
+    this.looked = now;
+    const blocks = (since / 1000) * (this.rate / AHEAD_BLOCK);
     // (a few blocks late now and then still time true; a worker far behind doesn't)
-    this.remember(playing, fresh <= CLEAN_STALLS);
+    this.remember(playing, fresh <= Math.max(1, CLEAN_STALLS * blocks));
     const waiting = fresh > 0 && this.waitedBefore;
     this.waitedBefore = fresh > 0;
     if (playing ? !waiting || now - this.moved < 30_000 : Math.max(...this.loads()) < 0.75 || now - this.moved < 10_000)

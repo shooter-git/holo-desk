@@ -18,21 +18,25 @@ export function warmAhead(): void {
 
 /** The pool, its workers Web Workers. */
 export function startAhead(count: number, sr: number, onError: (message: string) => void): AheadPool {
-  return new AheadPool(count, (ahead) => {
-    const w = new AheadWorkerScript();
-    w.onmessage = (e: MessageEvent<{ type: string; message?: string }>) => {
-      if (e.data?.type === 'error') onError(`Rendering ahead: ${e.data.message ?? ''}`);
-    };
-    w.onerror = (e) => onError(`Rendering ahead: ${e.message}`);
-    w.postMessage({ type: 'aheadStart', sr, ahead });
-    return {
-      post: (msg) => w.postMessage(msg),
-      close: () => {
-        w.postMessage({ type: 'aheadQuit' });
-        w.terminate();
-      },
-    };
-  });
+  return new AheadPool(
+    count,
+    (ahead) => {
+      const w = new AheadWorkerScript();
+      w.onmessage = (e: MessageEvent<{ type: string; message?: string }>) => {
+        if (e.data?.type === 'error') onError(`Rendering ahead: ${e.data.message ?? ''}`);
+      };
+      w.onerror = (e) => onError(`Rendering ahead: ${e.message}`);
+      w.postMessage({ type: 'aheadStart', sr, ahead });
+      return {
+        post: (msg) => w.postMessage(msg),
+        close: () => {
+          w.postMessage({ type: 'aheadQuit' });
+          w.terminate();
+        },
+      };
+    },
+    sr,
+  );
 }
 
 // ---- what this device has learned about its own speed, kept between visits ----

@@ -11,6 +11,10 @@ What you feel when you play is the time from pressing a key to hearing it. In HO
 On Windows the third part has a floor: a browser always plays through the shared Windows mixer. To go
 below it, run [HO[LO] Engine](#holo-engine) on the computer you play on.
 
+A sound device set to 88.2, 96 or 192 kHz doesn't make the studio work two or four times as hard:
+the engine plays at the device's rate up to 48 kHz (or up to the song's own rate, when the song is
+set higher), and the browser brings the sound to the device's rate from there.
+
 ## Seeing it
 
 **Audio & MIDI** settings shows, live, where this device's time from key to ear goes: the output

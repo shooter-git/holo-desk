@@ -204,6 +204,17 @@ before wrote them. A step holds the whole song from before it, but an edit share
 song it didn't change, and the database stores a shared part once, so a long history costs about one
 song and what its steps changed. The last 20 songs' histories are kept.
 
+So are the song's changes the host doesn't have yet: until they're saved (the studio saves a moment
+after an edit, and can't while the host is out of reach or the song was changed somewhere else), the
+song as it is, its history and the revision they were made on are kept on the device a tenth of a
+second after each change, and when the page is hidden. A browser drops what a page writes as it goes,
+so they're written while it's still there. When the song opens there again (after a reload, a closed
+tab, a phone that let the page go, or another song opened), it opens with them and saves them: on the
+revision they were made on, or, the song changed somewhere else since, asking which version to keep.
+If the host already has the song as they left it (their save got there just before the page went),
+they're let go and the history comes back. Another song opened before a save is saved in the
+background, after a save of it on its way. Unsaved changes are never let go to make room.
+
 ## The live channel
 
 The open studio connects to `/api/live`. It reports its playhead, selection and devices a few times

@@ -69,10 +69,10 @@ import { jobLabels } from './agent.ts';
 import { ApiError, api } from './api.ts';
 import { comparePlan, type Pass } from './compare.ts';
 import * as history from './history.ts';
-import { browserShelf, Keeper, stepJobs } from './kept-history.ts';
+import { browserShelf, Keeper, type Restored, stepJobs } from './kept-history.ts';
 // (live.ts imports this module too: neither uses the other while loading, so the cycle is harmless)
 import { reconnectSoon, reportHistory } from './live.ts';
-import { type Step, store, toast } from './store.ts';
+import { type AppState, type Step, store, toast } from './store.ts';
 import { TakeSender } from './take-sender.ts';
 
 // ---- editing ----
@@ -318,6 +318,9 @@ function settle(revision: number | null): void {
   done?.resolve(revision);
 }
 
+/** The save on its way to the host, if one is: its song, and the revision it gets (null: none). */
+let inFlight: { project: Project; revision: Promise<number | null> } | null = null;
+
 /** Save now. Resolves with the saved revision (or null if it couldn't). */
 export async function saveNow(): Promise<number | null> {
   const s = store.get();
@@ -333,17 +336,36 @@ export async function saveNow(): Promise<number | null> {
   }
   saving = true;
   store.set({ saveState: 'saving' });
+  const sending = api.save(project, s.serverRevision);
+  inFlight = {
+    project,
+    revision: sending.then(
+      (r) => r.revision,
+      () => null,
+    ),
+  };
   try {
-    const r = await api.save(project, s.serverRevision);
+    const r = await sending;
     const now = store.get();
-    store.set({ serverRevision: r.revision, saveState: now.project === project ? 'saved' : 'dirty' });
     // the host answered: the live channel needn't wait for its next retry
     if (now.connection === 'offline') reconnectSoon();
+    if (now.project?.id !== project.id) {
+      // another song was opened meanwhile: the answer is this song's, not the open one's (what's left
+      // of this one is saved on top of it, by saveLeft)
+      settle(null);
+      return r.revision;
+    }
+    store.set({ serverRevision: r.revision, saveState: now.project === project ? 'saved' : 'dirty' });
     // (changed meanwhile: those waiting get the save that takes the change in)
     if (now.project !== project) scheduleSave(200);
     else settle(r.revision);
     return r.revision;
   } catch (err) {
+    // (another song opened meanwhile: this one's changes are kept on the device, and saveLeft tries again)
+    if (store.get().project?.id !== project.id) {
+      settle(null);
+      return null;
+    }
     if (err instanceof ApiError && err.status === 409) {
       store.set({ saveState: 'conflict' });
       toast('This song was changed somewhere else. Choose which version to keep.', 'error', 8000);
@@ -355,6 +377,7 @@ export async function saveNow(): Promise<number | null> {
     return null;
   } finally {
     saving = false;
+    inFlight = null;
     if (saveAgain) {
       saveAgain = false;
       scheduleSave(100);
@@ -368,7 +391,8 @@ export async function resolveConflict(keep: 'mine' | 'theirs'): Promise<void> {
   if (!s.project) return;
   const theirs = await api.project(s.project.id);
   if (keep === 'theirs') {
-    load(theirs);
+    // (this studio's changes, kept on the device until saved, go too)
+    load(theirs, { discard: true });
     return;
   }
   store.set({ serverRevision: theirs.revision, saveState: 'dirty' });
@@ -377,11 +401,11 @@ export async function resolveConflict(keep: 'mine' | 'theirs'): Promise<void> {
 
 // ---- opening ----
 
-/** The open song's undo history, kept on this device (kept-history.ts). */
+/** The open song, kept on this device: its undo history, and its changes the host doesn't have yet (kept-history.ts). */
 const keeper = new Keeper(typeof window === 'undefined' ? null : browserShelf(), { made: STUDIO_ENGINE });
 
-/** Keep the open song's undo history as it changes, and before the page goes. */
-function keepHistory(): void {
+/** Keep the open song on the device as it changes, and as the page is hidden. */
+function keepOnDevice(): void {
   store.subscribe(() => keeper.changed(store.get()));
   addEventListener('pagehide', () => void keeper.flush());
   document.addEventListener('visibilitychange', () => {
@@ -390,21 +414,76 @@ function keepHistory(): void {
 }
 
 /**
- * The song's undo history as this device kept it, when the song opened at the revision it was kept
- * at: a reload's Undo and Redo, the agent's steps with them.
+ * What this device kept of the song as it opens: changes the host didn't get (a reload, the tab
+ * closed, the host away, another song opened before they were saved), which the song opens with and
+ * saves; or its history at the revision it opened at (a reload's Undo and Redo, the agent's steps with
+ * them).
  */
-async function bringBackHistory(project: Project): Promise<void> {
-  const h = await keeper.restore(project);
+async function bringBack(project: Project, kept: Promise<Restored | null>): Promise<void> {
+  const back = await kept;
   const s = store.get();
   // (edited, or another song opened, meanwhile: what's there stands)
-  if (!h || s.project !== project || s.undo.length || s.redo.length) return;
-  store.set({ undo: h.undo, redo: h.redo });
+  if (!back || s.project !== project || s.undo.length || s.redo.length) return;
+  if (back.kind === 'unsaved') {
+    const song = back.song;
+    store.set({
+      project: song,
+      serverRevision: back.base,
+      undo: back.undo,
+      redo: back.redo,
+      saveState: 'dirty',
+      selectedTrack: song.tracks.some((t) => t.id === s.selectedTrack) ? s.selectedTrack : (song.tracks[0]?.id ?? null),
+    });
+    changed(song);
+    // saved at once: on the revision they were made on, or (changed somewhere else since) asking which to keep
+    scheduleSave(0);
+    toast('Brought back changes to this song that hadn’t been saved');
+  } else store.set({ undo: back.undo, redo: back.redo });
   // a job that ended while the page was away: its steps take the name it ended with
-  const jobs = stepJobs(h);
+  const jobs = stepJobs(back);
   if (jobs.length) for (const [job, label] of await jobLabels(project.id, jobs)) relabelJob(job, label);
 }
 
-export function load(project: Project): void {
+/** The save states a song left with changes the host doesn't have can be saved from (not a conflict's). */
+const LEFT_TO_SAVE: ReadonlySet<AppState['saveState']> = new Set(['dirty', 'saving', 'offline', 'error']);
+
+/**
+ * Another song opened while this one had changes the host didn't have yet (they're kept on the
+ * device meanwhile): they're saved now, in the background, on top of a save of it already on its
+ * way. Not saved (the host away, the song changed somewhere else), they stay on the device, and come
+ * back when the song opens here again.
+ */
+async function saveLeft(left: AppState): Promise<void> {
+  const { project, undo, redo } = left;
+  if (!project) return;
+  let base = left.serverRevision;
+  const sending = inFlight;
+  if (sending && sending.project.id === project.id) {
+    const revision = await sending.revision;
+    if (revision === null) return;
+    base = revision;
+    // (what's kept is on top of that save now: all of it, or what came after it)
+    const all = sending.project === project;
+    keeper.changed({ project, serverRevision: base, saveState: all ? 'saved' : 'dirty', undo, redo });
+    if (all) return;
+  }
+  try {
+    const r = await api.save(project, base);
+    keeper.changed({ project, serverRevision: r.revision, saveState: 'saved', undo, redo });
+  } catch {
+    // kept on the device: saved when the song opens here again
+  }
+}
+
+/**
+ * Open a song as the host has it (`discard`: this device's changes to it that the host doesn't have
+ * go, the other version chosen).
+ */
+export function load(project: Project, { discard = false }: { discard?: boolean } = {}): void {
+  const left = store.get();
+  // what was kept of the song is read first (the state changing to it would let that go)
+  const kept = keeper.open(project, { discard });
+  if (left.project && left.project.id !== project.id && LEFT_TO_SAVE.has(left.saveState)) void saveLeft(left);
   store.set({
     project,
     serverRevision: project.revision,
@@ -423,13 +502,13 @@ export function load(project: Project): void {
   }
   engine.stop();
   engine.sync(project);
-  // takes recorded for this song that never reached it (the server away, the tab closed): sent now
-  sendKeptTakes();
   engine.locate(0);
   loadInstruments(project);
   refreshRouting();
   document.title = `${project.title} · HO[LO] Desk`;
-  void bringBackHistory(project);
+  // changes, then takes recorded for this song, that never reached it (a reload, the tab closed, the
+  // host away): back now, the takes placed in the song as it is with the changes
+  void bringBack(project, kept).finally(sendKeptTakes);
 }
 
 export async function openProject(id: string): Promise<void> {
@@ -504,7 +583,7 @@ export function exportMidi(): void {
 }
 
 export async function startup(): Promise<void> {
-  keepHistory();
+  keepOnDevice();
   void library.refresh();
   warmEngine();
   void api

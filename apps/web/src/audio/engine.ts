@@ -30,6 +30,7 @@ import {
   METER_CHANNELS,
   METER_FLOATS,
   meterTicks,
+  mixChanges,
   type PerformanceManifest,
   type PreparedImpulse,
   partSamples,
@@ -135,6 +136,8 @@ export class AudioEngine {
   /** Goes up with each tempo map sent: the cycle's frames and the graph's automation depend on it. */
   private tempoGen = 0;
   private sentGraph = '';
+  /** The graph the engines have (as last sent whole, with the mixer's settings sent since). */
+  private sentMix: GraphSpec | null = null;
   /** What the graph was last compiled from: the same lists make the same graph. */
   private graphFrom: {
     tracks: Project['tracks'];
@@ -307,6 +310,7 @@ export class AudioEngine {
     this.synced = null;
     this.inputTracks = null;
     this.sentGraph = this.sentCycle = this.sentInputs = '';
+    this.sentMix = null;
     this.audioSent.clear();
     this.impulsesSent.clear();
     this.closeInput();
@@ -511,10 +515,21 @@ export class AudioEngine {
         };
         this.releaseNums(project);
         const graph = compileGraph(project, (id) => this.numOf(id), this.segments);
-        // (the graph is built afresh each time: its text says whether anything in it changed)
-        const graphKey = JSON.stringify(graph);
-        if (graphKey !== this.sentGraph) {
+        // the mixer's settings alone (a fader or a knob being dragged: a graph a frame): only what
+        // moved goes to the engines, where the whole graph would have each of them go through the
+        // whole mix again. (An older HO[LO] Engine takes the graph.)
+        const was = this.sentMix;
+        const mix = was && (!this.remote || companion.snapshot().matches === true) ? mixChanges(was, graph) : null;
+        // (the whole graph when it isn't the settings alone, or to an engine that doesn't take them:
+        // its text says whether anything in it changed)
+        const graphKey = mix ? '' : JSON.stringify(graph);
+        if (mix) {
+          if (mix.changes.length || mix.soloed !== undefined) this.post({ type: 'mix', ...mix });
+          this.sentMix = graph;
+          this.sentGraph = '';
+        } else if (was === null || (this.sentGraph || JSON.stringify(was)) !== graphKey) {
           this.post({ type: 'graph', graph });
+          this.sentMix = graph;
           this.sentGraph = graphKey;
           if (this.ahead) {
             // the first layout of a song: by what its strips took the last time it played here

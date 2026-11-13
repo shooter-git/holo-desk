@@ -23,17 +23,21 @@ async function setup() {
 describe('the agent setting who the song is by and its album', () => {
   it('sets them as the Songs window does, beside the song: no new revision', async () => {
     const { start, put, s, services, tool } = await setup();
-    const { job, token } = await start({ project: s.id, text: 'Set the artist to Es Claro' });
-    const res = await put(job, token, { artist: '  Es   Claro ', album: 'Night Drives' });
+    const { job, token } = await start({ project: s.id, text: 'Set the artist to Example Artist' });
+    const res = await put(job, token, { artist: '  Example   Artist ', album: 'Night Drives' });
     expect(res.statusCode, res.body).toBe(200);
-    expect(res.json()).toEqual({ ok: true, artist: 'Es Claro', album: 'Night Drives' });
-    expect(services.store.row(s.id)).toMatchObject({ artist: 'Es Claro', album: 'Night Drives', revision: 0 });
+    expect(res.json()).toEqual({ ok: true, artist: 'Example Artist', album: 'Night Drives' });
+    expect(services.store.row(s.id)).toMatchObject({ artist: 'Example Artist', album: 'Night Drives', revision: 0 });
     // the agent's next look at the song says so
     expect(((await tool(job, token, 'GET', '/state')).json() as { about: string[] }).about).toEqual([
-      'By "Es Claro", on the album "Night Drives".',
+      'By "Example Artist", on the album "Night Drives".',
     ]);
     // null clears one, the other stays
-    expect((await put(job, token, { album: null })).json()).toEqual({ ok: true, artist: 'Es Claro', album: null });
+    expect((await put(job, token, { album: null })).json()).toEqual({
+      ok: true,
+      artist: 'Example Artist',
+      album: null,
+    });
   });
 
   it('checks what it is given, and needs the job’s token while the job runs', async () => {

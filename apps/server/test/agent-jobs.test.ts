@@ -500,7 +500,7 @@ describe('harnesses', () => {
           name: 'Codex',
           found: false,
           sealed: false,
-          host: 'r430',
+          host: 'studio-pc',
           installer: 'curl -fsSL https://chatgpt.com/codex/install.sh | sh',
         },
       ],
@@ -516,14 +516,14 @@ describe('harnesses', () => {
       harness: 'codex',
       kind: 'install',
       state: 'running',
-      line: 'Installing Codex on r430',
+      line: 'Installing Codex on studio-pc',
     });
     expect(desk.got('agent-harness').at(-1)).toEqual({
       type: 'agent-harness',
       harness: 'codex',
       kind: 'install',
       state: 'running',
-      line: 'Installing Codex on r430',
+      line: 'Installing Codex on studio-pc',
     });
     const settings = async () =>
       (await app.inject({ method: 'GET', url: '/api/agent/settings', headers: auth(token) })).json() as Msg & {
@@ -531,18 +531,26 @@ describe('harnesses', () => {
         harnesses: Msg[];
       };
     expect((await settings()).relays).toEqual([
-      { harness: 'codex', kind: 'install', state: 'running', line: 'Installing Codex on r430' },
+      { harness: 'codex', kind: 'install', state: 'running', line: 'Installing Codex on studio-pc' },
     ]);
     expect((await settings()).harnesses.find((h) => h.id === 'codex')).toMatchObject({
       found: false,
-      host: 'r430',
+      host: 'studio-pc',
       installer: 'curl -fsSL https://chatgpt.com/codex/install.sh | sh',
     });
     // found now: its version and sign-in, then the install is over
     host.say({
       type: 'harnesses',
       list: [
-        { id: 'codex', name: 'Codex', found: true, sealed: true, signedIn: false, version: '0.168.0', host: 'r430' },
+        {
+          id: 'codex',
+          name: 'Codex',
+          found: true,
+          sealed: true,
+          signedIn: false,
+          version: '0.168.0',
+          host: 'studio-pc',
+        },
       ],
     });
     host.say({
@@ -613,7 +621,7 @@ describe('harnesses', () => {
         name: 'Codex',
         found: false,
         sealed: false,
-        host: 'r430',
+        host: 'studio-pc',
         installer: 'curl -fsSL https://chatgpt.com/codex/install.sh | sh',
       },
       {
@@ -635,7 +643,10 @@ describe('harnesses', () => {
         host: 'x'.repeat(65),
       },
     ]);
-    expect(codex).toMatchObject({ host: 'r430', installer: 'curl -fsSL https://chatgpt.com/codex/install.sh | sh' });
+    expect(codex).toMatchObject({
+      host: 'studio-pc',
+      installer: 'curl -fsSL https://chatgpt.com/codex/install.sh | sh',
+    });
     expect(claude?.host).toBeUndefined();
     expect(claude?.installer).toBeUndefined();
     expect(claude?.sealUnknown).toBeUndefined();
@@ -730,15 +741,15 @@ describe('the song’s artist, album and creation', () => {
     const set = await app.inject({
       method: 'PUT',
       url: `/api/projects/${s.id}/details`,
-      payload: { artist: 'Es Claro', album: 'Night "Drives"' },
+      payload: { artist: 'Example Artist', album: 'Night "Drives"' },
     });
     expect(set.statusCode).toBe(200);
     const { job, token: jobToken, run } = await start({ project: s.id, text: 'Who is this by?' });
-    expect(run.prompt).toContain('## What the studio shows\n- By "Es Claro", on the album "Night “Drives“".');
+    expect(run.prompt).toContain('## What the studio shows\n- By "Example Artist", on the album "Night “Drives“".');
     const state = (await tool(job, jobToken, 'GET', '/state')).json() as { about: string[] };
-    expect(state.about).toEqual(['By "Es Claro", on the album "Night “Drives“".']);
+    expect(state.about).toEqual(['By "Example Artist", on the album "Night “Drives“".']);
     const described = (await tool(job, jobToken, 'GET', '/describe')).json() as { text: string };
-    expect(described.text.startsWith('By "Es Claro", on the album "Night “Drives“".\n')).toBe(true);
+    expect(described.text.startsWith('By "Example Artist", on the album "Night “Drives“".\n')).toBe(true);
   });
 });
 

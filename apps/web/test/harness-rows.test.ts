@@ -87,7 +87,7 @@ describe('a harness’s row, through its whole life', () => {
         name: x.name,
         found: false,
         sealed: false,
-        host: 'r430',
+        host: 'studio-pc',
         installer: x.installer,
         reason: `${x.name} isn’t installed on this computer`,
       };
@@ -103,18 +103,18 @@ describe('a harness’s row, through its whole life', () => {
         progress: null,
       });
       expect(installQuestion(missing)).toEqual({
-        text: `This downloads and runs ${x.name}’s official installer on r430`,
+        text: `This downloads and runs ${x.name}’s official installer on studio-pc`,
         command: x.installer,
       });
 
       // installing: the button waits, the installer's lines show
       const installing = harnessRow(
         missing,
-        event('install', 'running', { line: `Installing ${x.name} on r430` }),
+        event('install', 'running', { line: `Installing ${x.name} on studio-pc` }),
         false,
       );
       expect(installing.install).toEqual({ busy: true });
-      expect(installing.progress).toEqual({ line: `Installing ${x.name} on r430` });
+      expect(installing.progress).toEqual({ line: `Installing ${x.name} on studio-pc` });
       // failed: Install again, and why
       const failed = harnessRow(
         missing,
@@ -139,7 +139,7 @@ describe('a harness’s row, through its whole life', () => {
             }
           : {}),
         update: { available: false, latest: x.version },
-        host: 'r430',
+        host: 'studio-pc',
       };
       const justInstalled = harnessRow(
         installed,
@@ -262,7 +262,7 @@ describe('an install as the studio hears of it', () => {
       harness: 'cursor',
       kind: 'install',
       state: 'running',
-      line: 'Installing Cursor on r430',
+      line: 'Installing Cursor on studio-pc',
     };
     const settings = {
       enabled: true,

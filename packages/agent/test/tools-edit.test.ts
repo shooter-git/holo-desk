@@ -404,11 +404,13 @@ describe('fx', () => {
 describe('song_set: who it’s by and its album', () => {
   it('sets them beside the song, outside undo, with the song’s own settings in the same call', async () => {
     const api = setup();
-    const r = await call(api, 'song_set', { title: 'Night Drive', artist: 'Es Claro', album: 'Cannibals' });
+    const r = await call(api, 'song_set', { title: 'Night Drive', artist: 'Example Artist', album: 'Example Album' });
     expect(r.text).toBe(
-      'Set title "Night Drive"; artist "Es Claro"; album "Cannibals". The artist and album are kept beside the song, outside undo: undo doesn\'t take them back.',
+      'Set title "Night Drive"; artist "Example Artist"; album "Example Album". The artist and album are kept beside the song, outside undo: undo doesn\'t take them back.',
     );
-    expect(api.calls.find((c) => c.method === 'details')?.args).toEqual([{ artist: 'Es Claro', album: 'Cannibals' }]);
+    expect(api.calls.find((c) => c.method === 'details')?.args).toEqual([
+      { artist: 'Example Artist', album: 'Example Album' },
+    ]);
     expect(lastOps(api)).toEqual([{ op: 'setProject', patch: { title: 'Night Drive' } }]);
     const cleared = await call(api, 'song_set', { album: 'none' });
     expect(cleared.text).toBe(

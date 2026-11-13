@@ -658,6 +658,7 @@ export class AudioEngine {
     const ctx = this.ctx;
     if (!ctx) return;
     const wanted = songClips(project);
+    audioFiles.know(project.files ?? []);
     const keys = new Set(wanted.map(clipKey));
     for (const key of this.audioSent) {
       if (keys.has(key)) continue;
@@ -669,7 +670,7 @@ export class AudioEngine {
       if (this.audioSent.has(key)) continue;
       this.audioSent.add(key);
       void audioFiles
-        .load(project.id, clip, ctx)
+        .load(project.id, clip, ctx, this.ahead !== null)
         .then((channels) => {
           // still wanted, and still the same audio thread?
           if (this.ctx !== ctx || !this.audioSent.has(key)) return;

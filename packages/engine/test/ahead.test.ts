@@ -844,6 +844,25 @@ describe('laying a song out by what its strips take on this computer', () => {
     for (const s of strips) expect(a.cost(s.num)).toBeCloseTo(timedHere(s.num), 5);
   });
 
+  it('counts being kept waiting against how many blocks have passed, at whatever rate the engines run', () => {
+    // thirty blocks waited for in two seconds: one in 25 at 48 kHz (too many to trust the timings),
+    // one in 50 at 96 kHz (still keeping up)
+    const timed = (rate: number) => {
+      const a = new AheadPool(3, () => ({ post: () => undefined, close: () => undefined }), rate);
+      a.layout(graph, false);
+      for (const t of graph.tracks) a.setPart(t.num, 0.1);
+      for (const s of strips) a.link.setCost(s.num, timedHere(s.num));
+      a.check(true, 0);
+      for (let i = 1; i <= 4; i++) {
+        for (let n = 0; n < 30; n++) a.link.stall();
+        a.check(true, i * 2000);
+      }
+      return a.timings().size;
+    };
+    expect(timed(48000)).toBe(0);
+    expect(timed(96000)).toBe(strips.length);
+  });
+
   it('has its engines time their strips afresh when the song starts', () => {
     const q = light();
     const numsOf = numbering();

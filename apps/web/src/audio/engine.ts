@@ -65,12 +65,28 @@ import {
 } from '@holo/session';
 import { aheadThreads, loadAheadScale, loadAheadTimings, saveAhead, startAhead, warmAhead } from './ahead.ts';
 import { companion } from './companion.ts';
+import { engineRate } from './engine-rate.ts';
 import { audioFiles } from './files.ts';
 import ImpulseWorker from './impulse.worker.ts?worker';
 import { instrumentManifest, sampleFile } from './pack-files.ts';
 import processorUrl from './worklet/processor.ts?worker&url';
 
 export type LatencyMode = 'lowest' | 'balanced' | 'safe';
+
+/** An audio context at the engine's rate for this device (engineRate). */
+async function openContext(hint: AudioContextLatencyCategory | number, song?: number): Promise<AudioContext> {
+  const ctx = new AudioContext({ latencyHint: hint });
+  const rate = engineRate(ctx.sampleRate, song);
+  if (rate === ctx.sampleRate) return ctx;
+  try {
+    const paced = new AudioContext({ latencyHint: hint, sampleRate: rate });
+    await ctx.close().catch(() => undefined);
+    return paced;
+  } catch {
+    // (a browser that won't run at another rate than the device's: the device's it is)
+    return ctx;
+  }
+}
 
 /** How long an instrument no track plays keeps its samples (an undo often brings it back). */
 const FORGET_AFTER = 30_000;
@@ -239,7 +255,7 @@ export class AudioEngine {
       this.locate(Math.max(0, keep));
       return;
     }
-    const ctx = new AudioContext({ latencyHint: HINT[mode] });
+    const ctx = await openContext(HINT[mode], this.project?.sampleRate);
     await ctx.audioWorklet.addModule(processorUrl);
     const node = new AudioWorkletNode(ctx, 'holo-engine', {
       // the input is for audio tracks: monitoring and recording

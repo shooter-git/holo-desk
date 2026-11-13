@@ -30,6 +30,7 @@ import {
   compileTempo,
   compileTrack,
   meterTicks,
+  mixChanges,
   songClips,
   songImpulses,
   tickToFrame,
@@ -714,6 +715,134 @@ describe('strips with nothing to play', () => {
   it('are played through, every block, where nothing rests (a bounce): the numbers of before', () => {
     const again = one(batches, BLOCKS, false);
     expect(same(again, through)).toBe(true);
+  });
+});
+
+describe("the mixer's settings alone, moved", () => {
+  const p = song();
+  const nums = numbering();
+  const segments = compileTempo(p, SR);
+  const graph = graphOf(p, nums);
+  /** The song with a fader, a balance, a mute, a send's level, a plugin's knob and a solo moved. */
+  const moved = (): Project => {
+    const q = structuredClone(p);
+    const t0 = q.tracks[0] as Track;
+    const t1 = q.tracks[1] as Track;
+    t0.channel.volume = -11;
+    t0.channel.pan = 0.4;
+    t1.channel.mute = true;
+    const sent = q.tracks.find((t) => t.channel.sends.length) as Track;
+    (sent.channel.sends[0] as Track['channel']['sends'][number]).level = -21;
+    const hall = q.buses[0] as Project['buses'][number];
+    const plugin = hall.channel.inserts[0] as Project['buses'][number]['channel']['inserts'][number];
+    plugin.params = { ...plugin.params, wet: -9 };
+    (q.tracks[2] as Track).channel.solo = true;
+    q.master.volume = -5;
+    return q;
+  };
+  const after = compileGraph(moved(), nums, segments);
+
+  it('are told apart from every other change to the mix', () => {
+    expect(mixChanges(graph, structuredClone(graph))).toEqual({ changes: [] });
+    const mix = mixChanges(graph, after);
+    expect(mix).not.toBeNull();
+    expect(mix?.soloed).toEqual(after.soloed);
+    const of = (num: number) => mix?.changes.find((c) => c.num === num);
+    expect(of(after.tracks[0]?.num as number)).toMatchObject({ volume: -11, pan: 0.4 });
+    expect(of(after.tracks[1]?.num as number)).toEqual({ num: after.tracks[1]?.num, mute: true });
+    expect(of(0)).toEqual({ num: 0, volume: -5 });
+    expect(mix?.changes.some((c) => c.sends?.[0]?.level === -21)).toBe(true);
+    expect(mix?.changes.some((c) => c.params?.[0]?.params.wet === -9)).toBe(true);
+    // anything else is the whole graph's to say
+    const other = (change: (q: Project) => void) => {
+      const q = moved();
+      change(q);
+      return mixChanges(graph, compileGraph(q, nums, segments));
+    };
+    expect(other((q) => (q.tracks[0] as Track).channel.inserts.push(newPlugin('eq')))).toBeNull();
+    expect(
+      other((q) =>
+        (q.tracks[0] as Track).channel.sends.push({
+          bus: (q.buses[1] as Project['buses'][number]).id,
+          level: -6,
+          pre: false,
+        }),
+      ),
+    ).toBeNull();
+    expect(other((q) => q.tracks.pop())).toBeNull();
+    expect(other((q) => q.tracks.reverse())).toBeNull();
+    expect(
+      other((q) => ((q.tracks[0] as Track).channel.output = (q.buses[0] as Project['buses'][number]).id)),
+    ).toBeNull();
+    expect(other((q) => ((q.tracks[0] as Track).instrument = { type: 'synth', preset: 'Warm Pad' }))).toBeNull();
+    expect(
+      other((q) => {
+        const hall = (q.buses[0] as Project['buses'][number]).channel;
+        (hall.inserts[0] as (typeof hall.inserts)[number]).bypass = true;
+      }),
+    ).toBeNull();
+    expect(
+      other((q) => {
+        (q.tracks[0] as Track).channel.automation = [
+          {
+            param: 'pan',
+            mode: 'read',
+            points: [
+              [0, -1],
+              [BAR, 1],
+            ],
+          },
+        ];
+      }),
+    ).toBeNull();
+  });
+
+  it('play the same numbers said that way as said by the whole graph, on one engine and split', () => {
+    const mix = mixChanges(graph, after) as NonNullable<ReturnType<typeof mixChanges>>;
+    const back = mixChanges(after, graph) as NonNullable<ReturnType<typeof mixChanges>>;
+    const BLOCKS = 700;
+    const whole = new Map<number, ToWorklet[]>([
+      [0, setup(p, nums)],
+      [250, [{ type: 'graph', graph: after }]],
+      [450, [{ type: 'graph', graph }]],
+    ]);
+    const settings = new Map<number, ToWorklet[]>([
+      [0, setup(p, nums)],
+      [250, [{ type: 'mix', ...mix }]],
+      [450, [{ type: 'mix', ...back }]],
+    ]);
+    const reference = one(whole, BLOCKS);
+    const untouched = one(new Map([[0, setup(p, nums)]]), BLOCKS);
+    // the changes are heard
+    expect(same(reference, untouched)).toBe(false);
+    expect(same(one(settings, BLOCKS), reference)).toBe(true);
+    const owners = aheadOwners(graph, 2, () => 0.1);
+    expect(same(split(settings, BLOCKS, 2, owners), reference)).toBe(true);
+  }, 60_000);
+
+  it('wake the strip they are for where strips rest, and leave the others resting', () => {
+    const q = sparse();
+    const numsOf = numbering();
+    const g = graphOf(q, numsOf);
+    const louder = structuredClone(q);
+    (louder.tracks[1] as Track).channel.volume = -3;
+    const mix = mixChanges(g, compileGraph(louder, numsOf, compileTempo(q, SR))) as NonNullable<
+      ReturnType<typeof mixChanges>
+    >;
+    const at = Math.round((10 * SR) / AHEAD_BLOCK);
+    const resting: number[] = [];
+    one(
+      new Map<number, ToWorklet[]>([
+        [0, setup(q, numsOf)],
+        [at, [{ type: 'mix', ...mix }]],
+      ]),
+      at + 40,
+      true,
+      (_k, core) => resting.push(core.resting),
+    );
+    // ten seconds into the silence everything rests; the fader moved wakes its strip alone
+    expect(resting[at - 1]).toBe(5);
+    expect(resting[at + 10]).toBe(4);
   });
 });
 

@@ -50,7 +50,9 @@ wraps `EngineCore` from `@holo/engine`):
   Without cross-origin isolation (an insecure page) it falls back to messages.
 - **The song** plays from event lists the main thread compiles per track (`@holo/engine`'s `compile.ts`). It's sent
   only when a track's regions change, and played sample-accurately by the audio thread, so a busy
-  screen can't make the song stumble.
+  screen can't make the song stumble. A mixer setting being moved (a fader, a balance, a mute, a
+  send's level, a plugin's knob) goes to the engines alone, a few dozen bytes a frame; the whole
+  mix is said again only when its strips, plugins, routing or lanes change.
 - **Each track** runs its MIDI effects (arpeggiator, harmonizer…), then its instruments (sampler,
   synth, drum kit; one per articulation), splitting the block at each event. Then come its inserts,
   fader and balance, and its sends to buses. Buses, then the master, follow.

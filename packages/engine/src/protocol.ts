@@ -85,6 +85,19 @@ export interface TrackSpec extends ChannelSpec {
   midiFx: PluginSpec[];
 }
 
+/**
+ * What has moved on one strip of the mixer, by its channel number (0: the master): only the
+ * settings that are there. A send by its place among the strip's sends, a plugin by its id.
+ */
+export interface MixChange {
+  num: number;
+  volume?: number;
+  pan?: number;
+  mute?: boolean;
+  sends?: { index: number; level: number }[];
+  params?: { id: string; params: Record<string, number> }[];
+}
+
 export interface GraphSpec {
   tracks: TrackSpec[];
   buses: ChannelSpec[];
@@ -239,6 +252,12 @@ export type ToWorklet =
   /** Rendering ahead: room for more connections, from the block this is taken in at. */
   | { type: 'aheadData'; data: SharedArrayBuffer; edges: number }
   | { type: 'graph'; graph: GraphSpec }
+  /**
+   * The mixer's settings alone have moved (a fader, a balance, a mute, a solo, a send's level, a
+   * plugin's knobs): just those, where a `graph` would say the whole mix again. Whoever sends it
+   * knows the engine takes it (an engine from before it takes the graph).
+   */
+  | { type: 'mix'; changes: MixChange[]; soloed?: string[] | null }
   | { type: 'sequence'; num: number; events: Float64Array }
   /** `meters`: where each meter starts (older engines click the first meter's beat throughout). */
   | { type: 'tempo'; segments: TempoSegment[]; ppq: number; beatTicks: number; barTicks: number; meters?: MeterSpan[] }

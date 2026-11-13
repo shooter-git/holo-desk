@@ -10,7 +10,7 @@ import StretchWorker from './stretch.worker.ts?worker';
 
 export { clipKey } from '@holo/engine';
 
-const CACHE = 'holo-audio-v1';
+export const CACHE = 'holo-audio-v1';
 
 export interface Peaks {
   /** Frames (at the decoded rate) per peak pair. */

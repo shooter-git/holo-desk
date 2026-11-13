@@ -29,6 +29,24 @@ export class Smooth {
   get settled(): boolean {
     return Math.abs(this.value - this.target) < 1e-6;
   }
+  /**
+   * Come to rest: a step from here leaves the value exactly where it is (at its target, or the last
+   * rounding short of it, where it stays for good), so whoever uses it may take the one number for
+   * every frame and skip the steps.
+   */
+  get still(): boolean {
+    return this.target + (this.value - this.target) * this.coef === this.value;
+  }
+  /**
+   * For a gain a sample is multiplied by: once it's within the smallest numbers of its target, it's
+   * there. On its way to 0 it would otherwise stay at the smallest number there is for good (a
+   * strip panned hard to one side, a fader at the bottom), which multiplies to the same zero in the
+   * sound, sign and all, at many times the cost on some processors.
+   */
+  land(): void {
+    const d = this.value - this.target;
+    if (d !== 0 && d < 1e-300 && d > -1e-300) this.value = this.target;
+  }
 }
 
 export type BiquadKind = 'lowpass' | 'highpass' | 'bandpass' | 'peak' | 'lowshelf' | 'highshelf' | 'notch';

@@ -24,7 +24,7 @@ describe('the agent setting who the song is by and its album', () => {
   it('sets them as the Songs window does, beside the song: no new revision', async () => {
     const { start, put, s, services, tool } = await setup();
     const { job, token } = await start({ project: s.id, text: 'Set the artist to Example Artist' });
-    const res = await put(job, token, { artist: '  Es   Claro ', album: 'Night Drives' });
+    const res = await put(job, token, { artist: '  Example   Artist ', album: 'Night Drives' });
     expect(res.statusCode, res.body).toBe(200);
     expect(res.json()).toEqual({ ok: true, artist: 'Example Artist', album: 'Night Drives' });
     expect(services.store.row(s.id)).toMatchObject({ artist: 'Example Artist', album: 'Night Drives', revision: 0 });

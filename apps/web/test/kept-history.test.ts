@@ -8,16 +8,22 @@ import {
   Keeper,
   type Kept,
   overflow,
+  type Restored,
   restorable,
   type Shelf,
+  sameSong,
   stepJobs,
   toKeep,
+  toKeepUnsaved,
+  type Unsaved,
 } from '../src/app/kept-history.ts';
 
 /** The browser's database in miniature: what goes in is cloned as one value, as the database clones it. */
 class MemoryShelf implements Shelf {
   items = new Map<string, Kept>();
+  unsavedItems = new Map<string, Unsaved>();
   puts = 0;
+  unsavedPuts = 0;
   fail = false;
   async get(project: string) {
     if (this.fail) throw new Error('refused');
@@ -28,6 +34,7 @@ class MemoryShelf implements Shelf {
     if (this.fail) throw new Error('refused');
     this.puts++;
     this.items.set(kept.project, structuredClone(kept));
+    this.unsavedItems.delete(kept.project);
   }
   async delete(project: string) {
     this.items.delete(project);
@@ -35,7 +42,23 @@ class MemoryShelf implements Shelf {
   async list() {
     return [...this.items.values()].map(({ project, kept }) => ({ project, kept }));
   }
+  async unsaved(project: string) {
+    if (this.fail) throw new Error('refused');
+    const u = this.unsavedItems.get(project);
+    return u && structuredClone(u);
+  }
+  async keepUnsaved(unsaved: Unsaved) {
+    if (this.fail) throw new Error('refused');
+    this.unsavedPuts++;
+    this.unsavedItems.set(unsaved.project, structuredClone(unsaved));
+  }
+  async dropUnsaved(project: string) {
+    this.unsavedItems.delete(project);
+  }
 }
+
+/** The history a song opened with, if that's what came back. */
+const historyOf = (r: Restored | null): History | null => (r?.kind === 'history' ? r : null);
 
 const titled = (p: Project, title: string): Project => applyOps(p, [{ op: 'setProject', patch: { title } }]);
 
@@ -114,7 +137,7 @@ describe('the keeper', () => {
     const song = state.project as Project;
 
     // the page reloads: a new keeper, the song as the host has it
-    const back = (await new Keeper(shelf, { delay: 0 }).restore(structuredClone(song))) as History;
+    const back = historyOf(await new Keeper(shelf, { delay: 0 }).open(structuredClone(song))) as History;
     expect(back.undo.map((s) => s.label)).toEqual(['Title One', 'Title Two', 'Title Three']);
     expect(back.undo.map((s) => s.at)).toEqual([1000, 1001, 1002]);
     const undone = travel(back, song, -3);
@@ -139,12 +162,13 @@ describe('the keeper', () => {
     expect(shelf.puts).toBe(2);
   });
 
-  it('nothing while the song has changes not yet saved', async () => {
+  it('no history while the song has changes not yet saved (they’re kept as such)', async () => {
     const shelf = new MemoryShelf();
     const keeper = new Keeper(shelf, { delay: 0 });
     keeper.changed({ ...edited().state, saveState: 'dirty' });
     await keeper.flush();
     expect(shelf.puts).toBe(0);
+    expect(shelf.unsavedPuts).toBe(1);
   });
 
   it('what it brought back isn’t kept again', async () => {
@@ -157,7 +181,7 @@ describe('the keeper', () => {
     })();
     const keeper = new Keeper(shelf, { delay: 0 });
     const song = state.project as Project;
-    const back = (await keeper.restore(song)) as History;
+    const back = historyOf(await keeper.open(song)) as History;
     keeper.changed({ ...state, undo: back.undo, redo: back.redo });
     await keeper.flush();
     expect(shelf.puts).toBe(1);
@@ -169,7 +193,7 @@ describe('the keeper', () => {
     const { state } = edited();
     keeper.changed(state);
     // (not flushed: the song is opened again at once, as a reload of the same song would)
-    expect((await keeper.restore(state.project as Project))?.undo).toHaveLength(3);
+    expect(historyOf(await keeper.open(state.project as Project))?.undo).toHaveLength(3);
   });
 
   it('keeps a limited number of songs, letting the oldest go', async () => {
@@ -192,8 +216,8 @@ describe('the keeper', () => {
     before.changed(state);
     await before.flush();
     const song = state.project as Project;
-    expect(await new Keeper(shelf, { made: 'def' }).restore(song)).toBeNull();
-    expect((await new Keeper(shelf, { made: 'abc' }).restore(song))?.undo).toHaveLength(3);
+    expect(await new Keeper(shelf, { made: 'def' }).open(song)).toBeNull();
+    expect(historyOf(await new Keeper(shelf, { made: 'abc' }).open(song))?.undo).toHaveLength(3);
   });
 
   it('a database that refuses is no error: nothing comes back', async () => {
@@ -203,11 +227,181 @@ describe('the keeper', () => {
     const { state } = edited();
     keeper.changed(state);
     await expect(keeper.flush()).resolves.toBeUndefined();
-    await expect(keeper.restore(state.project as Project)).resolves.toBeNull();
+    await expect(keeper.open(state.project as Project)).resolves.toBeNull();
     // and no database at all
     const none = new Keeper(null, { delay: 0 });
     none.changed(state);
-    await expect(none.restore(state.project as Project)).resolves.toBeNull();
+    await expect(none.open(state.project as Project)).resolves.toBeNull();
+  });
+});
+
+/** The song as the host has it after a save of `song` (a revision on, saved a moment later). */
+const asSaved = (song: Project, revision: number): Project => ({
+  ...structuredClone(song),
+  revision,
+  modified: '2030-01-01T00:00:00.000Z',
+});
+
+/** A reload: a new page's keeper, on the same database. */
+const reload = (shelf: Shelf, made = '') => new Keeper(shelf, { made, delay: 0 });
+
+describe('changes not saved yet', () => {
+  it('are kept with the revision they were made on, the song and its history', () => {
+    const { state } = edited(4);
+    const u = toKeepUnsaved({ ...state, saveState: 'dirty' }, 'abc', 42);
+    expect(u).toEqual({
+      project: state.project?.id,
+      base: 4,
+      song: state.project,
+      undo: state.undo,
+      redo: [],
+      kept: 42,
+      made: 'abc',
+    });
+    for (const saveState of ['dirty', 'saving', 'offline', 'conflict', 'error'] as const)
+      expect(toKeepUnsaved({ ...state, saveState }, '')).not.toBeNull();
+    expect(toKeepUnsaved(state, '')).toBeNull();
+  });
+
+  it('a reload opens the song with them, on the revision they were made on, Undo and all', async () => {
+    const shelf = new MemoryShelf();
+    const { state, songs } = edited(4);
+    const keeper = new Keeper(shelf, { delay: 0 });
+    keeper.changed({ ...state, saveState: 'dirty' });
+    await keeper.flush();
+    // the host still has the song from before them
+    const back = await reload(shelf).open({ ...(songs[0] as Project), revision: 4 });
+    expect(back?.kind).toBe('unsaved');
+    if (back?.kind !== 'unsaved') return;
+    expect(back.song).toEqual(state.project);
+    expect(back.base).toBe(4);
+    expect(back.undo.map((s) => s.label)).toEqual(['Title One', 'Title Two', 'Title Three']);
+    expect(travel(back, back.song, -3)?.project).toEqual(songs[0]);
+  });
+
+  it('kept once while they’re the same (dirty, saving, the host away)', async () => {
+    const shelf = new MemoryShelf();
+    const keeper = new Keeper(shelf, { delay: 0 });
+    const { state } = edited();
+    for (const saveState of ['dirty', 'saving', 'offline'] as const) {
+      keeper.changed({ ...state, saveState });
+      await keeper.flush();
+    }
+    expect(shelf.unsavedPuts).toBe(1);
+  });
+
+  it('once saved, the history is kept and they go, in the same write', async () => {
+    const shelf = new MemoryShelf();
+    const keeper = new Keeper(shelf, { delay: 0 });
+    const { state } = edited(4);
+    keeper.changed({ ...state, saveState: 'dirty' });
+    await keeper.flush();
+    keeper.changed({ ...state, serverRevision: 5 });
+    await keeper.flush();
+    expect(shelf.unsavedItems.size).toBe(0);
+    expect(shelf.items.get(state.project?.id as string)?.revision).toBe(5);
+  });
+
+  it('their save got to the host before the page went: they go, and the history comes back', async () => {
+    const shelf = new MemoryShelf();
+    const keeper = new Keeper(shelf, { delay: 0 });
+    const { state } = edited(4);
+    keeper.changed({ ...state, saveState: 'saving' });
+    await keeper.flush();
+    const back = await reload(shelf).open(asSaved(state.project as Project, 5));
+    expect(back?.kind).toBe('history');
+    expect(historyOf(back)?.undo).toHaveLength(3);
+    expect(shelf.unsavedItems.size).toBe(0);
+  });
+
+  it('the song changed somewhere else since: they come back on their own revision (the save asks which to keep)', async () => {
+    const shelf = new MemoryShelf();
+    const keeper = new Keeper(shelf, { delay: 0 });
+    const { state } = edited(4);
+    keeper.changed({ ...state, saveState: 'offline' });
+    await keeper.flush();
+    const elsewhere = { ...titled(state.project as Project, 'Elsewhere'), revision: 6 };
+    const back = await reload(shelf).open(elsewhere);
+    expect(back?.kind).toBe('unsaved');
+    if (back?.kind === 'unsaved') expect([back.song.title, back.base]).toEqual(['Three', 4]);
+  });
+
+  it('the other version chosen: they go, and don’t come back', async () => {
+    const shelf = new MemoryShelf();
+    const keeper = new Keeper(shelf, { delay: 60_000 });
+    const { state } = edited(4);
+    keeper.changed({ ...state, saveState: 'dirty' });
+    await keeper.flush();
+    // a newer change still waiting to be written goes with them
+    keeper.changed({ ...state, project: titled(state.project as Project, 'Four'), saveState: 'conflict' });
+    const theirs = { ...titled(state.project as Project, 'Theirs'), revision: 6 };
+    expect(await keeper.open(theirs, { discard: true })).toBeNull();
+    expect(shelf.unsavedItems.size).toBe(0);
+    expect(await reload(shelf).open(theirs)).toBeNull();
+  });
+
+  it('a song opening keeps its kept changes, though its state is saved and empty till they’re read', async () => {
+    const shelf = new MemoryShelf();
+    const { state, songs } = edited(4);
+    const before = new Keeper(shelf, { delay: 0 });
+    before.changed({ ...state, saveState: 'dirty' });
+    await before.flush();
+    const keeper = reload(shelf);
+    const host = { ...(songs[0] as Project), revision: 4 };
+    const opening = keeper.open(host);
+    // (the studio's state changes to the song as the host has it, with no history, as it opens)
+    keeper.changed({ project: host, serverRevision: 4, saveState: 'saved', undo: [], redo: [] });
+    expect((await opening)?.kind).toBe('unsaved');
+    await keeper.flush();
+    expect(shelf.unsavedItems.size).toBe(1);
+  });
+
+  it('kept by other code for songs: the song comes back as this code reads it, without its history', async () => {
+    const shelf = new MemoryShelf();
+    const { state, songs } = edited(4);
+    const before = new Keeper(shelf, { made: 'abc', delay: 0 });
+    before.changed({ ...state, saveState: 'dirty' });
+    await before.flush();
+    const back = await reload(shelf, 'def').open({ ...(songs[0] as Project), revision: 4 });
+    expect(back?.kind).toBe('unsaved');
+    if (back?.kind !== 'unsaved') return;
+    expect(back.song.title).toBe('Three');
+    expect([back.undo, back.redo]).toEqual([[], []]);
+    // saved with no history to keep, they go
+    const keeper = reload(shelf, 'def');
+    await keeper.open({ ...(songs[0] as Project), revision: 4 });
+    keeper.changed({ project: back.song, serverRevision: 5, saveState: 'saved', undo: [], redo: [] });
+    await keeper.flush();
+    expect(shelf.unsavedItems.size).toBe(0);
+  });
+
+  it('several songs’ changes waiting are all kept (another song opened before the write)', async () => {
+    const shelf = new MemoryShelf();
+    const keeper = new Keeper(shelf, { delay: 60_000 });
+    const { state } = edited();
+    keeper.changed({ ...state, saveState: 'dirty' });
+    keeper.changed({ ...state, project: { ...(state.project as Project), id: 'prj_other' }, saveState: 'dirty' });
+    await keeper.flush();
+    expect([...shelf.unsavedItems.keys()].sort()).toEqual([state.project?.id, 'prj_other'].sort());
+  });
+
+  it('are never let go to make room for histories', async () => {
+    const shelf = new MemoryShelf();
+    const keeper = new Keeper(shelf, { delay: 0 });
+    const { state } = edited();
+    keeper.changed({ ...state, project: { ...(state.project as Project), id: 'prj_unsaved' }, saveState: 'offline' });
+    for (let i = 0; i < KEEP_SONGS + 2; i++) {
+      keeper.changed({ ...state, project: { ...(state.project as Project), id: `prj_${i}` } });
+      await keeper.flush();
+    }
+    expect(shelf.unsavedItems.has('prj_unsaved')).toBe(true);
+  });
+
+  it('a song is the same but for its revision and when it was saved', () => {
+    const { state } = edited();
+    const song = state.project as Project;
+    expect(sameSong(song, asSaved(song, 9))).toBe(true);
+    expect(sameSong(song, titled(song, 'Other'))).toBe(false);
   });
 });
 

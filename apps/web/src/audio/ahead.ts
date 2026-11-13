@@ -37,9 +37,20 @@ export function startAhead(count: number, sr: number, onError: (message: string)
 
 // ---- what this device has learned about its own speed, kept between visits ----
 
-const SCALE_KEY = 'holo:ahead:scale';
-const SONG_KEY = 'holo:ahead:song:';
-const SONGS_KEY = 'holo:ahead:songs';
+// (the 2: what was kept before it could come from timings taken while a song loaded or the workers
+// fell behind, several times too high; those keys are cleared away)
+const SCALE_KEY = 'holo:ahead2:scale';
+const SONG_KEY = 'holo:ahead2:song:';
+const SONGS_KEY = 'holo:ahead2:songs';
+
+/** What an earlier build kept under other names: gone the first time this one looks. */
+function clearEarlier(): void {
+  try {
+    for (const key of Object.keys(localStorage)) if (key.startsWith('holo:ahead:')) localStorage.removeItem(key);
+  } catch {
+    // (no storage: nothing to clear)
+  }
+}
 /** Songs whose strips' timings are kept (the most lately played). */
 const SONGS_KEPT = 24;
 
@@ -62,6 +73,7 @@ function write(key: string, value: unknown): void {
 
 /** How far this device's timings run from the engine's guesses, as last learned here (null: never). */
 export function loadAheadScale(): Partial<AheadScale> | null {
+  clearEarlier();
   return read<Partial<AheadScale>>(SCALE_KEY);
 }
 

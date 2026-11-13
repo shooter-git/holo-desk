@@ -794,7 +794,7 @@ describe('laying a song out by what its strips take on this computer', () => {
     expect(a.link.cost(t0.num)).toBe(0);
   });
 
-  it('moves no strip while the song plays unless the audio thread is kept waiting', () => {
+  it('moves no strip while the song plays unless the audio thread keeps being kept waiting, and then not often', () => {
     const a = pool();
     a.layout(graph, false);
     for (const t of graph.tracks) a.setPart(t.num, 0.1);
@@ -802,13 +802,71 @@ describe('laying a song out by what its strips take on this computer', () => {
     // a worker nearly out of time, and a better layout there to be had
     for (let j = 0; j < 3; j++) a.link.setLoad(j, 0.95);
     for (let i = 0; i < 6; i++) expect(a.check(true, 20_000 + i * 2000)).toEqual([]);
-    // the audio thread waited for a block: now the strips are laid out again, by the timings
+    // the audio thread waited for a block: once is a hiccup
     a.link.stall();
-    const moved = a.check(true, 40_000);
-    expect(ownersOf(moved)).toBeDefined();
-    // and not again straight away
+    expect(a.check(true, 40_000)).toEqual([]);
+    // and again in the next stretch: now the strips are laid out again, by the timings
     a.link.stall();
-    expect(a.check(true, 42_000)).toEqual([]);
+    expect(ownersOf(a.check(true, 42_000))).toBeDefined();
+    // not again for half a minute, however it goes (a move costs blocks itself)
+    for (const s of strips) a.link.setCost(s.num, timedHere(s.num) * (s.num % 2 ? 3 : 0.3));
+    for (let i = 1; i <= 10; i++) {
+      a.link.stall();
+      expect(a.check(true, 42_000 + i * 2000)).toEqual([]);
+    }
+  });
+
+  it('goes by timings taken while the song plays and the workers keep up, and by no others', () => {
+    const a = pool();
+    a.layout(graph, false);
+    for (const t of graph.tracks) a.setPart(t.num, 0.1);
+    // a song being loaded: every strip timed at many times what it takes
+    for (const s of strips) a.link.setCost(s.num, 4);
+    for (let i = 0; i < 5; i++) a.check(false, i * 2000);
+    expect(a.timings().size).toBe(0);
+    expect(a.calibration()).toEqual({ tracks: 1, buses: 1 });
+    // playing, the workers far behind (the audio thread waiting for most blocks): still nothing kept
+    a.check(true, 10_000);
+    for (let i = 0; i < 5; i++) {
+      for (let n = 0; n < 300; n++) a.link.stall();
+      a.check(true, 12_000 + i * 2000);
+    }
+    expect(a.timings().size).toBe(0);
+    expect(a.calibration()).toEqual({ tracks: 1, buses: 1 });
+    // keeping up (a block late now and then): these count
+    for (const s of strips) a.link.setCost(s.num, timedHere(s.num));
+    for (let i = 0; i < 5; i++) {
+      a.link.stall();
+      a.check(true, 30_000 + i * 2000);
+    }
+    expect(a.timings().size).toBe(strips.length);
+    expect(a.calibration().tracks).toBeLessThan(0.5);
+    for (const s of strips) expect(a.cost(s.num)).toBeCloseTo(timedHere(s.num), 5);
+  });
+
+  it('has its engines time their strips afresh when the song starts', () => {
+    const q = light();
+    const numsOf = numbering();
+    const messages = setup(q, numsOf);
+    const play = messages.pop() as ToWorklet;
+    const g = graphOf(q, numsOf);
+    const control = aheadControl();
+    const data = aheadData(64);
+    const link = new AheadLink(control, data, 64);
+    const core = new EngineCore(SR, () => undefined);
+    core.receive({
+      type: 'init',
+      ring: null,
+      meters: null,
+      transport: null,
+      ahead: { control, data, edges: 64, workers: 1, self: 0 },
+    });
+    core.receive({ type: 'ahead', owners: aheadOwners(g, 1, () => 0.1) });
+    for (const m of messages) core.receive(structuredClone(m));
+    // what a strip read while the song loaded
+    for (const s of [...g.tracks, ...g.buses]) link.setCost(s.num, 3.5);
+    core.receive(structuredClone(play));
+    for (const s of [...g.tracks, ...g.buses]) expect(link.cost(s.num)).toBe(0);
   });
 });
 

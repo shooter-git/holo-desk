@@ -1100,6 +1100,7 @@ export class EngineCore implements Host {
           this.seek(t, Math.max(0, this.pos));
           if (msg.record && t.input?.record) this.beginCapture(t);
         }
+        this.timeAfresh();
         break;
       case 'stop':
         this.lastCmd = msg.cmd ?? this.lastCmd;
@@ -1964,6 +1965,23 @@ export class EngineCore implements Host {
     for (const s of this.allStrips) {
       s.heard = this.tick;
       if (s.role !== ROLE_NONE) for (const ins of s.inserts) ins.effect.refresh?.();
+    }
+    this.timeAfresh();
+  }
+
+  /**
+   * Rendering ahead: the strips this engine plays are timed afresh from here (a song starting, a
+   * hall's response arriving). What they took before says nothing of what they take playing: a song
+   * being loaded has every thread building what it plays with, and a block timed then can read
+   * several times what the strip takes. The layout goes by timings taken while the song plays.
+   */
+  private timeAfresh(): void {
+    const sp = this.split;
+    if (!sp || sp.self < 0) return;
+    for (const s of this.mixStrips) {
+      if (s.role !== ROLE_OWN) continue;
+      s.timed = 0;
+      sp.link.setCost(s.num, 0);
     }
   }
 

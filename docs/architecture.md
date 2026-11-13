@@ -114,14 +114,17 @@ Engine's, as Node threads):
   which lays its own out from the messages the studio sends it (the studio sends no more than it
   sends its own audio thread). Each strip's share of a block is timed where it plays: a track while
   it has something to play, a bus while it sounds, with the time it takes to fetch what other
-  threads send it. A strip not timed yet goes by a guess (its plugins, and for a track its notes or
-  its planned part's plans), brought to this computer's speed by how its timings have run against
-  the guesses so far. The studio keeps that, and each song's timings, on the device, so a song is
+  threads send it. Only timings taken while the song plays and the workers keep up count (a song
+  being loaded, or workers far behind, time a strip at several times what it takes), and the
+  engines time their strips afresh each time the song starts. A strip not timed yet goes by a guess
+  (its plugins, and for a track its notes or its planned part's plans), brought to this computer's
+  speed by how its timings have run against the guesses so far. The studio keeps that, and each song's timings, on the device, so a song is
   laid out by what its strips took the last time it played there. The strips are packed so the
   busiest worker has as little as can be, and so a strip's sound only ever goes to its own worker or
   a later one (a worker never waits on one after it). While playing, strips keep their workers (one
-  that moves starts afresh, its notes and its reverb's tail cut): the layout changes when the song
-  starts, and while it plays only when the audio thread is being kept waiting.
+  that moves starts afresh, its notes and its reverb's tail cut, its hall built again): the layout
+  changes when the song starts, and while it plays only when the audio thread has been kept waiting
+  two looks running (a look every two seconds), at most every half minute.
 - **A strip with nothing to play rests.** Playing live, a track with no note, clip or input and
   nothing ringing, and a bus nothing is sent to, are skipped whole (plugins and all) once they have
   been silent, below -140 dB before the fader, for four seconds; a note, a clip, an input or a send

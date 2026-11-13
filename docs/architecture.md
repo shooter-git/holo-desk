@@ -80,9 +80,10 @@ measure how close a song comes:
   clock, it shows the average only.
 - **`pnpm bench`** runs the same engine headless on made-up songs of growing size (built-in synths
   playing chords, plugins and automation lanes on every track, sends to convolution halls) on one
-  thread; `--ahead 6` renders them ahead on six worker threads, as the studio does (`--paced` plays
-  them in real time and counts the blocks the audio thread had to wait for); `--session FILE` takes a
-  real song, its samples from the data folder.
+  thread; `--ahead 6` renders them ahead on six worker threads, laid out by the studio's own pool
+  (`--paced` plays them in real time and counts the blocks the audio thread had to wait for;
+  `--trace` sets each worker's time against its strips'); `--session FILE` takes a real song, its
+  samples from the data folder; `--no-rest` plays every strip through, as a bounce does.
 
 ### Rendering ahead
 
@@ -111,12 +112,22 @@ Engine's, as Node threads):
   skips the stop the workers had played ahead, and starts once they have the song's first few blocks.
 - **Who plays what** is worked out where the workers are started: on the page, or in HO[LO] Engine,
   which lays its own out from the messages the studio sends it (the studio sends no more than it
-  sends its own audio thread). Each strip's share of a block is timed where it plays
-  (and its heaviest remembered for a while), and a track's notes or a planned part's plans say how
-  busy it will be before it plays. The strips are packed so the busiest worker has as little as can
-  be, and so a strip's sound only ever goes to its own worker or a later one (a worker never waits on
-  one after it). While playing, strips keep their workers (one that moves starts afresh, its notes
-  and its reverb's tail cut); the layout changes when the song starts, or when a worker falls behind.
+  sends its own audio thread). Each strip's share of a block is timed where it plays: a track while
+  it has something to play, a bus while it sounds, with the time it takes to fetch what other
+  threads send it. A strip not timed yet goes by a guess (its plugins, and for a track its notes or
+  its planned part's plans), brought to this computer's speed by how its timings have run against
+  the guesses so far. The studio keeps that, and each song's timings, on the device, so a song is
+  laid out by what its strips took the last time it played there. The strips are packed so the
+  busiest worker has as little as can be, and so a strip's sound only ever goes to its own worker or
+  a later one (a worker never waits on one after it). While playing, strips keep their workers (one
+  that moves starts afresh, its notes and its reverb's tail cut): the layout changes when the song
+  starts, and while it plays only when the audio thread is being kept waiting.
+- **A strip with nothing to play rests.** Playing live, a track with no note, clip or input and
+  nothing ringing, and a bus nothing is sent to, are skipped whole (plugins and all) once they have
+  been silent, below -140 dB before the fader, for four seconds; a note, a clip, an input or a send
+  wakes them in the same block. A stopped song, or a quiet stretch of one, costs next to nothing.
+  A bounce or a headless render plays every strip through every block, to the same numbers as ever;
+  live, the difference is the tails given up, under -120 dB in the mix.
 - **Samples, recordings and halls** are in shared memory: every thread plays the same copy.
 - **HO[LO] Engine** runs the same pool on `worker_threads`, started and warmed up with the app and
   given each studio's song as it starts its engine; its render thread plays the master and live

@@ -75,8 +75,12 @@ export function aheadControl(slots = AHEAD_SLOTS): SharedArrayBuffer {
   return sab;
 }
 
-/** Bytes a block takes in the ring: every strip's meters, then each connection's two channels, then its gains. */
-const slotBytes = (edges: number) => METERS * 4 + edges * SIGNAL * 4 + edges * AHEAD_BLOCK * 8;
+/**
+ * Bytes a block takes in the ring: every strip's meters, then each connection's two channels, then
+ * its gains, then a mark for each connection that is silent this block (its strip rests: nothing
+ * was written for it, and whoever takes it in has nothing to add).
+ */
+const slotBytes = (edges: number) => METERS * 4 + edges * SIGNAL * 4 + edges * AHEAD_BLOCK * 8 + edges * 8;
 
 /** The ring's sound, with room for `edges` connections between engines. */
 export function aheadData(edges: number, slots = AHEAD_SLOTS): SharedArrayBuffer {
@@ -97,6 +101,7 @@ export class AheadLink {
   readonly slots: number;
   f32: Float32Array = new Float32Array(0);
   f64: Float64Array = new Float64Array(0);
+  i32: Int32Array = new Int32Array(0);
   edges = 0;
   private stride = 0;
   private readonly loadAt: number;
@@ -114,6 +119,7 @@ export class AheadLink {
   setData(data: SharedArrayBuffer, edges: number): void {
     this.f32 = new Float32Array(data);
     this.f64 = new Float64Array(data);
+    this.i32 = new Int32Array(data);
     this.edges = edges;
     this.stride = slotBytes(edges);
   }
@@ -129,6 +135,13 @@ export class AheadLink {
   /** Where connection e's gains start in block k (in f64). */
   gainAt(k: number, e: number): number {
     return ((k % this.slots) * this.stride + METERS * 4 + this.edges * SIGNAL * 4 + e * AHEAD_BLOCK * 8) / 8;
+  }
+
+  /** Where connection e's mark is in block k (in i32): 1 when it is silent this block, 0 when its sound is there. */
+  silentAt(k: number, e: number): number {
+    return (
+      ((k % this.slots) * this.stride + METERS * 4 + this.edges * SIGNAL * 4 + this.edges * AHEAD_BLOCK * 8) / 4 + e * 2
+    );
   }
 
   /** Blocks the audio thread has played. */
@@ -544,14 +557,6 @@ function madeOf(s: GraphSpec['tracks'][number] | GraphSpec['buses'][number]): st
   return `${s.id}|${plugins}|${i.kind}|${i.kind === 'synth' ? i.preset : i.kind === 'sampler' ? i.key : ''}`;
 }
 
-/** The middle one of some numbers (0 for none). */
-function median(values: number[]): number {
-  if (!values.length) return 0;
-  const sorted = [...values].sort((a, b) => a - b);
-  const mid = sorted.length >> 1;
-  return sorted.length % 2 ? (sorted[mid] as number) : ((sorted[mid - 1] as number) + (sorted[mid] as number)) / 2;
-}
-
 /**
  * How far this computer's timings run from the guesses (aheadGuess, made on one computer years ago):
  * the timed share of a block over the guessed one, for instruments and for strips that are plugins
@@ -597,7 +602,7 @@ export class AheadPool {
   private shape = '';
   private graph: GraphSpec | null = null;
   private guesses = new Map<number, number>();
-  /** Each strip's heaviest timing lately (a track idle while stopped still costs what it did playing). */
+  /** Each strip's heaviest timing since the song last started, or as kept from the last time it was open (remember). */
   private seen = new Map<number, number>();
   /** What each strip was when it was timed (madeOf): another strip under its number, or other plugins, is timed afresh. */
   private made = new Map<number, string>();
@@ -605,6 +610,8 @@ export class AheadPool {
   private scale: AheadScale = { tracks: 1, buses: 1 };
   /** Stalls when the layout was last looked at (check). */
   private stallsSeen = 0;
+  /** Whether the song was playing when the timings were last kept (remember). */
+  private wasPlaying = false;
   /** Instruments' guesses from their notes or plans, by channel number (what's to come is known). */
   private parts = new Map<number, number>();
   /** When the strips last moved (ms). */
@@ -638,13 +645,19 @@ export class AheadPool {
    * has played; a guess from an instrument's notes counts all along (it knows what's to come, and a
    * track times at next to nothing while the song is stopped).
    */
-  private cost(num: number): number {
+  cost(num: number): number {
+    // (a track is timed only while it has something to play, a bus while it sounds: a timing is
+    // what the strip takes at work)
     const timed = Math.max(this.link.cost(num), this.seen.get(num) ?? 0);
-    // (the guess in this computer's own terms: next to timings, a guess from another computer's
-    // speed would weigh its strip several times too heavy or too light)
-    const guess = (this.guesses.get(num) ?? 0.01) * (this.parts.has(num) ? this.scale.tracks : this.scale.buses);
-    if (this.parts.has(num)) return Math.max(timed, guess);
-    return timed > 0.002 ? timed : guess;
+    if (timed > 0) return timed;
+    // not timed yet: the guess, in this computer's own terms (next to timings, a guess from another
+    // computer's speed would weigh its strip several times too heavy or too light)
+    return (this.guesses.get(num) ?? 0.01) * (this.parts.has(num) ? this.scale.tracks : this.scale.buses);
+  }
+
+  /** Who plays each strip now, by channel number (a worker's index; -1 for the audio thread). */
+  get laidOut(): readonly number[] {
+    return this.owners;
   }
 
   /** How far this computer's timings run from the guesses, as learned so far (to keep for the next song, or the next visit). */
@@ -670,7 +683,7 @@ export class AheadPool {
     for (const s of [...graph.tracks, ...graph.buses]) {
       const share = Math.max(this.link.cost(s.num), this.seen.get(s.num) ?? 0);
       const made = this.made.get(s.num);
-      if (share > 0.002 && made !== undefined) out.set(s.num, { share, made });
+      if (share > 0 && made !== undefined) out.set(s.num, { share, made });
     }
     return out;
   }
@@ -684,32 +697,38 @@ export class AheadPool {
   }
 
   /**
-   * Keep each strip's heaviest timing: call every couple of seconds. While the song plays it fades by
-   * half in about half a minute (the song moves on); stopped, it is kept as it is (a stopped strip
-   * times at next to nothing, and the song starts again with what its strips took playing). Playing
-   * also says how far this computer's timings run from the guesses.
+   * Keep each strip's heaviest timing: call every couple of seconds. It is the heaviest the strip
+   * has been since the song last started (the layout has to hold through the busiest passage), and
+   * each new start lets it fade a little, so a strip that has grown lighter (fewer notes) is found
+   * out over a few plays. Playing also says how far this computer's timings run from the guesses.
    */
   remember(playing = true): void {
     const graph = this.graph;
     if (!graph) return;
-    const fade = playing ? 0.95 : 1;
+    const fade = playing && !this.wasPlaying ? 0.85 : 1;
+    this.wasPlaying = playing;
     for (const s of [...graph.tracks, ...graph.buses])
       this.seen.set(s.num, Math.max(this.link.cost(s.num), (this.seen.get(s.num) ?? 0) * fade));
     if (!playing) return;
-    const tracks: number[] = [];
-    const buses: number[] = [];
+    // the strips timed so far against their guesses, all together (the heavy ones count for what they are)
+    const sum = { tracks: [0, 0, 0], buses: [0, 0, 0] };
     for (const s of [...graph.tracks, ...graph.buses]) {
-      const now = this.link.cost(s.num);
+      const timed = this.seen.get(s.num) ?? 0;
       const guess = this.guesses.get(s.num) ?? 0;
-      // (a strip sounding now, and one whose guess says something: an empty strip's says nothing)
-      if (now <= 0.002 || guess <= 0.004) continue;
-      (this.parts.has(s.num) ? tracks : buses).push((this.seen.get(s.num) as number) / guess);
+      // (an empty strip's guess says nothing)
+      if (timed <= 0 || guess <= 0.004) continue;
+      const of = this.parts.has(s.num) ? sum.tracks : sum.buses;
+      of[0] = (of[0] as number) + timed;
+      of[1] = (of[1] as number) + guess;
+      of[2] = (of[2] as number) + 1;
     }
-    // (half way to the middle one each time: a couple of seconds' timings don't swing it)
-    const toward = (was: number, ratios: number[], least: number) =>
-      ratios.length >= least ? Math.min(4, Math.max(0.02, was + (median(ratios) - was) * 0.5)) : was;
-    this.scale.tracks = toward(this.scale.tracks, tracks, 3);
-    this.scale.buses = toward(this.scale.buses, buses, 1);
+    // (half way there each time: a couple of seconds' timings don't swing it)
+    const toward = (was: number, of: number[], least: number) =>
+      (of[2] as number) >= least && (of[1] as number) > 0
+        ? Math.min(4, Math.max(0.02, was + ((of[0] as number) / (of[1] as number) - was) * 0.5))
+        : was;
+    this.scale.tracks = toward(this.scale.tracks, sum.tracks, 3);
+    this.scale.buses = toward(this.scale.buses, sum.buses, 1);
   }
 
   /**

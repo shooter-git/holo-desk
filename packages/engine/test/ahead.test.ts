@@ -405,14 +405,21 @@ function edits(p: Project, nums: (id: string) => number): Map<number, ToWorklet[
 }
 
 /** One engine, the whole mix: what a bounce plays. */
-function one(batches: Map<number, ToWorklet[]>, blocks: number): Float32Array[] {
+function one(
+  batches: Map<number, ToWorklet[]>,
+  blocks: number,
+  rest = false,
+  each?: (k: number, core: EngineCore) => void,
+): Float32Array[] {
   const core = new EngineCore(SR, (m) => {
     if (m.type === 'error') throw new Error(m.message);
   });
+  core.rest = rest;
   core.receive({ type: 'init', ring: null, meters: null, transport: null });
   return run(blocks, (k, l, r) => {
     for (const m of batches.get(k) ?? []) core.receive(structuredClone(m));
     core.process(l, r, undefined, k * AHEAD_BLOCK);
+    each?.(k, core);
   });
 }
 
@@ -439,6 +446,7 @@ function split(
   workers: number,
   owners: number[],
   live?: (k: number, core: EngineCore) => void,
+  rest = false,
 ): Float32Array[] {
   const control = aheadControl();
   const room = 256;
@@ -449,6 +457,7 @@ function split(
     const core = new EngineCore(SR, (m) => {
       if (m.type === 'error') throw new Error(m.message);
     });
+    core.rest = rest;
     core.receive({
       type: 'init',
       ring: null,
@@ -617,6 +626,94 @@ describe('the shared memory between engines', () => {
     const lost = aheadOwners(graph, 3, () => Number.NaN);
     const used = new Set([...graph.tracks, ...graph.buses].map((s) => lost[s.num]));
     expect(used.size).toBeGreaterThan(1);
+  });
+});
+
+/** A song with long silences: a lead that plays a bar, waits five and plays again; a pad that only comes in then; a room; a recording late on. */
+function sparse(): Project {
+  const p = newProject('Sparse');
+  p.tempo = [{ tick: 0, bpm: 120 }];
+  const room = newBus('Room');
+  room.channel.inserts = [newPlugin('space', { space: 0, decay: 0.5, dry: -60, wet: -6 })];
+  const echo = newBus('Echo');
+  echo.channel.inserts = [newPlugin('delay')];
+  p.buses = [room, echo];
+  p.master.inserts = [];
+  const lead = newTrack('Lead', { type: 'synth', preset: 'Soft Keys' });
+  lead.regions = [{ ...newRegion(0, BAR * 8), notes: [0, 6].map((b) => ({ t: b * BAR, d: BAR / 2, p: 64, v: 90 })) }];
+  lead.channel.inserts = [newPlugin('eq', { b2Gain: 3 }), newPlugin('compressor')];
+  lead.channel.sends = [
+    { bus: room.id, level: -10, pre: false },
+    { bus: echo.id, level: -14, pre: false },
+  ];
+  const pad = newTrack('Pad', { type: 'synth', preset: 'Warm Pad' });
+  pad.regions = [{ ...newRegion(0, BAR * 8), notes: [{ t: 6 * BAR, d: BAR, p: 52, v: 80 }] }];
+  pad.channel.inserts = [newPlugin('eq', { b2Gain: 3 })];
+  pad.channel.sends = [{ bus: room.id, level: -12, pre: false }];
+  const take = newAudioTrack('Take');
+  take.regions = [
+    {
+      ...newRegion(BAR * 6.5, BAR),
+      audio: { file: 'aud_sparse', offset: 0, gain: 0, fadeIn: 0, fadeOut: 0, stretch: 1 },
+    },
+  ];
+  take.channel.sends = [{ bus: room.id, level: -9, pre: false }];
+  p.tracks = [lead, pad, take];
+  return p;
+}
+
+describe('strips with nothing to play', () => {
+  const p = sparse();
+  const nums = numbering();
+  const batches = new Map<number, ToWorklet[]>([[0, setup(p, nums)]]);
+  const graph = graphOf(p, nums);
+  // sixteen seconds: a bar played, ten seconds of nothing, then everything at once
+  const BLOCKS = Math.round((16 * SR) / AHEAD_BLOCK);
+  const at = (seconds: number) => Math.round((seconds * SR) / AHEAD_BLOCK);
+  const through = one(batches, BLOCKS);
+  const resting: number[] = [];
+  const rested = one(batches, BLOCKS, true, (_k, core) => resting.push(core.resting));
+
+  it('has a song with a long silence in it, and something after', () => {
+    expect(peak(through[0] as Float32Array, 0, at(1) * AHEAD_BLOCK)).toBeGreaterThan(0.01);
+    expect(peak(through[0] as Float32Array, at(9) * AHEAD_BLOCK, at(11) * AHEAD_BLOCK)).toBeLessThan(1e-5);
+    expect(peak(through[0] as Float32Array, at(12.2) * AHEAD_BLOCK, at(14) * AHEAD_BLOCK)).toBeGreaterThan(0.01);
+  });
+
+  it('rest once they have been silent a few seconds, and wake when something comes', () => {
+    // while the lead's note and the room's and the echo's tails sound, only what never played rests
+    expect(resting[at(0.5)]).toBe(0);
+    // (the pad and the recording have had nothing yet: asleep four seconds in)
+    expect(resting[at(4.5)]).toBeGreaterThanOrEqual(2);
+    // deep in the silence: every track and both buses
+    expect(resting[at(11)]).toBe(5);
+    // everything plays again
+    expect(resting[at(13.5)]).toBe(0);
+  });
+
+  it('play what they would have, to within what no one can hear', () => {
+    let worst = 0;
+    for (let c = 0; c < 2; c++) {
+      const a = through[c] as Float32Array;
+      const b = rested[c] as Float32Array;
+      for (let i = 0; i < a.length; i++) worst = Math.max(worst, Math.abs((a[i] as number) - (b[i] as number)));
+    }
+    // (-120 dB: the tails given up were below -140 dB before the fader, a few strips of them)
+    expect(worst).toBeLessThan(1e-6);
+    // and nothing at all comes out of a mix at rest
+    expect(peak(rested[0] as Float32Array, at(10) * AHEAD_BLOCK, at(11.5) * AHEAD_BLOCK)).toBe(0);
+  });
+
+  it('rest the same split between engines as on one: the same numbers', () => {
+    for (const workers of [1, 2]) {
+      const owners = aheadOwners(graph, workers, () => 0.1);
+      expect(same(split(batches, BLOCKS, workers, owners, undefined, true), rested)).toBe(true);
+    }
+  }, 120_000);
+
+  it('are played through, every block, where nothing rests (a bounce): the numbers of before', () => {
+    const again = one(batches, BLOCKS, false);
+    expect(same(again, through)).toBe(true);
   });
 });
 

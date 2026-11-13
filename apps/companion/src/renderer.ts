@@ -598,6 +598,8 @@ export class Renderer {
     });
     core.clock = () => performance.now();
     core.fineClock = true;
+    // (playing live: a strip with nothing to play rests)
+    core.rest = true;
     this.core = core;
     // (a studio starting again says whether it's rendered ahead)
     this.player = null;

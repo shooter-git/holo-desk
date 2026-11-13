@@ -94,7 +94,10 @@ const EDGE_TAKE = 3;
 const EDGE_TAKE_TWIN = 4;
 const EDGE_TWIN = 5;
 
-/** A twin falls asleep after this long without a sound (longer than any delay's echo, or a hall's pre-delay). */
+/**
+ * A twin falls asleep after this long without a sound (longer than any delay's echo, or a hall's
+ * pre-delay); and so does a strip with nothing to play, where strips rest (EngineCore.rest).
+ */
 const TWIN_HOLD_SECONDS = 4;
 /** Quieter than this is silence, for a twin (-140 dB). */
 const TWIN_SILENT = 1e-7;
@@ -323,6 +326,13 @@ class Strip {
   hands = false;
   /** It was another worker's to hand over until the block about to play: that one finishes its blocks first. */
   handover = false;
+  /** Where strips rest: the block it last made a sound in (or was last changed), and whether it's resting now. */
+  heard = 0;
+  resting = false;
+  /** Connections it takes in from other engines' strips (as a source: how many of its own this engine takes in). */
+  takes = 0;
+  /** Milliseconds this block spent taking in what other engines sent it (timed with it: the work is this strip's). */
+  tookMs = 0;
   /** It has been played here (its plugins' state is its own), and for how many blocks it has been timed. */
   ran = false;
   timed = 0;
@@ -420,9 +430,13 @@ class Strip {
     }));
   }
 
-  /** Automation in Read: the settings at the playhead (playing or not, as Logic does). */
-  automate(frame: number): void {
+  /**
+   * Automation in Read: the settings at the playhead (playing or not, as Logic does). True when a
+   * plugin's setting moved (a resting strip wakes: the plugin may have something to say now).
+   */
+  automate(frame: number): boolean {
     this.autoMute = false;
+    let moved = false;
     for (const lane of this.lanes) {
       const v = laneAt(lane.points, frame, lane.stepped, lane.smooth);
       if (lane.mute) this.autoMute = v >= 0.5;
@@ -437,10 +451,48 @@ class Strip {
           // only what the one setting changes, where the plugin knows; else the whole
           if (ins.effect.setParam) ins.effect.setParam(lane.id, ins.params, ins.settings);
           else ins.effect.setParams(ins.params, ins.settings);
+          moved = true;
         }
       }
       lane.last = v;
     }
+    return moved;
+  }
+
+  /**
+   * Waking from a rest: the fader, the balance and the sends are where they were set meanwhile (as
+   * they would be had it played on: they settle in a fraction of a second), not gliding there from
+   * where they were when it fell asleep.
+   */
+  wake(): void {
+    this.resting = false;
+    this.vol.value = this.vol.target;
+    this.panL.value = this.panL.target;
+    this.panR.value = this.panR.target;
+    this.distance.value = this.distance.target;
+    for (const send of this.sends) send.gain.value = send.gain.target;
+  }
+
+  /** Whether it made a sound this block, before the fader (a muted strip's plugins still ring). */
+  loud(n: number): boolean {
+    const { preL, preR } = this;
+    for (let i = 0; i < n; i++) {
+      const a = preL[i] as number;
+      const b = preR[i] as number;
+      if (a > TWIN_SILENT || a < -TWIN_SILENT || b > TWIN_SILENT || b < -TWIN_SILENT) return true;
+    }
+    return false;
+  }
+
+  /** Whether anything has come into it this block (a bus: what its strips sent). */
+  fed(n: number): boolean {
+    const { l, r } = this;
+    for (let i = 0; i < n; i++) {
+      const a = l[i] as number;
+      const b = r[i] as number;
+      if (a > TWIN_SILENT || a < -TWIN_SILENT || b > TWIN_SILENT || b < -TWIN_SILENT) return true;
+    }
+    return false;
   }
 
   /** The lanes that move every frame (fader, balance, sends, distance), across this block's spans of the song. */
@@ -717,6 +769,17 @@ interface Split {
 export class EngineCore implements Host {
   readonly sr: number;
   lowLatency = false;
+  /**
+   * Strips with nothing to play rest: a track with no notes, clip or input and nothing ringing, a
+   * bus nothing is sent to, once they have been silent (below -140 dB before the fader) for a few
+   * seconds, are skipped whole (their plugins too) until something comes. For playing live, where
+   * every block has a deadline: set by whoever runs the engine live (the studio's audio thread and
+   * its workers, HO[LO] Engine). A bounce or a headless render leaves it off and plays every strip
+   * through, to the same numbers as ever.
+   */
+  rest = false;
+  /** Blocks played (what a strip's rest is counted in). */
+  private tick = 0;
   private tracks = new Map<number, TrackNode>();
   private trackOrder: TrackNode[] = [];
   private buses: Strip[] = [];
@@ -956,7 +1019,7 @@ export class EngineCore implements Host {
       case 'impulse': {
         this.impulses.set(msg.key, msg.data);
         // the plugins waiting for it pick it up (those this engine plays)
-        for (const s of this.allStrips) if (s.role !== ROLE_NONE) for (const ins of s.inserts) ins.effect.refresh?.();
+        this.refreshed();
         break;
       }
       case 'forgetAudio':
@@ -1016,14 +1079,14 @@ export class EngineCore implements Host {
         for (const t of this.trackOrder)
           if (t.spec && usesSampler(t.spec, msg.spec.key)) this.buildInstruments(t, t.spec, true);
         // plugins that play it (a Drum Replacer's kit) pick it up (those this engine plays)
-        for (const s of this.allStrips) if (s.role !== ROLE_NONE) for (const ins of s.inserts) ins.effect.refresh?.();
+        this.refreshed();
         break;
       case 'forgetSampler':
         // (a track still on it, if any, keeps a silent instrument until the samples come again)
         this.samplers.delete(msg.key);
         for (const t of this.trackOrder)
           if (t.spec && usesSampler(t.spec, msg.key)) this.buildInstruments(t, t.spec, true);
-        for (const s of this.allStrips) if (s.role !== ROLE_NONE) for (const ins of s.inserts) ins.effect.refresh?.();
+        this.refreshed();
         break;
       case 'play':
         this.lastCmd = msg.cmd ?? this.lastCmd;
@@ -1158,6 +1221,8 @@ export class EngineCore implements Host {
     this.allStrips = [...this.mixStrips, this.master];
     this.latencyGraph++;
     this.graph = g;
+    // (a change to the mix: every strip plays on a while, whatever was changed about it)
+    for (const st of this.mixStrips) st.heard = this.tick;
     if (this.split) this.planSplit();
   }
   private graph: GraphSpec | null = null;
@@ -1693,6 +1758,68 @@ export class EngineCore implements Host {
     }
   }
 
+  /** Whether a track rests this block (where strips rest): nothing to play (trackBusy), and silent for `hold` blocks. */
+  private trackRests(t: TrackNode, hold: number): boolean {
+    return this.tick - t.heard >= hold && !this.trackBusy(t);
+  }
+
+  /**
+   * Whether a track has something to play this block: a note or a controller, a voice sounding, a
+   * MIDI effect at work, a clip under the playhead, a planned part while the song plays, an input.
+   * (Asked before it plays: playing empties its events.)
+   */
+  private trackBusy(t: TrackNode): boolean {
+    if (t.events.count > 0 || t.input || t.capture) return true;
+    for (const inst of t.instruments) if (inst && inst.active > 0) return true;
+    for (const m of t.midiFx) if (!m.bypass && m.fx.busy?.()) return true;
+    return this.playing && (t.part !== null || (t.clips.length > 0 && this.clipsAhead(t)));
+  }
+
+  /** Whether one of the track's audio regions sounds in this block (playClips' own search, kept for it). */
+  private clipsAhead(t: TrackNode): boolean {
+    const clips = t.clips;
+    for (let s = 0; s < this.spanCount; s++) {
+      const song = this.spans[s * 3 + 1] as number;
+      const songEnd = song + (this.spans[s * 3 + 2] as number);
+      let c = song < t.clipFrom ? 0 : t.clipCursor;
+      while (c < clips.length && (clips[c] as ClipSpec).end <= song) c++;
+      if (this.spanCount === 1) {
+        t.clipFrom = song;
+        t.clipCursor = c;
+      }
+      if (c < clips.length && (clips[c] as ClipSpec).start < songEnd) return true;
+    }
+    return false;
+  }
+
+  /** Whether a bus rests this block: nothing sent to it, and silent for `hold` blocks. */
+  private busRests(b: Strip, n: number, hold: number): boolean {
+    if (this.tick - b.heard < hold) return false;
+    if (b.fed(n)) {
+      b.heard = this.tick;
+      return false;
+    }
+    return true;
+  }
+
+  /** A resting strip's block: nothing played, its meters falling. */
+  private restStrip(s: Strip): void {
+    s.resting = true;
+    s.gr = 0;
+    s.watchGr = 0;
+    if (s instanceof TrackNode) {
+      s.events.clear();
+      s.work.clear();
+    }
+    const m = this.meters ?? this.fallbackMeters;
+    const at = s.num * METER_FLOATS;
+    if (at + 3 >= m.length) return;
+    m[at] = (m[at] as number) * METER_FALL;
+    m[at + 1] = (m[at + 1] as number) * METER_FALL;
+    m[at + 2] = 0;
+    m[at + 3] = 0;
+  }
+
   private meter(s: Strip, n: number): void {
     const m = this.meters ?? this.fallbackMeters;
     const at = s.num * METER_FLOATS;
@@ -1828,6 +1955,25 @@ export class EngineCore implements Host {
     return this.playing;
   }
 
+  /**
+   * Something a plugin was waiting for has arrived (a hall's response, a kit's samples): each plugin
+   * told, and every strip awake a while (a hall plays and is timed with its response from here on,
+   * not as the empty thing it was while it waited).
+   */
+  private refreshed(): void {
+    for (const s of this.allStrips) {
+      s.heard = this.tick;
+      if (s.role !== ROLE_NONE) for (const ins of s.inserts) ins.effect.refresh?.();
+    }
+  }
+
+  /** Strips of this engine's resting now (where strips rest: `rest`). */
+  get resting(): number {
+    let count = 0;
+    for (const s of this.mixStrips) if (s.resting && s.role === ROLE_OWN) count++;
+    return count;
+  }
+
   /** Rendering ahead: the workers in the pool (0: none). */
   get aheadWorkers(): number {
     return this.split?.workers ?? 0;
@@ -1885,6 +2031,7 @@ export class EngineCore implements Host {
         slot: e.slot,
       }));
       s.hands = s.role === ROLE_OWN && s.plan.some((e) => e.mode === EDGE_HAND);
+      s.takes = s.plan.reduce((count, e) => count + (e.mode === EDGE_TAKE ? 1 : 0), 0);
       // (as its owner sees it: the same connections, the same room)
       const o = owner(i);
       if (o >= 0 && (plan?.edges[i] ?? []).some((e) => e.slot >= 0 && e.slot < sp.link.edges))
@@ -1916,6 +2063,7 @@ export class EngineCore implements Host {
       if (t.part) t.part.voices = [];
     }
     s.timed = 0;
+    s.heard = this.tick;
     if (s.role === ROLE_OWN) {
       if (s.ran) for (const ins of s.inserts) ins.effect.reset();
       if (t) {
@@ -1949,20 +2097,34 @@ export class EngineCore implements Host {
       b.twinIn = false;
     }
     const at = Math.max(0, this.pos);
-    for (const t of this.trackOrder) if (t.role === ROLE_OWN && t.lanes.length) t.automate(at);
-    for (const b of this.buses) if (b.role === ROLE_OWN && b.lanes.length) b.automate(at);
+    for (const t of this.trackOrder) if (t.role === ROLE_OWN && t.lanes.length && t.automate(at)) t.heard = this.tick;
+    for (const b of this.buses) if (b.role === ROLE_OWN && b.lanes.length && b.automate(at)) b.heard = this.tick;
     if (this.master.role === ROLE_OWN && this.master.lanes.length) this.master.automate(at);
-    for (const s of this.allStrips) if (s.role === ROLE_OWN) s.automateFrames(this.spans, this.spanCount, n, at);
+    if (this.master.role === ROLE_OWN) this.master.automateFrames(this.spans, this.spanCount, n, at);
     const hold = Math.round((TWIN_HOLD_SECONDS * this.sr) / n);
+    const rest = this.rest;
     const clock = live ? null : this.clock;
     for (const t of this.trackOrder) {
       const t0 = clock ? clock() : 0;
       if (t.role === ROLE_OWN) {
+        if (rest && this.trackRests(t, hold)) {
+          // (resting: silence handed on where another engine takes it in, and not timed: what it
+          // takes is what it takes playing)
+          this.restStrip(t);
+          this.routeSplit(t, n, sp, false, true);
+          continue;
+        }
+        if (t.resting) t.wake();
+        // (timed while it has something to play: what a track takes is what it takes playing, not
+        // idling between its notes or while the song is stopped)
+        const busy = clock !== null && this.trackBusy(t);
+        t.automateFrames(this.spans, this.spanCount, n, at);
         this.renderTrack(t, n, input);
+        if (rest && t.loud(n)) t.heard = this.tick;
         this.meter(t, n);
         this.routeSplit(t, n, sp, true);
         t.ran = true;
-        if (clock) this.timeStrip(sp, t, clock() - t0);
+        if (clock && busy) this.timeStrip(sp, t, clock() - t0);
       } else if (t.role === ROLE_TWIN) {
         const awake = this.twinAwake(t, k, hold);
         if (awake) {
@@ -1975,17 +2137,31 @@ export class EngineCore implements Host {
         this.routeSplit(t, n, sp, awake);
       } else {
         t.events.clear();
-        this.routeSplit(t, n, sp, false);
+        if (clock && t.takes) {
+          const w0 = this.waited;
+          this.routeSplit(t, n, sp, false);
+          this.tookFrom(t, clock() - t0 - (this.waited - w0));
+        } else this.routeSplit(t, n, sp, false);
       }
     }
     for (const b of this.buses) {
       const t0 = clock ? clock() : 0;
       if (b.role === ROLE_OWN) {
+        if (rest && this.busRests(b, n, hold)) {
+          this.restStrip(b);
+          this.routeSplit(b, n, sp, false, true);
+          b.tookMs = 0;
+          continue;
+        }
+        if (b.resting) b.wake();
+        b.automateFrames(this.spans, this.spanCount, n, at);
         b.run(n);
+        if (rest && b.loud(n)) b.heard = this.tick;
         this.meter(b, n);
         this.routeSplit(b, n, sp, true);
         b.ran = true;
-        if (clock) this.timeStrip(sp, b, clock() - t0);
+        if (clock) this.timeStrip(sp, b, clock() - t0 + b.tookMs);
+        b.tookMs = 0;
       } else if (b.role === ROLE_TWIN) {
         const awake = b.twinIn || k - b.twinSeen < hold;
         if (awake) {
@@ -1996,6 +2172,10 @@ export class EngineCore implements Host {
           b.ran = true;
         } else this.twinRest(b);
         this.routeSplit(b, n, sp, awake);
+      } else if (clock && b.takes) {
+        const w0 = this.waited;
+        this.routeSplit(b, n, sp, false);
+        this.tookFrom(b, clock() - t0 - (this.waited - w0));
       } else this.routeSplit(b, n, sp, false);
     }
     if (this.master.role === ROLE_OWN) {
@@ -2011,6 +2191,17 @@ export class EngineCore implements Host {
     else this.handMeters(sp);
   }
 
+  /**
+   * The time a block spent taking in another engine's strip, shared among the strips here it went
+   * into: fetching a few hundred connections from other threads' memory is real work on the thread
+   * that plays the buses, and it's those buses' (they are laid out by it).
+   */
+  private tookFrom(s: Strip, ms: number): void {
+    if (!(ms > 0)) return;
+    const each = ms / s.takes;
+    for (const e of s.plan) if (e.mode === EDGE_TAKE) e.dest.tookMs += each;
+  }
+
   /** A twin plays while something live comes in or still sounds (its voices, its plugins' tails). */
   private twinAwake(t: TrackNode, k: number, hold: number): boolean {
     if (t.events.count > 0 || t.input || k - t.twinSeen < hold) return true;
@@ -2023,7 +2214,7 @@ export class EngineCore implements Host {
    * A strip's connections this block, as this engine plays its part in them, in the order one engine
    * adds them (so whatever meets in a bus adds up in the same order, to the same numbers).
    */
-  private routeSplit(s: Strip, n: number, sp: Split, active: boolean): void {
+  private routeSplit(s: Strip, n: number, sp: Split, active: boolean, resting = false): void {
     const link = sp.link;
     const k = sp.block;
     let waited = false;
@@ -2033,7 +2224,9 @@ export class EngineCore implements Host {
           if (active) this.addInto(e.dest, this.produce(s, e, n), n);
           break;
         case EDGE_HAND:
-          this.hand(link, k, e, this.produce(s, e, n), n);
+          // (resting: marked silent, nothing written)
+          if (resting) link.i32[link.silentAt(k, e.slot)] = 1;
+          else this.hand(link, k, e, this.produce(s, e, n), n);
           break;
         case EDGE_TAKE:
           if (!waited) {
@@ -2152,10 +2345,13 @@ export class EngineCore implements Host {
       const go = link.gainAt(k, e.slot);
       for (let i = 0; i < n; i++) d[go + i] = g[i] as number;
     }
+    link.i32[link.silentAt(k, e.slot)] = 0;
   }
 
   /** A connection another engine played, added where it goes (the same sums as adding it here). */
   private take(link: AheadLink, k: number, e: EdgePlan, n: number): void {
+    // (its strip rests this block: nothing to add, and nothing fetched from the other thread's memory)
+    if (link.i32[link.silentAt(k, e.slot)] === 1) return;
     const f = link.f32;
     const o = link.signalAt(k, e.slot);
     const { l, r } = e.dest;
@@ -2183,8 +2379,7 @@ export class EngineCore implements Host {
       if (!s.hands) continue;
       for (const e of s.plan) {
         if (e.mode !== EDGE_HAND) continue;
-        const o = sp.link.signalAt(k, e.slot);
-        sp.link.f32.fill(0, o, o + AHEAD_BLOCK * 2);
+        sp.link.i32[sp.link.silentAt(k, e.slot)] = 1;
       }
       sp.link.publish(s.num, k + 1);
     }
@@ -2267,6 +2462,7 @@ export class EngineCore implements Host {
   }
 
   private block(out0: Float32Array, out1: Float32Array, n: number, input: Float32Array[] | undefined): void {
+    this.tick++;
     this.readLive();
     const cyc = this.cycle;
     if (this.playing && cyc.on && cyc.end > cyc.start && this.pos === cyc.end) {
@@ -2319,20 +2515,35 @@ export class EngineCore implements Host {
     this.master.clear(n);
     for (const b of this.buses) b.clear(n);
     const at = Math.max(0, this.pos);
-    for (const t of this.trackOrder) if (t.lanes.length) t.automate(at);
-    for (const b of this.buses) if (b.lanes.length) b.automate(at);
+    const hold = this.rest ? Math.round((TWIN_HOLD_SECONDS * this.sr) / n) : 0;
+    for (const t of this.trackOrder) if (t.lanes.length && t.automate(at)) t.heard = this.tick;
+    for (const b of this.buses) if (b.lanes.length && b.automate(at)) b.heard = this.tick;
     if (this.master.lanes.length) this.master.automate(at);
-    for (const s of this.allStrips) s.automateFrames(this.spans, this.spanCount, n, at);
     for (const t of this.trackOrder) {
+      if (hold && this.trackRests(t, hold)) {
+        this.restStrip(t);
+        continue;
+      }
+      if (t.resting) t.wake();
+      t.automateFrames(this.spans, this.spanCount, n, at);
       this.renderTrack(t, n, input);
+      if (hold && t.loud(n)) t.heard = this.tick;
       this.meter(t, n);
       this.route(t, n);
     }
     for (const b of this.buses) {
+      if (hold && this.busRests(b, n, hold)) {
+        this.restStrip(b);
+        continue;
+      }
+      if (b.resting) b.wake();
+      b.automateFrames(this.spans, this.spanCount, n, at);
       b.run(n);
+      if (hold && b.loud(n)) b.heard = this.tick;
       this.meter(b, n);
       this.route(b, n);
     }
+    this.master.automateFrames(this.spans, this.spanCount, n, at);
     this.master.run(n);
     this.meter(this.master, n);
     for (let i = 0; i < n; i++) {

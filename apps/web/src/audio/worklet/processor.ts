@@ -18,6 +18,8 @@ class EngineProcessor extends AudioWorkletProcessor {
   constructor() {
     super();
     this.core = new EngineCore(sampleRate, (msg, transfer) => this.port.postMessage(msg, transfer ?? []));
+    // (playing live: a strip with nothing to play rests)
+    this.core.rest = true;
     this.port.onmessage = (e: MessageEvent<ToWorklet>) => {
       const msg = e.data;
       if (msg.type === 'init') {

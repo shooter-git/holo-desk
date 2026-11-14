@@ -1830,7 +1830,7 @@ function placeSample(src: string, dest: string): void {
 export function importFolder(
   source: string,
   packsDir: string,
-  opts: { id?: string; name?: string; license?: string; log?: (line: string) => void },
+  opts: { id?: string; name?: string; license?: string; trim?: boolean | TrimOptions; log?: (line: string) => void },
 ): Pack {
   const name = opts.name ?? basename(source).replace(/\.(zip)$/i, '');
   const all = walk(source);
@@ -1873,6 +1873,7 @@ export function importFolder(
   for (const [dir, files] of byDir)
     instruments.push(instrumentFromFolder(dir, files, opts.log ? { log: opts.log } : {}));
   if (!instruments.length) throw new Error('No SFZ or EXS instruments or audio files (WAV, FLAC, OGG) were found');
+  if (opts.trim) trimAll(instruments, opts.trim === true ? {} : opts.trim, opts.log);
   return writeOwnPack(instruments, source, packsDir, { ...opts, name }, basename(source));
 }
 
@@ -1924,6 +1925,7 @@ export function importPrograms(
     name?: string;
     license?: string;
     mics?: boolean | readonly string[];
+    trim?: boolean | TrimOptions;
     log?: (line: string) => void;
   },
 ): Pack {
@@ -1934,21 +1936,22 @@ export function importPrograms(
   const first = programs[0] as string;
   const name = opts.name ?? basename(first, extname(first));
   const source = commonFolder([...programs, ...made.flatMap((m) => m.files)]);
-  if (!opts.mics)
-    return writeOwnPack(
-      playable.map((m) => m.inst),
-      source,
-      packsDir,
-      { ...opts, name },
-      basename(first),
-    );
-  if (playable.length < programs.length) throw new Error('Every microphone needs samples HO[LO] can play');
-  const names = Array.isArray(opts.mics) ? opts.mics : micNames(programs);
-  const inst = micsFromPrograms(
-    made.map((m) => m.inst),
-    names,
-  );
-  return writeOwnPack([inst], source, packsDir, { ...opts, name }, basename(first));
+  let instruments = playable.map((m) => m.inst);
+  if (opts.mics) {
+    if (playable.length < programs.length) throw new Error('Every microphone needs samples HO[LO] can play');
+    const names = Array.isArray(opts.mics) ? opts.mics : micNames(programs);
+    instruments = [micsFromPrograms(instruments, names)];
+  }
+  if (opts.trim) trimAll(instruments, opts.trim === true ? {} : opts.trim, opts.log);
+  return writeOwnPack(instruments, source, packsDir, { ...opts, name }, basename(first));
+}
+
+/** Trim each instrument (see trimInstrument), saying how much smaller each became. */
+function trimAll(instruments: PackInstrument[], opts: TrimOptions, log?: (line: string) => void): void {
+  for (const inst of instruments) {
+    const { before, after } = trimInstrument(inst, opts);
+    log?.(`${inst.title}: ${after} MB decoded at 48 kHz, trimmed from ${before} MB`);
+  }
 }
 
 /**
@@ -2013,6 +2016,95 @@ export function micsFromPrograms(instruments: readonly PackInstrument[], names: 
     mics,
     zones: instruments.flatMap((inst, i) => inst.zones.map((z) => ({ ...z, mic: (mics[i] as SampleMic).id }))),
   };
+}
+
+/** How an import keeps notes shorter than their files: see trimInstrument. */
+export interface TrimOptions {
+  /** dB of full scale, as the note plays (its file's level with its zone's gain), it's kept down to. */
+  floor?: number;
+  /** Seconds a note is kept at most. */
+  cap?: number;
+  /** Seconds it fades out over before its new end. */
+  fade?: number;
+}
+
+/** The pinned pianos' rule: a note kept until it falls to -58 dB, 20 s at most, faded over its last 1.5 s. */
+export const TRIM_DEFAULTS: Required<TrimOptions> = { floor: -58, cap: 20, fade: 1.5 };
+
+/** Megabytes a stretch of a file takes decoded at 48 kHz, as a device holds it (32-bit floats). */
+const decodedMb = (frames: number, rate: number, channels: number) => (frames / rate) * 48000 * channels * 4 * 1e-6;
+
+/**
+ * Keep an instrument's notes shorter than their files, so a big library fits in a device's memory (a
+ * studio holds every sample it plays). Only the map changes: each zone's end, and a fade the studio
+ * makes as it loads the sample. The files are never rewritten, so importing again without trimming
+ * brings every note back whole.
+ *
+ * A struck note is kept until, as it plays (its file's level with its zone's gain, at full velocity),
+ * it has fallen to `floor` dB, and half a second more, `cap` seconds at most, fading over its last
+ * `fade` seconds. A release or pedal sample (short already) loses only what's below -80 dB. A note that
+ * wouldn't get shorter keeps its end and gets no fade. Returns the instrument's decoded size before and
+ * after, in megabytes at 48 kHz.
+ */
+export function trimInstrument(inst: PackInstrument, opts: TrimOptions = {}): { before: number; after: number } {
+  const o = { ...TRIM_DEFAULTS, ...opts };
+  const byFile = new Map<string, Zone[]>();
+  for (const z of inst.zones) byFile.set(z.file, [...(byFile.get(z.file) ?? []), z]);
+  let before = 0;
+  let after = 0;
+  for (const [file, zones] of byFile) {
+    const { rate, channels } = decodeInput(new Uint8Array(readFileSync(file)));
+    const length = channels[0]?.length ?? 0;
+    const block = Math.max(1, Math.round(0.05 * rate));
+    /** A stretch's level in dB (its loudest channel's mean square). */
+    const level = (from: number, to: number) => {
+      let best = 0;
+      for (const ch of channels) {
+        let sum = 0;
+        for (let i = from; i < to; i++) sum += (ch[i] as number) ** 2;
+        best = Math.max(best, sum / Math.max(1, to - from));
+      }
+      return 10 * Math.log10(best + 1e-20);
+    };
+    // each distinct stretch of the file once (its zones on several keys share one decode and one cut)
+    const cuts = new Map<string, { end: number; fadeOut?: number }>();
+    for (const z of zones) {
+      const start = Math.max(0, Math.min(z.start, length));
+      const end = Math.min(length, z.end > start ? z.end : length);
+      const struck = !z.trigger;
+      const key = `${start}|${end}|${struck ? 's' : 't'}`;
+      let cut = cuts.get(key);
+      if (!cut) {
+        // what the file must fall below for the note, as it plays, to be under the floor
+        const loudest = Math.max(...zones.filter((x) => !x.trigger === struck).map((x) => x.gain));
+        const below = (struck ? o.floor : -80) - loudest;
+        let last = -1;
+        for (let b = Math.ceil((end - start) / block) - 1; b >= 0; b--) {
+          if (level(start + b * block, Math.min(end, start + (b + 1) * block)) > below) {
+            last = b;
+            break;
+          }
+        }
+        const margin = Math.round((struck ? 0.5 : 0.05) * rate);
+        let keep = Math.max(Math.round((struck ? 1 : 0.1) * rate), (last + 1) * block + margin);
+        if (struck) keep = Math.min(keep, Math.round(o.cap * rate));
+        const newEnd = Math.min(end, start + keep);
+        cut =
+          newEnd < end - Math.round(0.05 * rate)
+            ? {
+                end: newEnd,
+                fadeOut: Math.min(Math.round((struck ? o.fade : 0.05) * rate), Math.round((newEnd - start) * 0.4)),
+              }
+            : { end };
+        cuts.set(key, cut);
+        before += decodedMb(end - start, rate, channels.length);
+        after += decodedMb(cut.end - start, rate, channels.length);
+      }
+      z.end = cut.end;
+      if (cut.fadeOut) z.fadeOut = cut.fadeOut;
+    }
+  }
+  return { before: Math.round(before), after: Math.round(after) };
 }
 
 /**

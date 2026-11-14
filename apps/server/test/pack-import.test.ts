@@ -28,6 +28,7 @@ import {
   instrumentFromExs,
   instrumentFromSfz,
   noteNumber,
+  trimInstrument,
 } from '../src/pack-import.ts';
 import { installedPack, installPack, packFiles, useShippedMaps } from '../src/pack-install.ts';
 import type { PackInstrument, Zone } from '../src/packs.ts';
@@ -417,6 +418,90 @@ describe('pack import', () => {
     const named = importPrograms([near, far], packs, { name: 'Grand', mics: ['Near', 'Far'] });
     expect(named.instruments[0]?.mics?.map((m) => m.name)).toEqual(['Near', 'Far']);
     expect(() => importPrograms([near], packs, { name: 'Grand', mics: true })).toThrow('two programs or more');
+  });
+
+  it("trims notes where they've fallen away, in the map alone, and leaves short ones whole", () => {
+    const dir = join(work, 'trim');
+    const R = 44100;
+    /** A 220 Hz tone from -6 dB of full scale, falling `fall` dB a second. */
+    const tone = (name: string, seconds: number, fall: number) => {
+      const out = new Int32Array(Math.round(seconds * R));
+      for (let i = 0; i < out.length; i++)
+        out[i] = Math.round(Math.sin((2 * Math.PI * 220 * i) / R) * 10 ** ((-6 - (fall * i) / R) / 20) * 32767);
+      mkdirSync(dir, { recursive: true });
+      const path = join(dir, `${name}.wav`);
+      writeFileSync(path, pcmWav({ rate: R, bits: 16, channels: [out] }));
+      return path;
+    };
+    const files = {
+      long: tone('long', 6, 20),
+      loud: tone('loud', 6, 20),
+      short: tone('short', 0.6, 20),
+      rel: tone('rel', 3, 40),
+    };
+    const zone = (file: string, key: number, extra: Partial<Zone> = {}): Zone => ({
+      file,
+      root: key,
+      lo: key,
+      hi: key,
+      lovel: 1,
+      hivel: 127,
+      gain: 0,
+      start: 0,
+      end: Math.round((file === files.short ? 0.6 : file === files.rel ? 3 : 6) * R),
+      loopStart: 0,
+      loopEnd: 0,
+      rate: R,
+      rr: 1,
+      ...extra,
+    });
+    const piano = (): PackInstrument => ({
+      name: 'piano',
+      title: 'Piano',
+      category: 'Imported',
+      pitched: true,
+      release: 0.3,
+      attack: 0,
+      oneShot: false,
+      velocityRange: 12,
+      zones: [
+        zone(files.long, 60),
+        zone(files.loud, 62, { gain: 10 }),
+        zone(files.short, 64),
+        zone(files.rel, 60, { trigger: 'release' }),
+      ],
+    });
+    const bytes = Object.values(files).map((f) => readFileSync(f));
+    const inst = piano();
+    const { before, after } = trimInstrument(inst);
+    const [long, loud, short, rel] = inst.zones as [Zone, Zone, Zone, Zone];
+    // a sine's level is 3 dB under its peak: it reaches -58 dB at 2.45 s, kept half a second more
+    expect(long.end / R).toBeGreaterThan(2.9);
+    expect(long.end / R).toBeLessThan(3.05);
+    // its fade: 1.5 s, or 40% of what's kept where that's shorter
+    expect(long.fadeOut).toBe(Math.round(long.end * 0.4));
+    // played 10 dB up, the same tone is heard falling to -58 dB half a second later
+    expect(loud.end / R).toBeGreaterThan(3.4);
+    expect(loud.end / R).toBeLessThan(3.55);
+    // a note that wouldn't get shorter keeps its end, with no fade
+    expect([short.end, short.fadeOut]).toEqual([0.6 * R, undefined]);
+    // a release sample loses only what's under -80 dB, with a short fade
+    expect(rel.end / R).toBeGreaterThan(1.75);
+    expect(rel.end / R).toBeLessThan(1.9);
+    expect(rel.fadeOut).toBe(0.05 * R);
+    expect(after).toBeLessThan(before);
+    // the files themselves are as they were
+    expect(Object.values(files).map((f) => readFileSync(f))).toEqual(bytes);
+    // a cap in seconds
+    const capped = piano();
+    trimInstrument(capped, { cap: 2 });
+    expect(capped.zones[0]?.end).toBe(2 * R);
+    // an import that trims writes the cut into its map
+    writeFileSync(join(dir, 'Tone.sfz'), '<region> sample=long.wav key=60');
+    const pack = importPrograms([join(dir, 'Tone.sfz')], join(work, 'trim-packs'), { name: 'Tone', trim: true });
+    const written = JSON.parse(readFileSync(join(work, 'trim-packs', pack.id, 'holo-pack.json'), 'utf8'));
+    const cut = written.instruments[0].zones[0];
+    expect([cut.file, cut.end, cut.fadeOut]).toEqual(['long.wav', long.end, long.fadeOut]);
   });
 
   it('reads an EXS instrument written big-end first, and refuses a file that is not one', () => {

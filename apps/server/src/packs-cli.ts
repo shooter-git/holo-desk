@@ -18,6 +18,10 @@
  *   import A.exs [B.exs…] [--name N] [--id ID] [--license L]
  *                                Logic's sampler instruments (EXS), exactly those: each an instrument, its
  *                                samples found where they are now
+ *   import … --trim [--trim-floor DB] [--trim-cap S] [--trim-fade S]
+ *                                keep notes shorter than their files, so a big library fits in a device's memory:
+ *                                each kept until it falls to -58 dB as it plays (20 s at most), faded over its
+ *                                last 1.5 s; only the map changes, never the files
  *   import A B… --mics [--mic-names "Close,Room"]
  *                                SFZ or EXS programs that play the same notes from different microphones (a
  *                                piano's player, close and room perspectives) as one instrument, each program
@@ -148,6 +152,20 @@ async function main(): Promise<void> {
     const id = flag('id');
     const license = flag('license');
     const micNames = flag('mic-names');
+    const trimFloor = flag('trim-floor');
+    const trimCap = flag('trim-cap');
+    const trimFade = flag('trim-fade');
+    const trimmed = rest.includes('--trim') || [trimFloor, trimCap, trimFade].some((v) => v !== undefined);
+    if (rest.includes('--trim')) rest.splice(rest.indexOf('--trim'), 1);
+    const trim = trimmed
+      ? {
+          ...(trimFloor !== undefined ? { floor: Number(trimFloor) } : {}),
+          ...(trimCap !== undefined ? { cap: Number(trimCap) } : {}),
+          ...(trimFade !== undefined ? { fade: Number(trimFade) } : {}),
+        }
+      : undefined;
+    if (trim && Object.values(trim).some((v) => !Number.isFinite(v)))
+      throw new Error('--trim-floor, --trim-cap and --trim-fade take numbers');
     const mics = rest.includes('--mics') || micNames !== undefined;
     if (rest.includes('--mics')) rest.splice(rest.indexOf('--mics'), 1);
     const path = rest[0];
@@ -164,6 +182,7 @@ async function main(): Promise<void> {
           ...(id ? { id } : {}),
           ...(license ? { license } : {}),
           ...(mics ? { mics: micNames ? micNames.split(',').map((n) => n.trim()) : true } : {}),
+          ...(trim ? { trim } : {}),
           log: (line) => console.log(`  ${line}`),
         },
       );
@@ -186,6 +205,7 @@ async function main(): Promise<void> {
         name: name ?? basename(path).replace(/\.(zip|sfz)$/i, ''),
         ...(id ? { id } : {}),
         ...(license ? { license } : {}),
+        ...(trim ? { trim } : {}),
         log: (line) => console.log(`  ${line}`),
       });
       imported(pack);

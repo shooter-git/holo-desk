@@ -261,7 +261,9 @@ overheads, rooms), turned while it plays. Every kit also has **Tune** and **Deca
 kept in the song, and `holo kit Drums mic:room=-6 decay=70` sets them from the command line.
 
 You can also import your own from the studio: **Library → Import a sample pack (.zip)**. SFZ
-instruments come in with their mapping. Folders of samples named by note (C4, F#3, `_v2`, `_rr1`…)
+instruments come in with their mapping, their release samples (`trigger=release`: a piano's dampers
+falling, quieter the longer a note was held where `rt_decay` says so) and the sustain pedal's own
+sounds (regions `on_locc64` sets off). Folders of samples named by note (C4, F#3, `_v2`, `_rr1`…)
 become instruments, and a folder of one-shot hits becomes a drum kit on the General MIDI keys.
 
 A kit's folder with a folder for each piece (Kick, Snare, Hi-Hat Closed, Hi-Hat Open, Tom 1, Crash,

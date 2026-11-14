@@ -3,7 +3,8 @@
  * named by note, a drum kit's folder (a folder for each piece, its microphones in folders of their own
  * or named in its files), or a ZIP of any of them. The result is a HO[LO] pack of your own, its id
  * starting with mine-: the files hard-linked (else copied) under the data folder, and a holo-pack.json
- * describing every sample's key, velocity, pitch, level, loop and microphone.
+ * describing every sample's key, velocity, pitch, level, loop and microphone, and what sets it off (a key
+ * struck or let go, the sustain pedal going down or coming up).
  */
 import {
   closeSync,
@@ -213,14 +214,19 @@ function parseSfzText(file: string): { header: string; ops: Opcodes }[] {
   return out;
 }
 
-/** Every region with the headers above it applied, and the control header's settings (labels, defaults). */
-function sfzRegions(file: string): { regions: Opcodes[]; control: Opcodes } {
+/**
+ * Every region with the headers above it applied, the control header's settings (labels, defaults), and
+ * each region's group: the header block it's under (each <global>, <master> or <group> starts one).
+ */
+function sfzRegions(file: string): { regions: Opcodes[]; control: Opcodes; groupOf: number[] } {
   const blocks = parseSfzText(file);
   let control: Opcodes = {};
   let global: Opcodes = {};
   let master: Opcodes = {};
   let group: Opcodes = {};
+  let block = 0;
   const regions: Opcodes[] = [];
+  const groupOf: number[] = [];
   for (const b of blocks) {
     switch (b.header) {
       case 'control':
@@ -230,20 +236,24 @@ function sfzRegions(file: string): { regions: Opcodes[]; control: Opcodes } {
         global = b.ops;
         master = {};
         group = {};
+        block++;
         break;
       case 'master':
         master = b.ops;
         group = {};
+        block++;
         break;
       case 'group':
         group = b.ops;
+        block++;
         break;
       case 'region':
         regions.push({ ...control, ...global, ...master, ...group, ...b.ops });
+        groupOf.push(block);
         break;
     }
   }
-  return { regions, control };
+  return { regions, control, groupOf };
 }
 
 const num = (v: string | undefined, d: number) => (v === undefined || Number.isNaN(Number(v)) ? d : Number(v));
@@ -276,14 +286,48 @@ function ccDefault(ops: Opcodes, control: Opcodes, cc: number): number | null {
   return null;
 }
 
+/** What sets a region off: a key struck or let go, or the sustain pedal going down or coming up. */
+type RegionTrigger = 'attack' | 'release' | 'pedalDown' | 'pedalUp';
+
+const ON_CC = /^on_(lo|hi)(hd)?cc(\d+)$/;
+
+/**
+ * What sets a region off, or null for what HO[LO] doesn't play (a legato or first-note region, or one a
+ * controller other than the sustain pedal sets off). A region the pedal's controller (CC 64) sets off
+ * as it moves into a range (on_locc64, on_hicc64) is the pedal's own sound: going down into its upper
+ * half, coming up into its lower half.
+ */
+function regionTrigger(ops: Opcodes): RegionTrigger | null {
+  const on = Object.keys(ops).filter((k) => ON_CC.test(k));
+  if (on.length) {
+    let lo = 0;
+    let hi = 1;
+    for (const k of on) {
+      const [, side, hd, cc] = ON_CC.exec(k) as RegExpExecArray;
+      if (cc !== '64') return null;
+      const v = hd ? num(ops[k], 0) : num(ops[k], 0) / 127;
+      if (side === 'lo') lo = v;
+      else hi = v;
+    }
+    if (lo >= 0.5 - 1e-9) return 'pedalDown';
+    if (hi < 0.5 - 1e-9) return 'pedalUp';
+    return null;
+  }
+  const t = ops.trigger ?? 'attack';
+  if (t === 'attack') return 'attack';
+  if (t === 'release' || t === 'release_key') return 'release';
+  return null;
+}
+
 /**
  * Whether a region plays with the controllers where they start, and the key switch its SFZ starts on: a
  * hi-hat's pedal positions, say, are regions on one key that each need the pedal's controller in a
  * range. A microphone's own fader (a controller setting its level) doesn't count: its microphone is
- * there at whatever level.
+ * there at whatever level. A region a controller sets off as it moves (on_locc) plays only then (the
+ * pedal's own sounds are read by regionTrigger, and checked here without those opcodes).
  */
 function playsAtStart(ops: Opcodes, control: Opcodes, faders: Map<number, unknown>): boolean {
-  if (Object.keys(ops).some((k) => /^on_(lo|hi)(hd)?cc\d+$/.test(k))) return false;
+  if (Object.keys(ops).some((k) => ON_CC.test(k))) return false;
   const sw = noteNumber(ops.sw_default ?? control.sw_default ?? '');
   if (sw !== null) {
     const last = ops.sw_last !== undefined ? noteNumber(ops.sw_last) : null;
@@ -303,12 +347,50 @@ function playsAtStart(ops: Opcodes, control: Opcodes, faders: Map<number, unknow
   return true;
 }
 
+/**
+ * Release samples a player sounds together (a damper's thud and a key's knock, both on the key let go)
+ * as parts of their own: the engine sounds one of each part, its zone nearest the key let go, and a
+ * part's tied zones take turns. A family of release samples (an SFZ group, an EXS group) stays in one
+ * part, so a part covers the keys its families do; families that overlap (one microphone, the same
+ * round robin, keys and velocities in common) can't share one.
+ */
+export function numberReleaseParts(zones: Zone[], familyOf: (zone: Zone, index: number) => number | string): void {
+  const families = new Map<string, Zone[]>();
+  zones.forEach((z, i) => {
+    if (z.trigger !== 'release') return;
+    const k = String(familyOf(z, i));
+    families.set(k, [...(families.get(k) ?? []), z]);
+  });
+  const clash = (a: Zone, b: Zone) =>
+    (a.mic ?? '') === (b.mic ?? '') &&
+    a.rr === b.rr &&
+    a.lo <= b.hi &&
+    b.lo <= a.hi &&
+    a.lovel <= b.hivel &&
+    b.lovel <= a.hivel;
+  const parts: Zone[][] = [];
+  for (const family of families.values()) {
+    let p = parts.findIndex((part) => !family.some((z) => part.some((o) => clash(z, o))));
+    if (p < 0) {
+      p = parts.length;
+      parts.push([]);
+    }
+    (parts[p] as Zone[]).push(...family);
+    for (const z of family) {
+      if (p) z.part = p;
+      else delete z.part;
+    }
+  }
+}
+
 /** An SFZ instrument as a HO[LO] instrument; its samples are listed so they can be copied. */
 export function instrumentFromSfz(file: string): { inst: PackInstrument; files: string[] } {
-  const { regions, control } = sfzRegions(file);
+  const { regions, control, groupOf } = sfzRegions(file);
   interface Found {
     zone: Zone;
     ops: Opcodes;
+    /** The SFZ group it's under (a family of release samples stays in one part). */
+    family: number;
     faders: Map<number, { db: boolean; depth: number }>;
     take: [number, number];
     group: number;
@@ -320,56 +402,75 @@ export function instrumentFromSfz(file: string): { inst: PackInstrument; files: 
   let attack = 0.002;
   let oneShot = false;
   let pitched = true;
-  for (const ops of regions) {
-    if ((ops.trigger ?? 'attack') !== 'attack' || !ops.sample) continue;
+  for (const [index, ops] of regions.entries()) {
+    const trigger = regionTrigger(ops);
+    if (!trigger || !ops.sample) continue;
     const faders = levelCcs(ops);
-    if (!playsAtStart(ops, control, faders)) continue;
+    const pedal = trigger === 'pedalDown' || trigger === 'pedalUp';
+    const atStart = pedal ? Object.fromEntries(Object.entries(ops).filter(([k]) => !ON_CC.test(k))) : ops;
+    if (!playsAtStart(atStart, control, faders)) continue;
     const samplePath = normalize(
       join(dirname(file), (ops.default_path ?? '').replace(/\\/g, '/'), ops.sample.replace(/\\/g, '/')),
     );
     if (!existsSync(samplePath) || !AUDIO.has(extname(samplePath).toLowerCase())) continue;
     files.add(samplePath);
     const key = ops.key !== undefined ? noteNumber(ops.key) : null;
-    const lo = noteNumber(ops.lokey ?? '') ?? key ?? 0;
-    const hi = noteNumber(ops.hikey ?? '') ?? key ?? 127;
+    // the pedal's own sound is on no key: it plays whatever is held
+    const lo = pedal ? 0 : (noteNumber(ops.lokey ?? '') ?? key ?? 0);
+    const hi = pedal ? 127 : (noteNumber(ops.hikey ?? '') ?? key ?? 127);
     const center = noteNumber(ops.pitch_keycenter ?? '') ?? key ?? (lo === hi ? lo : 60);
-    if (ops.pitch_keytrack === '0') pitched = false;
+    const untracked = ops.pitch_keytrack === '0';
     const info = audioInfo(samplePath);
     const loopMode = ops.loop_mode ?? ops.loopmode;
-    if (loopMode === 'one_shot') oneShot = true;
-    release = Math.max(release, num(ops.ampeg_release, 0));
-    attack = Math.max(attack, Math.min(0.05, num(ops.ampeg_attack, 0)));
+    if (trigger === 'attack') {
+      // how the instrument plays is its struck notes': a key's release noise doesn't make it a drum
+      if (untracked) pitched = false;
+      if (loopMode === 'one_shot') oneShot = true;
+      release = Math.max(release, num(ops.ampeg_release, 0));
+      attack = Math.max(attack, Math.min(0.05, num(ops.ampeg_attack, 0)));
+    }
     const looped = loopMode === 'loop_continuous' || loopMode === 'loop_sustain';
     const pan = clamp(num(ops.pan, 0) / 100, -1, 1);
-    found.push({
-      zone: {
-        file: samplePath,
-        root: center - num(ops.transpose, 0) - num(ops.tune, 0) / 100,
-        lo,
-        hi,
-        lovel: num(ops.lovel, 1),
-        hivel: num(ops.hivel, 127),
-        gain: num(ops.volume, 0),
-        start: num(ops.offset, 0),
-        end: num(ops.end, info.frames),
-        loopStart: looped ? num(ops.loop_start ?? ops.loopstart, 0) : 0,
-        loopEnd: looped ? num(ops.loop_end ?? ops.loopend, 0) : 0,
-        rate: info.rate,
-        rr: 1,
-        ...(pan ? { pan } : {}),
-      },
+    const zone: Zone = {
+      file: samplePath,
+      root: center - num(ops.transpose, 0) - num(ops.tune, 0) / 100,
+      lo,
+      hi,
+      lovel: num(ops.lovel, 1),
+      hivel: num(ops.hivel, 127),
+      gain: num(ops.volume, 0),
+      start: num(ops.offset, 0),
+      end: num(ops.end, info.frames),
+      loopStart: looped ? num(ops.loop_start ?? ops.loopstart, 0) : 0,
+      loopEnd: looped ? num(ops.loop_end ?? ops.loopend, 0) : 0,
+      rate: info.rate,
+      rr: 1,
+      ...(trigger !== 'attack' ? { trigger } : {}),
+      // a release sample quietens the longer its note was held (dB a second)
+      ...(trigger === 'release' && ops.rt_decay !== undefined ? { decay: num(ops.rt_decay, 0) } : {}),
+      ...(pan ? { pan } : {}),
+    };
+    const base = {
       ops,
+      family: groupOf[index] ?? 0,
       faders,
       // its turn: seq_position, then where it sits in the random range (lorand/hirand)
-      take: [num(ops.seq_position, 1), num(ops.lorand, 0)],
+      take: [num(ops.seq_position, 1), num(ops.lorand, 0)] as [number, number],
       group: Math.trunc(num(ops.group, 0)),
       offBy: Math.trunc(num(ops.off_by, 0)),
-    });
+    };
+    // a release noise that doesn't follow the key (a key coming back up): each key plays it as it is
+    if (trigger === 'release' && untracked && lo !== hi) {
+      for (let k = lo; k <= hi; k++) found.push({ ...base, zone: { ...zone, root: k, lo: k, hi: k } });
+    } else found.push({ ...base, zone });
   }
 
   // microphones: a region whose level controllers set is one microphone's, each set of controllers
   // one microphone (a controller on every region is the instrument's own volume, not a microphone)
-  const common = [...(found[0]?.faders.keys() ?? [])].filter((cc) => found.every((f) => f.faders.has(cc)));
+  // (read from the struck notes: a pedal's own sound in a block of its own needn't have the volume's)
+  const struck = found.filter((f) => !f.zone.trigger);
+  const basis = struck.length ? struck : found;
+  const common = [...(basis[0]?.faders.keys() ?? [])].filter((cc) => basis.every((f) => f.faders.has(cc)));
   const micKey = (f: Found) =>
     [...f.faders.keys()]
       .filter((cc) => !common.includes(cc))
@@ -407,8 +508,9 @@ export function instrumentFromSfz(file: string): { inst: PackInstrument; files: 
   }
 
   // round robins: on each key and velocity range, every distinct turn (seq_position, lorand) in order,
-  // numbered alike on every microphone so a hit's microphones play the same take
-  const slot = (z: Zone) => `${z.lo}:${z.hi}:${z.lovel}:${z.hivel}`;
+  // numbered alike on every microphone so a hit's microphones play the same take (a key's release and
+  // pedal samples take turns among their own)
+  const slot = (z: Zone) => `${z.trigger ?? ''}:${z.lo}:${z.hi}:${z.lovel}:${z.hivel}`;
   const turns = new Map<string, [number, number][]>();
   for (const f of found) {
     const list = turns.get(slot(f.zone)) ?? [];
@@ -459,6 +561,7 @@ export function instrumentFromSfz(file: string): { inst: PackInstrument; files: 
   }
 
   const zones = found.map((f) => f.zone);
+  numberReleaseParts(zones, (_, i) => (found[i] as Found).family);
   const name = basename(file, extname(file));
   return {
     inst: {
@@ -469,7 +572,7 @@ export function instrumentFromSfz(file: string): { inst: PackInstrument; files: 
       release: Math.min(8, release || 0.3),
       attack,
       oneShot,
-      velocityRange: zones.some((z) => z.lovel > 1) ? 12 : 20,
+      velocityRange: zones.some((z) => !z.trigger && z.lovel > 1) ? 12 : 20,
       ...(mics.length ? { mics } : {}),
       zones,
     },

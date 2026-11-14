@@ -129,6 +129,71 @@ describe('pack import', () => {
     ]);
   });
 
+  it("keeps an SFZ piano's release and pedal samples: the damper's, a key's knock, the pedal's", () => {
+    const dir = join(work, 'sfz-release');
+    for (const f of ['c4_p', 'c4_f', 'rel_c4', 'knock', 'pedal_down', 'pedal_up', 'legato']) wav(join(dir, `${f}.wav`));
+    writeFileSync(
+      join(dir, 'Piano.sfz'),
+      `<group> ampeg_release=0.8
+<region> sample=c4_p.wav key=60 hivel=63
+<region> sample=c4_f.wav key=60 lovel=64
+<group> trigger=release rt_decay=6 volume=-12
+<region> sample=rel_c4.wav lokey=59 hikey=61 pitch_keycenter=60
+<group> trigger=release pitch_keytrack=0 volume=-20
+<region> sample=knock.wav lokey=59 hikey=61
+<group> on_locc64=64 on_hicc64=127
+<region> sample=pedal_down.wav
+<group> on_hicc64=63
+<region> sample=pedal_up.wav
+<group> trigger=legato
+<region> sample=legato.wav key=60`,
+    );
+    const { inst, files } = instrumentFromSfz(join(dir, 'Piano.sfz'));
+    const of = (name: string) => inst.zones.filter((z) => z.file.endsWith(`${name}.wav`));
+    // how it plays is its struck notes': a key's untracked knock doesn't make it a drum
+    expect([inst.pitched, inst.release, inst.velocityRange]).toEqual([true, 0.8, 12]);
+    expect(of('c4_f').map((z) => [z.trigger, z.lovel])).toEqual([[undefined, 64]]);
+    // the damper falling: quieter the longer its note was held
+    expect(of('rel_c4').map((z) => [z.trigger, z.lo, z.hi, z.root, z.decay, z.gain, z.part])).toEqual([
+      ['release', 59, 61, 60, 6, -12, undefined],
+    ]);
+    // the knock on each key at its own pitch, a part of its own so it sounds with the damper
+    expect(of('knock').map((z) => [z.trigger, z.lo, z.hi, z.root, z.part])).toEqual([
+      ['release', 59, 59, 59, 1],
+      ['release', 60, 60, 60, 1],
+      ['release', 61, 61, 61, 1],
+    ]);
+    // the pedal's own sounds, on no key: going down, coming up
+    expect(of('pedal_down').map((z) => [z.trigger, z.lo, z.hi])).toEqual([['pedalDown', 0, 127]]);
+    expect(of('pedal_up').map((z) => [z.trigger, z.lo, z.hi])).toEqual([['pedalUp', 0, 127]]);
+    // a legato region isn't played
+    expect(files.some((f) => f.endsWith('legato.wav'))).toBe(false);
+
+    // the volume's controller is read from the struck notes, though the pedal's block hasn't it
+    writeFileSync(
+      join(dir, 'Miked.sfz'),
+      `<control> label_cc20=Close label_cc21=Room
+<global> amplitude_oncc7=100
+<group> amplitude_oncc20=100
+<region> sample=c4_p.wav key=60
+<group> amplitude_oncc21=100
+<region> sample=c4_f.wav key=60
+<global>
+<group> on_locc64=64
+<region> sample=pedal_down.wav`,
+    );
+    const miked = instrumentFromSfz(join(dir, 'Miked.sfz')).inst;
+    expect(miked.mics).toEqual([
+      { id: 'close', name: 'Close' },
+      { id: 'room', name: 'Room' },
+    ]);
+    expect(miked.zones.map((z) => [z.file.split(/[\\/]/).pop(), z.mic, z.trigger])).toEqual([
+      ['c4_p.wav', 'close', undefined],
+      ['c4_f.wav', 'room', undefined],
+      ['pedal_down.wav', undefined, 'pedalDown'],
+    ]);
+  });
+
   it('turns a folder of unnamed hits into a kit on General MIDI keys', () => {
     const dir = join(work, 'kit-src', 'My Kit');
     for (const n of ['Kick', 'Snare', 'Closed Hat', 'Thing']) wav(join(dir, `${n}.wav`));

@@ -1,8 +1,11 @@
 /**
  * The measurements, as the measuring child runs them (child.ts; the tests call them straight): a take's
- * notes from its files, the mix rendered, each track rendered on its own, a plugin's response or what
- * it does to its track's sound, a file's loudness. Each answers plain numbers (the agent's tool says
- * them in words), and says how far it has got as it goes.
+ * notes from its files, a recording's notes to edit, the mix rendered, each track rendered on its own,
+ * a plugin's response or what it does to its track's sound, a file's loudness. Each answers plain
+ * numbers (the agent's tool says them in words), and says how far it has got as it goes.
+ *
+ * A recording's notes are found as the studio's Notes view finds them (notes.ts), and a take whose
+ * notes are edited is measured as it plays, its patches in place.
  *
  * Renders are the engine's (renderSession), unmastered (`finish: false`), from two bars before where
  * the measurement starts so reverbs and compressors have settled; those bars aren't measured. What
@@ -45,6 +48,8 @@ import {
   throughEffect,
 } from '@holo/engine/analysis';
 import {
+  type AudioNotes,
+  type AudioNotesMode,
   bpmAt,
   type Channel,
   type KeyPoint,
@@ -58,6 +63,7 @@ import {
   ticksPerBar,
   tickToSeconds,
 } from '@holo/session';
+import { findNotes, type NoteShape, playedTake } from './notes.ts';
 import { decodeFile, type MeasureSource, measureSource } from './source.ts';
 import { takeSpan } from './span.ts';
 
@@ -82,7 +88,9 @@ export type ChildInput =
   | { kind: 'mix'; dataDir: string; project: Project; from?: number; to?: number }
   | { kind: 'file'; path: string; source: 'bounce' | 'file'; name: string; project?: Project }
   | { kind: 'tracks'; dataDir: string; project: Project; tracks: string[]; from?: number; to?: number }
-  | { kind: 'plugin'; dataDir: string; project: Project; channel: string; plugin: string; from?: number; to?: number };
+  | { kind: 'plugin'; dataDir: string; project: Project; channel: string; plugin: string; from?: number; to?: number }
+  /** A song's recording (`file`, of the song `project`), its notes found to edit. */
+  | { kind: 'notes'; dataDir: string; project: string; file: string; name: string };
 
 /** How far a measurement has got (0–1), and what it's doing. */
 export type Progress = (fraction: number, stage: string) => void;
@@ -199,7 +207,22 @@ export interface PluginResult {
   unplayable?: Unplayable;
 }
 
-export type MeasureResult = TakeResult | MixResult | TracksResult | PluginResult;
+/** A recording's notes as the studio's Notes view finds them, to edit (notes.ts). */
+export interface NotesResult {
+  kind: 'notes';
+  /** The song's file, and its name. */
+  file: string;
+  name: string;
+  /** How long it is (s). */
+  seconds: number;
+  notes: AudioNotes;
+  /** Each note's drift and vibrato as sung, by its index (null for a note with no pitch). */
+  shapes: (NoteShape | null)[];
+  /** What kind of recording it looks like (the notes are found as one line's for now). */
+  looks: AudioNotesMode;
+}
+
+export type MeasureResult = TakeResult | MixResult | TracksResult | PluginResult | NotesResult;
 
 // ---- helpers ----
 
@@ -662,7 +685,9 @@ async function take(input: Extract<ChildInput, { kind: 'take' }>, progress: Prog
   if (input.through === 'effects') return takeThrough(input, track, against, progress);
   const source = measureSource(input.dataDir, project.id);
   progress(0.1, 'Reading the take');
-  const report = measureTake(project, track, (file) => source.decodeAudio(file), {
+  // a region whose notes are edited is measured as it plays
+  const played = await playedTake(project, track, source, input.region);
+  const report = measureTake(played.project, played.track, played.decode, {
     ...(input.from !== undefined ? { from: input.from } : {}),
     ...(input.to !== undefined ? { to: input.to } : {}),
     ...(input.region ? { region: input.region } : {}),
@@ -923,6 +948,16 @@ async function plugin(input: Extract<ChildInput, { kind: 'plugin' }>, progress: 
   };
 }
 
+async function notes(input: Extract<ChildInput, { kind: 'notes' }>, progress: Progress): Promise<NotesResult> {
+  progress(0.05, `Reading ${input.name}`);
+  const source = measureSource(input.dataDir, input.project);
+  const wav = await source.audio(input.file).catch(() => {
+    throw new Error(`The recording ${input.name} is missing`);
+  });
+  progress(0.15, `Finding the notes in ${input.name}`);
+  return { kind: 'notes', file: input.file, name: input.name, ...findNotes(wav) };
+}
+
 /** Run one measurement. */
 export async function runTask(input: ChildInput, progress: Progress): Promise<MeasureResult> {
   switch (input.kind) {
@@ -938,5 +973,7 @@ export async function runTask(input: ChildInput, progress: Progress): Promise<Me
       return tracks(input, progress);
     case 'plugin':
       return plugin(input, progress);
+    case 'notes':
+      return notes(input, progress);
   }
 }

@@ -1,9 +1,10 @@
 /**
  * The agent's measurements (docs/agent.md, "Measuring"): `POST …/measure` asks for one, `GET
- * …/measure/:task` asks again after it by id. A take, a bounce or an attachment is read from its file;
- * the mix, a track or a plugin's effect on its track's sound is rendered; all of it in a child process
- * (runner.ts), each call waiting up to 40 s and otherwise answering how far it has got. The studio's
- * own meters (`what: 'meters'`) are asked of the requester's studio, while it plays.
+ * …/measure/:task` asks again after it by id. A take, a bounce or an attachment is read from its file,
+ * as are a recording's notes (`what: 'notes'`, for `audio_notes`); the mix, a track or a plugin's effect
+ * on its track's sound is rendered; all of it in a child process (runner.ts), each call waiting up to
+ * 40 s and otherwise answering how far it has got. The studio's own meters (`what: 'meters'`) are
+ * asked of the requester's studio, while it plays.
  *
  * A render is refused when it would take too long (about ten minutes of work): the answer says to
  * measure fewer bars or one track, or to bounce the song and measure the bounce (plan.ts plans each

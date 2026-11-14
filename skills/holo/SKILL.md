@@ -155,6 +155,10 @@ holo regions fade selected --fade-out 1.5          #   repeat (--times), trim (-
 holo regions stretch "Take 2" --ratio 2            #   stretch, mute, unmute, rename (--name); MIDI only:
 holo regions quantize --track Keys --unit 1/16 --strength 80   # quantize, transpose (--semitones) and
 holo regions cc rgn_… --lane pb --points "9=0 9.3=4096 10=0"   # controller lanes (mod 1, 11, 64, pb, at)
+holo notes show --track Vocal                      # a recording's notes, numbered: pitch and cents, vibrato, drift
+holo notes shift --notes 5 --semitones 2           # each Audio Editor edit, on notes chosen as all, 1-12,15,
+holo notes vibrato --notes "bars 9-12" --keep 60   #   "bars 9-12" or "pitch E4" (holo notes help lists the
+holo notes reset --notes all                       #   edits; holo notes ACTION --help an edit's flags)
 holo timeline insert --at 17 --bars 4              # whole bars across every track: insert, copy (--from 9
 holo timeline copy --from 9 --to 17 --at 33        #   --to 17 --at 33); delete and move need --confirm
 holo measure take --track Vocal --from 17 --to 25  # a take's pitch (cents against the key or --against a
@@ -179,6 +183,14 @@ than the song plays: a measurement not done within 40 s says how far it got, and
 collects it (`--wait 300` waits here; `--json` gives the numbers). `holo import` places at the
 playhead when `--at` is left out (unlike `holo audio`, which starts at bar 1); the song keeps its meter
 and key, and new tracks play a synth until you give them instruments.
+
+A recording's notes (a vocal, a solo instrument) are edited one by one with `holo notes`, as the Audio
+Editor's Notes edits them: `holo notes` shows them, then each edit works on `--notes`. Until a
+region's first edit its notes are found on the host and nothing is kept; that edit keeps them in the
+song with it, one undo step. The recording itself never changes. Be gentle with a voice: move notes
+80–100% of the way to their pitch rather than snapping every one, keep the vibrato, keep 30–50% of the
+drift (`holo notes drift --keep 40`), never quantize it fully; then check it with `holo measure take`,
+which measures what plays, edits in.
 
 Anything else the studio's agent does, by its tool's name: `holo tool` lists them, `holo tool fx --help`
 shows a tool's fields, and `holo tool fx --action move --target Keys --plugin eq --index 1` runs it

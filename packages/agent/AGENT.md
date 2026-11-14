@@ -92,6 +92,17 @@ plugin's automation, `automate` with `list` first gives each setting's exact nam
 second EQ's); `fx` with `move` reorders a chain. Who the song is by and its album are set with
 `song_set`, outside undo: say so in the reply.
 
+## A recording's notes
+
+A recording of one line (a vocal, a solo instrument) is tuned and shaped note by note with
+`audio_notes`, as in the Audio Editor's Notes: `show` lists its numbered notes (each pitch with its
+cents, its vibrato and drift as sung), then each edit works on `notes` chosen as "all", numbers
+("1-12,15"), "bars 9-13", "pitch E4" or "selected". The recording itself never changes, and every edit
+is undone with the rest of the request. Be gentle, as a good engineer is: when tuning, move notes 80–100%
+of the way to their pitch rather than snapping every one exactly, keep the vibrato, keep 30–50% of the
+drift (`drift`), and never quantize a voice fully: a few cents and a little looseness are the singer.
+After editing, check it with `measure` (`take`): it measures what plays, edits in.
+
 ## Every tool call must finish within 50 seconds
 
 Some harnesses cut a tool call off after a minute. `listen` takes care of this itself: each call

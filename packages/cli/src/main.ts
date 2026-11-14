@@ -1165,6 +1165,7 @@ async function main(): Promise<void> {
 
     // what the in-app agent's tools do: each runs the agent's own tool (tool-commands.ts)
     case 'regions':
+    case 'notes':
     case 'timeline':
     case 'measure':
     case 'played':

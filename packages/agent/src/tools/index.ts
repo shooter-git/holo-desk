@@ -19,6 +19,8 @@ import { trackTools } from './tracks.ts';
 
 // ---- measure ----
 
+// ---- audio notes ----
+import { audioNoteTools } from './audio-notes.ts';
 // ---- import ----
 import { importTools } from './import.ts';
 // ---- regions ----
@@ -34,6 +36,8 @@ export const TOOLS: readonly Tool[] = [
   ...noteTools,
   // ---- regions ----
   ...regionTools,
+  // ---- audio notes ----
+  ...audioNoteTools,
 
   ...trackTools,
   ...mixTools,

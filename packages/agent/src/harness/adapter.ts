@@ -214,6 +214,7 @@ const TOOL_WORDS: Record<string, string> = {
   measure: 'Measuring',
   import: 'Bringing it in',
   regions: 'Editing regions',
+  audio_notes: 'Editing a recording’s notes',
   timeline: 'Arranging bars',
   look: 'Asking you',
   ask_permission: 'Asking you',

@@ -60,7 +60,7 @@ function pos(song: Project, tick: number): string {
  * A note's name as the song's key spells it there (B♭ in D minor, A♯ in B major; sharps with no key),
  * named the studio's way (middle C is C4 or C3).
  */
-function keyName(pitch: number, key: KeyPoint | null, middleC: MiddleC): string {
+export function keyName(pitch: number, key: KeyPoint | null, middleC: MiddleC): string {
   if (!key) return noteName(pitch, middleC);
   const s = spellInKey(Math.round(pitch), key.fifths, key.mode);
   const accidental = s.alter > 0 ? '#'.repeat(s.alter) : 'b'.repeat(-s.alter);
@@ -422,6 +422,9 @@ function resultText(r: MeasureResult, song: Project, middleC: MiddleC): string {
       return pluginText(r, song);
     case 'meters':
       return metersText(r, song);
+    case 'notes':
+      // (audio_notes says a recording's notes; this only names them)
+      return `${plural(r.notes.n.length, 'note')} found in ${r.name}.`;
   }
 }
 

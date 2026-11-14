@@ -65,7 +65,7 @@ import {
   updateChannel,
   updateTrack,
 } from '../app/actions.ts';
-import { isPhone, isTouch, useLayout } from '../app/layout.ts';
+import { isPhone, isTouch, layoutNow, useLayout } from '../app/layout.ts';
 import { type AppState, store, useApp } from '../app/store.ts';
 import { engine } from '../audio/engine.ts';
 import { audioFiles } from '../audio/files.ts';
@@ -193,12 +193,11 @@ function LaneSelect({ track }: { track: Track }) {
   const targets = automationTargets(project, track.channel);
   const lane = findLane(track.channel, param);
   return (
-    <div className="hstack" style={{ gap: 4 }} onPointerDown={(e) => e.stopPropagation()}>
+    <div className="hstack lane-select" onPointerDown={(e) => e.stopPropagation()}>
       <select
         className="select"
         value={param}
         aria-label={`Automation shown for ${track.name}`}
-        style={{ height: 22, fontSize: 10.5, padding: '0 18px 0 4px', minWidth: 0, flex: 1 }}
         onChange={(e) => store.set((s) => ({ autoParam: { ...s.autoParam, [track.id]: e.target.value } }))}
       >
         {targets.map((t) => (
@@ -248,8 +247,14 @@ const LIST_TAIL = 60;
  * buttons (4 + 32), with room above and below so a row's buttons don't meet the next track's name.
  */
 const TOUCH_ROW = 78;
+/**
+ * And on a phone held sideways, where height is what's short: the buttons sit beside the name (the
+ * header is wider for them), so a row is as tall as its buttons and half again as many tracks show.
+ */
+const TOUCH_ROW_SIDEWAYS = 52;
 /** A track's height as drawn: rows are taller under a finger. */
-const rowHeight = (h: number) => (isTouch() ? Math.max(TOUCH_ROW, h) : h);
+const rowHeight = (h: number) =>
+  isTouch() ? Math.max(layoutNow() === 'phone-landscape' ? TOUCH_ROW_SIDEWAYS : TOUCH_ROW, h) : h;
 /** The track list with every track in it. */
 const listHeight = (tracks: number, row: number) => tracks * row + LIST_TAIL;
 /** The track list on screen (there's one tracks area at a time), for spareTrackRoom. */
@@ -1632,7 +1637,8 @@ export function TracksArea() {
     persistZoom();
   };
 
-  const headerWidth = phone ? 176 : layout === 'tablet' ? 210 : 230;
+  // (sideways, a phone's header holds the name and the buttons side by side)
+  const headerWidth = layout === 'phone-landscape' ? 244 : phone ? 176 : layout === 'tablet' ? 210 : 230;
   const listMax = maxScrollY(project);
 
   return (

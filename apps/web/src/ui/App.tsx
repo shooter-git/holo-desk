@@ -1,6 +1,6 @@
 /** The studio's frame: the desktop layout, the tablet's, and the phone's (portrait and landscape). */
 import { Library as LibraryIcon, Music2, Piano, Rows3, Settings, SlidersVertical } from 'lucide-react';
-import { lazy, Suspense, useEffect, useRef } from 'react';
+import { lazy, type ReactNode, Suspense, useEffect, useRef } from 'react';
 import { ensureAudio, resolveConflict } from '../app/actions.ts';
 import { clampEditorHeight, fitEditorHeight, isPhone, type Layout, useLayout } from '../app/layout.ts';
 import { otherStudioToDrive } from '../app/live.ts';
@@ -15,6 +15,7 @@ import { MenuHost } from './menu.tsx';
 import { Inspector, LibraryPanel } from './Panels.tsx';
 import { PianoRoll, PianoRollBar } from './PianoRoll.tsx';
 import { PlayPad } from './PlayPad.tsx';
+import { useScrollCue } from './scroll-cue.ts';
 import { spareTrackRoom, TracksArea } from './Tracks.tsx';
 import { UndoRedo } from './UndoRedo.tsx';
 import { DOUBLE_TAP_MS } from './view.ts';
@@ -81,6 +82,20 @@ function NoteViewSwitch() {
   );
 }
 
+/**
+ * An editor's bar. Where it's wider than its pane (a phone held upright) it scrolls sideways, and
+ * the edge that has more fades: the bar has no scrollbar to say so.
+ */
+function PaneBar({ children }: { children: ReactNode }) {
+  const bar = useRef<HTMLDivElement>(null);
+  useScrollCue(bar, 'x');
+  return (
+    <div className="pane-bar" ref={bar}>
+      {children}
+    </div>
+  );
+}
+
 function EditorPane() {
   const editor = useApp((s) => s.editor);
   const height = clampEditorHeight(useApp((s) => s.editorHeight));
@@ -131,7 +146,7 @@ function EditorPane() {
           el.addEventListener('lostpointercapture', up);
         }}
       />
-      <div className="pane-bar">
+      <PaneBar>
         {editor === 'piano' ? (
           audio ? (
             <AudioEditorBar />
@@ -152,7 +167,7 @@ function EditorPane() {
         )}
         {/* how the notes are shown; the Piano Roll and the Mixer themselves are opened at the top right */}
         {editor === 'piano' && !audio && <NoteViewSwitch />}
-      </div>
+      </PaneBar>
       {editor === 'piano' ? (
         audio ? (
           <AudioEditor />
@@ -310,7 +325,7 @@ function PhoneView() {
   if (tab === 'editor') {
     return (
       <div className="phone-view editor">
-        <div className="pane-bar">
+        <PaneBar>
           {audio ? (
             <AudioEditorBar />
           ) : score ? (
@@ -321,7 +336,7 @@ function PhoneView() {
             <PianoRollBar />
           )}
           {!audio && <NoteViewSwitch />}
-        </div>
+        </PaneBar>
         {audio ? (
           <AudioEditor />
         ) : score ? (

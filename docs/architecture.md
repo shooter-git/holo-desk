@@ -269,6 +269,9 @@ the studio that asked ◄── server ◄── /api/agent/jobs/:job/* ◄─�
   studio has gone is saved on the host instead). Listening, what was just played and before and after
   are asked of that studio too. Asking a permission (installing a pack, sending the song to its
   creation, a screenshot, a photo, the microphone) ends the turn; the user's click starts the next one.
+- **The terminal** has all of it too: `holo regions`, `timeline`, `measure`, `played`, `details`,
+  `import`, `packs` and `holo tool NAME` run the same tools on the song from a terminal, through the
+  command line's own routes instead of a job's (docs/agent.md, "What doesn't change, and the terminal").
 - **A job ends** with the agent's `finish` (a label for the undo step and a reply of a sentence or
   two), or when it's stopped: Stop, the studio opening another song or undoing the job's change while it
   runs, the device removed, the agent turned off, the runner gone for 15 s, or after 10 minutes (45 for

@@ -22,6 +22,8 @@ export type Tool = 'pointer' | 'pencil' | 'eraser';
 export type EditorPane = 'piano' | 'mixer' | null;
 /** What the editor shows for a track's notes: the Piano Roll or the Score. */
 export type NoteView = 'roll' | 'score';
+/** What the Audio Editor shows of a recording: its waveform or its notes. */
+export type AudioMode = 'wave' | 'notes';
 export type MobileTab = 'tracks' | 'editor' | 'mixer' | 'play' | 'library';
 export type Dialog = null | 'projects' | 'settings' | 'creations' | 'shortcuts' | 'about' | 'remote';
 /** Settings' tabs. */
@@ -53,6 +55,7 @@ export interface AppState {
 
   editor: EditorPane;
   noteView: NoteView;
+  audioMode: AudioMode;
   /** The Score shows every track (a full score), not just the selected one. */
   scoreAll: boolean;
   /** The Score's size, as a percentage. */
@@ -186,6 +189,7 @@ const initial: AppState = {
   selectedNotes: [],
   editor: 'piano',
   noteView: 'roll',
+  audioMode: 'wave',
   scoreAll: false,
   scoreZoom: 45,
   scoreWrite: false,
@@ -249,6 +253,7 @@ const initial: AppState = {
 const REMEMBER: (keyof AppState)[] = [
   'editor',
   'noteView',
+  'audioMode',
   'scoreAll',
   'scoreZoom',
   'editorHeight',

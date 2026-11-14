@@ -1,3 +1,6 @@
+import { type Project, ticksPerBar, ticksPerBeat, tickToBarBeat } from '@holo/session';
+import { gridStep } from './view.ts';
+
 /** What a press on the tracks' ruler takes hold of: the playhead, or the cycle (an edge, all of it, a new one). */
 export type RulerHold = 'playhead' | 'start' | 'end' | 'move' | 'new';
 
@@ -40,4 +43,45 @@ export function jog(travel: number, step = JOG_PX): { bars: number; rest: number
   // (|| 0: no -0 for a short drag back)
   const bars = Math.trunc(travel / step) || 0;
   return { bars, rest: travel - bars * step };
+}
+
+/** A timeline's view, as a ruler reads it. */
+export interface RulerView {
+  /** The first tick at the left edge. */
+  x: number;
+  pxPerTick: number;
+  tickToX(tick: number): number;
+  xToTick(x: number): number;
+}
+
+/** An editor's ruler: a tick on each beat (or finer, zoomed in), longer on bars, numbered as far apart as fits. */
+export function drawRuler(
+  ctx: CanvasRenderingContext2D,
+  project: Project,
+  view: RulerView,
+  w: number,
+  h: number,
+): void {
+  const m = project.meter[0] ?? { tick: 0, num: 4, den: 4 };
+  const beat = ticksPerBeat(m);
+  const bar = ticksPerBar(m);
+  ctx.fillStyle = '#1b1e23';
+  ctx.fillRect(0, 0, w, h);
+  ctx.font = '600 10.5px Inter Variable, system-ui, sans-serif';
+  const step = gridStep(view.pxPerTick, 7, beat, bar);
+  // labels on beats at the finest (a label between beats would repeat its beat's number)
+  const labels = Math.max(beat, gridStep(view.pxPerTick, 40, beat, bar));
+  for (let t = Math.floor(view.x / step) * step; t < view.xToTick(w); t += step) {
+    const x = Math.round(view.tickToX(t)) + 0.5;
+    const isBar = t % bar === 0;
+    ctx.fillStyle = isBar ? '#7d8796' : '#454c57';
+    ctx.fillRect(x, isBar ? h - 11 : h - 5, 1, isBar ? 11 : 5);
+    if (t % labels === 0) {
+      const bb = tickToBarBeat(project.meter, t);
+      ctx.fillStyle = isBar ? '#c3cad4' : '#7d8796';
+      ctx.fillText(isBar ? String(bb.bar) : `${bb.bar}.${bb.beat}`, x + 3, h - 4);
+    }
+  }
+  ctx.fillStyle = '#0b0d10';
+  ctx.fillRect(0, h - 1, w, 1);
 }

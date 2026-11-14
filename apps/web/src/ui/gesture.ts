@@ -186,8 +186,11 @@ export class Pinch {
     if (this.pts.size >= 2) this.active = true;
     return this.active;
   }
-  /** A finger moved: the zoom factor and the point between the fingers, while two are down. */
-  move(e: ReactPointerEvent): { factor: number; x: number; y: number } | null {
+  /**
+   * A finger moved: the zoom factor and the point between the fingers, while two are down, and how far
+   * apart they are across and up and down (for a view that zooms the way the fingers spread).
+   */
+  move(e: ReactPointerEvent): { factor: number; x: number; y: number; dx: number; dy: number } | null {
     if (e.pointerType !== 'touch' || this.pts.size !== 2 || !this.pts.has(e.pointerId)) return null;
     const [a, b] = [...this.pts.values()] as [{ x: number; y: number }, { x: number; y: number }];
     const before = Math.hypot(a.x - b.x, a.y - b.y);
@@ -195,7 +198,13 @@ export class Pinch {
     const [c, d] = [...this.pts.values()] as [{ x: number; y: number }, { x: number; y: number }];
     const after = Math.hypot(c.x - d.x, c.y - d.y);
     if (before < 20 || after < 20) return null;
-    return { factor: after / before, x: (c.x + d.x) / 2, y: (c.y + d.y) / 2 };
+    return {
+      factor: after / before,
+      x: (c.x + d.x) / 2,
+      y: (c.y + d.y) / 2,
+      dx: Math.abs(c.x - d.x),
+      dy: Math.abs(c.y - d.y),
+    };
   }
   /** A finger lifted: true when it was the pinch's last. */
   up(e: ReactPointerEvent): boolean {

@@ -12,7 +12,6 @@ import {
   type Track,
   ticksPerBar,
   ticksPerBeat,
-  tickToBarBeat,
   tickToSeconds,
 } from '@holo/session';
 import { Upload, ZoomIn, ZoomOut } from 'lucide-react';
@@ -33,6 +32,7 @@ import { audioFiles } from '../audio/files.ts';
 import { Knob } from './controls.tsx';
 import { alpha, prepare, useFrame, useSize } from './frame.ts';
 import { capture, edgeScroll, type Gesture, Pinch, screenDpr, useWheel } from './gesture.ts';
+import { drawRuler } from './ruler.ts';
 import { chooseAudioFiles, inputLabel } from './Tracks.tsx';
 import { UndoRedo } from './UndoRedo.tsx';
 import { gridStep, Viewport, WHEEL_ZOOM, ZOOM } from './view.ts';
@@ -65,6 +65,22 @@ export function useAudioRegion(): { project: Project | null; track: Track | null
   return { project, track, region: shownRegion(track, selected) };
 }
 
+/** The region the view was last fitted to: the editor shown again on it (or its other view, Wave or Notes) keeps its place. */
+let fittedTo = '';
+
+/** A region opens in a view `w` pixels wide: the whole recording in view, once (until another region opens). */
+export function fitAudioView(project: Project, region: Region, w: number): void {
+  if (!region.audio || !w || fittedTo === region.id) return;
+  fittedTo = region.id;
+  const [a, b] = fileSpan(project, region, region.audio);
+  const from = Math.min(a, region.start);
+  const to = Math.max(Number.isFinite(b) ? b : region.start + region.length, region.start + region.length);
+  const span = Math.max(240, to - from);
+  audioView.zoom = Math.max(ZOOM.audio[0], Math.min(ZOOM.audio[1], ((w * 0.9) / span) * 960));
+  audioView.x = Math.max(0, from - (w * 0.05) / audioView.pxPerTick);
+  audioView.emit();
+}
+
 export function AudioEditor() {
   const { project, track, region } = useAudioRegion();
   const box = useRef<HTMLDivElement>(null);
@@ -94,14 +110,7 @@ export function AudioEditor() {
   // a region opens: the whole recording in view
   // biome-ignore lint/correctness/useExhaustiveDependencies: refits when the region changes, not on every edit
   useLayoutEffect(() => {
-    if (!project || !region?.audio || !size.w) return;
-    const [a, b] = fileSpan(project, region, region.audio);
-    const from = Math.min(a, region.start);
-    const to = Math.max(Number.isFinite(b) ? b : region.start + region.length, region.start + region.length);
-    const span = Math.max(240, to - from);
-    audioView.zoom = Math.max(ZOOM.audio[0], Math.min(ZOOM.audio[1], ((size.w * 0.9) / span) * 960));
-    audioView.x = Math.max(0, from - (size.w * 0.05) / audioView.pxPerTick);
-    audioView.emit();
+    if (project && region) fitAudioView(project, region, size.w);
   }, [region?.id, size.w > 0]);
 
   useFrame(() => {
@@ -126,7 +135,7 @@ export function AudioEditor() {
       const ctx = prepare(canvas.current, size.w, size.h);
       if (ctx) draw(ctx, p, track, region, preview.current, size.w, size.h);
       const rctx = prepare(rulerCanvas.current, rulerSize.w, rulerSize.h);
-      if (rctx) drawRuler(rctx, p, rulerSize.w, rulerSize.h);
+      if (rctx) drawRuler(rctx, p, audioView, rulerSize.w, rulerSize.h);
     }
     // the playhead, on its own layer, redrawn only when it has moved a pixel
     const x = Math.round(audioView.tickToX(Math.max(0, engine.positionTick()))) + 0.5;
@@ -154,20 +163,7 @@ export function AudioEditor() {
   useWheel(rulerBox, onWheel);
 
   if (!project || !track) return <div className="audio-ed empty">Select a track.</div>;
-  if (!region?.audio) {
-    return (
-      <div className="audio-ed empty">
-        <div className="vstack" style={{ alignItems: 'center', gap: 10 }}>
-          <span>
-            {track.name} has no recordings yet. Arm it (R) and record from {inputLabel(track)}, or bring in a file.
-          </span>
-          <button type="button" className="btn" onClick={() => chooseAudioFiles()}>
-            <Upload /> Import audio file…
-          </button>
-        </div>
-      </div>
-    );
-  }
+  if (!region?.audio) return <NoRecordings track={track} />;
   const clip = region.audio;
   const m = project.meter[0] ?? { tick: 0, num: 4, den: 4 };
   const snapTo = (tick: number, free: boolean) => {
@@ -330,6 +326,22 @@ export function AudioEditor() {
   );
 }
 
+/** An audio track with nothing recorded on it yet: how to record, or bring in a file. */
+export function NoRecordings({ track }: { track: Track }) {
+  return (
+    <div className="audio-ed empty">
+      <div className="vstack" style={{ alignItems: 'center', gap: 10 }}>
+        <span>
+          {track.name} has no recordings yet. Arm it (R) and record from {inputLabel(track)}, or bring in a file.
+        </span>
+        <button type="button" className="btn" onClick={() => chooseAudioFiles()}>
+          <Upload /> Import audio file…
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function draw(
   ctx: CanvasRenderingContext2D,
   project: Project,
@@ -431,30 +443,6 @@ function draw(
     clip.stretch !== 1 ? `${Math.round(clip.stretch * 1000) / 10}%` : '',
   ].filter(Boolean);
   ctx.fillText(facts.join('  ·  '), Math.max(8, x0 + 10), 14);
-}
-
-function drawRuler(ctx: CanvasRenderingContext2D, project: Project, w: number, h: number): void {
-  const m = project.meter[0] ?? { tick: 0, num: 4, den: 4 };
-  const beat = ticksPerBeat(m);
-  const bar = ticksPerBar(m);
-  ctx.fillStyle = '#1b1e23';
-  ctx.fillRect(0, 0, w, h);
-  ctx.font = '600 10.5px Inter Variable, system-ui, sans-serif';
-  const step = gridStep(audioView.pxPerTick, 7, beat, bar);
-  const labels = Math.max(beat, gridStep(audioView.pxPerTick, 40, beat, bar));
-  for (let t = Math.floor(audioView.x / step) * step; t < audioView.xToTick(w); t += step) {
-    const x = Math.round(audioView.tickToX(t)) + 0.5;
-    const isBar = t % bar === 0;
-    ctx.fillStyle = isBar ? '#7d8796' : '#454c57';
-    ctx.fillRect(x, isBar ? h - 11 : h - 5, 1, isBar ? 11 : 5);
-    if (t % labels === 0) {
-      const bb = tickToBarBeat(project.meter, t);
-      ctx.fillStyle = isBar ? '#c3cad4' : '#7d8796';
-      ctx.fillText(isBar ? String(bb.bar) : `${bb.bar}.${bb.beat}`, x + 3, h - 4);
-    }
-  }
-  ctx.fillStyle = '#0b0d10';
-  ctx.fillRect(0, h - 1, w, 1);
 }
 
 /** A number typed in, committed on Enter or leaving the field. */

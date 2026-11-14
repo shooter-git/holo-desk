@@ -1202,22 +1202,50 @@ a.btn {
   background: var(--bg-1);
 }
 
-.audio-ed .cell {
+.audio-ed .cell,
+.audio-notes .cell {
   position: relative;
   overflow: hidden;
   touch-action: none;
   contain: layout paint;
 }
 
-.audio-ed .ruler-cell {
+.audio-ed .ruler-cell,
+.audio-notes .ruler-cell {
   border-bottom: 1px solid var(--line);
   cursor: pointer;
 }
 
-.audio-ed canvas {
+.audio-ed canvas,
+.audio-notes canvas {
   position: absolute;
   inset: 0;
   display: block;
+}
+
+/* the Notes view: the Piano Roll's keys down the left, the waveform's ruler along the top */
+.audio-notes {
+  position: relative;
+  display: grid;
+  grid-template-columns: var(--keys, 66px) minmax(0, 1fr);
+  grid-template-rows: 26px minmax(0, 1fr);
+  min-height: 0;
+  background: var(--bg-1);
+}
+
+.audio-notes .corner {
+  border-right: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  background: var(--bg-3);
+}
+
+.audio-notes .keys-cell {
+  border-right: 1px solid var(--line);
+  cursor: ns-resize;
+}
+
+.audio-notes .cell:last-child {
+  cursor: grab;
 }
 
 .audio-ed.empty {

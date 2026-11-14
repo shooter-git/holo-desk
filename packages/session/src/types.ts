@@ -372,6 +372,62 @@ export interface AudioClip {
   fadeOut: number;
   /** 1 plays the file as recorded; 2 plays it twice as long at the same pitch. */
   stretch: number;
+  /** The recording's notes as this region plays them, and how each is edited (audio-notes.ts). */
+  notes?: AudioNotes;
+}
+
+/** How a recording's notes were found: one line at a time, the notes of chords, or hits. */
+export type AudioNotesMode = 'mono' | 'poly' | 'perc';
+
+/**
+ * A recording's notes as a region plays them: what was found in it (times in seconds of the file,
+ * before the region's stretch) and how each is edited. They're kept in the song, so it plays the same
+ * wherever it's rendered, from the song and the file alone.
+ */
+export interface AudioNotes {
+  mode: AudioNotesMode;
+  /** The version of the detection that found them (they're never found again unasked). */
+  v: number;
+  /** The notes, by start (then pitch). */
+  n: AudioNote[];
+  /** Edits kept, but not played (to hear the recording as it was). */
+  off?: true;
+  /** The pitch A4 is tuned to, Hz (440 when absent). */
+  a4?: number;
+  /** How readily the notes of chords were found (0–1). */
+  sens?: number;
+}
+
+/** A note found in a recording, and how it's edited (each edit absent while it's untouched). */
+export interface AudioNote {
+  /** Start and length, seconds of the file. */
+  t: number;
+  d: number;
+  /** Its pitch as found: MIDI with cents (64.18 is E4, 18 cents sharp); null for none (a breath, a lone consonant, a hit). */
+  p: number | null;
+  /** How long its unvoiced start lasts (a consonant: s, t, k), seconds: it keeps its length when the note is stretched, and the note's beat is after it. */
+  u?: number;
+  /** Its pitch moved to (MIDI with cents). */
+  to?: number;
+  /** How much of its drift is kept (0–1), and of its vibrato (0–2). */
+  dr?: number;
+  mo?: number;
+  /** How long the glide into it from the note before takes, against as it was sung (0–3). */
+  tr?: number;
+  /** Its formant moved, semitones (−12 to 12), its pitch where it is. */
+  fo?: number;
+  /** Its level changed, dB (−60 to 24); or muted. */
+  g?: number;
+  m?: true;
+  /** Where it starts and ends now (seconds of the file, before the region's stretch). */
+  ts?: number;
+  te?: number;
+  /** Its attack's length against as it was sung (0.25–4: 0.5 plays it in half the time). */
+  at?: number;
+  /** Pasted: it plays what's found from `s` to `s + d` in the file. */
+  s?: number;
+  /** A chord's note left out by hand: its sound stays as it is, part of the rest. */
+  off?: true;
 }
 
 export interface Note {

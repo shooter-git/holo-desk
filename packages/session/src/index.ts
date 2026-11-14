@@ -1,5 +1,6 @@
 export { type ArrangeEdit, type Arrangement, arrange, meterBefore, onBarLine } from './arrange.ts';
 export * from './audio-notes.ts';
+export * from './audio-notes-edit.ts';
 export * from './audio-region.ts';
 export * from './automation.ts';
 export * from './defaults.ts';
@@ -24,6 +25,7 @@ export * from './keysig.ts';
 export * from './merge.ts';
 export * from './midi-file.ts';
 export * from './notation.ts';
+export * from './note-edits.ts';
 export * from './ops.ts';
 export * from './palettes.ts';
 export * from './plugins.ts';

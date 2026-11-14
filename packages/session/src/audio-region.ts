@@ -4,6 +4,7 @@
  * two. The studio's tracks area and Audio Editor, the agent's tools and the `splitRegion` operation
  * share it, so a trim or a split comes out the same wherever it's made.
  */
+import { pruneNotes } from './audio-notes-edit.ts';
 import { secondsToTick, tickToSeconds } from './time.ts';
 import type { AudioClip, CCPoint, Mark, Project, Region } from './types.ts';
 
@@ -84,7 +85,8 @@ export function setStretch(project: Project, region: Region, clip: AudioClip, st
  * keeps the region's id, the right half takes `id`. Notes and controller points go to the half they
  * start in (a note keeps its length), score marks too (a line that runs past the cut stops there);
  * an audio region's right half plays on from where the cut fell in its recording, and neither half
- * fades at the cut.
+ * fades at the cut. Its recording's notes go to each half that plays them (pruneNotes): a note across
+ * the cut to both, as it is, so each half sounds as the region did.
  */
 export function splitRegionAt(project: Project, region: Region, at: number, id: string): [Region, Region] {
   const cut = at - region.start;
@@ -121,8 +123,14 @@ export function splitRegionAt(project: Project, region: Region, at: number, id: 
   if (region.audio) {
     // the right half plays on from where the cut fell in the recording
     const a = region.audio;
+    const cutAt = a.offset + seconds(project, region.start, at) / a.stretch;
     left.audio = { ...a, fadeOut: 0 };
-    right.audio = { ...a, fadeIn: 0, offset: a.offset + seconds(project, region.start, at) / a.stretch };
+    right.audio = { ...a, fadeIn: 0, offset: cutAt };
+    if (a.notes) {
+      const end = a.offset + seconds(project, region.start, region.start + region.length) / a.stretch;
+      left.audio.notes = pruneNotes(a.notes, [a.offset, cutAt]);
+      right.audio.notes = pruneNotes(a.notes, [cutAt, end]);
+    }
   }
   return [left, right];
 }

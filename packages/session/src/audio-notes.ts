@@ -16,8 +16,13 @@
  * stretches, not the "s"). A move that would run time backwards, or squeeze or stretch any part of the
  * sound past four times, is let go (that note's time edits are dropped), as is one more than 4 s away.
  * Only a line's notes (`mono`) move in time; the notes of chords don't (yet).
+ *
+ * **On the timeline.** `fileToTick` and `tickToFile` say where a time in the recording plays in the
+ * song and back: through the warp (where the notes' moves put it), the region's offset and stretch,
+ * then the tempo map. The Audio Editor draws by them, and the agent and `holo notes` read bars by them.
  */
-import type { AudioNote, AudioNotes, AudioNotesMode } from './types.ts';
+import { secondsToTick, tickToSeconds } from './time.ts';
+import type { AudioClip, AudioNote, AudioNotes, AudioNotesMode, Region, TempoPoint } from './types.ts';
 
 /** At most this many notes in a region. */
 export const MAX_AUDIO_NOTES = 20_000;
@@ -106,18 +111,143 @@ function byStart(a: AudioNote, b: AudioNote): number {
 export function parseAudioNotes(v: unknown): AudioNotes | undefined {
   if (!isObj(v) || !AUDIO_NOTES_MODES.includes(v.mode as AudioNotesMode) || !Array.isArray(v.n)) return undefined;
   const mode = v.mode as AudioNotesMode;
-  let notes = v.n.map((n) => readNote(n, mode)).filter((n): n is AudioNote => n !== null);
-  notes.sort(byStart);
-  if (mode === 'mono') notes = apart(notes);
-  if (notes.length > MAX_AUDIO_NOTES) notes = notes.slice(0, MAX_AUDIO_NOTES);
-  if (mode === 'mono') notes = fitWarp(notes);
-  const out: AudioNotes = { mode, v: finite(v.v) ? Math.max(0, Math.round(v.v)) : 1, n: notes };
+  const notes = v.n.map((n) => readNote(n, mode)).filter((n): n is AudioNote => n !== null);
+  return { ...header(v, mode), n: settle(notes, mode) };
+}
+
+/** Everything but the notes, canonical. */
+function header(v: Obj, mode: AudioNotesMode): AudioNotes {
+  const out: AudioNotes = { mode, v: finite(v.v) ? Math.max(0, Math.round(v.v)) : 1, n: [] };
   if (v.off === true) out.off = true;
   const a4 = amount(v.a4, 400, 480, roundAmount);
   if (a4 !== undefined && a4 !== 440) out.a4 = a4;
   const sens = amount(v.sens, 0, 1, roundAmount);
   if (sens !== undefined) out.sens = sens;
   return out;
+}
+
+/** Notes as read, put in order: sorted, a line's apart, at most MAX_AUDIO_NOTES, a line's moves fitting the warp. */
+function settle(read: AudioNote[], mode: AudioNotesMode): AudioNote[] {
+  let notes = read;
+  notes.sort(byStart);
+  if (mode === 'mono') notes = apart(notes);
+  if (notes.length > MAX_AUDIO_NOTES) notes = notes.slice(0, MAX_AUDIO_NOTES);
+  if (mode === 'mono') notes = fitWarp(notes);
+  return notes;
+}
+
+/**
+ * Notes put in a region as an edit leaves them: canonical as `parseAudioNotes` reads them (so they
+ * read back the same), with no edit left that changes nothing (a pitch moved to where it was, all of
+ * its vibrato kept, a level of 0 dB…). A note that's already so is kept as the same object, so an edit
+ * shares every note it didn't touch with the notes before it; and when nothing changed at all, the
+ * notes come back as they were (`notes` itself). The rest of `notes` (its kind, version, tuning) stays.
+ */
+export function canonicalNotes(notes: AudioNotes, list: readonly AudioNote[]): AudioNotes {
+  const mode = notes.mode;
+  const kept: AudioNote[] = [];
+  for (const n of list) {
+    const k = canonicalNote(n, mode);
+    if (k) kept.push(k);
+  }
+  const n = settle(kept, mode).map(withoutNeutral);
+  const head = header(notes as unknown as Obj, mode);
+  const same =
+    n.length === notes.n.length &&
+    n.every((x, i) => x === notes.n[i]) &&
+    head.v === notes.v &&
+    head.off === notes.off &&
+    head.a4 === notes.a4 &&
+    head.sens === notes.sens;
+  return same ? notes : { ...head, n };
+}
+
+/**
+ * A note as a region keeps it: read as a song reads it, without edits that change nothing; the same
+ * object when it already is so; null when it can't be read as a note.
+ */
+export function canonicalNote(n: AudioNote, mode: AudioNotesMode): AudioNote | null {
+  const read = readNote(n, mode);
+  if (!read) return null;
+  const k = withoutNeutral(read);
+  return sameNote(k, n) ? n : k;
+}
+
+/** Every field of a note, in a fixed order. */
+export const AUDIO_NOTE_FIELDS = [
+  't',
+  'd',
+  'p',
+  'u',
+  'to',
+  'dr',
+  'mo',
+  'tr',
+  'fo',
+  'g',
+  'm',
+  'ts',
+  'te',
+  'at',
+  's',
+  'off',
+] as const satisfies readonly (keyof AudioNote)[];
+
+/** Whether two notes are the same, field by field (and neither has anything else). */
+export function sameNote(a: AudioNote, b: AudioNote): boolean {
+  if (a === b) return true;
+  for (const f of AUDIO_NOTE_FIELDS) if (a[f] !== b[f]) return false;
+  return Object.keys(a).length === Object.keys(b).length;
+}
+
+/** A note without the edits that change nothing (the same object when it has none). */
+function withoutNeutral(n: AudioNote): AudioNote {
+  const neutral = (f: keyof AudioNote): boolean => {
+    const v = n[f];
+    if (v === undefined) return false;
+    switch (f) {
+      case 'to':
+        return v === n.p;
+      case 'dr':
+      case 'mo':
+      case 'tr':
+      case 'at':
+        return v === 1;
+      case 'fo':
+      case 'g':
+        return v === 0;
+      case 'ts':
+      case 's':
+        return v === n.t;
+      case 'te':
+        return v === roundTime(n.t + n.d);
+      default:
+        return false;
+    }
+  };
+  const drop = EDITS.filter(neutral);
+  if (!drop.length) return n;
+  const out: AudioNote = { ...n };
+  for (const f of drop) delete out[f];
+  return out;
+}
+
+const EDITS = ['to', 'dr', 'mo', 'tr', 'fo', 'g', 'ts', 'te', 'at', 's'] as const;
+
+/** Whether a note sounds any different from the recording: an edit of its pitch, glide, formant, level or time, or muted. */
+export function isNoteEdited(n: AudioNote): boolean {
+  const changed = (v: number | undefined, neutral: number) => v !== undefined && v !== neutral;
+  return (
+    (n.p !== null && changed(n.to, n.p)) ||
+    changed(n.dr, 1) ||
+    changed(n.mo, 1) ||
+    changed(n.tr, 1) ||
+    changed(n.fo, 0) ||
+    changed(n.g, 0) ||
+    n.m === true ||
+    (n.s !== undefined && n.s !== n.t) ||
+    movesInTime(n)
+  );
 }
 
 /** A line's notes one after another: each ends where the next starts at the latest (one that starts on another's start goes). */
@@ -127,7 +257,7 @@ function apart(notes: AudioNote[]): AudioNote[] {
     const last = out[out.length - 1];
     if (last) {
       if (n.t - last.t < MIN_NOTE_S) continue;
-      if (last.t + last.d > n.t) out[out.length - 1] = shorten(last, roundTime(n.t - last.t));
+      if (roundTime(last.t + last.d) > n.t) out[out.length - 1] = shorten(last, roundTime(n.t - last.t));
     }
     out.push(n);
   }
@@ -157,7 +287,7 @@ export const movesInTime = (n: AudioNote): boolean => n.ts !== undefined || n.te
 
 /** A note's anchors: its start, its voice's start, its attack's end, its end; each as recorded and as it plays. */
 function anchorsOf(n: AudioNote): [number, number][] {
-  const end = n.t + n.d;
+  const end = roundTime(n.t + n.d);
   if (!movesInTime(n))
     return [
       [n.t, n.t],
@@ -187,6 +317,9 @@ function build(notes: readonly AudioNote[]): Warp {
   const w: Warp = { src: [], out: [], of: [] };
   if (!notes.some(movesInTime)) return w;
   const add = (src: number, out: number, of: number) => {
+    // where one note ends and the next starts (legato), unmoved or moved alike, is one anchor
+    const k = w.src.length - 1;
+    if (k >= 0 && Math.abs((w.src[k] as number) - src) < 1e-9 && Math.abs((w.out[k] as number) - out) < 1e-9) return;
     w.src.push(src);
     w.out.push(out);
     w.of.push(of);
@@ -268,4 +401,71 @@ function through(from: readonly number[], to: readonly number[], x: number): num
   const t0 = to[lo] as number;
   const t1 = to[hi] as number;
   return t0 + ((x - f0) * (t1 - t0)) / (f1 - f0);
+}
+
+// ---- on the song's timeline ----
+
+/** Where a region places its recording: its start (a tick), and the second of the file it starts at, its stretch and its notes' moves. */
+export interface NotesPlacing {
+  start: Region['start'];
+  audio?: Pick<AudioClip, 'offset' | 'stretch'> & { notes?: AudioNotes };
+}
+
+const warps = new WeakMap<AudioNotes, Warp | null>();
+
+/** The warp a region's notes play by, worked out once per notes (none when nothing moves, or their edits are off). */
+function playedWarp(notes: AudioNotes | undefined): Warp | null {
+  if (!notes || notes.off || notes.mode !== 'mono') return null;
+  let w = warps.get(notes);
+  if (w === undefined) {
+    const made = warpOf(notes);
+    w = made.src.length ? made : null;
+    warps.set(notes, w);
+  }
+  return w;
+}
+
+/**
+ * Where times in a region's recording play on the song's timeline, in ticks: seconds of the file as
+ * recorded (a note's `t`), through the warp its notes' moves make, its offset and stretch, then the
+ * tempo map. `played`: the seconds given are as the region plays them already (a note's `ts`, the
+ * region's `offset`), past the warp. The warp and the region's start are worked out once, for many points.
+ */
+export function fileToTicks(
+  project: { tempo: readonly TempoPoint[] },
+  region: NotesPlacing,
+  played = false,
+): (seconds: number) => number {
+  const clip = region.audio ?? { offset: 0, stretch: 1 };
+  const w = played ? null : playedWarp(clip.notes);
+  const s0 = tickToSeconds(project.tempo, region.start);
+  return (seconds) =>
+    secondsToTick(project.tempo, s0 + ((w ? warpAt(w, seconds) : seconds) - clip.offset) * clip.stretch);
+}
+
+/** Where a time in a region's recording (seconds of the file as recorded) plays on the song's timeline, in ticks. */
+export function fileToTick(
+  project: { tempo: readonly TempoPoint[] },
+  region: NotesPlacing,
+  seconds: number,
+  played = false,
+): number {
+  return fileToTicks(project, region, played)(seconds);
+}
+
+/**
+ * The time in a region's recording (seconds of the file as recorded) that plays at a tick: `fileToTick`
+ * the other way. `played`: as the region plays it (past the warp, as a note's `ts` is).
+ */
+export function tickToFile(
+  project: { tempo: readonly TempoPoint[] },
+  region: NotesPlacing,
+  tick: number,
+  played = false,
+): number {
+  const clip = region.audio ?? { offset: 0, stretch: 1 };
+  const at =
+    clip.offset + (tickToSeconds(project.tempo, tick) - tickToSeconds(project.tempo, region.start)) / clip.stretch;
+  const w = played ? null : playedWarp(clip.notes);
+  return w ? unwarpAt(w, at) : at;
 }

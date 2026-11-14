@@ -12,6 +12,16 @@ export const DOUBLE_TAP_MS = 320;
 /** How long the view stays where the user put it before following the playhead again. */
 const USER_SCROLL_MS = 1500;
 
+/**
+ * How far a view must scroll to show the whole of a row (the row's top and height in the list, the
+ * view's scroll and height): 0 when it already shows, and a row taller than the view comes to its top.
+ */
+export function revealBy(top: number, height: number, scroll: number, viewHeight: number): number {
+  if (top < scroll || height > viewHeight) return top - scroll;
+  const under = top + height - (scroll + viewHeight);
+  return under > 0 ? under : 0;
+}
+
 // A finger's scroll, as a phone's browser scrolls a page (see TouchPan)
 /** How far a finger moves before the view follows it, and the drag's direction is read. */
 const PAN_SLOP = 8;

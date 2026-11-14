@@ -450,6 +450,9 @@ export const Strip = memo(function Strip({ id, kind, name, color, channel, track
             <button
               type="button"
               className={`chip mute${channel.mute ? ' on' : ''}`}
+              title="Mute"
+              aria-label={`Mute ${name}`}
+              aria-pressed={channel.mute}
               onClick={() => updateChannel(id, { mute: !channel.mute }, 'Mute')}
             >
               M
@@ -458,6 +461,9 @@ export const Strip = memo(function Strip({ id, kind, name, color, channel, track
               <button
                 type="button"
                 className={`chip solo${channel.solo ? ' on' : ''}`}
+                title="Solo"
+                aria-label={`Solo ${name}`}
+                aria-pressed={channel.solo}
                 onClick={() => updateChannel(id, { solo: !channel.solo }, 'Solo')}
               >
                 S
@@ -469,6 +475,9 @@ export const Strip = memo(function Strip({ id, kind, name, color, channel, track
           <button
             type="button"
             className={`chip rec${track.armed ? ' on' : ''}`}
+            title="Record-arm"
+            aria-label={`Record-arm ${name}`}
+            aria-pressed={track.armed}
             onClick={() => updateTrack(id, { armed: !track.armed }, 'Arm')}
           >
             R
@@ -908,6 +917,14 @@ function Floating({
     x: Math.max(8, window.innerWidth / 2 - width / 2),
     y: Math.max(60, window.innerHeight / 2 - 220),
   }));
+  // it opens whole: a window taller than the room under where it would open moves up to fit
+  useLayoutEffect(() => {
+    const h = win.current?.offsetHeight ?? 0;
+    setPos((p) => {
+      const y = Math.max(8, Math.min(p.y, window.innerHeight - h - 8));
+      return y === p.y ? p : { ...p, y };
+    });
+  }, []);
   useEffect(() => {
     const before = document.activeElement;
     win.current?.focus({ preventScroll: true });

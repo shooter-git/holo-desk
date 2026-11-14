@@ -94,7 +94,7 @@ import {
 import { type MenuEntry, openMenu, openMenuAt } from './menu.tsx';
 import { pressToReorder, type ReorderList } from './reorder.ts';
 import { rulerHold } from './ruler.ts';
-import { DOUBLE_TAP_MS, gridStep, TouchPan, Viewport, WHEEL_ZOOM, ZOOM } from './view.ts';
+import { DOUBLE_TAP_MS, gridStep, revealBy, TouchPan, Viewport, WHEEL_ZOOM, ZOOM } from './view.ts';
 import { drawClipWave, drawFades, fadeTo, trimEnd, trimStart } from './wave.ts';
 
 export const tracksView = new Viewport(store.get().zoom);
@@ -218,6 +218,7 @@ function LaneSelect({ track }: { track: Track }) {
               ? 'Read: the automation plays (click to turn it off)'
               : 'Off: the automation is kept but not played'
           }
+          aria-pressed={lane.mode === 'read'}
           onClick={() =>
             apply(
               [
@@ -394,7 +395,10 @@ const TrackRow = memo(function TrackRow({ track, top, height, selected, phone, m
           />
         ) : (
           <>
-            <div className="name">{track.name}</div>
+            {/* (a long name is cut short here: the whole of it is its tip) */}
+            <div className="name" title={track.name}>
+              {track.name}
+            </div>
             {!compact && !automationView && show.trackSub && (
               <div className="sub">
                 {track.kind === 'audio' ? inputLabel(track) : instrumentLabel(track.instrument)}
@@ -418,6 +422,7 @@ const TrackRow = memo(function TrackRow({ track, top, height, selected, phone, m
             type="button"
             className={`chip mute${track.channel.mute ? ' on' : ''}`}
             title="Mute (M)"
+            aria-pressed={track.channel.mute}
             onClick={() => updateChannel(track.id, { mute: !track.channel.mute }, 'Mute')}
           >
             M
@@ -426,6 +431,7 @@ const TrackRow = memo(function TrackRow({ track, top, height, selected, phone, m
             type="button"
             className={`chip solo${track.channel.solo ? ' on' : ''}`}
             title="Solo (S)"
+            aria-pressed={track.channel.solo}
             onClick={() => updateChannel(track.id, { solo: !track.channel.solo }, 'Solo')}
           >
             S
@@ -438,6 +444,7 @@ const TrackRow = memo(function TrackRow({ track, top, height, selected, phone, m
                 ? 'Record-arm: the input is recorded here'
                 : 'Record-arm: live MIDI is recorded here'
             }
+            aria-pressed={track.armed}
             onClick={() => updateTrack(track.id, { armed: !track.armed }, 'Arm')}
           >
             R
@@ -447,6 +454,7 @@ const TrackRow = memo(function TrackRow({ track, top, height, selected, phone, m
               type="button"
               className={`chip mon${track.audioInput?.monitor ? ' on' : ''}`}
               title="Input monitoring: hear the input through the track (wear headphones)"
+              aria-pressed={!!track.audioInput?.monitor}
               onClick={() =>
                 updateTrack(
                   track.id,
@@ -1534,6 +1542,8 @@ export function TracksArea() {
   // ruler: top half sets or moves the cycle, bottom half moves the playhead (on a phone, a finger
   // moves the playhead anywhere but at the cycle's edges: rulerHold)
   const onRulerDown = (e: ReactPointerEvent<HTMLDivElement>) => {
+    // the ruler has no menu: a right-click (or a wheel's click) does nothing here, as on the editors' rulers
+    if (e.button !== 0 || isMenuPress(e)) return;
     const rect = e.currentTarget.getBoundingClientRect();
     const x = e.clientX - rect.left;
     const y = e.clientY - rect.top;
@@ -1650,6 +1660,7 @@ export function TracksArea() {
         className="ruler"
         ref={rulerBox}
         onPointerDown={onRulerDown}
+        onContextMenu={(e) => e.preventDefault()}
         title="Top: drag to set the cycle. Bottom: click to move the playhead"
       >
         <canvas ref={rulerCanvas} />
@@ -1659,6 +1670,18 @@ export function TracksArea() {
         ref={(el) => {
           listBox.current = el;
           shownList = el;
+        }}
+        // the headers move with the view, never by the browser's own scrolling: a header the keyboard
+        // reaches below the fold is brought into view by the view, so its lane comes with it
+        onFocus={(e) => {
+          const row = (e.target as HTMLElement).closest<HTMLElement>('.track-row');
+          if (!row || !(e.target as HTMLElement).matches(':focus-visible')) return;
+          const by = revealBy(row.offsetTop, row.offsetHeight, tracksView.y, e.currentTarget.clientHeight);
+          if (by) tracksView.scrollBy(0, by, listMax);
+        }}
+        onScroll={(e) => {
+          // (a browser that scrolled the box anyway, to show what took the keyboard: put it back)
+          if (e.currentTarget.scrollTop) e.currentTarget.scrollTop = 0;
         }}
       >
         <div className="track-list-inner" ref={listInner}>

@@ -7,7 +7,12 @@
  * notes chosen first (`selectNotes`), and its arguments, each with a kind (semitones, seconds, dB…), a
  * range and a default, from which a tool's arguments or a command's flags are made. `apply` makes it:
  * from the notes as they are to the notes as edited (audio-notes-edit.ts), canonical, and the notes as
- * they were when it doesn't apply (another kind of notes, an argument missing).
+ * they were when it doesn't apply (another kind of notes, an argument missing, or something it needs
+ * to know beyond the notes: the song and region for the grid, the notes' levels).
+ *
+ * The macros (`correct-pitch`, `quantize-time`, `level`: note-macros.ts) are edits here like the
+ * rest. Beside the edits, each of the three offers what's in `NOTE_EXTRAS` by the same name: a
+ * region's notes made a MIDI track (`midi`, notes-midi.ts), which adds a track rather than editing.
  */
 
 import { AUDIO_NOTES_MODES, fileToTicks, MAX_MOVE_S, MIN_NOTE_S } from './audio-notes.ts';
@@ -35,6 +40,8 @@ import {
   splitNote,
 } from './audio-notes-edit.ts';
 import { type MiddleC, parseNoteName } from './notation.ts';
+import { correctPitch, levelNotes, quantizeNotes } from './note-macros.ts';
+import { DIVISIONS } from './time.ts';
 import type { AudioNote, AudioNotes, AudioNotesMode, Project } from './types.ts';
 
 /**
@@ -87,11 +94,19 @@ export interface NoteArg {
 export type NoteArgValue = number | string | boolean;
 export type NoteArgs = Readonly<Record<string, NoteArgValue | undefined>>;
 
-/** What an edit may need to know beyond the notes: for snapping to the key's scale, the song and region (or a scale). */
+/**
+ * What an edit may need to know beyond the notes: for snapping to the key's scale and for the grid,
+ * the song and region (or a scale); for `level`, the notes' levels.
+ */
 export interface NoteEditContext extends NoteSelectContext {
   project?: Pick<Project, 'tempo' | 'meter' | 'key' | 'keys'>;
   /** The scale to snap to, instead of the song's key where each note plays. */
   scale?: Scale | null;
+  /**
+   * Each note's level as recorded, dB of full scale by its index (null where it isn't known): measured
+   * from the recording (the engine's `noteLevel`), as it isn't in the song. `level` needs them.
+   */
+  levels?: readonly (number | null)[];
 }
 
 export interface NoteEdit {
@@ -104,6 +119,8 @@ export interface NoteEdit {
   args: readonly NoteArg[];
   /** Whether it works on notes chosen first (else it chooses none: adding a note). */
   selection: boolean;
+  /** It needs each note's level, measured from the recording (`levels` in its context); without them it doesn't apply. */
+  needsLevels?: boolean;
   /** The notes edited: canonical, or the notes as they were when it doesn't apply. Arguments outside their ranges are brought in. */
   apply(notes: AudioNotes, indices: readonly number[], args: NoteArgs, ctx?: NoteEditContext): AudioNotes;
 }
@@ -444,7 +461,121 @@ const DEFS: Def[] = [
     ],
     run: (notes, idx, a) => resetNotes(notes, idx, RESETS[a.what as string] ?? NOTE_EDIT_FIELDS),
   },
+  {
+    name: 'correct-pitch',
+    summary:
+      'Tune notes toward the nearest semitone or note of the key, and take out some of their drift, all at once.',
+    modes: PITCHED,
+    selection: true,
+    args: [
+      {
+        name: 'centre',
+        kind: 'percent',
+        min: 0,
+        max: 100,
+        default: 100,
+        help: 'How far each note’s centre moves to its pitch: 100 all the way, 0 not at all',
+      },
+      {
+        name: 'drift',
+        kind: 'percent',
+        min: 0,
+        max: 100,
+        default: 0,
+        help: 'How much of each note’s drift as sung is taken out: 0 none (left as it is), 100 all',
+      },
+      {
+        name: 'snap',
+        kind: 'snap',
+        values: ['semitone', 'scale'],
+        default: 'semitone',
+        help: 'Where each note goes: the nearest semitone, or the nearest note of the key’s scale where it plays',
+      },
+      {
+        name: 'tolerance',
+        kind: 'cents',
+        min: 0,
+        max: 50,
+        default: 0,
+        help: 'Notes this close to their pitch already are left as they are (0: none are)',
+      },
+    ],
+    run: (notes, idx, a, ctx) =>
+      correctPitch(
+        notes,
+        idx,
+        {
+          centre: pct(a, 'centre'),
+          drift: pct(a, 'drift'),
+          snap: a.snap === 'scale' ? 'scale' : 'semitone',
+          tolerance: a.tolerance as number,
+        },
+        a.snap === 'scale' ? scalesOf(notes, ctx) : null,
+      ),
+  },
+  {
+    name: 'quantize-time',
+    summary: 'Move notes’ beats (where the voice starts, after a consonant) toward the song’s grid.',
+    modes: LINE,
+    selection: true,
+    args: [
+      {
+        name: 'amount',
+        kind: 'percent',
+        min: 0,
+        max: 100,
+        default: 100,
+        help: 'How far toward the grid: 100 onto it, 50 halfway',
+      },
+      {
+        name: 'grid',
+        kind: 'choice',
+        values: Object.keys(DIVISIONS),
+        default: '1/16',
+        help: 'The grid, a note value: 1/8, 1/16, 1/8T a triplet, 1/16. dotted',
+      },
+    ],
+    run: (notes, idx, a, ctx) =>
+      ctx.project && ctx.region
+        ? quantizeNotes(notes, idx, pct(a, 'amount'), DIVISIONS[a.grid as string] ?? 0, ctx.project, ctx.region)
+        : notes,
+  },
+  {
+    name: 'level',
+    summary: 'Bring notes’ levels toward one level: their mean, or a level given.',
+    modes: ALL,
+    selection: true,
+    needsLevels: true,
+    args: [
+      {
+        name: 'amount',
+        kind: 'percent',
+        min: 0,
+        max: 100,
+        default: 100,
+        help: 'How far toward it: 100 all the way, 50 halfway',
+      },
+      {
+        name: 'target',
+        kind: 'db',
+        min: -60,
+        max: 0,
+        help: 'The level they go to, dB of full scale (their mean when left out)',
+      },
+    ],
+    run: (notes, idx, a, ctx) =>
+      ctx.levels
+        ? levelNotes(notes, idx, ctx.levels, pct(a, 'amount'), typeof a.target === 'number' ? a.target : undefined)
+        : notes,
+  },
 ];
+
+/**
+ * What the studio, the agent and `holo notes` each offer beside the edits, by the same name (their
+ * parity tests check these as they check the edits): `midi`, a region's notes made a new MIDI track
+ * (`notesToMidi`).
+ */
+export const NOTE_EXTRAS: readonly string[] = ['midi'];
 
 /** An argument as given, read: a number in its range, a pitch as MIDI, a value of its list; undefined when it can't be read. */
 function readArg(def: NoteArg, v: unknown, middleC: MiddleC, strict: boolean): NoteArgValue | undefined {
@@ -462,8 +593,9 @@ function readArg(def: NoteArg, v: unknown, middleC: MiddleC, strict: boolean): N
       return undefined;
     case 'snap':
     case 'choice': {
+      // (in any case: "1/8t" is the grid's "1/8T")
       const s = typeof v === 'string' ? v.trim().toLowerCase() : undefined;
-      return s !== undefined && (def.values ?? []).includes(s) ? s : undefined;
+      return s === undefined ? undefined : (def.values ?? []).find((x) => x.toLowerCase() === s);
     }
     case 'pitch': {
       let p: number | undefined;
@@ -551,6 +683,7 @@ export const NOTE_EDITS: readonly NoteEdit[] = DEFS.map(
     modes: def.modes,
     args: def.args,
     selection: def.selection,
+    ...(def.needsLevels ? { needsLevels: true } : {}),
     apply(notes, indices, args, ctx = {}) {
       if (!def.modes.includes(notes.mode)) return notes;
       const a = lenientArgs(def, args, ctx.middleC ?? 'C4');
@@ -572,4 +705,10 @@ export const noteEdit = (name: string): NoteEdit | undefined => NOTE_EDITS.find(
 export function missingNoteEdits(offered: Iterable<string>): string[] {
   const have = new Set(offered);
   return NOTE_EDIT_NAMES.filter((n) => !have.has(n));
+}
+
+/** What beside the edits (`NOTE_EXTRAS`) a list of names leaves out, for the same tests. */
+export function missingNoteExtras(offered: Iterable<string>): string[] {
+  const have = new Set(offered);
+  return NOTE_EXTRAS.filter((n) => !have.has(n));
 }

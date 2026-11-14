@@ -1,6 +1,14 @@
 import { type AudioNote, parseAudioNotes, roundPitch, roundTime } from '@holo/session';
 import { describe, expect, it } from 'vitest';
-import { classifyRecording, DETECT_V, detectNotes, noteCurves, noteShape, notesAndCurves } from '../src/notes/index.ts';
+import {
+  classifyRecording,
+  DETECT_V,
+  detectNotes,
+  noteCurves,
+  noteLevel,
+  noteShape,
+  notesAndCurves,
+} from '../src/notes/index.ts';
 
 const SR = 48000;
 
@@ -308,6 +316,34 @@ describe('notes found to edit', () => {
     // a note with no pitch has no shape
     const { curves } = notesAndCurves([sing([[64, 1]])], SR);
     expect(noteShape({ t: 0.1, d: 0.3, p: null }, curves)).toBeNull();
+  });
+
+  it('reads each note’s level as recorded: a note 6 dB louder reads 6 dB louder', () => {
+    // two notes apart, the second at twice the amplitude (6.02 dB)
+    const samples = join(
+      silence(0.2),
+      sing([[62, 0.8]], { amp: 0.1 }),
+      silence(0.3),
+      sing([[67, 0.8]], { amp: 0.2 }),
+      silence(0.2),
+    );
+    const { notes, curves } = notesAndCurves([samples], SR);
+    const pitched = notes.n.filter((n) => n.p !== null);
+    expect(pitched).toHaveLength(2);
+    const [quiet, loud] = pitched.map((n) => noteLevel(n, curves) as number);
+    expect(Math.abs((loud as number) - (quiet as number) - 6.02)).toBeLessThan(0.5);
+    // dB of full scale, to a hundredth: the sawtooth's mean power (its 20 harmonics, 0.06 at the top)
+    let power = 0;
+    for (let k = 1; k <= 20; k++) power += (0.06 / k) ** 2 / 2;
+    expect(Math.abs((quiet as number) - 10 * Math.log10(power))).toBeLessThan(0.5);
+    expect(quiet).toBe(Math.round((quiet as number) * 100) / 100);
+    // the same from the curves as the studio keeps them (times every 5 ms, power as 64-bit numbers)
+    const studio = { t0: curves.t0, step: curves.step, power: Float64Array.from(curves.power) };
+    expect(pitched.map((n) => noteLevel(n, studio))).toEqual([quiet, loud]);
+    // a note with no pitch is read over all of it; silence, or outside the curves, reads nothing
+    expect(noteLevel({ t: 0.3, d: 0.4, p: null }, curves)).toBeCloseTo(quiet as number, 0);
+    expect(noteLevel({ t: 1.05, d: 0.2, p: 60 }, curves)).toBeNull();
+    expect(noteLevel({ t: 100, d: 1, p: 60 }, curves)).toBeNull();
   });
 
   it('draws its curves every 5 ms: the pitch where it is voiced, the power, and where sound has no pitch', () => {

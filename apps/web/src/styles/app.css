@@ -2187,6 +2187,89 @@ button.list-item {
   gap: 14px;
 }
 
+/* the Notes view's Macros: narrow, to the right, over a lighter scrim, so the notes it changes show beside it */
+.scrim:has(> .dialog.macros) {
+  justify-items: end;
+  background: rgba(3, 4, 6, 0.28);
+}
+
+.dialog.macros {
+  width: min(400px, 100%);
+}
+
+.macro-list {
+  gap: 10px;
+}
+
+.macro {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 10px 12px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--bg-1);
+  opacity: 0.6;
+  transition: opacity 0.12s;
+}
+
+.macro.on {
+  border-color: var(--line-3);
+  opacity: 1;
+}
+
+.macro-head {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.macro-head:disabled {
+  cursor: default;
+}
+
+.macro-row input[type="range"] {
+  width: 100%;
+}
+
+.macro-row .seg {
+  align-self: flex-start;
+}
+
+.macro-help,
+.macro-why {
+  margin: 0;
+  font-size: 11px;
+}
+
+.macro-scope {
+  align-self: center;
+}
+
+/* on a phone, a sheet over the whole screen */
+.scrim:has(> .dialog.macros.full) {
+  place-items: stretch;
+  padding: 0;
+  background: rgba(3, 4, 6, 0.72);
+}
+
+.dialog.macros.full {
+  width: 100%;
+  height: 100dvh;
+  max-height: 100dvh;
+  border-radius: 0;
+  padding-top: var(--safe-top);
+  padding-bottom: var(--safe-bottom);
+}
+
 @media (max-width: 700px) {
   .scrim {
     place-items: end stretch;

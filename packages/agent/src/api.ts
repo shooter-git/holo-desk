@@ -359,6 +359,8 @@ export interface NotesMeasure {
   notes: AudioNotes;
   /** Each note's drift (cents its held part moves) and vibrato ([Hz, ±cents]) as sung, by index (null: no pitch). */
   shapes: ({ drift: number; vibrato: [number, number] | null } | null)[];
+  /** Each note's level as recorded, dB of full scale, by index (null: nothing to read; missing from an older HO[LO]). */
+  levels?: (number | null)[];
   /** What kind of recording it looks like: notes are found as one line's for now (a chord's strongest). */
   looks: AudioNotesMode;
 }

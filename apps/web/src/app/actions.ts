@@ -1491,7 +1491,8 @@ export function cancelGesture(): void {
   }
   const { before, release } = gesture;
   gesture = null;
-  store.set({ project: before });
+  // (a save while it was under way may have taken its changes to the host: the song as it was goes too)
+  store.set({ project: before, saveState: 'dirty' });
   changed(before);
   release();
 }

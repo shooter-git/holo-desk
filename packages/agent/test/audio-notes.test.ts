@@ -8,7 +8,9 @@ import { join } from 'node:path';
 import {
   type AudioNote,
   type AudioNotes,
+  MIDI_LOUDEST_VELOCITY,
   missingNoteEdits,
+  missingNoteExtras,
   NOTE_EDITS,
   type NoteEdit,
   newProject,
@@ -78,7 +80,10 @@ function songWith(notes?: AudioNotes): Project {
   return parseProject(p);
 }
 
-const answer = (notes = found()): MeasureAnswer => ({
+/** Each found note's level as recorded: -20, -18, -16 dB in turn (the breath -40). */
+const levelOf = (n: AudioNote, i: number) => (n.p === null ? -40 : -20 + (i % 3) * 2);
+
+const answer = (notes = found(), levels = true): MeasureAnswer => ({
   done: true,
   task: 'msr_1',
   result: {
@@ -90,6 +95,7 @@ const answer = (notes = found()): MeasureAnswer => ({
     shapes: notes.n.map((n, i) =>
       n.p === null ? null : { drift: i === 12 ? -34 : 0, vibrato: i === 13 ? ([5.6, 35] as [number, number]) : null },
     ),
+    ...(levels ? { levels: notes.n.map(levelOf) } : {}),
     looks: 'mono',
   },
 });
@@ -122,13 +128,21 @@ function argsFor(e: NoteEdit): Record<string, unknown> {
 const BEFORE: Record<string, { action: string; [k: string]: unknown }> = {
   reset: { action: 'shift', notes: '7', semitones: 1 },
   unmute: { action: 'mute', notes: '7' },
+  // (note 7 is sung on G4, and its beat is on the grid)
+  'correct-pitch': { action: 'shift', notes: '7', cents: 30 },
+  'quantize-time': { action: 'move', notes: '7', seconds: 0.05 },
 };
+/** The notes an edit works on there, when not note 7 alone: levelling one note against itself changes nothing. */
+const CHOSEN: Record<string, string> = { level: '6-8' };
 
 describe('audio_notes, made from the note edits', () => {
   it('offers every note edit as an action, with its arguments, and keeps the tool list within 48', () => {
     const actions = audioNotes.args.find((a) => a.name === 'action')?.values ?? [];
     expect(actions.slice(0, 2)).toEqual(['show', 'detect']);
     expect(missingNoteEdits(actions)).toEqual([]);
+    // and what's beside the edits, after them
+    expect(missingNoteExtras(actions)).toEqual([]);
+    expect(actions.at(-1)).toBe('midi');
     const fields = audioNotes.args.map((a) => a.name);
     for (const e of NOTE_EDITS) {
       for (const a of e.args) {
@@ -226,7 +240,12 @@ describe('audio_notes, made from the note edits', () => {
       const api = setup();
       const before = BEFORE[e.name];
       if (before) await call(api, 'audio_notes', { track: 'Vocal', ...before });
-      const args = { action: e.name, track: 'Vocal', ...(e.selection ? { notes: '7' } : {}), ...argsFor(e) };
+      const args = {
+        action: e.name,
+        track: 'Vocal',
+        ...(e.selection ? { notes: CHOSEN[e.name] ?? '7' } : {}),
+        ...argsFor(e),
+      };
       const r = await call(api, 'audio_notes', args);
       expect(r.text, `${e.name}: ${r.text}`).not.toMatch(/^Nothing changed/);
       expect(api.batches, e.name).toHaveLength(before ? 2 : 1);
@@ -236,6 +255,91 @@ describe('audio_notes, made from the note edits', () => {
       const notes = keptNotes(api);
       expect(parseProject(structuredClone(api.project)).tracks[1]?.regions[0]?.audio?.notes, e.name).toEqual(notes);
     }
+  });
+
+  it('makes the macros from the list: correct-pitch, then level from the levels the host measured', async () => {
+    const api = setup();
+    const r = await call(api, 'audio_notes', {
+      action: 'correct-pitch',
+      track: 'Vocal',
+      notes: 'all',
+      centre: 100,
+      drift: 40,
+    });
+    expect(r.text.split('\n')[0]).toBe(
+      '"Take": correct-pitch all notes, centre 100%, drift 40%: 3 notes tuned, 13 drift changed; its notes are kept in the song from now on, as found, with this edit.',
+    );
+    const kept = keptNotes(api);
+    // E4 26 cents sharp lands on E4; every note with a pitch keeps 60% of its drift
+    expect(kept.n[1]).toEqual({ t: 8.5, d: 0.6, p: 64.26, to: 64, dr: 0.6 });
+    expect(
+      kept.n.filter((n) => n.p !== null).every((n) => n.dr === 0.6 && (n.to ?? n.p) === Math.round(n.p as number)),
+    ).toBe(true);
+    // all the way, a second time changes nothing
+    expect(
+      (await call(api, 'audio_notes', { action: 'correct-pitch', track: 'Vocal', notes: 'all', drift: 40 })).text,
+    ).toMatch(/^Nothing changed/);
+    // level: the levels found with the notes, matched to the notes kept
+    await call(api, 'audio_notes', { action: 'level', track: 'Vocal', notes: '1-6' });
+    const levels = keptNotes(api)
+      .n.slice(0, 6)
+      .map((n, i) => levelOf(n, i + 7) + (n.g ?? 0));
+    expect(new Set(levels.map((l) => l.toFixed(2))).size).toBe(1);
+    expect(api.batches.map((b) => b.label)).toEqual([
+      '"Take": correct-pitch all notes, centre 100%, drift 40%',
+      '"Take": level notes 1-6',
+    ]);
+    expect(parseProject(structuredClone(api.project)).tracks[1]?.regions[0]?.audio?.notes).toEqual(keptNotes(api));
+  });
+
+  it('refuses level without the notes’ levels, and waits while they’re being measured', async () => {
+    const none = setup({ measured: { notes: answer(found(), false) } });
+    expect(await refused(none, 'audio_notes', { action: 'level', track: 'Vocal', notes: 'all' })).toMatch(
+      /^level needs the notes' levels as recorded, and those notes’ levels couldn't be measured/,
+    );
+    expect(none.batches).toEqual([]);
+    const kept: AudioNotes = { mode: 'mono', v: 1, n: [{ t: 10.5, d: 0.6, p: 64 }] };
+    const waiting = setup({
+      kept,
+      measured: { notes: { done: false, task: 'msr_3', progress: 0.5, eta: 4, stage: 'Finding the notes' } },
+    });
+    const r = await call(waiting, 'audio_notes', { action: 'level', track: 'Vocal', notes: '1', target: -12 });
+    expect(r.text).toMatch(/^Still finding the notes of Take 3\.wav: 50% done/);
+    expect(waiting.batches).toEqual([]);
+  });
+
+  it('adds a MIDI track playing the notes as they play (midi), and keeps nothing of the notes', async () => {
+    const api = setup();
+    const r = await call(api, 'audio_notes', { action: 'midi', track: 'Vocal' });
+    expect(r.text).toBe(
+      '"Take": notes to MIDI: added "Vocal notes", a MIDI track below Vocal, playing 8 notes over bars 5–8: each where its beat plays, at the nearest semitone of its pitch, velocities from their levels as recorded; breaths and muted notes left out. It plays Soft Keys: give it an instrument with track_set.',
+    );
+    expect(api.batches).toHaveLength(1);
+    expect(api.batches[0]?.label).toBe('"Take": notes to MIDI');
+    const tracks = api.project.tracks;
+    expect(tracks.map((t) => t.name)).toEqual(['Keys', 'Vocal', 'Vocal notes', 'Pad']);
+    const region = tracks[2]?.regions[0] as Region;
+    expect(region).toMatchObject({ start: 4 * BAR, length: 4 * BAR, name: 'Take' });
+    // 10.5 s of the recording plays 0.5 s into the region (a beat at 120 bpm), its beat 30 ms later
+    expect(region.notes.map((n) => [n.t, n.p])).toEqual([
+      [PPQ + 58, 69],
+      [3 * PPQ, 67],
+      [5 * PPQ, 64],
+      [7 * PPQ, 67],
+      [9 * PPQ, 69],
+      [11 * PPQ + 58, 67],
+      [13 * PPQ, 64],
+      [15 * PPQ, 67],
+    ]);
+    expect(Math.max(...region.notes.map((n) => n.v))).toBe(MIDI_LOUDEST_VELOCITY);
+    // the recording's notes aren't kept by it
+    expect(takeOf(api).audio?.notes).toBeUndefined();
+    expect(await refused(api, 'audio_notes', { action: 'midi', track: 'Vocal', notes: 'all' })).toBe(
+      'midi writes all the notes the region plays: leave "notes" out',
+    );
+    expect(await refused(api, 'audio_notes', { action: 'midi', track: 'Vocal', semitones: 2 })).toBe(
+      'midi takes no "semitones"',
+    );
   });
 
   it('chooses notes as the studio does: all, numbers, bars, a pitch named the studio’s way, the selection', async () => {

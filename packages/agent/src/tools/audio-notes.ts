@@ -15,7 +15,11 @@
  *   (`pruneNotes`, as a split keeps them). The first edit keeps them in the song with that edit, in
  *   one batch: one undo step.
  * - **Each edit** is one batch of operations, tried on a copy of the song first (`change`); its
- *   arguments are read as the registry reads them (`readNoteArgs`), and refused in its words.
+ *   arguments are read as the registry reads them (`readNoteArgs`), and refused in its words. The
+ *   macros are edits like the rest; `level` needs each note's level as recorded, which the host
+ *   measures with the notes (`levels`, matched to the region's notes by start and length).
+ * - **`midi`** (the registry's `NOTE_EXTRAS`) adds a MIDI track playing the region's notes as they
+ *   play (`notesToMidi`), velocities from their levels; the recording's notes stay as they are.
  */
 import {
   type AudioClip,
@@ -26,10 +30,12 @@ import {
   isNoteEdited,
   keyAt,
   keysOf,
+  MIDI_NOTE_VELOCITY,
   type MiddleC,
   NOTE_ARG_UNITS,
   NOTE_EDIT_NAMES,
   NOTE_EDITS,
+  NOTE_EXTRAS,
   type NoteArg,
   type NoteArgValue,
   type NoteEdit,
@@ -37,6 +43,7 @@ import {
   noteChangesText,
   noteEdit,
   noteName,
+  notesToMidi,
   type Op,
   type Project,
   pruneNotes,
@@ -55,7 +62,7 @@ import { keyName } from './measure.ts';
 
 /** The tool's own fields; every other field is an edit's argument, as the registry names it. */
 export const NOTE_TOOL_FIELDS = ['action', 'track', 'region', 'notes', 'page'] as const;
-/** Its actions besides the edits. */
+/** Its actions besides the edits: the views, then the registry's extras (`midi`) after the edits. */
 const VIEWS = ['show', 'detect'] as const;
 /** Notes on a page of `show`. */
 const PAGE = 40;
@@ -199,12 +206,16 @@ interface RegionNotes {
   kept: boolean;
   /** Each note's drift and vibrato as sung, found by its start, length and pitch; empty when they weren't found. */
   shapes: Map<string, NotesMeasure['shapes'][number]>;
+  /** Each note's level as recorded (dB), found by its start and length; empty when they weren't measured. */
+  levels: Map<string, number | null>;
   /** Kept notes' shapes are still being found. */
   shapesPending?: boolean;
   found: NotesMeasure | null;
 }
 
 const noteKey = (n: Pick<AudioNote, 't' | 'd' | 'p'>) => `${n.t}|${n.d}|${n.p}`;
+/** A note's level is its stretch of the recording's: found by its start and length (an octave put right keeps it). */
+const spanKey = (n: Pick<AudioNote, 't' | 'd'>) => `${n.t}|${n.d}`;
 
 /** The seconds of its recording a region plays, [from, to). */
 function windowOf(project: Project, region: Region, clip: AudioClip): [number, number] {
@@ -221,41 +232,59 @@ function pendingText(a: Extract<MeasureAnswer, { done: false }>, name: string): 
 }
 
 /**
+ * What's measured of a region's notes beyond the notes kept: nothing (`notes`: found only until the
+ * first edit), their shapes (`shapes`: shown without them when that can't be done at once), or their
+ * levels (`levels`: waited for, as the same call later gets them).
+ */
+type Wanted = 'notes' | 'shapes' | 'levels';
+
+/**
  * A region's notes: those it keeps, or those found in its recording on the host (when they're still
- * being found, the same call later gets them). Kept notes' drift and vibrato as sung are found too when
- * `shapes` (they're shown without them when that can't be done at once).
+ * being found, the same call later gets them), with what's `wanted` of them measured too.
  */
 async function regionNotes(
   ctx: ToolContext,
   project: Project,
   f: Found,
-  shapes: boolean,
+  wanted: Wanted,
 ): Promise<RegionNotes | { pending: string }> {
   const clip = f.region.audio as AudioClip;
   const name = project.files?.find((x) => x.id === clip.file)?.name ?? 'the recording';
   const kept = clip.notes;
   let found: NotesMeasure | null = null;
   let pending = false;
-  if (!kept || shapes) {
+  if (!kept || wanted !== 'notes') {
     try {
       const a = await ctx.api.measure({ what: 'notes', track: f.track.id, region: f.region.id });
       if (!a.done) {
-        if (!kept) return { pending: pendingText(a, name) };
+        if (!kept || wanted === 'levels') return { pending: pendingText(a, name) };
         pending = true;
       } else if (a.result.kind === 'notes') found = a.result;
     } catch (err) {
-      // (kept notes are shown without their shapes when the recording can't be read)
+      // (kept notes are shown without their shapes, or levels, when the recording can't be read)
       if (!kept) throw err;
     }
   }
   const byNote = new Map<string, NotesMeasure['shapes'][number]>();
+  const levels = new Map<string, number | null>();
   found?.notes.n.forEach((n, i) => {
     byNote.set(noteKey(n), found?.shapes[i] ?? null);
+    levels.set(spanKey(n), found?.levels?.[i] ?? null);
   });
-  if (kept) return { notes: kept, kept: true, shapes: byNote, found, ...(pending ? { shapesPending: true } : {}) };
+  if (kept)
+    return { notes: kept, kept: true, shapes: byNote, levels, found, ...(pending ? { shapesPending: true } : {}) };
   if (!found) throw new ToolError(`The notes of ${name} couldn't be found`);
-  return { notes: pruneNotes(found.notes, windowOf(project, f.region, clip)), kept: false, shapes: byNote, found };
+  return {
+    notes: pruneNotes(found.notes, windowOf(project, f.region, clip)),
+    kept: false,
+    shapes: byNote,
+    levels,
+    found,
+  };
 }
+
+/** Each of the region's notes' level as recorded, by index (null where it wasn't measured: a note split or added since). */
+const levelsOf = (rn: RegionNotes): (number | null)[] => rn.notes.n.map((n) => rn.levels.get(spanKey(n)) ?? null);
 
 // ---- saying them ----
 
@@ -442,13 +471,13 @@ function argsWords(
 
 // ---- the tool ----
 
-const ACTIONS = [...VIEWS, ...NOTE_EDIT_NAMES];
+const ACTIONS = [...VIEWS, ...NOTE_EDIT_NAMES, ...NOTE_EXTRAS];
 
 export const audioNotes: Tool = {
   name: 'audio_notes',
   kind: 'change',
   summary: ({ middleC }) =>
-    `Edit a recording's notes one by one, as the studio's Audio Editor does: their pitch, drift, vibrato, glide, formant, level and timing (an audio region; the recording itself is never changed). The region: "region" (its id, its name or "selected") and/or "track" (alone: its only recording; neither: the only audio track's). Actions: show (the notes, ${PAGE} a "page": number, where, the pitch found with its cents → where it's moved, length, vibrato and drift as sung, edits); detect (find them; nothing is kept in the song until the first edit, which keeps them with it as one undo step); and the edits, each on "notes" chosen as ${NOTES_HELP} (middle C is ${middleC}): ${NOTE_EDITS.map(editLine).join('; ')}. Example: {"action": "shift", "track": "Vocal", "notes": "5", "semitones": 2}. Check an edit with measure ("take"): it measures what plays, edits in.`,
+    `Edit a recording's notes one by one, as the studio's Audio Editor does: their pitch, drift, vibrato, glide, formant, level and timing (an audio region; the recording itself is never changed). The region: "region" (its id, its name or "selected") and/or "track" (alone: its only recording; neither: the only audio track's). Actions: show (the notes, ${PAGE} a "page": number, where, the pitch found with its cents → where it's moved, length, vibrato and drift as sung, edits); detect (find them; nothing is kept in the song until the first edit, which keeps them with it as one undo step); the edits, each on "notes" chosen as ${NOTES_HELP} (middle C is ${middleC}): ${NOTE_EDITS.map(editLine).join('; ')}; and midi (a new MIDI track playing the region's notes as they play, velocities from their levels; no "notes"). Example: {"action": "shift", "track": "Vocal", "notes": "5", "semitones": 2}. Check an edit with measure ("take"): it measures what plays, edits in.`,
   args: [
     { name: 'action', type: 'enum', values: ACTIONS, describe: 'What to do', required: true },
     { name: 'track', type: 'string', describe: 'The audio track (name or id)' },
@@ -492,10 +521,13 @@ export const audioNotes: Tool = {
           .join(', ')}`,
       );
     if (num(args, 'page') !== undefined && action !== 'show') throw new ToolError('"page" is for show');
+    if (action === 'midi' && notesText)
+      throw new ToolError('midi writes all the notes the region plays: leave "notes" out');
 
     const f = await audioRegion(ctx, project, str(args, 'region'), str(args, 'track'));
     const clip = f.region.audio as AudioClip;
-    const got = await regionNotes(ctx, project, f, action === 'show');
+    const wanted: Wanted = action === 'show' ? 'shapes' : action === 'midi' || edit?.needsLevels ? 'levels' : 'notes';
+    const got = await regionNotes(ctx, project, f, wanted);
     if ('pending' in got) return { text: got.pending };
     const rn = got;
     const placing = { start: f.region.start, audio: clip };
@@ -523,6 +555,7 @@ export const audioNotes: Tool = {
       return { text: showText(ctx, project, f, rn, chosen, num(args, 'page') ?? 1, notesText) };
     }
     if (action === 'detect') return { text: detectText(project, f, rn, ctx.middleC) };
+    if (action === 'midi') return midiOf(ctx, project, f, rn);
 
     const e = edit as NoteEdit;
     if (!e.modes.includes(rn.notes.mode))
@@ -532,7 +565,12 @@ export const audioNotes: Tool = {
     const indices = e.selection ? await choose(notesText as string) : [];
     if (e.selection && !indices.length)
       throw new ToolError(`"${notesText}" chooses none of the notes of "${f.region.name}"`);
-    const editCtx = { project, region: placing, middleC: ctx.middleC };
+    const levels = e.needsLevels ? levelsOf(rn) : undefined;
+    if (levels && !indices.some((i) => levels[i] !== null))
+      throw new ToolError(
+        `${e.name} needs the notes' levels as recorded, and ${indices.length === 1 ? 'that note’s level' : 'those notes’ levels'} couldn't be measured from the recording (a note split or added since the notes were found has none)`,
+      );
+    const editCtx = { project, region: placing, middleC: ctx.middleC, ...(levels ? { levels } : {}) };
     const next = e.apply(rn.notes, indices, read, editCtx);
     const said = [
       e.selection ? chosenWords(notesText as string, indices.length) : '',
@@ -575,5 +613,31 @@ export const audioNotes: Tool = {
     return { text: lines.join('\n'), progress: label };
   },
 };
+
+/** `midi`: a new MIDI track playing the region's notes as they play, one batch. */
+async function midiOf(ctx: ToolContext, project: Project, f: Found, rn: RegionNotes) {
+  const levels = levelsOf(rn);
+  const leveled = levels.some((l) => l !== null);
+  const ops = notesToMidi(project, f.track.id, f.region.id, {
+    notes: rn.notes,
+    ...(leveled ? { levels } : {}),
+  });
+  const add = ops.find((o): o is Extract<Op, { op: 'addTrack' }> => o.op === 'addTrack');
+  const region = ops.find((o): o is Extract<Op, { op: 'addRegion' }> => o.op === 'addRegion');
+  const count = region?.region.notes.length ?? 0;
+  if (!add || !count)
+    throw new ToolError(
+      `"${f.region.name || 'the region'}" plays no notes with a pitch to write as MIDI (breaths, consonants and muted notes are left out)`,
+    );
+  const label = `"${f.region.name || 'the region'}": notes to MIDI`;
+  await change(ctx, project, ops, label);
+  const velocities = leveled
+    ? 'velocities from their levels as recorded'
+    : `velocities all ${MIDI_NOTE_VELOCITY} (their levels couldn't be measured)`;
+  return {
+    text: `${label}: added "${add.track.name}", a MIDI track below ${f.track.name}, playing ${plural(count, 'note')} over ${barsText(project, f.region.start, f.region.start + f.region.length)}: each where its beat plays, at the nearest semitone of its pitch, ${velocities}; breaths and muted notes left out. It plays ${add.track.instrument.type === 'synth' ? add.track.instrument.preset : 'a stand-in synth'}: give it an instrument with track_set.`,
+    progress: label,
+  };
+}
 
 export const audioNoteTools: Tool[] = [audioNotes];

@@ -2,18 +2,21 @@
  * The Notes view's tools (AudioNotes.tsx), as plain arithmetic: which note a pointer is on and which
  * part of it, which way a drag goes once it has gone far enough to tell, how far a drag moves a pitch,
  * a time or an amount, where a note detection missed can go, and which of the note edits (NOTE_EDITS)
- * each tool, menu entry and key offers, so a test can tell the studio offers every one.
+ * each tool, menu entry, key and the Macros dialog offers, so a test can tell the studio offers every
+ * one (and what's beside them, NOTE_EXTRAS: the notes made a MIDI track).
  */
 import {
   ATTACK_S,
   type AudioNote,
   MIN_NOTE_S,
   NOTE_EDIT_NAMES,
+  NOTE_EXTRAS,
   type PitchSnap,
   type Scale,
   snapTarget,
 } from '@holo/session';
 import { capsuleHalf, firstAt, restingPitch } from './note-lanes.ts';
+import { NOTE_MACROS } from './note-macros.ts';
 
 const clamp = (x: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, x));
 
@@ -113,7 +116,12 @@ export const NOTE_KEY_EDITS: Readonly<Record<string, readonly string[]>> = {
   Delete: ['reset'],
 };
 
-/** Each note edit the studio offers, with the controls that offer it ("Vibrato tool", "menu", "M key"). */
+/** What beside the edits (NOTE_EXTRAS) the studio offers, and where: "Notes to MIDI track" in the menu on the space between notes and the bar's More menu. */
+export const NOTE_EXTRA_CONTROLS: Readonly<Record<string, readonly string[]>> = {
+  midi: ['menu', 'More menu'],
+};
+
+/** Each note edit the studio offers, with the controls that offer it ("Vibrato tool", "menu", "M key", "Macros dialog"). */
 export function studioNoteEdits(): Map<string, string[]> {
   const out = new Map<string, string[]>();
   const add = (edit: string, control: string) => {
@@ -124,7 +132,15 @@ export function studioNoteEdits(): Map<string, string[]> {
   for (const t of NOTE_TOOLS) for (const e of t.edits) add(e, `${t.name} tool`);
   for (const e of NOTE_MENU_EDITS) add(e, 'menu');
   for (const [key, edits] of Object.entries(NOTE_KEY_EDITS)) for (const e of edits) add(e, `${key} key`);
+  for (const m of NOTE_MACROS) add(m.edit, 'Macros dialog');
   return out;
+}
+
+/** Each of NOTE_EXTRAS the studio offers, with its controls (none missing: the test checks). */
+export function studioNoteExtras(): Map<string, string[]> {
+  return new Map(
+    NOTE_EXTRAS.filter((e) => NOTE_EXTRA_CONTROLS[e]?.length).map((e) => [e, [...(NOTE_EXTRA_CONTROLS[e] ?? [])]]),
+  );
 }
 
 /** Names the studio offers that aren't note edits at all (a name changed in NOTE_EDITS and not here). */

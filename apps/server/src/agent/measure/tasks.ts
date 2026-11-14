@@ -218,6 +218,8 @@ export interface NotesResult {
   notes: AudioNotes;
   /** Each note's drift and vibrato as sung, by its index (null for a note with no pitch). */
   shapes: (NoteShape | null)[];
+  /** Each note's level as recorded, dB of full scale, by its index (null where there's nothing to read). */
+  levels: (number | null)[];
   /** What kind of recording it looks like (the notes are found as one line's for now). */
   looks: AudioNotesMode;
 }

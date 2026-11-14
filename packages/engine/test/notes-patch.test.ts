@@ -2,17 +2,23 @@ import {
   type AudioClip,
   type AudioNote,
   type AudioNotes,
+  moveNotes,
   newAudioTrack,
   newProject,
   newRegion,
   PPQ,
   type Project,
   parseAudioNotes,
+  resizeNote,
+  setAttack,
+  unwarpAt,
+  warpAt,
+  warpOf,
 } from '@holo/session';
 import { describe, expect, it, vi } from 'vitest';
 import { clipKey, compileClips, compileTempo } from '../src/compile.ts';
 import { assembleClip, renderNotePatch } from '../src/notes/patch.ts';
-import { isEdited, type PatchSpec, regionPatches, songPatches } from '../src/notes/plan.ts';
+import { isEdited, type PatchSpec, RENDER_V, regionPatches, songPatches } from '../src/notes/plan.ts';
 import { renderSession } from '../src/render.ts';
 import { encodeWav } from '../src/wav.ts';
 
@@ -95,6 +101,90 @@ describe('a region’s patches', () => {
     // and clear of the notes that don't move
     expect(moved?.spec.a).toBeGreaterThan(1.3 * SR);
     expect(moved?.spec.b).toBeLessThan(2.2 * SR);
+  });
+
+  it('reach 180 ms past an island that ends at a note’s edge, so the marks can settle back onto the recording', () => {
+    // four notes sung legato, the second moved: the third squeezed, its end the first place that doesn't move
+    const notes = moveNotes(
+      line([
+        { t: 1, d: 0.3 },
+        { t: 1.3, d: 0.3 },
+        { t: 1.6, d: 0.3 },
+        { t: 1.9, d: 0.3 },
+      ]),
+      [1],
+      0.05,
+    );
+    const [moved] = regionPatches(clip(notes), SR);
+    expect(moved?.spec.a).toBe(Math.floor(0.97 * SR));
+    expect(Math.abs((moved?.spec.b ?? 0) - 2.11 * SR)).toBeLessThanOrEqual(1);
+  });
+
+  it('hand the renderer the notes its warp needs: the warp they make alone is the region’s, all through each patch and its context', () => {
+    const legato = (from: number, n: number) => Array.from({ length: n }, (_, i) => ({ t: from + 0.3 * i, d: 0.3 }));
+    for (const notes of [
+      // rests longer than 200 ms either side: the notes beyond them place the rests' middles
+      line([
+        { t: 0.3, d: 0.5 },
+        { t: 1.4, d: 0.5, ts: 1.52, te: 2.02 },
+        { t: 2.5, d: 0.5 },
+      ]),
+      // a legato line, a note in it moved; and one moved at the region's very start
+      moveNotes(line([...legato(1, 6), { t: 3.5, d: 0.4 }]), [2], 0.1),
+      moveNotes(
+        line([
+          { t: 0.05, d: 0.3 },
+          { t: 0.9, d: 0.3 },
+          { t: 1.7, d: 0.4 },
+        ]),
+        [0],
+        0.2,
+      ),
+      // two moved far apart (two patches), a stretch, an attack
+      resizeNote(moveNotes(line([...legato(0.5, 3), ...legato(4, 3)]), [1], -0.08), 4, 'end', 4.75),
+      setAttack(
+        line([
+          { t: 1, d: 0.6 },
+          { t: 2.2, d: 0.6 },
+          { t: 3.3, d: 0.6 },
+        ]),
+        [1],
+        2,
+      ),
+      // a note moved a second later, past a short one
+      moveNotes(
+        line([
+          { t: 1, d: 0.4 },
+          { t: 1.6, d: 0.1 },
+          { t: 3, d: 0.4 },
+          { t: 5, d: 0.4 },
+        ]),
+        [1],
+        1,
+      ),
+    ]) {
+      const whole = warpOf(notes);
+      const jobs = regionPatches(clip(notes), SR);
+      expect(jobs.length).toBeGreaterThan(0);
+      for (const { spec } of jobs) {
+        const alone = warpOf(spec.notes);
+        for (let f = spec.ctx[0]; f <= spec.ctx[1]; f += SR / 1000) {
+          expect(Math.abs(warpAt(alone, f / SR) - warpAt(whole, f / SR))).toBeLessThan(1e-9);
+          expect(Math.abs(unwarpAt(alone, f / SR) - unwarpAt(whole, f / SR))).toBeLessThan(1e-9);
+        }
+      }
+    }
+  });
+
+  it('read where a pasted note’s sound comes from, and are keyed by it', () => {
+    const [pasted] = regionPatches(clip(line([{ t: 1 }, { t: 3, s: 1 }])), SR);
+    // the note and 30 ms before it, and 30 + 180 ms past it (for the marks to settle back)
+    expect([pasted?.spec.a, pasted?.spec.b]).toEqual([Math.floor(2.97 * SR), Math.ceil(3.51 * SR)]);
+    expect(pasted?.spec.ctx[0]).toBe(Math.floor(0.8 * SR));
+    expect(pasted?.spec.ctx[1]).toBe(Math.ceil(3.71 * SR));
+    const elsewhere = regionPatches(clip(line([{ t: 1 }, { t: 3, s: 1.5 }])), SR);
+    expect(elsewhere[0]?.key).not.toBe(pasted?.key);
+    expect(RENDER_V).toBe(4);
   });
 
   it('are keyed by what they sound like: the same edits share a key, another edit doesn’t', () => {

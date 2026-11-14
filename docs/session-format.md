@@ -137,11 +137,14 @@ it's rendered, from the song and the recording alone:
   kept (0–1) and `mo` of its vibrato (0–2); `tr` the glide into it against as sung (0–3); `fo` its
   formant moved (semitones, −12 to 12); `g` its level (dB, −60 to 24) and `m` muted; `ts` and `te` where
   it now starts and ends, and `at` its attack's length against as sung (0.25–4); `s` (pasted) the place
-  in the recording it plays instead; `off` (chords) a note left out by hand.
+  in the recording it plays instead (from `s` for the note's length, where the note now plays, moved too
+  if it's moved; its other edits apply to the sound pasted, whose pitch as found is `p`); `off` (chords)
+  a note left out by hand.
 - The notes object may also carry `off` (edits kept but not played), `a4` (the pitch A4 is tuned to, when
   not 440) and `sens` (how readily chords' notes were found, 0–1).
 - Only a line's notes move in time. A move warps the sound between the rests on either side of it (the
-  identity everywhere else, so no other sample moves); a move that would run time backwards, squeeze or
+  identity everywhere else, so no other sample moves; a note's other edits move with it, and a voice
+  played longer or shorter keeps its pitch); a move that would run time backwards, squeeze or
   stretch any part past four times, or go more than 4 s is let go. A line's notes don't overlap. Where
   one note ends and the next starts (legato), both play that place at the same time: a note moved there
   moves its neighbour's edge with it (the neighbour stretches or squeezes), as a rest between would.

@@ -163,10 +163,7 @@ export const Strip = memo(function Strip({ id, kind, name, color, channel, track
   const faderBox = useRef<HTMLDivElement>(null);
   const faderHeight = Math.max(56, useSize(faderBox).h - 2);
   const slots = useRef<HTMLDivElement>(null);
-  useScrollCue(
-    slots,
-    `${track?.midiFx.length ?? 0} ${channel.inserts.length} ${channel.sends.length} ${channel.stage ? 1 : 0} ${show.stripInstrument} ${show.stripMidiFx} ${show.stripAudioFx} ${show.stripSends} ${show.stripStage}`,
-  );
+  useScrollCue(slots);
   // a tap on the strip selects its track; a scroll, a fader drag or a right-click doesn't
   const press = useRef<{ x: number; y: number } | null>(null);
   // in the mixer, a track strip's name is its handle: drag it (a finger holds it first) to move the track

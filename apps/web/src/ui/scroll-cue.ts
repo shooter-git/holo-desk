@@ -3,7 +3,7 @@
  * keeps the marks its style fades by: data-above and data-below for a box that scrolls up and down,
  * data-before and data-after for one that scrolls sideways.
  */
-import { type RefObject, useEffect, useLayoutEffect } from 'react';
+import { type RefObject, useEffect } from 'react';
 
 /** Whether a scrolled box holds more before and after what it shows (its scroll, its content's size, its own). */
 export function scrollCue(start: number, content: number, box: number): { before: boolean; after: boolean } {
@@ -20,24 +20,33 @@ function mark(el: HTMLElement, axis: 'x' | 'y'): void {
 }
 
 /**
- * Keep a scrolling box's marks: read as it scrolls, as it resizes, and when `holds` changes (what
- * the box holds, as the caller counts it: its content can grow without the box changing size).
+ * Keep a scrolling box's marks. They are read again as the box scrolls, and as it or anything
+ * directly in it changes size or comes and goes: what a box holds can outgrow it without the box
+ * itself changing.
  */
-export function useScrollCue(ref: RefObject<HTMLElement | null>, holds: unknown, axis: 'x' | 'y' = 'y'): void {
-  // biome-ignore lint/correctness/useExhaustiveDependencies: holds is what the box's content depends on
-  useLayoutEffect(() => {
-    if (ref.current) mark(ref.current, axis);
-  }, [ref, holds, axis]);
+export function useScrollCue(ref: RefObject<HTMLElement | null>, axis: 'x' | 'y' = 'y'): void {
   useEffect(() => {
     const el = ref.current;
     if (!el) return;
     const on = () => mark(el, axis);
     el.addEventListener('scroll', on, { passive: true });
-    const watch = new ResizeObserver(on);
-    watch.observe(el);
+    const sizes = new ResizeObserver(on);
+    const watch = () => {
+      sizes.disconnect();
+      sizes.observe(el);
+      for (const child of el.children) sizes.observe(child);
+    };
+    const children = new MutationObserver(() => {
+      watch();
+      on();
+    });
+    children.observe(el, { childList: true });
+    watch();
+    on();
     return () => {
       el.removeEventListener('scroll', on);
-      watch.disconnect();
+      sizes.disconnect();
+      children.disconnect();
     };
   }, [ref, axis]);
 }

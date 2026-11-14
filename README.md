@@ -285,7 +285,14 @@ player, close and room perspectives), can come in as one instrument with `--mics
 microphone, all of them sounding together, each with a level in the instrument's window (the first
 at full, the others off until you turn them up). They're named by what tells their folders or files
 apart, or by `--mic-names "Player,Close,Room"`. Every microphone's samples load, whatever its level:
-a studio holds every sample it plays in memory, so mind the size of a big library. Folders of samples named by note (C4, F#3, `_v2`, `_rr1`…)
+a studio holds every sample it plays in memory, so mind the size of a big library.
+
+`--trim` keeps a big library's notes shorter than their files, so it fits: each is kept until, as it
+plays, it has fallen to −58 dB (and half a second more, 20 s at most), fading over its last 1.5 s, as
+the pinned pianos are. Only the pack's map changes (where each note ends, faded as it loads): the
+files are never rewritten, so importing again without `--trim` brings every note back whole.
+`--trim-floor`, `--trim-cap` and `--trim-fade` change the rule, and the command says how much memory
+each instrument takes before and after. Folders of samples named by note (C4, F#3, `_v2`, `_rr1`…)
 become instruments, and a folder of one-shot hits becomes a drum kit on the General MIDI keys.
 
 A kit's folder with a folder for each piece (Kick, Snare, Hi-Hat Closed, Hi-Hat Open, Tom 1, Crash,

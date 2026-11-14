@@ -763,6 +763,15 @@ class TrackNode extends Strip {
   /** The first clip not yet past (the clips are in order and don't overlap), and the song frame it was found for. */
   clipCursor = 0;
   clipFrom = Number.NEGATIVE_INFINITY;
+  /**
+   * The clips it played before clips came with a `fade`, with their own place: they fade out as the
+   * new ones fade in, over `fadeLength` frames from the engine's frame `fadeStart` (null: no fade).
+   */
+  oldClips: ClipSpec[] | null = null;
+  oldCursor = 0;
+  oldFrom = Number.NEGATIVE_INFINITY;
+  fadeStart = 0;
+  fadeLength = 0;
   part: PartRuntime | null = null;
   input: InputSpec | null = null;
   capture: Capture | null = null;
@@ -833,6 +842,9 @@ export class EngineCore implements Host {
   rest = false;
   /** Blocks played (what a strip's rest is counted in). */
   private tick = 0;
+  /** Frames played, and where this block starts among them (what a clips crossfade is counted in). */
+  private frames = 0;
+  private blockFrame = 0;
   private tracks = new Map<number, TrackNode>();
   private trackOrder: TrackNode[] = [];
   private buses: Strip[] = [];
@@ -1084,6 +1096,14 @@ export class EngineCore implements Host {
       case 'clips': {
         const t = this.tracks.get(msg.num);
         if (t) {
+          // a crossfade: what it played goes on, fading out, while these fade in
+          if (msg.fade && msg.fade > 0 && t.clips.length) {
+            t.oldClips = t.clips;
+            t.oldCursor = t.clipCursor;
+            t.oldFrom = t.clipFrom;
+            t.fadeStart = this.frames;
+            t.fadeLength = msg.fade;
+          } else t.oldClips = null;
           t.clips = msg.clips;
           t.clipCursor = 0;
           t.clipFrom = Number.NEGATIVE_INFINITY;
@@ -1633,19 +1653,41 @@ export class EngineCore implements Host {
     }
   }
 
-  /** The track's audio regions over this block. */
+  /** The track's audio regions over this block (through a crossfade, its clips before and after it). */
   private playClips(t: TrackNode): void {
-    const clips = t.clips;
+    let old = t.oldClips;
+    if (old && this.blockFrame - t.fadeStart >= t.fadeLength) {
+      old = null;
+      t.oldClips = null;
+    }
+    if (!old) {
+      this.playClipList(t, t.clips, false, 0);
+      return;
+    }
+    this.playClipList(t, t.clips, false, 1);
+    this.playClipList(t, old, true, -1);
+  }
+
+  /**
+   * One list of a track's clips over this block: its current one, or (`old`) the one it fades out
+   * from. `fade`: 1 fading in, -1 fading out, 0 neither.
+   */
+  private playClipList(t: TrackNode, clips: ClipSpec[], old: boolean, fade: number): void {
     for (let s = 0; s < this.spanCount; s++) {
       const out = this.spans[s * 3] as number;
       const song = this.spans[s * 3 + 1] as number;
       const count = this.spans[s * 3 + 2] as number;
       const songEnd = song + count;
       // from the first clip not yet past (from the first of all, when the song has gone back)
-      let c = song < t.clipFrom ? 0 : t.clipCursor;
-      t.clipFrom = song;
+      let c = song < (old ? t.oldFrom : t.clipFrom) ? 0 : old ? t.oldCursor : t.clipCursor;
       while (c < clips.length && (clips[c] as ClipSpec).end <= song) c++;
-      t.clipCursor = c;
+      if (old) {
+        t.oldFrom = song;
+        t.oldCursor = c;
+      } else {
+        t.clipFrom = song;
+        t.clipCursor = c;
+      }
       for (let i = c; i < clips.length; i++) {
         const clip = clips[i] as ClipSpec;
         if (clip.start >= songEnd) break;
@@ -1676,6 +1718,12 @@ export class EngineCore implements Host {
           if (cutIn && a < DECLICK) g *= a / DECLICK;
           if (cutOut && b < DECLICK) g *= b / DECLICK;
           const o = out + (f - song);
+          if (fade !== 0) {
+            // linear across the crossfade: the new list's share from its first frame on
+            const k = this.blockFrame + o - t.fadeStart + 1;
+            const x = k >= t.fadeLength ? 1 : k / t.fadeLength;
+            g *= fade > 0 ? x : 1 - x;
+          }
           t.l[o] = (t.l[o] as number) + (L[i] as number) * g;
           t.r[o] = (t.r[o] as number) + (R[i] as number) * g;
         }
@@ -1715,7 +1763,7 @@ export class EngineCore implements Host {
     }
     t.events.clear();
     t.work.clear();
-    if (t.clips.length && this.playing && song) this.playClips(t);
+    if ((t.clips.length || t.oldClips) && this.playing && song) this.playClips(t);
     if (t.part && this.playing && song) this.playPart(t, t.part);
     if (t.input && this.inputOf(t, input)) {
       const { inA, inB } = this;
@@ -2562,6 +2610,8 @@ export class EngineCore implements Host {
 
   private block(out0: Float32Array, out1: Float32Array, n: number, input: Float32Array[] | undefined): void {
     this.tick++;
+    this.blockFrame = this.frames;
+    this.frames += n;
     this.readLive();
     const cyc = this.cycle;
     if (this.playing && cyc.on && cyc.end > cyc.start && this.pos === cyc.end) {

@@ -141,7 +141,48 @@ You think in seconds; music happens in milliseconds. So:
   song on the host; the command prints where.
 - **Audio**: `holo audio FILE.wav --at 9 [--track "Vocal"]` puts a recording or a stem on an audio track
   (a new one unless `--track` names one). Audio regions show in `holo show` with their file, gain,
-  fades and stretch; change those with raw `updateRegion` ops (see reference.md).
+  fades and stretch; change those with `holo regions` (below) or raw `updateRegion` ops (see reference.md).
+
+## Regions, bars, measuring, files: what the studio's own agent can do
+
+The studio has an agent of its own (its bar, Ctrl /). Everything it can do on a song, `holo` does too,
+with the agent's own code, so it does it the same way and says what it did the same way:
+
+```bash
+holo regions show --track Vocal                    # a track's regions (a region by id, name or "selected")
+holo regions split --track Vocal --at "17 21 25"   # chop; also delete (--confirm), copy, move (--to-track),
+holo regions fade selected --fade-out 1.5          #   repeat (--times), trim (--start/--end), gain (--db),
+holo regions stretch "Take 2" --ratio 2            #   stretch, mute, unmute, rename (--name); MIDI only:
+holo regions quantize --track Keys --unit 1/16 --strength 80   # quantize, transpose (--semitones) and
+holo regions cc rgn_… --lane pb --points "9=0 9.3=4096 10=0"   # controller lanes (mod 1, 11, 64, pb, at)
+holo timeline insert --at 17 --bars 4              # whole bars across every track: insert, copy (--from 9
+holo timeline copy --from 9 --to 17 --at 33        #   --to 17 --at 33); delete and move need --confirm
+holo measure take --track Vocal --from 17 --to 25  # a take's pitch (cents against the key or --against a
+                                                   #   track), drift, vibrato, timing, phrase levels
+holo measure mix                                   # loudness, true peak, sections, balance (--source bounce)
+holo measure tracks [--track Bass --against Kick]  # each track alone; where two mask each other
+holo measure plugin --track Vocal --plugin compressor   # what a plugin does (an EQ's curve, a reverb's decay)
+holo measure meters --seconds 8                    # the studio's meters while it plays (start playback first)
+holo measure file take.wav                         # a recording here (or the newest bounce)
+holo played [--seconds 20]                         # what the user just played in the studio
+holo played --analyze                              # its tempo, meter, key, pickup and grid, as score text
+holo listen --seconds 8 --analyze                  # the same for what they play next
+holo import theme.mid --at 17 [--track Strings] [--parts 1,3] [--tempo adopt]   # MIDI or MusicXML into the
+holo import vocal.wav --track Vocal --at 9         #   song as tracks, or a recording onto an audio track
+holo details --artist "…" --album "…"              # who the song is by and its album (outside undo)
+holo packs [--available] [--search piano]          # installed packs and palettes' sounds, or the catalog
+```
+
+Measure before you judge a mix or a take, and never claim what a plugin did without measuring it
+(`holo measure take --through effects` hears a take as it comes out of its plugins). A render is slower
+than the song plays: a measurement not done within 40 s says how far it got, and the same command again
+collects it (`--wait 300` waits here; `--json` gives the numbers). `holo import` places at the
+playhead when `--at` is left out (unlike `holo audio`, which starts at bar 1); the song keeps its meter
+and key, and new tracks play a synth until you give them instruments.
+
+Anything else the studio's agent does, by its tool's name: `holo tool` lists them, `holo tool fx --help`
+shows a tool's fields, and `holo tool fx --action move --target Keys --plugin eq --index 1` runs it
+(fields as flags; an object field as JSON: `--sends '{"Reverb": -12}'`).
 
 ## Craft
 

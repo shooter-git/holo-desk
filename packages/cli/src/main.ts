@@ -39,6 +39,7 @@ import {
   ticksPerBar,
   tickToSeconds,
 } from '@holo/session';
+import { TOOL_HELP } from './commands.ts';
 import { scanCommand } from './scan.ts';
 import { scoreCommand } from './score.ts';
 
@@ -52,7 +53,22 @@ const command = argv.shift() ?? 'help';
 const flags = new Map<string, string | true>();
 const words: string[] = [];
 /** Flags that never take a value. */
-const SWITCHES = new Set(['replace', 'new', 'help', 'no-wait', 'smooth', 'linear', 'no-finish', 'no-loop']);
+const SWITCHES = new Set([
+  'replace',
+  'new',
+  'help',
+  'no-wait',
+  'smooth',
+  'linear',
+  'no-finish',
+  'no-loop',
+  // (the commands that do what the agent's tools do)
+  'confirm',
+  'clear',
+  'json',
+  'analyze',
+  'available',
+]);
 for (let i = 0; i < argv.length; i++) {
   const a = argv[i] as string;
   if (a.startsWith('--')) {
@@ -303,6 +319,8 @@ Experiences (a new project whose music is made here and built by the project its
   holo update-engine [DIR] [--ref REF]
                                       pin this HO[LO]'s engine and the packs the songs play, rebuild every
                                       song, say how far each moved
+
+${TOOL_HELP}
 
 Every change is one undo step in the studio, labeled "${AUTHOR}: …". --song ID picks a song other than the open one.
 Note names are scientific (middle C = C4 = MIDI 60) unless --names logic (middle C = C3).`;
@@ -847,6 +865,11 @@ async function main(): Promise<void> {
           `${noteName(n.pitch, names())} (${n.pitch}) vel ${n.velocity} ${where}, ${n.length !== null ? `${n.length} ms` : 'still held'} [${n.port}]`,
         );
       }
+      if (has('analyze')) {
+        // heard as music, as the agent's analyze_played hears it
+        const { analyzeNotes } = await import('./tool-commands.ts');
+        console.log(await analyzeNotes({ base: BASE, author: AUTHOR, middleC: names(), songId }, r.notes));
+      }
       return;
     }
 
@@ -1137,6 +1160,20 @@ async function main(): Promise<void> {
       });
       console.log(`Sent to ${r.path}${r.edited.length ? `; edited tracks: ${r.edited.join(', ')}` : ''}`);
       if (r.note) console.log(r.note);
+      return;
+    }
+
+    // what the in-app agent's tools do: each runs the agent's own tool (tool-commands.ts)
+    case 'regions':
+    case 'timeline':
+    case 'measure':
+    case 'played':
+    case 'details':
+    case 'import':
+    case 'packs':
+    case 'tool': {
+      const { toolCommand } = await import('./tool-commands.ts');
+      await toolCommand({ command, words, flags, base: BASE, author: AUTHOR, middleC: names(), songId });
       return;
     }
 

@@ -1,7 +1,7 @@
 import { EventEmitter } from 'node:events';
 import { describe, expect, it } from 'vitest';
 import type { WebSocket } from 'ws';
-import { Live, type RenderJob } from '../src/live.ts';
+import { GONE, Live, NO_ANSWER, type RenderJob } from '../src/live.ts';
 
 const KEY = 'ab'.repeat(32);
 
@@ -148,5 +148,23 @@ describe('runners and the runner key', () => {
     expect(render.state).toBe('done');
     old.close();
     expect(studio.got('ai-status')).toEqual([]);
+  });
+});
+
+describe('asking a studio', () => {
+  it('asked to hear at once, a studio that goes answers GONE; otherwise the request waits for its time', async () => {
+    const { live, studio } = setup();
+    const editor = live.editor('prj_song');
+    if (!editor) throw new Error('no studio');
+    const early = live.request(editor, { type: 'agent-ops' }, 60_000, true);
+    const plain = live.request(editor, { type: 'ops' }, 50);
+    expect(studio.got('agent-ops')).toHaveLength(1);
+    studio.close();
+    expect(await early).toEqual({ ok: false, error: GONE });
+    // (the command line's requests are as they were: no answer, at their timeout)
+    expect(await plain).toEqual({ ok: false, error: NO_ANSWER });
+    // asked once it has gone: GONE at once, nothing sent
+    expect(await live.request(editor, { type: 'agent-ops' }, 60_000, true)).toEqual({ ok: false, error: GONE });
+    expect(studio.got('agent-ops')).toHaveLength(1);
   });
 });

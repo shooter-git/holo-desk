@@ -404,6 +404,15 @@ export async function resolveConflict(keep: 'mine' | 'theirs'): Promise<void> {
 /** The open song, kept on this device: its undo history, and its changes the host doesn't have yet (kept-history.ts). */
 const keeper = new Keeper(typeof window === 'undefined' ? null : browserShelf(), { made: STUDIO_ENGINE });
 
+/**
+ * Keep the open song on the device now (its changes the host doesn't have yet, or its history):
+ * resolves once it's written, or couldn't be.
+ */
+export function keepNow(): Promise<void> {
+  keeper.changed(store.get());
+  return keeper.flush();
+}
+
 /** Keep the open song on the device as it changes, and as the page is hidden. */
 function keepOnDevice(): void {
   store.subscribe(() => keeper.changed(store.get()));

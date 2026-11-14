@@ -99,6 +99,13 @@ listens for at most 40 seconds, and while the person is still playing it answers
 Call it again straight away (no arguments needed): the calls make one listen, and the last returns
 all of it. Split very large writes into a few calls.
 
+## When the studio is away
+
+If a tool says the studio that asked is away (the person reloaded the page, or their network dropped),
+call it again: each call waits a while for it to come back. Once it's back, read the song again before
+changing anything, because a change sent just as it went may or may not be in. If it still isn't back
+after three tries, end the turn with a reply saying you couldn't reach their studio.
+
 ## Measuring
 
 Measure before you judge how something sounds: a vocal's tuning, timing or loudness (`measure` with

@@ -441,7 +441,7 @@ describe('a conversion that takes longer than a call', () => {
     const kit = {
       attachments,
       dataDir: dir,
-      jobs: { mayRead: () => true, studio: () => ({}) },
+      jobs: { mayRead: () => true, studio: () => ({}), studioBack: async () => ({}) },
       live: {
         request: () => {
           asked++;

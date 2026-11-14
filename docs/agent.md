@@ -165,15 +165,29 @@ effort, and the row says so.
 
 These are for the agent's tools, with the job token. Without a token of the right shape they answer
 401. When the job has ended (or its turn has), or the token isn't its, they answer 403. The first call
-moves the job from `waiting` to `running`. Routes marked **studio** also answer 403 unless the
-requester's studio has the job's song open.
+moves the job from `waiting` to `running`.
+
+**The studio that asked, away a moment.** Routes marked **studio**, `…/ops`, `meters` and an import
+the studio converts need the requester's studio with the job's song open. When it isn't there (the page
+reloading, its network dropped), they wait up to 15 s (`awayMs`) for that device's studio to report the
+song open again, then go on there. Meanwhile the job's line under the bar says "Waiting for the studio
+that asked to come back" (the other devices with the song open see it), and the line it had comes back
+after. If the studio isn't back by then, they answer 409 `away`, and the agent may try again. The wait
+comes out of the call's own time: a listen's part is that much shorter, `…/ops` has that much less of
+its minute, and `meters` waits only as long as its 45 s leave. A request the studio was sent and that
+goes unanswered because its connection closed is answered 409 `away` at once, not at its timeout; for
+`…/ops`, the change may or may not have gone in, and the agent is told to read the song before making it
+again. `…/song` and `…/describe` wait the same way, and if the studio doesn't come back they read the
+song as saved here. A scan preset, which carries on without its studio, isn't waited for: those routes
+answer it 403 at once. A reload doesn't end the job (only opening another song does), and the
+command line's own requests to a studio are as they were.
 
 | Method and path | Body / query | Answer |
 |---|---|---|
 | `GET …/song` | | The Project (JSON). The studio is asked to save first. |
 | `GET …/describe` | | `{text}` (`describeProject`) |
 | `GET …/state` **studio** | | `{playhead, position, playing, recording, bpm, selection:{track, regions, notes}, cycle, middleC, view?, scan?}` |
-| `POST …/ops` | `{ops, label, batch}` (1 to 5000 ops; label ≤ 80) | `{ok, revision?}`. Sent to the requester's studio as `agent-ops`, answered once applied: 400 if it refused, 504 after 60 s. Without the studio: 403, except for a scan preset, whose batch is applied and saved here as a revision by "Agent". Each batch id is applied once. |
+| `POST …/ops` | `{ops, label, batch}` (1 to 5000 ops; label ≤ 80) | `{ok, revision?}`. Sent to the requester's studio as `agent-ops`, answered once applied: 400 if it refused, 504 after 60 s (less the time it waited for the studio). Without the studio: 409 `away` (above), except for a scan preset, whose batch is applied and saved here as a revision by "Agent". Each batch id is applied once. |
 | `POST …/transport` **studio** | `{action:'play'|'stop'|'locate', bar?}` | `{ok}`. `locate` needs `bar`. Sent as `transport {action, at?}`, `at` in ticks; 409 if the studio can't (its audio isn't started). |
 | `POST …/audition` **studio** | `{track?, events:[[delayMs, status, d1, d2]]}` (1 to 1024; status 0x80 to 0xEF) | `{ok}`. Sent as `play-notes`: heard, not recorded. |
 | `POST …/listen` **studio** | `{maxMs, quietMs, last?}` (maxMs ≤ 45000, quietMs ≤ 10000) | `{notes:[PlayedNote], done, part, pending}`: one part of a listen (below). 409 while a part is under way. |
@@ -309,8 +323,10 @@ taken only from the runner it was handed to, while it runs.
 - acks: `{type:'ack', id, ok, …}`. An ack is taken only from the connection the request went to.
 
 **Server → studio**, asked (answered with an ack carrying the same `id`):
-- `agent-ops {id, project, job, batch, ops, label}`: ack `{ok, revision?}` once applied, or
-  `{ok:false, error}`.
+- `agent-ops {id, project, job, batch, ops, label}`: ack `{ok, revision?}` once applied and kept on the
+  device (`keepNow`, docs/architecture.md: a reload or a closed tab after it brings the change back and
+  saves it), or `{ok:false, error}`. A page that goes before then never acks, and the tool hears 409
+  `away` (above).
 - `agent-flush {id}`: save now; ack `{revision}`.
 - `agent-played {id, seconds}`: ack `{notes:[PlayedNote]}` from the last minute of what was played here.
 - `agent-compare {id, job, from, to}`: ack once it has started playing.

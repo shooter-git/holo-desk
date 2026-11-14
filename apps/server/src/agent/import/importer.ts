@@ -23,7 +23,7 @@ import { type Answer, NO_ANSWER } from '../../live.ts';
 import { type AttachmentRecord, isAudio, isScore, scoreText } from '../attachments.ts';
 import { isObj } from '../check.ts';
 import type { JobRouteKit } from '../job-routes/index.ts';
-import { type AgentJob, Refusal } from '../jobs.ts';
+import { type AgentJob, awayIfGone, Refusal } from '../jobs.ts';
 
 /** How long a call waits before it answers "not done", and how long the studio may take in all. */
 export const BUDGET_MS = 40_000;
@@ -173,13 +173,15 @@ export class Importer {
 
   /** The requester's studio fetches the bytes, decodes them and uploads them as WAV. */
   private async viaStudio(job: AgentJob, a: AttachmentRecord, dir: string): Promise<ImportAnswer> {
-    const studio = this.kit.jobs.studio(job);
-    if (!studio) throw new Refusal(403, 'The song isn’t open in the studio that asked');
+    // (a studio away a moment is waited for; the call still answers within its budget, the work going on)
+    const studio = await this.kit.jobs.studioBack(job);
     const answer = await this.kit.live.request(
       studio,
       { type: 'agent-import-audio', project: job.view.project, attachment: a.id, name: a.name },
       STUDIO_MS,
+      true,
     );
+    awayIfGone(answer);
     return { done: true, kind: 'audio', how: 'studio', file: studioFile(answer, a, dir) };
   }
 }

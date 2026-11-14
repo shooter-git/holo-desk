@@ -292,7 +292,9 @@ class SampleVoice implements Voice {
   /** A release or pedal sample's voice (never counted against a key's notes, never let go by a key). */
   readonly isRelease: boolean;
   /** Letting it go stops it: false for a string without a damper. */
-  private readonly damped: boolean;
+  readonly damped: boolean;
+  /** Its sample ended while its key or the pedal still held it, and the sampler has noted it. */
+  ended = false;
   /** The velocity that struck it, and the sampler's frame it started on (for its release sample). */
   readonly velocity: number;
   readonly born: number;
@@ -572,6 +574,16 @@ export class Sampler extends Instrument {
   private readonly offCoef: number;
   /** Frames rendered: how long a note was held, for its release sample. */
   private frames = 0;
+  /**
+   * Notes whose samples ended while their key or the pedal still held them, by key: a key let go still
+   * drops its damper, so its release sample is still due (as a sampler playing SFZ or EXS has it). Made
+   * once (nothing is allocated as it plays), empty for an instrument without release samples. Each key's
+   * state (0 none, 1 held by its key, 2 held by the pedal), its exact pitch, velocity and start frame.
+   */
+  private readonly endedState: Uint8Array;
+  private readonly endedPitch: Float64Array;
+  private readonly endedVelocity: Float64Array;
+  private readonly endedBorn: Float64Array;
   /** The pedal as the sampler last saw it (for its own sound going down and up). */
   private pedal = false;
   /** Its knobs, as its voices read them. */
@@ -606,7 +618,18 @@ export class Sampler extends Instrument {
     this.pedalUp = up.length ? set(up) : null;
     this.offCoef = Math.exp(-6.9 / (Math.max(spec.offTime ?? 0.02, 0.001) * sr));
     if (spec.polyphony) this.maxVoices = spec.polyphony;
+    const keys = this.releases.length && !spec.oneShot ? 128 : 0;
+    this.endedState = new Uint8Array(keys);
+    this.endedPitch = new Float64Array(keys);
+    this.endedVelocity = new Float64Array(keys);
+    this.endedBorn = new Float64Array(keys);
     this.update(params);
+  }
+
+  /** A key's place in the table of ended notes (-1: none, or no table). */
+  private endedAt(key: number): number {
+    const k = Math.round(key);
+    return k >= 0 && k < this.endedState.length ? k : -1;
   }
 
   /**
@@ -640,6 +663,9 @@ export class Sampler extends Instrument {
   }
 
   protected startVoice(key: number, velocity: number): Voice | null {
+    // struck again, its ended note's damper is the new note's to drop
+    const at = this.endedAt(key);
+    if (at >= 0) this.endedState[at] = 0;
     const set = this.struck;
     const count = set.pick(key, velocity);
     if (!count) return null;
@@ -686,21 +712,43 @@ export class Sampler extends Instrument {
       const v = this.voices[i] as SampleVoice;
       if (!v.letGo) continue;
       v.letGo = false;
-      const held = (this.frames - v.born) / this.sr;
-      for (const set of this.releases) {
-        const count = set.pick(v.key, v.velocity);
-        let layers: SampleLayer[] | null = null;
-        for (let k = 0; k < count; k++) {
-          const zone = set.out[k] as SampleZone;
-          const db = -(zone.decay ?? this.spec.releaseDecay ?? 0) * held;
-          const gain = zone.gain * this.velocityGain(v.velocity, this.releaseVelocityRange) * 10 ** (db / 20);
-          if (gain < 1e-4) continue;
-          if (!layers) layers = [];
-          layers.push(this.layer(zone, v.key, gain));
-        }
-        if (layers)
-          this.addVoice(new SampleVoice(layers, v.key, this.sr, this.spec, this.state, v.velocity, this.frames));
+      this.releaseOf(v.key, v.velocity, v.born);
+    }
+  }
+
+  /** A note's release samples, one of each part, for a key let go after `born` (quieter the longer it was held). */
+  private releaseOf(key: number, velocity: number, born: number): void {
+    const held = (this.frames - born) / this.sr;
+    for (const set of this.releases) {
+      const count = set.pick(key, velocity);
+      let layers: SampleLayer[] | null = null;
+      for (let k = 0; k < count; k++) {
+        const zone = set.out[k] as SampleZone;
+        const db = -(zone.decay ?? this.spec.releaseDecay ?? 0) * held;
+        const gain = zone.gain * this.velocityGain(velocity, this.releaseVelocityRange) * 10 ** (db / 20);
+        if (gain < 1e-4) continue;
+        if (!layers) layers = [];
+        layers.push(this.layer(zone, key, gain));
       }
+      if (layers) this.addVoice(new SampleVoice(layers, key, this.sr, this.spec, this.state, velocity, this.frames));
+    }
+  }
+
+  /**
+   * Ended notes let go: those `held` (1, by their key; 2, by the pedal) drop their dampers now, or with
+   * the pedal down a key's wait for it. `key` undefined: every key.
+   */
+  private letGoEnded(held: 1 | 2, key?: number): void {
+    const state = this.endedState;
+    for (let at = 0; at < state.length; at++) {
+      if (state[at] !== held) continue;
+      if (key !== undefined && (at !== this.endedAt(key) || this.endedPitch[at] !== key)) continue;
+      if (held === 1 && this.sustain) {
+        state[at] = 2;
+        continue;
+      }
+      state[at] = 0;
+      this.releaseOf(this.endedPitch[at] as number, this.endedVelocity[at] as number, this.endedBorn[at] as number);
     }
   }
 
@@ -722,6 +770,7 @@ export class Sampler extends Instrument {
     if (this.spec.oneShot) return;
     super.noteOff(key);
     this.releaseSamples();
+    if (this.endedState.length) this.letGoEnded(1, key);
   }
 
   override cc(num: number, value: number): void {
@@ -729,6 +778,7 @@ export class Sampler extends Instrument {
     if (num === 64) {
       const down = value >= 64;
       if (down !== this.pedal) this.pedalSound(down ? this.pedalDown : this.pedalUp);
+      if (this.pedal && !down && this.endedState.length) this.letGoEnded(2);
       this.pedal = down;
     }
     this.releaseSamples();
@@ -737,12 +787,31 @@ export class Sampler extends Instrument {
   override allNotesOff(hard: boolean): void {
     super.allNotesOff(hard);
     this.pedal = false;
-    if (hard) for (const v of this.voices as SampleVoice[]) v.letGo = false;
-    else this.releaseSamples();
+    if (hard) {
+      for (const v of this.voices as SampleVoice[]) v.letGo = false;
+      this.endedState.fill(0);
+    } else {
+      this.releaseSamples();
+      this.letGoEnded(1);
+      this.letGoEnded(2);
+    }
   }
 
   override render(l: Float32Array, r: Float32Array, start: number, end: number): void {
     super.render(l, r, start, end);
+    // notes whose samples ended while their key or the pedal held them (not choked, stolen or let go)
+    if (this.endedState.length) {
+      for (const v of this.voices as SampleVoice[]) {
+        if (!v.done || v.ended || v.released || v.isRelease || !v.damped) continue;
+        v.ended = true;
+        const at = this.endedAt(v.key);
+        if (at < 0) continue;
+        this.endedState[at] = v.sustained ? 2 : 1;
+        this.endedPitch[at] = v.key;
+        this.endedVelocity[at] = v.velocity;
+        this.endedBorn[at] = v.born;
+      }
+    }
     this.frames += end - start;
   }
 }

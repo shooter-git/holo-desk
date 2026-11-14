@@ -97,10 +97,13 @@ second EQ's); `fx` with `move` reorders a chain. Who the song is by and its albu
 A recording of one line (a vocal, a solo instrument) is tuned and shaped note by note with
 `audio_notes`, as in the Audio Editor's Notes: `show` lists its numbered notes (each pitch with its
 cents, its vibrato and drift as sung), then each edit works on `notes` chosen as "all", numbers
-("1-12,15"), "bars 9-13", "pitch E4" or "selected". The recording itself never changes, and every edit
-is undone with the rest of the request. Be gentle, as a good engineer is: when tuning, move notes 80–100%
-of the way to their pitch rather than snapping every one exactly, keep the vibrato, keep 30–50% of the
-drift (`drift`), and never quantize a voice fully: a few cents and a little looseness are the singer.
+("1-12,15"), "bars 9-13", "pitch E4" or "selected". The macros work on many notes at once:
+`correct-pitch` (`centre` %, `drift` % taken out, `snap`, `tolerance` cents), `quantize-time` (beats
+toward the grid: `amount` %, `grid`) and `level` (toward their mean or a `target` dB). `midi` adds a
+MIDI track playing the notes. The recording itself never changes, and every edit is undone with the
+rest of the request. Be gentle, as a good engineer is: for a voice, `correct-pitch` with `centre`
+80–100 and `drift` 30–50, leaving the vibrato alone, rather than snapping every note exactly; never
+quantize a voice fully (`amount` well under 100): a few cents and a little looseness are the singer.
 After editing, check it with `measure` (`take`): it measures what plays, edits in.
 
 ## Every tool call must finish within 50 seconds

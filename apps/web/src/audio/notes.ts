@@ -8,6 +8,8 @@ import type { AudioNote } from '@holo/session';
 /** A recording's pitch every 5 ms (MIDI with cents, NaN where it isn't voiced) and its power there, at times in seconds of the file. */
 export interface NoteCurve {
   t: Float64Array;
+  /** The step between times, seconds (as found: `t` is the first time and this many steps on). */
+  step: number;
   midi: Float64Array;
   power: Float64Array;
 }

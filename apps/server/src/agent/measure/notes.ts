@@ -6,8 +6,9 @@
  * - **Found the same way.** The recording is decoded as every renderer decodes it (`decodeWav`, at its
  *   own rate) and its notes found with the studio's own call (`notesAndCurves`), so the host and the
  *   studio find the same notes in the same file. Beside them: each note's drift and vibrato as sung,
- *   from the same pitch curve, measured as a take's are (the engine's `noteShape`), and what kind of
- *   recording it looks like.
+ *   from the same pitch curve, measured as a take's are (the engine's `noteShape`), each note's level
+ *   as recorded from the same power curve (`noteLevel`, as the studio reads it, for the `level` macro
+ *   and a MIDI track's velocities), and what kind of recording it looks like.
  * - **What plays.** A region whose notes are edited plays its recording with its patches in place
  *   (`renderNotePatch`, `assembleClip`): the recording at the song's rate, stretched as the region
  *   stretches it, as a bounce plays it. Measuring a take reads that, so a note tuned is measured where
@@ -19,6 +20,7 @@ import {
   decodeWav,
   loadClipAudio,
   type NoteCurves,
+  noteLevel,
   noteShape,
   notesAndCurves,
   type RenderSource,
@@ -37,6 +39,8 @@ export interface FoundNotes {
   notes: AudioNotes;
   /** Each note's shape, by its index (null for a note with no pitch). */
   shapes: (NoteShape | null)[];
+  /** Each note's level as recorded, dB of full scale, by its index (null where there's nothing to read). */
+  levels: (number | null)[];
   /** What kind of recording it looks like: notes are found as one line's for now, a chord's strongest. */
   looks: AudioNotesMode;
 }
@@ -58,6 +62,7 @@ export function findNotes(wav: Uint8Array): FoundNotes & { seconds: number } {
   return {
     notes,
     shapes: notes.n.map((n) => shapeOf(n, curves)),
+    levels: notes.n.map((n) => noteLevel(n, curves)),
     looks: classifyRecording(d.channels, d.rate).mode,
     seconds: Math.round(((d.channels[0]?.length ?? 0) / d.rate) * 1000) / 1000,
   };

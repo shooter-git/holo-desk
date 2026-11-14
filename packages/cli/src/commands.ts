@@ -4,7 +4,7 @@
  * tests and tools can read the list, and the help for the commands that do what the in-app agent's
  * tools do (tool-commands.ts).
  */
-import { NOTE_EDIT_NAMES } from '@holo/session';
+import { NOTE_EDIT_NAMES, NOTE_EXTRAS } from '@holo/session';
 
 export const COMMANDS = [
   'help',
@@ -66,12 +66,13 @@ export const COMMANDS = [
 
 export type Command = (typeof COMMANDS)[number];
 
-/** The note edits, as `holo help` lists them after `holo notes`: a few to a line. */
+/** The note edits (and what's beside them: midi), as `holo help` lists them after `holo notes`: a few to a line. */
 const noteActions = (indent: string, width = 104): string => {
   const lines: string[] = [];
   let line = indent;
-  for (const [i, name] of ['show', 'detect', ...NOTE_EDIT_NAMES].entries()) {
-    const word = `${name}${i < NOTE_EDIT_NAMES.length + 1 ? ',' : ''}`;
+  const names = ['show', 'detect', ...NOTE_EDIT_NAMES, ...NOTE_EXTRAS];
+  for (const [i, name] of names.entries()) {
+    const word = `${name}${i < names.length - 1 ? ',' : ''}`;
     if (line.length + word.length + 1 > width && line.trim()) {
       lines.push(line.trimEnd());
       line = indent;
@@ -93,6 +94,7 @@ export const TOOL_HELP = `What the in-app agent does, from here (each runs the a
 ${noteActions('        ')}
         e.g. holo notes show --track Vocal · holo notes shift --notes 5 --semitones 2
              holo notes vibrato --notes "bars 9-12" --keep 60 · holo notes reset --notes all
+             holo notes correct-pitch --notes all --centre 90 --drift 40 · holo notes midi --track Vocal
         (holo notes help lists what each does; holo notes ACTION --help its flags)
   holo timeline insert|delete|copy|move [--at 17] [--from 9] [--to 17] [--bars 4] [--confirm]
         whole bars across every track (delete and move need --confirm)

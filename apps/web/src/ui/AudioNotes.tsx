@@ -14,6 +14,11 @@
  * and the studio tells the agent which they are (live.ts). A region's edits can be switched off and on,
  * to hear the recording as it was (A/B). While an edit's sound is being rendered, its stretch is
  * striped and the bar says so.
+ *
+ * The bar's Macros dialog (NoteMacros.tsx) corrects pitch, quantizes time and levels the notes
+ * selected (or all the region plays), previewing as it goes, one undo step when applied; Level reads
+ * each note's level as recorded from the curve the notes were found with. "Notes to MIDI track" (the
+ * menu on the space between notes, and the bar's More menu) adds a MIDI track playing them.
  */
 import { DETECT_V, editedPitch, isEdited, regionPatches } from '@holo/engine';
 import {
@@ -27,6 +32,7 @@ import {
   type AudioNotes as NoteList,
   noteEdit,
   noteName,
+  notesToMidi,
   PITCH_SNAPS,
   type PitchSnap,
   type Project,
@@ -58,11 +64,12 @@ import {
   useEffect,
   useLayoutEffect,
   useRef,
+  useState,
   useSyncExternalStore,
 } from 'react';
 import { apply, findRegion, locate } from '../app/actions.ts';
 import { isPhone, useLayout } from '../app/layout.ts';
-import { store, useApp } from '../app/store.ts';
+import { store, toast, useApp } from '../app/store.ts';
 import { engine } from '../audio/engine.ts';
 import { type FoundNotes, type NoteCurve, type NotesState, recordingNotes } from '../audio/notes.ts';
 import { audioView, fitAudioView, NoRecordings, useAudioRegion } from './AudioEditor.tsx';
@@ -79,6 +86,7 @@ import {
 } from './gesture.ts';
 import { drawKeys, drawLanes } from './keys.ts';
 import { type MenuEntry, openMenu, openMenuAt } from './menu.tsx';
+import { type MacroSession, NoteMacros } from './NoteMacros.tsx';
 import {
   capsule,
   capsuleHalf,
@@ -98,6 +106,7 @@ import {
   tickToFile,
   zoomPitch,
 } from './note-lanes.ts';
+import { notesLevels } from './note-macros.ts';
 import {
   AMOUNT_TOOLS,
   type AmountTool,
@@ -265,6 +274,70 @@ function patchStatus(clip: AudioClip): PatchStatus {
 /** The seconds of its recording a region plays, [from, to). */
 function fileWindow(project: Project, region: Region, clip: AudioClip): [number, number] {
   return [clip.offset, tickToFile(project.tempo, region.start, clip, region.start + region.length)];
+}
+
+/** Each of these notes' level as recorded (by index), read from the curve they were found with; null till it's found. */
+function levelsFor(notes: NoteList, state: NotesState | null): (number | null)[] | null {
+  return state?.state === 'found' ? notesLevels(notes.n, state.found.curve) : null;
+}
+
+/** The region shown, its track and recording, as the song has them now (null when it isn't a recording). */
+function shownNow(regionId: string) {
+  const p = store.get().project;
+  const found = p && findRegion(p, regionId);
+  return p && found?.region.audio
+    ? { project: p, track: found.track, region: found.region, clip: found.region.audio }
+    : null;
+}
+
+/** What the Macros dialog works on: the region's notes as its edits start from them, and the notes selected (else all it plays). */
+function macroSession(regionId: string, middleC: MiddleC): MacroSession | null {
+  const now = shownNow(regionId);
+  if (!now) return null;
+  const { project, track, region, clip } = now;
+  const base = editableNotes(project, region, clip, recordingNotes.of(project.id, clip.file));
+  if (!base) return null;
+  const sel = selectedIn(region.id).filter((i) => i < base.n.length);
+  const [a, b] = fileWindow(project, region, clip);
+  const plays = base.n.map((n, i) => (n.t + n.d > a && n.t < b ? i : -1)).filter((i) => i >= 0);
+  return {
+    track: track.id,
+    region: region.id,
+    clip,
+    base,
+    indices: sel.length ? sel : plays,
+    selected: sel.length > 0,
+    ctx: editContext(project, region, clip, base, middleC),
+  };
+}
+
+/**
+ * A MIDI track playing the region's notes as they play (notesToMidi): named after its track, just
+ * below it, velocities from the notes' levels when they're known. One undo step.
+ */
+function notesToMidiTrack(regionId: string): void {
+  const now = shownNow(regionId);
+  if (!now) return;
+  const { project, track, region, clip } = now;
+  const state = recordingNotes.of(project.id, clip.file);
+  const notes = clip.notes ?? foundNotes(project, region, clip, state);
+  if (!notes) {
+    toast('The notes are still being found');
+    return;
+  }
+  const levels = levelsFor(notes, state);
+  const ops = notesToMidi(project, track.id, region.id, { notes, ...(levels ? { levels } : {}) });
+  const put = ops.find((o) => o.op === 'addRegion');
+  const count = put?.op === 'addRegion' ? put.region.notes.length : 0;
+  if (!count) {
+    toast('No notes with a pitch to write as MIDI');
+    return;
+  }
+  apply(ops, 'Notes to MIDI Track');
+  const added = ops.find((o) => o.op === 'addTrack');
+  toast(
+    `Added “${added?.op === 'addTrack' ? added.track.name : 'a MIDI track'}”: ${count === 1 ? '1 note' : `${count} notes`}`,
+  );
 }
 
 /** What the bar says of the notes: how many the region plays (and how many are selected), or what's keeping them. */
@@ -665,6 +738,7 @@ export function AudioNotes() {
         at >= 0 ? [at] : [],
       ),
       { label: 'Select all', hint: 'Ctrl A', onSelect: selectAll },
+      { label: 'Notes to MIDI track', onSelect: () => notesToMidiTrack(region.id) },
       'sep',
       {
         label: 'Find notes again…',
@@ -1625,9 +1699,10 @@ function ToolButton({ id, on }: { id: NoteTool; on: boolean }) {
 
 /**
  * The tools: each a button, and where a pitch dragged lands. A phone has the Pointer, the Pitch tool
- * (or the one chosen) and the rest, with the snap, in a menu.
+ * (or the one chosen) and the rest, with the snap and the bar's `more` (the macros, the notes as
+ * MIDI), in a menu.
  */
-function NoteTools({ phone }: { phone: boolean }) {
+function NoteTools({ phone, more }: { phone: boolean; more: MenuEntry[] }) {
   const tool = useApp((s) => s.noteTool);
   const snap = useApp((s) => s.pitchSnap);
   const setSnap = (v: PitchSnap) => store.set({ pitchSnap: v });
@@ -1640,7 +1715,7 @@ function NoteTools({ phone }: { phone: boolean }) {
         <button
           type="button"
           className="btn icon"
-          title="More tools, and where a dragged pitch lands"
+          title="More tools, where a dragged pitch lands, the macros, and the notes as MIDI"
           aria-label="More tools"
           onClick={(e) =>
             openMenuAt(e.currentTarget, [
@@ -1657,6 +1732,8 @@ function NoteTools({ phone }: { phone: boolean }) {
               ...PITCH_SNAPS.map(
                 (v): MenuEntry => ({ label: PITCH_SNAP_NAMES[v], checked: v === snap, onSelect: () => setSnap(v) }),
               ),
+              'sep',
+              ...more,
             ])
           }
         >
@@ -1692,8 +1769,22 @@ function NoteTools({ phone }: { phone: boolean }) {
 export function AudioNotesBar() {
   const { project, track, region } = useAudioRegion();
   const phone = isPhone(useLayout());
+  const middleC = useApp((s) => s.middleC);
   const clip = region?.audio;
   const state = useFound(project?.id, clip?.file);
+  /** The Macros dialog, while it's open: what it works on, as it was when it opened. */
+  const [macros, setMacros] = useState<MacroSession | null>(null);
+  const openMacros = () => {
+    const session = region && macroSession(region.id, middleC);
+    if (session) setMacros(session);
+    else toast('The notes are still being found');
+  };
+  const more: MenuEntry[] = region
+    ? [
+        { label: 'Macros…', onSelect: openMacros },
+        { label: 'Notes to MIDI track', onSelect: () => notesToMidiTrack(region.id) },
+      ]
+    : [];
   const selected = useApp((s) =>
     s.selectedAudioNotes && s.selectedAudioNotes.region === region?.id ? s.selectedAudioNotes.notes.length : 0,
   );
@@ -1707,7 +1798,7 @@ export function AudioNotesBar() {
           {track?.name ?? ''}
         </span>
       )}
-      {project && region && clip && <NoteTools phone={phone} />}
+      {project && region && clip && <NoteTools phone={phone} more={more} />}
       {project && region && clip && (
         <span
           className="muted"
@@ -1734,6 +1825,35 @@ export function AudioNotesBar() {
         >
           A/B
         </button>
+      )}
+      {!phone && project && region && clip && (
+        <button
+          type="button"
+          className="btn"
+          title="Correct Pitch, Quantize Time and Level: on the notes selected, or all the region plays"
+          onClick={openMacros}
+        >
+          Macros…
+        </button>
+      )}
+      {!phone && project && region && clip && (
+        <button
+          type="button"
+          className="btn ghost icon"
+          title="More"
+          aria-label="More"
+          onClick={(e) => openMenuAt(e.currentTarget, more.slice(1))}
+        >
+          <Ellipsis />
+        </button>
+      )}
+      {macros && (
+        <NoteMacros
+          session={macros}
+          levels={levelsFor(macros.base, state)}
+          phone={phone}
+          onClose={() => setMacros(null)}
+        />
       )}
       <span className="grow" />
       {/* a phone has undo and redo in its control bar or side rail, and zooms with two fingers (across

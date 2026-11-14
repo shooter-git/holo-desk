@@ -697,6 +697,9 @@ describe('the note edits’ registry', () => {
       'add',
       'remove',
       'reset',
+      'correct-pitch',
+      'quantize-time',
+      'level',
     ]);
     for (const e of NOTE_EDITS) {
       expect(e.name).toMatch(/^[a-z]+(-[a-z]+)*$/);

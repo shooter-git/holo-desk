@@ -6,7 +6,7 @@
 import { readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { decodeWav, encodeWav } from '@holo/engine';
-import { notesAndCurves } from '@holo/engine/notes';
+import { noteLevel, notesAndCurves } from '@holo/engine/notes';
 import type { AudioNotes, Project, Track } from '@holo/session';
 import Fastify from 'fastify';
 import { afterAll, describe, expect, it } from 'vitest';
@@ -105,7 +105,11 @@ describe('a recording’s notes, found on the host', () => {
     ]);
     // the notes the studio's worker finds in the same file: decoded the same way, found by the same call
     const wav = decodeWav(new Uint8Array(readFileSync(join(dataDir, 'audio', song.id, 'aud_take1.wav'))));
-    expect(r.notes).toEqual(notesAndCurves(wav.channels, wav.rate).notes);
+    const studio = notesAndCurves(wav.channels, wav.rate);
+    expect(r.notes).toEqual(studio.notes);
+    // each note's level as recorded, as the studio reads it from the same curve
+    expect(r.levels).toEqual(studio.notes.n.map((n) => noteLevel(n, studio.curves)));
+    expect(r.levels.every((l) => typeof l === 'number' && l < 0 && l > -60)).toBe(true);
     // a vibrato, as sung
     writeFileSync(join(dataDir, 'audio', song.id, 'aud_vib.wav'), encodeWav([withVibrato(3, 0.5, 2, 67)], SR, 'pcm24'));
     const v = await runTask({ kind: 'notes', dataDir, project: song.id, file: 'aud_vib', name: 'vib.wav' }, () => {});

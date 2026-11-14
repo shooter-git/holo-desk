@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { TOOLS, toolNamed } from '@holo/agent';
-import { missingNoteEdits, NOTE_EDITS } from '@holo/session';
+import { missingNoteEdits, missingNoteExtras, NOTE_EDITS, NOTE_EXTRAS } from '@holo/session';
 import { describe, expect, it } from 'vitest';
 import { COMMANDS, TOOL_HELP } from '../src/commands.ts';
 import { TOOL_PARITY } from '../src/parity.ts';
@@ -55,6 +55,19 @@ describe('a recording’s notes: every edit in the studio, the agent and holo no
   it('runs the agent’s audio_notes, which takes every note edit as an action', () => {
     expect(TOOL_PARITY.audio_notes).toEqual({ commands: ['notes'] });
     expect(missingNoteEdits(tool.args.find((a) => a.name === 'action')?.values ?? [])).toEqual([]);
+  });
+
+  it('has what’s beside the edits too (midi), by the same name, as an action and a command', () => {
+    const actions = tool.args.find((a) => a.name === 'action')?.values ?? [];
+    expect(NOTE_EXTRAS).toEqual(['midi']);
+    expect(missingNoteExtras(actions)).toEqual([]);
+    const help = notesHelp(undefined);
+    expect(missingNoteExtras(NOTE_EXTRAS.filter((n) => new RegExp(`^  ${n}\\b`, 'm').test(help)))).toEqual([]);
+    // (among holo help's list of actions: a word of its own, after a comma)
+    expect(missingNoteExtras(NOTE_EXTRAS.filter((n) => new RegExp(`, ${n}(?:,|$)`, 'm').test(TOOL_HELP)))).toEqual([]);
+    for (const n of NOTE_EXTRAS) expect(notesHelp(n)).toMatch(new RegExp(`^holo notes ${n}: \\w`));
+    // (a name missing from a list is said)
+    expect(missingNoteExtras(actions.filter((a) => a !== 'midi'))).toEqual(['midi']);
   });
 
   it('lists every edit in its help and holo help, and says each one’s flags from the list', () => {

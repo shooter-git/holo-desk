@@ -21,7 +21,7 @@ import {
   type ToolResult,
   toolNamed,
 } from '@holo/agent';
-import { type MiddleC, NOTE_EDITS, type NoteArg, noteEdit } from '@holo/session';
+import { MIDI_NOTE_VELOCITY, type MiddleC, NOTE_EDITS, type NoteArg, noteEdit } from '@holo/session';
 import { TOOL_PARITY } from './parity.ts';
 import { aboutLines, type TerminalApi, terminalApi } from './terminal-api.ts';
 
@@ -234,6 +234,10 @@ const NOTES_SELECT = 'all, selected, note numbers (1-12,15), "bars 9-13" or "pit
 const NOTES_REGION =
   '--track T, --region R: the recording, a region by id, name or "selected" on an audio track (when left out: the only audio track\'s only recording)';
 
+/** What `holo notes midi` does, in a line and in full. */
+const MIDI_SUMMARY = 'Add a MIDI track playing the notes as they play, velocities from their levels.';
+const MIDI_HELP = `add a MIDI track playing the recording's notes as they play (named after the track, just below it): each where its beat plays, at the nearest semitone of its pitch, its velocity from its level as recorded (${MIDI_NOTE_VELOCITY} when that can't be measured); breaths and muted notes left out, and the recording's notes stay as they are. One undo step.`;
+
 /** What a note edit's flag takes, said shortly: N, PITCH, a list of values. */
 function flagValue(a: NoteArg): string {
   if (a.values) return a.values.join('|');
@@ -269,6 +273,7 @@ export function notesHelp(action: string | undefined): string {
       "holo notes detect: find a recording's notes, as the studio's Notes view finds them; nothing is kept in the song until the first edit, which keeps them with it, as one undo step",
       `  ${NOTES_REGION}`,
     ].join('\n');
+  if (action === 'midi') return [`holo notes midi: ${MIDI_HELP}`, `  ${NOTES_REGION}`].join('\n');
   const lines = [
     "holo notes ACTION [--track T] [--region R] [--notes SELECT] [--ARG value…]: a recording's notes, edited one by one as the Audio Editor edits them (the in-app agent's audio_notes)",
     `  --notes SELECT: which notes: ${NOTES_SELECT} (or the words after ACTION)`,
@@ -282,6 +287,7 @@ export function notesHelp(action: string | undefined): string {
     lines.push(`  ${[e.name, ...flags].join(' ')}`);
     lines.push(`        ${e.summary}`);
   }
+  lines.push('  midi', `        ${MIDI_SUMMARY}`);
   lines.push(
     'holo notes ACTION --help shows its flags. Every edit is one undo step; the recording itself never changes.',
   );

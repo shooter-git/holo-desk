@@ -1,4 +1,12 @@
-import { type AudioNote, type AudioNotes, missingNoteEdits, NOTE_EDITS, noteEdit } from '@holo/session';
+import {
+  type AudioNote,
+  type AudioNotes,
+  missingNoteEdits,
+  missingNoteExtras,
+  NOTE_EDITS,
+  NOTE_EXTRAS,
+  noteEdit,
+} from '@holo/session';
 import { describe, expect, it } from 'vitest';
 import { capsuleHalf } from '../src/ui/note-lanes.ts';
 import {
@@ -20,6 +28,7 @@ import {
   snapPitchTarget,
   snapTick,
   studioNoteEdits,
+  studioNoteExtras,
   unknownStudioEdits,
 } from '../src/ui/note-tools.ts';
 
@@ -281,7 +290,16 @@ describe('the studio offers every note edit', () => {
       octave: ['menu'],
       add: ['menu'],
       remove: ['menu'],
+      'correct-pitch': ['Macros dialog'],
+      'quantize-time': ['Macros dialog'],
+      level: ['Macros dialog'],
     });
+  });
+
+  it('offers what’s beside the edits too: the notes made a MIDI track', () => {
+    expect(NOTE_EXTRAS.length).toBeGreaterThan(0);
+    expect(missingNoteExtras(studioNoteExtras().keys())).toEqual([]);
+    expect(Object.fromEntries(studioNoteExtras())).toEqual({ midi: ['menu', 'More menu'] });
   });
 
   it('would miss an edit added to NOTE_EDITS without a control', () => {

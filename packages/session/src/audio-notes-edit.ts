@@ -144,17 +144,36 @@ const PITCHED = new Set<string>(['to', 'dr', 'mo', 'tr', 'fo']);
  * level and mute; a chord's notes take no glide.
  */
 export function editNotes(notes: AudioNotes, indices: readonly number[], patch: NotePatch): AudioNotes {
-  return change(notes, indices, (n) => {
-    const out: AudioNote = { ...n };
-    const fields = out as unknown as Record<string, unknown>;
-    for (const f of PATCH_FIELDS) {
-      if (!(f in patch) || (n.p === null && PITCHED.has(f))) continue;
-      const v = patch[f];
-      if (v === null || v === undefined || v === false) delete fields[f];
-      else fields[f] = v;
-    }
-    return out;
+  return change(notes, indices, (n) => patched(n, patch));
+}
+
+/**
+ * Edits set note by note, in one pass: each note the indices name takes its own (`patchOf`; null
+ * leaves it as it is), kept within range as `editNotes` keeps them. For the macros, which move each
+ * note by its own amount.
+ */
+export function editEachNote(
+  notes: AudioNotes,
+  indices: readonly number[],
+  patchOf: (n: AudioNote, i: number) => NotePatch | null,
+): AudioNotes {
+  return change(notes, indices, (n, i) => {
+    const patch = patchOf(n, i);
+    return patch ? patched(n, patch) : n;
   });
+}
+
+/** A note with a patch's edits set (a note with no pitch takes only its level and mute). */
+function patched(n: AudioNote, patch: NotePatch): AudioNote {
+  const out: AudioNote = { ...n };
+  const fields = out as unknown as Record<string, unknown>;
+  for (const f of PATCH_FIELDS) {
+    if (!(f in patch) || (n.p === null && PITCHED.has(f))) continue;
+    const v = patch[f];
+    if (v === null || v === undefined || v === false) delete fields[f];
+    else fields[f] = v;
+  }
+  return out;
 }
 
 /** How a pitch is snapped: not at all, to the nearest semitone, or to the nearest note of the key's scale. */

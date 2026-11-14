@@ -80,7 +80,10 @@ wraps `EngineCore` from `@holo/engine`):
   through `@holo/session`'s `NOTE_EDITS`, as the agent's `audio_notes` and `holo notes` do, and a
   test fails when an edit there has no control in the studio. A drag shows its result as it goes and
   is one undo step when it's let go; a region's first edit keeps the notes found in its recording,
-  pruned to what it plays (as a split keeps them), so the studio and the agent number them alike.
+  pruned to what it plays (as a split keeps them), so the studio and the agent number them alike. The
+  Macros dialog (`NoteMacros.tsx`) is made from the macros' arguments in the same list, previews
+  through a gesture and applies as one undo step; Level reads each note's level from the curve the
+  notes were found with (`noteLevel`), as the host reads it for the agent.
 - **Convolution is spread over the period.** A hall's long partitions take their forward transform,
   the sum over the spectrum and the inverse transform in about-equal pieces, one or two per block,
   so no single block pays for a 32768-point transform; the output lands in the same block as before,

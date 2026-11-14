@@ -19,6 +19,7 @@ function findNotes(channels: Float32Array[], rate: number): { notes: AudioNote[]
     notes: notes.n,
     curve: {
       t: Float64Array.from({ length: count }, (_, k) => curves.t0 + k * curves.step),
+      step: curves.step,
       midi: Float64Array.from(curves.midi),
       power: Float64Array.from(curves.power),
     },

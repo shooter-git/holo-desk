@@ -852,6 +852,36 @@ export function noteShape(
   return { drift, vibrato };
 }
 
+/**
+ * A note's level as recorded, dB of full scale (of its mean power: a full-scale sine reads −3 dB), to
+ * a hundredth, from the curves it's drawn with: over its held part from its beat (its attack and end
+ * left out, as `noteShape` reads its pitch; all of it when that's too short), so a note's consonant
+ * and a slow swell into it don't count. A note with no pitch is read over all of it. Null where
+ * there's nothing to read (outside the curves, or silence). The macros' `level` brings notes toward
+ * the same one (`levels` in the session's NoteEditContext), and a note's velocity follows it when its
+ * notes are made MIDI; the studio and the host read it from the same curves, so it's the same number.
+ */
+export function noteLevel(
+  n: Pick<AudioNote, 't' | 'd' | 'p' | 'u'>,
+  curves: { t0: number; step: number; power: ArrayLike<number> },
+): number | null {
+  const start = n.p === null ? n.t : n.t + (n.u ?? 0);
+  const stop = n.t + n.d;
+  const a = Math.max(0, Math.floor((start - curves.t0) / curves.step));
+  const b = Math.min(curves.power.length, Math.ceil((stop - curves.t0) / curves.step) + 1);
+  if (b <= a) return null;
+  const t = Array.from({ length: b - a }, (_, k) => curves.t0 + (a + k) * curves.step);
+  const power = Array.from({ length: b - a }, (_, k) => curves.power[a + k] as number);
+  // (the held part of the power, as of the pitch: power is never NaN, so it's the span's middle)
+  const { hp } = heldPart(t, power, 0, b - a, start, stop);
+  if (!hp.length) return null;
+  let sum = 0;
+  for (const p of hp) sum += p;
+  const mean = sum / hp.length;
+  if (!(mean > 0)) return null;
+  return Math.round(1000 * Math.log10(mean)) / 100;
+}
+
 /** Where the level jumps up 10 dB or more within 40 ms, 40 dB or less under the loudest, 50 ms apart at least. */
 function onsetsOf(power: Float64Array): number {
   let loudest = 0;

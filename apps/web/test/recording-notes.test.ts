@@ -4,6 +4,7 @@ import { loudestOf, type NoteCurve, RecordingNotes } from '../src/audio/notes.ts
 
 const curve = (): NoteCurve => ({
   t: Float64Array.from([0, 0.005, 0.01]),
+  step: 0.005,
   midi: Float64Array.from([Number.NaN, 64, 64.1]),
   power: Float64Array.from([Number.NaN, 0.02, 0.5]),
 });

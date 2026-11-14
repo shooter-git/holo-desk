@@ -13,7 +13,9 @@
  * alone never changes the song. The notes selected are numbered as the region keeps them (or will),
  * and the studio tells the agent which they are (live.ts). A region's edits can be switched off and on,
  * to hear the recording as it was (A/B). While an edit's sound is being rendered, its stretch is
- * striped and the bar says so.
+ * striped and the bar says so. With Hear notes on (the bar), a note pressed is heard through its track
+ * as it plays, and again as a drag changes it, once the sound of where the drag has got to is rendered
+ * (the engine's hearNote and previewNote).
  *
  * The bar's Macros dialog (NoteMacros.tsx) corrects pitch, quantizes time and levels the notes
  * selected (or all the region plays), previewing as it goes, one undo step when applied; Level reads
@@ -55,6 +57,8 @@ import {
   ticksPerBeat,
 } from '@holo/session';
 import {
+  Ear,
+  EarOff,
   Ellipsis,
   MicVocal,
   MousePointer2,
@@ -77,7 +81,7 @@ import {
   useState,
   useSyncExternalStore,
 } from 'react';
-import { apply, findRegion, locate } from '../app/actions.ts';
+import { apply, ensureAudio, findRegion, locate } from '../app/actions.ts';
 import { isPhone, useLayout } from '../app/layout.ts';
 import { store, toast, useApp } from '../app/store.ts';
 import { engine } from '../audio/engine.ts';
@@ -418,6 +422,17 @@ function notesToMidiTrack(regionId: string): void {
   );
 }
 
+/**
+ * A note pressed, heard now through its track (the audio started if it isn't, as the Piano Roll's keys
+ * do), with Hear notes on and the song stopped: whether it is.
+ */
+function hearNote(track: Track, clip: AudioClip, notes: NoteList, i: number): boolean {
+  const s = store.get();
+  if (!s.hearNotes || s.playing || s.recording) return false;
+  void ensureAudio().then(() => engine.hearNote(track.id, clip, notes, i));
+  return true;
+}
+
 /** What the bar says of the notes: how many the region plays (and how many are selected), or what's keeping them. */
 function notesStatus(
   project: Project,
@@ -492,6 +507,8 @@ export function AudioNotes() {
   /** Which way a pinch zooms, from how its fingers first spread: time across, pitch up and down. */
   const pinchAxis = useRef<'x' | 'y' | null>(null);
   const lastOverlay = useRef({ x: -1, w: 0, h: 0, rec: false, dpr: 0 });
+  /** The note the press is on, while it's heard: heard again as the drag changes it (null: none). */
+  const heard = useRef<number | null>(null);
   const lastDpr = useRef(screenDpr());
 
   // everything the picture reads: a change to any of it redraws
@@ -722,10 +739,13 @@ export function AudioNotes() {
         gesture.current = null;
         o.onUp?.(ev, gg);
         clearPreview();
+        // (a dragged note is heard once more where it landed, if its sound is still to come)
+        engine.endPreview(true);
       },
       onAbort: () => {
         gesture.current = null;
         clearPreview();
+        engine.endPreview(false);
         o.onAbort?.();
       },
       onLongPress: menu ? (ev) => menu(ev) : undefined,
@@ -743,13 +763,14 @@ export function AudioNotes() {
       audioView.xToTick(x),
     );
 
-  /** A drag's result shown as it goes, with its readout by the pointer. */
+  /** A drag's result shown as it goes, with its readout by the pointer (and heard, when its note is). */
   const show = (notes: NoteList, text: string, ev: PointerEvent, rect: DOMRect) => {
     preview.current = {
       notes,
       readout: text ? { text, x: ev.clientX - rect.left, y: ev.clientY - rect.top } : undefined,
     };
     dirty.current = true;
+    if (heard.current !== null) engine.previewNote(track.id, region.id, clip, notes, heard.current);
   };
 
   /** Each note's pitch snapped (to a semitone, or the key's scale where it plays): set-pitch, note by note. */
@@ -1142,6 +1163,7 @@ export function AudioNotes() {
       panDrag(e, false);
       return;
     }
+    heard.current = null;
     const base = editableNotes(project, region, clip, state);
     const boxes = base ? boxesNow() : [];
     const keyHeight = pitchView(size.h).keyHeight;
@@ -1177,6 +1199,8 @@ export function AudioNotes() {
       pressSpace(e, base, caught);
       return;
     }
+    // the note heard as it's pressed (as the song plays it: with its edits off, as recorded)
+    heard.current = hearNote(track, clip, clip.notes ?? base, hit.i) ? hit.i : null;
     // the selection: Shift adds or takes away; a note already selected drags the selection with it
     const sel = selectedIn(region.id);
     let group: readonly number[];
@@ -1874,6 +1898,26 @@ function NoteTools({ phone, more }: { phone: boolean; more: MenuEntry[] }) {
   );
 }
 
+/** Hear notes: a note pressed is heard, and again as a drag changes it (kept on this device). */
+function HearNotes() {
+  const on = useApp((s) => s.hearNotes);
+  const Icon = on ? Ear : EarOff;
+  return (
+    <button
+      type="button"
+      className={`btn icon${on ? ' on' : ''}`}
+      title={
+        on ? 'Hearing notes as they’re pressed and dragged: click to stop' : 'Hear notes as they’re pressed and dragged'
+      }
+      aria-label="Hear notes"
+      aria-pressed={on}
+      onClick={() => store.set({ hearNotes: !on })}
+    >
+      <Icon />
+    </button>
+  );
+}
+
 export function AudioNotesBar() {
   const { project, track, region } = useAudioRegion();
   const phone = isPhone(useLayout());
@@ -1894,12 +1938,18 @@ export function AudioNotesBar() {
     ? `Linked: an edit here is made in every region playing this recording (${linked === 1 ? 'only this one does' : `${linked} do`}), on the same notes; click to edit this region alone`
     : 'Link: make each edit in every region playing this recording too, on the same notes';
   const toggleLink = () => store.set({ linkRegions: !link });
+  const hearNotes = useApp((s) => s.hearNotes);
   const more: MenuEntry[] = region
     ? [
         { label: 'Macros…', onSelect: openMacros },
         { label: 'Notes to MIDI track', onSelect: () => notesToMidiTrack(region.id) },
-        // (a phone's bar has no room for Link's button: it's here, with how many regions it links)
-        ...(phone ? [{ label: `Link regions (${linked})`, checked: link, onSelect: toggleLink }] : []),
+        // (a phone's bar has no room for these toggles: they're here, Link with how many regions it links)
+        ...(phone
+          ? [
+              { label: `Link regions (${linked})`, checked: link, onSelect: toggleLink },
+              { label: 'Hear notes', checked: hearNotes, onSelect: () => store.set({ hearNotes: !hearNotes }) },
+            ]
+          : []),
       ]
     : [];
   const selected = useApp((s) =>
@@ -1943,6 +1993,7 @@ export function AudioNotesBar() {
           A/B
         </button>
       )}
+      {!phone && clip && <HearNotes />}
       {!phone && project && region && clip && (
         <button
           type="button"

@@ -1656,8 +1656,12 @@ export class EngineCore implements Host {
         const R = data[1] ?? L;
         const f0 = Math.max(song, clip.start);
         const f1 = Math.min(songEnd, clip.end);
-        const cutIn = clip.source > 0;
-        const cutOut = clip.source + (clip.end - clip.start) < L.length;
+        // a ramp where it cuts into its recording (a patch's: where the recording itself would be cut),
+        // none where it meets the next piece of the same region
+        const whole = clip.base === undefined ? L : this.audio.get(clip.base)?.[0];
+        const from = clip.base === undefined ? clip.source : (clip.at as number);
+        const cutIn = !clip.seamIn && from > 0;
+        const cutOut = !clip.seamOut && (!whole || from + (clip.end - clip.start) < whole.length);
         for (let f = f0; f < f1; f++) {
           const i = clip.source + (f - clip.start);
           if (i < 0 || i >= L.length) continue;

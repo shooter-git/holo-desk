@@ -15,6 +15,8 @@ export * from './machine.ts';
 export * from './master.ts';
 export * from './modfx.ts';
 export * from './morph.ts';
+export * from './notes/patch.ts';
+export * from './notes/plan.ts';
 export * from './organ.ts';
 export * from './parts.ts';
 export * from './peq.ts';

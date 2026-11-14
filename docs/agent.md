@@ -7,13 +7,30 @@ carries them out on the open song through a harness installed on the host: Claud
 
 This page is the contract between the studio, the server, the runner and the agent's tools.
 
-## What doesn't change
+## What doesn't change, and the terminal
 
 The `holo` command, the `holo` skill and `pnpm skill:install` are how HO[LO], holo-packs and creations
-are developed from a terminal, and they don't change:
-- `packages/cli/src/{main,score,scan,experience}.ts` are untouched;
-- so are `skills/holo/` and `tools/install-skill.mjs`;
-- so are the HTTP routes the CLI uses (`/api/projects/:id/ops` and the rest) and the runner's render path.
+are developed from a terminal (Claude Code, Codex or Cursor working through `holo`), and how music is
+made there for creations. The terminal has everything the agent has, and more; what it already did
+doesn't change:
+- every `holo` command keeps what it does and what it prints, the "AI" author of its changes included;
+  new commands and flags are additions;
+- the HTTP routes the CLI uses (`/api/projects/:id/ops` and the rest) work as they did, and the
+  runner's render path is untouched; the terminal's new routes are additions (below);
+- `pnpm skill:install` (`tools/install-skill.mjs`) installs the skill as it did; it never touches the
+  user's harness configuration.
+
+The commands that do what the agent's tools do (`holo regions`, `timeline`, `measure`, `played`,
+`details`, `import`, `packs`, `holo listen --analyze`, and `holo tool NAME` for any tool by name;
+`packages/cli/src/tool-commands.ts`) run the agent's own tools, through a `JobApi` over the CLI's routes
+(`packages/cli/src/terminal-api.ts`): the song as saved, changes through `/api/projects/:id/ops` (one
+undo step, "AI: …"), the studio's playhead and selection from `/api/live/state`, what was just played
+from `GET /api/live/played`, measurements from `/api/projects/:id/measure` (below), and files on the
+terminal's computer where the agent takes attachments. A tool's words about its fields are said as
+flags. `packages/cli/src/parity.ts` maps every tool to its commands, or says why it belongs to a
+request in the bar (`compare`, `attachment_get`, `look`, `ask_permission`, `hand_off`, `finish`); its
+test fails when a tool has neither. The agent gets nothing of this: its tools reach HO[LO] only through
+the job routes.
 
 The in-app agent lives in `packages/agent` (`@holo/agent`): the runner's side (`src/runner.ts`,
 `src/harness/`), the MCP server (`src/mcp.ts`) and its tools (`src/tools/`). The server's side is
@@ -243,6 +260,24 @@ server closes.
 |---|---|---|
 | `POST …/measure` | `{what:'take'\|'mix'\|'tracks'\|'plugin'\|'meters'\|'file', track?, region?, plugin?, from?, to?, against?, grid?, through?:'recording'\|'effects', source?:'render'\|'bounce', attachment?, seconds?}` (ids and ticks) | `{done:true, task, result, cached?}`, or `{done:false, task, progress, eta, stage}` after 40 s (`eta` in seconds). `take`: an audio `track` (or a recording `attachment`), `region?`, `against` `'key'` (default), `'none'` or an instrument track's id, `grid` in ticks (240), `through` `'recording'` (default: its files, at once) or `'effects'`: rendered in the render lane as the track comes out of its plugins (a solo copy with its sends gone, out to a bare master, its fader, pan and stage left out, `finish:false`) over its regions' bars (`region`'s, within `from`–`to`; 422 where it plays nothing) and two bars before, the plugins' delay made up for as in the mix, then measured as its recordings are, with `through:{plugins, errors}` in the result. `mix`: rendered, or the newest file in `data/bounces/<song>/` with `source:'bounce'` (404 `reason:'no-bounce'` without one; `made` and `stale` say when it was made and whether the song changed after). `tracks`: every track alone, or `track`, and with `against` a second track (masking). `plugin`: `track` is a track's, a bus's id or `master`; EQs, Space Reverb, Space Designer, Tape Delay and Stereo Width by their response to an impulse, the rest on the track's own sound (not on a bus). `file`: an `attachment` (WAV, FLAC or AIFF; 422 for MP3, OGG, M4A), else the newest bounce. `meters` **studio**: `seconds?` (1–30, 8 by default), asked of the requester's studio as `agent-meters`, which has that long plus 4 s to answer. A failed measurement is 422 with its reason. |
 | `GET …/measure/:task` | | As above, for a measurement of the job's song by id (404 once it's forgotten). |
+
+**The terminal's measurements** (`holo measure`; `apps/server/src/agent/measure/terminal.ts`) are the
+same, for any song, with the agent on or off. Each is planned as the agent's are
+(`measure/plan.ts`) and run by the same runner, so the same question about the same song as it is now
+is the same measurement whoever asks it, or comes from the cache. The studio with the song open saves
+first; a measurement the terminal asked for runs to its end. Refusals say what to do in `holo`'s words
+(`--from` and `--to`, `holo bounce`, `--source bounce`).
+
+| Method and path | Body / query | Answer |
+|---|---|---|
+| `POST /api/projects/:id/measure` | As `POST …/measure`, with `file` (a recording sent first) where the agent gives an `attachment` | As `POST …/measure`. `meters` asks the studio with the song open (409 without one). |
+| `GET /api/projects/:id/measure/:task` | | As `GET …/measure/:task`. |
+| `POST /api/projects/:id/measure/files` | `?name=`; the recording as the body (`application/x-holo-audio`: WAV, FLAC or AIFF, ≤ 200 MB) | `{file, name, size}` (201). The same bytes always get the same `file` (`mfl_…`, from their SHA-256), so a recording sent again joins its measurement. Kept a day in `data/measure-files/<song>/`. 415 for anything but a recording; 413 past the size. |
+
+**What was just played, for the terminal**: `GET /api/live/played?seconds=&project=` (1 to 60 s, 20
+by default) asks the studio with `project` open (or the most recently active one) for its memory of
+what was played, as `…/played` does (`agent-played`): `{notes:[PlayedNote]}`; 409 without a studio,
+504 when it doesn't answer within 3 s.
 
 `agent-meters {id, seconds}` (server → studio, asked): the studio reads every channel's meter twenty
 times a second while the song plays (`apps/web/src/app/agent-meters.ts`, keeping the last 30 s) and

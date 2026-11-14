@@ -147,7 +147,13 @@ holo show --track Strings --from 9 --to 17
 holo write --track Strings --at 9 "A4:2 C#5:2 E5:4"
 holo fx add Keys harmonizer key=9 scale=6 voice1=2 voice2=4
 holo listen --seconds 8
+holo measure mix            # how loud the mix is, its peaks and its balance, measured
 ```
+
+Everything the agent in the studio's bar can do on a song, the `holo` command can do too, with the
+agent's own tools: edit regions and whole bars (`holo regions`, `holo timeline`), measure takes, the mix,
+tracks and plugins (`holo measure`), hear what was just played (`holo played --analyze`), bring a MIDI
+file, a score or a recording into the song (`holo import`), and any of its tools by name (`holo tool`).
 
 Then ask Claude things like *"harmonize the melody in bars 9 to 16 with a counter-line on the oboe"*
 or *"put a live harmonizer on my keys in A lydian, thirds and fifths"*. Each change appears in the

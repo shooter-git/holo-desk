@@ -914,6 +914,8 @@ export function TracksArea() {
   const gesture = useRef<Gesture | null>(null);
   /** The menu a long press opens for what's under the finger, set as each gesture starts. */
   const menuAt = useRef<((ev: PointerEvent) => void) | null>(null);
+  /** What the next gesture does if it turns out to be a tap (a finger's second tap on a region), set as it starts. */
+  const tapAt = useRef<(() => void) | null>(null);
   const pinch = useRef(new Pinch());
   const lastTap = useRef(0);
   const zoomTimer = useRef(0);
@@ -1160,6 +1162,8 @@ export function TracksArea() {
   const start = (e: ReactPointerEvent, o: GestureOptions) => {
     gesture.current?.abort();
     const menu = menuAt.current;
+    const tap = tapAt.current;
+    tapAt.current = null;
     const clear = () => {
       drag.current = null;
       lanePreview.current = null;
@@ -1172,6 +1176,7 @@ export function TracksArea() {
       onUp: (ev, gg) => {
         gesture.current = null;
         o.onUp?.(ev, gg);
+        if (!gg.moved) tap?.();
       },
       onAbort: () => {
         gesture.current = null;
@@ -1219,12 +1224,13 @@ export function TracksArea() {
     }
     selectTrack(h.track.id);
     if (!h.region) {
-      if (tool === 'pencil' || doubleTap) {
+      if (tool === 'pencil' || (doubleTap && !touch)) {
         createRegionAt(h.track.id, tracksView.xToTick(x));
         return;
       }
       store.set({ selectedRegions: [] });
-      if (touch) panDrag(e);
+      // (a finger's second tap makes the region once it lifts: a swipe straight after a tap scrolls)
+      if (touch) panDrag(e, doubleTap ? () => createRegionAt(h.track.id, tracksView.xToTick(x)) : undefined);
       else marqueeDrag(e, x, y);
       return;
     }
@@ -1234,7 +1240,25 @@ export function TracksArea() {
       return;
     }
     if (doubleTap) {
-      openInEditor(h.track.id, region.id);
+      // a mouse's second press opens the region. A finger's second tap opens it once it lifts: a tap
+      // that selects a region and a drag straight after it move the region
+      if (!touch) {
+        openInEditor(h.track.id, region.id);
+        return;
+      }
+      if (selectedRegions.has(region.id)) tapAt.current = () => openInEditor(h.track.id, region.id);
+    }
+    // A finger on a region that isn't selected scrolls the view, as it does on the lane beside it:
+    // a tap selects the region, and a selected region is the one a finger moves, trims and fades.
+    // On a phone the timeline is mostly regions, and a scroll that happened to begin on one carried
+    // it off to another bar or another track.
+    if (touch && !selectedRegions.has(region.id)) {
+      const select = () => store.set({ selectedRegions: [region.id] });
+      menuAt.current = (ev) => {
+        select();
+        regionMenu(ev.clientX, ev.clientY, region, h.track);
+      };
+      panDrag(e, select);
       return;
     }
     let selection = selectedRegionsList;
@@ -1341,12 +1365,18 @@ export function TracksArea() {
   };
 
   /** A finger scrolling the timeline, as a phone scrolls a page (TouchPan): a flick carries on after it lifts. */
-  const panDrag = (e: ReactPointerEvent) => {
+  const panDrag = (e: ReactPointerEvent, onTap?: () => void) => {
     const pan = new TouchPan(tracksView, 'xy', () => maxScrollY(project), e);
     start(e, {
-      threshold: 0,
+      // over a region the finger may also rest for its menu: a wobble isn't a move (the gesture's own threshold)
+      threshold: onTap ? undefined : 0,
       onMove: (ev) => pan.move(ev),
-      onUp: (ev) => pan.end(ev.timeStamp),
+      onUp: (ev) => {
+        pan.end(ev.timeStamp);
+        // (a scroll isn't the first tap of a double tap: a second swipe soon after makes no region)
+        if (pan.panned) lastTap.current = 0;
+        else onTap?.();
+      },
     });
   };
 

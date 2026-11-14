@@ -317,12 +317,15 @@ export function Lcd({ compact = false, keyCell = !compact }: { compact?: boolean
               ...KEYS.map((k) => ({
                 label: `${k} major`,
                 checked: project.key === `${k} major`,
+                // (the list is longer than most windows: it opens on the song's key)
+                focus: project.key === `${k} major`,
                 onSelect: () => apply([{ op: 'setProject', patch: { key: `${k} major` } }], 'Key'),
               })),
               { heading: 'Minor' },
               ...KEYS.map((k) => ({
                 label: `${k} minor`,
                 checked: project.key === `${k} minor`,
+                focus: project.key === `${k} minor`,
                 onSelect: () => apply([{ op: 'setProject', patch: { key: `${k} minor` } }], 'Key'),
               })),
             ])

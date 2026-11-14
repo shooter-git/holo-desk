@@ -12,6 +12,7 @@ import {
 } from 'react';
 import { engine } from '../audio/engine.ts';
 import { prepare, useFrame } from './frame.ts';
+import { sideways, WheelSteps } from './wheel-steps.ts';
 
 // ---- the fader law: about 0 dB at 84% of the travel, +6 dB at the top ----
 
@@ -86,16 +87,23 @@ function useBurst(onBegin?: () => void, onEnd?: () => void, idle = 300) {
   );
 }
 
-/** React's onWheel is passive, so the page would scroll under the control: listen ourselves. */
-function useWheel(ref: RefObject<HTMLElement | null>, onWheel: (e: WheelEvent) => void): void {
-  const latest = useRef(onWheel);
-  latest.current = onWheel;
+/**
+ * The wheel over a control, in steps: a mouse's notch, or as much of a trackpad's swipe (see
+ * WheelSteps). React's onWheel is passive, so the page would scroll under the control: listen
+ * ourselves. A wheel turned sideways is left alone, to scroll what the control sits in.
+ */
+function useWheel(ref: RefObject<HTMLElement | null>, onSteps: (steps: number, e: WheelEvent) => void): void {
+  const latest = useRef(onSteps);
+  latest.current = onSteps;
   useEffect(() => {
     const el = ref.current;
     if (!el) return;
+    const count = new WheelSteps();
     const on = (e: WheelEvent) => {
+      if (sideways(e)) return;
       e.preventDefault();
-      latest.current(e);
+      const steps = count.take(e, e.timeStamp);
+      if (steps) latest.current(steps, e);
     };
     el.addEventListener('wheel', on, { passive: false });
     return () => el.removeEventListener('wheel', on);
@@ -167,9 +175,9 @@ export function Knob({
   const continuous = !def.step || def.scale === 'log';
   const stepUnit = continuous ? 0.01 : (def.step as number) / (def.max - def.min);
   const nudge = (steps: number) => onChange(fromUnit(def, clamp01(u + steps * stepUnit)));
-  useWheel(root, (e) => {
+  useWheel(root, (steps, e) => {
     const fine = e.shiftKey && continuous ? 0.25 : 1;
-    burst.tick(() => nudge(-Math.sign(e.deltaY) * (continuous ? 2 : 1) * fine));
+    burst.tick(() => nudge(-steps * (continuous ? 2 : 1) * fine));
   });
   const lit = Math.abs(a - zero) > 0.5 ? (a > zero ? arc(zero, a) : arc(a, zero)) : null;
   return (
@@ -395,7 +403,7 @@ export function Fader({ db, onChange, onBegin, onEnd, height, label = 'Volume' }
   const p = useRef(pos);
   const burst = useBurst(onBegin, onEnd);
   const step = (by: number) => onChange(Math.max(-144, Math.min(6, Math.round((db + by) * 10) / 10)));
-  useWheel(root, (e) => burst.tick(() => step(-Math.sign(e.deltaY) * (e.shiftKey ? 0.1 : 1))));
+  useWheel(root, (steps, e) => burst.tick(() => step(-steps * (e.shiftKey ? 0.1 : 1))));
   return (
     <div
       ref={root}

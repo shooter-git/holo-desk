@@ -421,13 +421,31 @@ function toggle(track: StudioTrack, what: 'mute' | 'solo' | 'armed') {
 function TrackChips({ track }: { track: StudioTrack }) {
   return (
     <div className="chips" onClick={(e) => e.stopPropagation()}>
-      <button type="button" className={`chip mute${track.mute ? ' on' : ''}`} onClick={() => toggle(track, 'mute')}>
+      <button
+        type="button"
+        className={`chip mute${track.mute ? ' on' : ''}`}
+        aria-label={`Mute ${track.name}`}
+        aria-pressed={track.mute}
+        onClick={() => toggle(track, 'mute')}
+      >
         M
       </button>
-      <button type="button" className={`chip solo${track.solo ? ' on' : ''}`} onClick={() => toggle(track, 'solo')}>
+      <button
+        type="button"
+        className={`chip solo${track.solo ? ' on' : ''}`}
+        aria-label={`Solo ${track.name}`}
+        aria-pressed={track.solo}
+        onClick={() => toggle(track, 'solo')}
+      >
         S
       </button>
-      <button type="button" className={`chip rec${track.armed ? ' on' : ''}`} onClick={() => toggle(track, 'armed')}>
+      <button
+        type="button"
+        className={`chip rec${track.armed ? ' on' : ''}`}
+        aria-label={`Record-arm ${track.name}`}
+        aria-pressed={track.armed}
+        onClick={() => toggle(track, 'armed')}
+      >
         R
       </button>
     </div>

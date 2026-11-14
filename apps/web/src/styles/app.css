@@ -888,7 +888,9 @@ a.btn {
   background: var(--bg-2);
 }
 
-/* the headers scroll as one block, moved by the viewport rather than a render per pixel */
+/* the headers scroll as one block, moved by the viewport rather than a render per pixel: the box
+   itself never scrolls (clip, where the browser has it: a box that only hides its overflow still
+   scrolls to show what takes the keyboard, and the headers would leave their lanes) */
 .track-list {
   position: relative;
   overflow: hidden;
@@ -896,6 +898,12 @@ a.btn {
   background: var(--bg-2);
   touch-action: none;
   contain: layout paint;
+}
+
+@supports (overflow: clip) {
+  .track-list {
+    overflow: clip;
+  }
 }
 
 .track-list-inner {
@@ -2901,7 +2909,9 @@ html[data-layout="phone-landscape"] .bar .field input {
   padding: 14px;
 }
 
+/* (it keeps its height in a window too short for everything: the body scrolls, the graph isn't squeezed) */
 .plugin-window .display {
+  flex: none;
   margin: 12px 14px 0;
   border: 1px solid #000;
   border-radius: 8px;

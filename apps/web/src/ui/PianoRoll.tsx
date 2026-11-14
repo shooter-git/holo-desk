@@ -243,7 +243,7 @@ export function PianoRoll() {
   const drawKeys = () => {
     const h = size.h;
     const kw = keysWidth;
-    const kctx = prepare(keysCanvas.current, kw, h);
+    const kctx = prepare(keysCanvas.current, kw, h, true);
     if (!kctx) return;
     const color = track?.color ?? '#5cb8ff';
     kctx.fillStyle = '#0b0d10';
@@ -308,8 +308,11 @@ export function PianoRoll() {
     const bar = ticksPerBar(m);
     const pv = preview.current;
 
-    const ctx = prepare(notesCanvas.current, w, h);
+    const ctx = prepare(notesCanvas.current, w, h, true);
     if (ctx) {
+      // (the keys' rows cover the canvas; under them, all of it is filled, as an opaque canvas must be)
+      ctx.fillStyle = '#121418';
+      ctx.fillRect(0, 0, w, h);
       for (let pitch = 0; pitch < 128; pitch++) {
         const y = yOf(pitch);
         if (y > h || y + keyHeight < 0) continue;
@@ -410,7 +413,7 @@ export function PianoRoll() {
     }
 
     // ruler
-    const rctx = prepare(rulerCanvas.current, rulerSize.w, rulerSize.h);
+    const rctx = prepare(rulerCanvas.current, rulerSize.w, rulerSize.h, true);
     if (rctx) {
       rctx.fillStyle = '#1b1e23';
       rctx.fillRect(0, 0, rulerSize.w, rulerSize.h);
@@ -438,7 +441,7 @@ export function PianoRoll() {
     const v = rollView;
     const bar = ticksPerBar(p.meter[0] ?? { tick: 0, num: 4, den: 4 });
     const pv = preview.current;
-    const lctx = prepare(laneCanvas.current, laneSize.w, laneSize.h);
+    const lctx = prepare(laneCanvas.current, laneSize.w, laneSize.h, true);
     if (!lctx || !track) return;
     const lw = laneSize.w;
     const lh = laneSize.h;

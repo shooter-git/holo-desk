@@ -725,7 +725,10 @@ function drawRegion(
     for (const n of r.notes) {
       if (n.t >= r.length) continue;
       const nx = x + n.t * pxPerTick;
+      // (a long region zoomed in holds far more notes than the canvas shows: those off it aren't drawn)
+      if (nx > canvasWidth) continue;
       const nw = Math.max(1.5, Math.min(n.d, r.length - n.t) * pxPerTick - 0.5);
+      if (nx + nw < 0) continue;
       const ny = top + (1 - (n.p - lo + 0.5) / span) * avail;
       ctx.fillRect(nx, ny - 1, nw, Math.max(1.5, Math.min(3, avail / span)));
     }
@@ -1032,7 +1035,7 @@ export function TracksArea() {
     if (dirty.current) {
       dirty.current = false;
       const cycle = cyclePreview.current ?? p.cycle;
-      const ctx = prepare(canvas.current, size.w, size.h);
+      const ctx = prepare(canvas.current, size.w, size.h, true);
       if (ctx)
         drawTimeline(ctx, {
           project: p,
@@ -1046,7 +1049,7 @@ export function TracksArea() {
           drag: drag.current,
           automation: s.automationView ? { params: s.autoParam, preview: lanePreview.current } : null,
         });
-      const rctx = prepare(rulerCanvas.current, rulerSize.w, rulerSize.h);
+      const rctx = prepare(rulerCanvas.current, rulerSize.w, rulerSize.h, true);
       if (rctx) drawRuler(rctx, p, cycle, s.show.markers, rulerSize.w, rulerSize.h);
     }
     // what's being recorded is drawn on a layer over the timeline, each frame while there is any

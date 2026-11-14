@@ -26,7 +26,16 @@ import {
   type Track,
 } from '@holo/session';
 import { ChevronDown, Headphones, Power, RotateCcw, SlidersHorizontal, X } from 'lucide-react';
-import { memo, type ReactNode, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react';
+import {
+  memo,
+  type ReactNode,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from 'react';
 import {
   addBusWithSend,
   addPlugin,
@@ -655,6 +664,9 @@ const EQ_H = 150;
 const eqX = (f: number, width: number) => (Math.log(f / 20) / Math.log(1000)) * width;
 const eqY = (db: number) => EQ_H / 2 - (db / 24) * (EQ_H / 2 - 8);
 
+/** The frequencies an EQ's curve is drawn through, 20 Hz to 20 kHz, even in octaves. */
+const EQ_FREQS = new Float64Array(220).map((_, i) => 20 * 1000 ** (i / 219));
+
 /** Where a Parametric EQ's band handles sit on its curve (a cut's, notch's or band pass's on the 0 dB line). */
 function peqHandles(type: string, params: Record<string, number>, width: number) {
   const out: { band: number; x: number; y: number; on: boolean }[] = [];
@@ -682,11 +694,10 @@ function EqDisplay({
   const ref = useRef<HTMLCanvasElement>(null);
   const h = EQ_H;
   useLayoutEffect(() => {
-    const ctx = prepare(ref.current, width, h);
+    const ctx = prepare(ref.current, width, h, true);
     if (!ctx) return;
-    const n = 220;
-    const freqs = new Float64Array(n).map((_, i) => 20 * 1000 ** (i / (n - 1)));
-    const resp = curveOf(type, params, freqs, engine.sampleRate);
+    const n = EQ_FREQS.length;
+    const resp = curveOf(type, params, EQ_FREQS, engine.sampleRate);
     const x = (f: number) => eqX(f, width);
     const y = eqY;
     ctx.fillStyle = '#07090b';
@@ -724,12 +735,18 @@ function EqDisplay({
       if (i === 0) ctx.moveTo(px, py);
       else ctx.lineTo(px, py);
     });
+    // a wider, fainter stroke under the curve is its glow: a blur would be worked out again for
+    // every move of a knob or a band
+    ctx.lineJoin = 'round';
+    ctx.strokeStyle = 'rgba(166,236,255,0.16)';
+    ctx.lineWidth = 9;
+    ctx.stroke();
+    ctx.strokeStyle = 'rgba(166,236,255,0.22)';
+    ctx.lineWidth = 5;
+    ctx.stroke();
     ctx.strokeStyle = '#a6ecff';
     ctx.lineWidth = 2;
-    ctx.shadowColor = 'rgba(166,236,255,0.6)';
-    ctx.shadowBlur = 8;
     ctx.stroke();
-    ctx.shadowBlur = 0;
     ctx.lineTo(width, h / 2);
     ctx.lineTo(0, h / 2);
     ctx.fillStyle = g;
@@ -854,6 +871,53 @@ function Setting({ def, value, onBegin, onEnd, onChange, color, size, label }: S
   );
 }
 
+interface PluginSettingProps {
+  /** The channel the plugin is on, the plugin, and its name (for the undo step's). */
+  target: string;
+  plugin: string;
+  of: string;
+  def: ParamDef;
+  value: number;
+  color?: string;
+  size?: number;
+  label?: string;
+}
+
+/**
+ * One of a plugin's settings, told what it is and not handed functions made for it: so it is drawn
+ * again only when its own value changes. A knob dragged in a window of twenty-four (the Parametric
+ * EQ's) used to draw all twenty-four on every move of the pointer.
+ */
+const PluginSetting = memo(function PluginSetting({
+  target,
+  plugin,
+  of,
+  def,
+  value,
+  color,
+  size,
+  label,
+}: PluginSettingProps) {
+  const begin = useCallback(() => beginGesture(`${of}: ${def.name}`), [of, def.name]);
+  const change = useCallback(
+    (v: number) =>
+      gestureChange([{ op: 'updatePlugin', target, plugin, patch: { params: { [def.id]: v } } } satisfies Op]),
+    [target, plugin, def.id],
+  );
+  return (
+    <Setting
+      def={def}
+      value={value}
+      onBegin={begin}
+      onEnd={endGesture}
+      onChange={change}
+      color={color}
+      size={size}
+      label={label}
+    />
+  );
+});
+
 /** Channel EQ's bands, low to high: each one's switch, frequency, gain and Q, as it has them. */
 const EQ_BANDS: { name: string; on?: string; f: string; g?: string; q?: string }[] = [
   { name: 'Low Cut', on: 'hpOn', f: 'hpFreq' },
@@ -874,13 +938,28 @@ const EQ_BANDED = new Set(EQ_BANDS.flatMap((b) => [b.on, b.f, b.g, b.q]).filter(
 function EqBands({
   def,
   params,
-  setting,
+  target,
+  plugin,
 }: {
   def: PluginDef;
   params: Record<string, number>;
-  setting: (p: ParamDef, label: string, dim?: boolean) => ReactNode;
+  target: string;
+  plugin: string;
 }) {
   const param = (id?: string) => (id ? def.params.find((p) => p.id === id) : undefined);
+  const setting = (p: ParamDef, label: string, dim = false) => (
+    <div key={p.id} className={`peq-knob${dim ? ' dim' : ''}`}>
+      <PluginSetting
+        target={target}
+        plugin={plugin}
+        of={def.name}
+        def={p}
+        value={paramValue(def.type, params, p.id)}
+        size={30}
+        label={label}
+      />
+    </div>
+  );
   return (
     <div className="eq-bands">
       {EQ_BANDS.map((b) => {
@@ -907,12 +986,14 @@ function EqBands({
 function PeqBands({
   def,
   params,
-  change,
+  target,
+  plugin,
   set,
 }: {
   def: PluginDef;
   params: Record<string, number>;
-  change: (param: string, value: number) => void;
+  target: string;
+  plugin: string;
   set: (param: string, value: number, label: string) => void;
 }) {
   const param = (id: string) => def.params.find((p) => p.id === id);
@@ -945,14 +1026,14 @@ function PeqBands({
               const dim = !on || (k === 'g' && !PEQ_GAINED.has(kind));
               return (
                 <div key={k} className={`peq-knob${dim ? ' dim' : ''}`}>
-                  <Knob
+                  <PluginSetting
+                    target={target}
+                    plugin={plugin}
+                    of={def.name}
                     def={p}
                     value={paramValue('peq', params, p.id)}
                     size={30}
                     label={k === 'f' ? 'Freq' : k === 'g' ? 'Gain' : 'Q'}
-                    onBegin={() => beginGesture(`Parametric EQ: ${p.name}`)}
-                    onEnd={endGesture}
-                    onChange={(v) => change(p.id, v)}
                     color={PEQ_COLORS[i]}
                   />
                 </div>
@@ -976,7 +1057,8 @@ function GainReduction({ target, plugin }: { target: string; plugin: string }) {
     const gr = Math.round(engine.pluginGr(target) * 10) / 10;
     if (gr === shown.current) return;
     shown.current = gr;
-    if (bar.current) bar.current.style.width = `${Math.min(100, (-gr / 30) * 100)}%`;
+    // (as wide as its track and scaled to the reduction: nothing is laid out for a new reading)
+    if (bar.current) bar.current.style.transform = `scaleX(${Math.min(1, -gr / 30)})`;
     if (text.current) text.current.textContent = `${gr.toFixed(1)} dB`;
   });
   return (
@@ -1123,8 +1205,6 @@ export function PluginWindow() {
   if (!owner || !plugin || !def) return null;
   // Parametric EQ's eight bands want more room than a row of knobs
   const width = phone ? vp.w : plugin.type === 'peq' ? 600 : plugin.type === 'eq' ? 540 : 460;
-  const change = (param: string, value: number) =>
-    gestureChange([{ op: 'updatePlugin', target, plugin: id, patch: { params: { [param]: value } } } satisfies Op]);
   const close = () => store.set({ plugin: null });
   return (
     <Floating
@@ -1178,30 +1258,13 @@ export function PluginWindow() {
           />
         </div>
       )}
-      {plugin.type === 'eq' && (
-        <EqBands
-          def={def}
-          params={plugin.params}
-          setting={(p, label, dim) => (
-            <div key={p.id} className={`peq-knob${dim ? ' dim' : ''}`}>
-              <Setting
-                def={p}
-                value={paramValue(def.type, plugin.params, p.id)}
-                size={30}
-                label={label}
-                onBegin={() => beginGesture(`${def.name}: ${p.name}`)}
-                onEnd={endGesture}
-                onChange={(v) => change(p.id, v)}
-              />
-            </div>
-          )}
-        />
-      )}
+      {plugin.type === 'eq' && <EqBands def={def} params={plugin.params} target={target} plugin={id} />}
       {plugin.type === 'peq' && (
         <PeqBands
           def={def}
           params={plugin.params}
-          change={change}
+          target={target}
+          plugin={id}
           set={(param, value, label) =>
             apply([{ op: 'updatePlugin', target, plugin: id, patch: { params: { [param]: value } } }], label)
           }
@@ -1229,13 +1292,13 @@ export function PluginWindow() {
           // (a Drum Replacer's piece has its own menu, by its kit)
           .filter((p) => plugin.type !== 'replacer' || p.id !== 'piece')
           .map((p) => (
-            <Setting
+            <PluginSetting
               key={p.id}
+              target={target}
+              plugin={id}
+              of={def.name}
               def={p}
               value={paramValue(def.type, plugin.params, p.id)}
-              onBegin={() => beginGesture(`${def.name}: ${p.name}`)}
-              onEnd={endGesture}
-              onChange={(v) => change(p.id, v)}
               color={def.kind === 'midi' ? 'var(--midi)' : 'var(--accent)'}
             />
           ))}

@@ -415,7 +415,7 @@ export function Meter({ id, width = 14, height }: { id: string; width?: number; 
     )
       return lit;
     // (the canvas is only touched once there is something new to draw on it)
-    const ctx = prepare(canvas.current, width, height);
+    const ctx = prepare(canvas.current, width, height, true);
     if (!ctx) return lit;
     drawn.current = { w: width, h: height, dpr, l: pl, r: pr, hl: phl, hr: phr, over };
     ctx.clearRect(0, 0, width, height);
@@ -529,7 +529,8 @@ export function Fader({ db, onChange, onBegin, onEnd, height, label = 'Volume' }
           style={{ top: 13 + (1 - dbToFader(d)) * travel - 0.5 }}
         />
       ))}
-      <div className="fader-cap" style={{ top: (1 - pos) * travel + 3 }}>
+      {/* (moved by a transform: a fader dragged lays nothing out) */}
+      <div className="fader-cap" style={{ transform: `translateY(${(1 - pos) * travel + 3}px)` }}>
         <div className="fader-cap-line" />
       </div>
     </div>

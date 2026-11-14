@@ -5,7 +5,16 @@
  */
 import { readFileSync } from 'node:fs';
 import type { Scan, ScanSystem, SystemState } from '@holo/score';
-import { type AudioFile, applyOps, describeProject, type Op, type Project, type SampleMic } from '@holo/session';
+import {
+  type AudioFile,
+  type AudioNotes,
+  type AudioNotesMode,
+  applyOps,
+  describeProject,
+  type Op,
+  type Project,
+  type SampleMic,
+} from '@holo/session';
 
 /** What the requester's studio shows: the playhead, the selection, the cycle and the view. */
 export interface StudioState {
@@ -16,7 +25,15 @@ export interface StudioState {
   bpm?: number;
   /** The editor in front ("arrange", "piano roll", "score", "mixer"…). */
   view?: string;
-  selection?: { track?: string | null; regions?: string[]; notes?: number; from?: number; to?: number };
+  selection?: {
+    track?: string | null;
+    regions?: string[];
+    notes?: number;
+    from?: number;
+    to?: number;
+    /** The notes selected in the Audio Editor's Notes: the region, and each note's place in its notes (from 0). */
+    audioNotes?: { region: string; notes: number[] };
+  };
   cycle?: { on: boolean; start: number; end: number };
   /** The scan open in the Scan window, if one is. */
   scan?: string | null;
@@ -142,13 +159,13 @@ export interface Image {
 
 // ---- measure ----
 
-/** What `measure` measures (docs/agent.md, "Measuring"). */
-export type MeasureWhat = 'take' | 'mix' | 'tracks' | 'plugin' | 'meters' | 'file';
+/** What `measure` measures (docs/agent.md, "Measuring"); `notes` is a recording's notes found to edit (`audio_notes`). */
+export type MeasureWhat = 'take' | 'mix' | 'tracks' | 'plugin' | 'meters' | 'file' | 'notes';
 
 /** POST …/measure: ids and ticks (the tool turns names and positions into these). */
 export interface MeasureBody {
   what: MeasureWhat;
-  /** A track's id (take, tracks); a track's, a bus's or "master" (plugin). */
+  /** A track's id (take, tracks, notes); a track's, a bus's or "master" (plugin). */
   track?: string;
   region?: string;
   plugin?: string;
@@ -333,7 +350,20 @@ export interface MetersMeasure {
   }[];
 }
 
-export type MeasureResult = TakeMeasure | MixMeasure | TracksMeasure | PluginMeasure | MetersMeasure;
+/** A recording's notes as the studio's Notes view finds them (`what: 'notes'`): by its file, whatever the song's revision. */
+export interface NotesMeasure {
+  kind: 'notes';
+  file: string;
+  name: string;
+  seconds: number;
+  notes: AudioNotes;
+  /** Each note's drift (cents its held part moves) and vibrato ([Hz, ±cents]) as sung, by index (null: no pitch). */
+  shapes: ({ drift: number; vibrato: [number, number] | null } | null)[];
+  /** What kind of recording it looks like: notes are found as one line's for now (a chord's strongest). */
+  looks: AudioNotesMode;
+}
+
+export type MeasureResult = TakeMeasure | MixMeasure | TracksMeasure | PluginMeasure | MetersMeasure | NotesMeasure;
 
 /** A measurement's answer: its result, or (not done within 40 s) how far it has got and about how many seconds are left. */
 export type MeasureAnswer =

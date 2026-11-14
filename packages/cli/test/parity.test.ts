@@ -1,10 +1,11 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { TOOLS, toolNamed } from '@holo/agent';
+import { missingNoteEdits, NOTE_EDITS } from '@holo/session';
 import { describe, expect, it } from 'vitest';
-import { COMMANDS } from '../src/commands.ts';
+import { COMMANDS, TOOL_HELP } from '../src/commands.ts';
 import { TOOL_PARITY } from '../src/parity.ts';
-import { terminalWords, toolArgs } from '../src/tool-commands.ts';
+import { notesHelp, terminalWords, toolArgs } from '../src/tool-commands.ts';
 
 const main = readFileSync(join(import.meta.dirname, '../src/main.ts'), 'utf8');
 
@@ -44,6 +45,55 @@ describe('the terminal has what the in-app agent has', () => {
   it('keeps the asking tools to the conversation', () => {
     for (const tool of TOOLS.filter((t) => t.kind === 'ask'))
       expect('conversation' in (TOOL_PARITY[tool.name] ?? {}), tool.name).toBe(true);
+  });
+});
+
+describe('a recording’s notes: every edit in the studio, the agent and holo notes', () => {
+  const tool = toolNamed('audio_notes');
+  if (!tool) throw new Error('the agent lacks its audio_notes tool');
+
+  it('runs the agent’s audio_notes, which takes every note edit as an action', () => {
+    expect(TOOL_PARITY.audio_notes).toEqual({ commands: ['notes'] });
+    expect(missingNoteEdits(tool.args.find((a) => a.name === 'action')?.values ?? [])).toEqual([]);
+  });
+
+  it('lists every edit in its help and holo help, and says each one’s flags from the list', () => {
+    const help = notesHelp(undefined);
+    expect(
+      missingNoteEdits(NOTE_EDITS.map((e) => e.name).filter((n) => new RegExp(`^  ${n}\\b`, 'm').test(help))),
+    ).toEqual([]);
+    expect(missingNoteEdits(NOTE_EDITS.map((e) => e.name).filter((n) => TOOL_HELP.includes(n)))).toEqual([]);
+    for (const e of NOTE_EDITS) {
+      const one = notesHelp(e.name);
+      expect(one, e.name).toContain(`holo notes ${e.name}: ${e.summary}`);
+      for (const a of e.args) expect(one, `${e.name} --${a.name}`).toContain(`--${a.name} `);
+      expect(one.includes('--notes SELECT (required)'), e.name).toBe(e.selection);
+    }
+  });
+
+  it('reads an edit’s arguments from flags, and says the list’s refusals in flags', () => {
+    const how = { command: 'holo notes', positional: { field: 'action', say: 'ACTION' } };
+    expect(
+      toolArgs(
+        tool,
+        new Map([
+          ['notes', '5'],
+          ['semitones', '2'],
+          ['track', 'Vocal'],
+        ]),
+        how,
+        ['wait'],
+      ),
+    ).toEqual({ notes: '5', semitones: '2', track: 'Vocal' });
+    expect(terminalWords('Say "keep": 100 as sung, 0 none, 200 twice as wide (0 to 200 %)', tool, how)).toBe(
+      'Say --keep: 100 as sung, 0 none, 200 twice as wide (0 to 200 %)',
+    );
+    expect(terminalWords('Say which "notes": "all", "selected"', tool, how)).toBe(
+      'Say which --notes: "all", "selected"',
+    );
+    expect(terminalWords('call audio_notes again with the same arguments', null, null, false)).toBe(
+      'call holo notes again with the same arguments',
+    );
   });
 });
 

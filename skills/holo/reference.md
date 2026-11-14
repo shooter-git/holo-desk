@@ -103,13 +103,31 @@ scales velocities); `fade [--fade-in 0.01] [--fade-out 1.5]` (seconds; MIDI: a v
 [--points "9=0 9.3=64"] [--clear]` (MIDI: points replace the lane from the first to the last; CC 0–127,
 pb −8192–8191; no points: the lane as it is).
 
+## A recording's notes (holo notes ACTION …)
+
+`holo notes [ACTION] [--track T] [--region R] [--notes SELECT] [--ARG value…]` edits an audio region's
+notes as the Audio Editor's Notes does (the in-app agent's `audio_notes`). The region: `--region` (id,
+name or `selected`) and/or `--track`; neither: the only audio track's only recording. `--notes` (or the
+words after ACTION): `all`, `selected`, numbers from 1 (`1-12,15`), `"bars 9-13"`, `"pitch E4"`.
+`show [--page N]` (also `holo notes` alone) lists them: number, where, the pitch found with its cents →
+where it's moved, length, vibrato and drift as sung, edits; `detect` finds them. The edits come from
+the session's list of note edits (`holo notes help` lists them all, `holo notes ACTION --help` gives
+an edit's flags and ranges): `shift [--semitones N] [--cents N] [--snap free|semitone|scale]`,
+`set-pitch --pitch E4`, `drift --keep 0–100`, `vibrato --keep 0–200`, `transition --length %`,
+`formant --semitones N`, `gain --db N`, `mute`, `unmute`, `move --seconds N`,
+`resize [--edge start|end] --seconds N`, `attack --length %`, `split [--at S]`, `join`,
+`boundary --seconds N`, `octave --direction up|down`, `add --start S --length S [--pitch P]`, `remove`,
+`reset [--what all|pitch|drift|vibrato|transition|formant|gain|mute|time]` (100% is as sung). Time edits
+(move, resize, attack, join, boundary, transition) are for a line's notes. Each edit is one undo step;
+the first keeps the notes found in the song. `--wait SECONDS` waits here while notes are being found.
+
 ## Measuring (holo measure WHAT …)
 
 `take` (an audio track's recording, `--track`, `--region`, `--against key|none|TRACK`, `--grid 1/16`,
 `--through effects`; or `--file REC.wav`), `mix` (`--source bounce` for the newest bounce), `tracks`
 (`--track T`, `--against T2` for masking), `plugin` (`--track T|BUS|master --plugin TYPE|TYPE#2|fx_…`),
 `meters` (`--seconds 1–30`, while the studio plays), `file` (a recording's path, or the newest
-bounce). `--from`/`--to` limit it to some bars. Pitch is in cents, loudness in LUFS (EBU R128), peaks
+bounce). `--from`/`--to` limit it to some bars. A take whose notes are edited is measured as it plays. Pitch is in cents, loudness in LUFS (EBU R128), peaks
 in dBTP and dBFS, bands in dB. A render estimated past ten minutes is refused with what to do instead.
 
 ## Raw operations

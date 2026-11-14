@@ -1,13 +1,20 @@
 import { type AudioNote, parseAudioNotes, roundPitch, roundTime } from '@holo/session';
 import { describe, expect, it } from 'vitest';
-import { classifyRecording, DETECT_V, detectNotes, noteCurves, notesAndCurves } from '../src/notes/index.ts';
+import { classifyRecording, DETECT_V, detectNotes, noteCurves, noteShape, notesAndCurves } from '../src/notes/index.ts';
 
 const SR = 48000;
 
 /** A sung line: notes one after another ([MIDI, seconds]), a band-limited sawtooth (its first 20 harmonics) with no break in its wave. */
 function sing(
   notes: [number, number][],
-  o: { glide?: number; vibrato?: [number, number]; amp?: number; from?: number; rate?: number } = {},
+  o: {
+    glide?: number;
+    vibrato?: [number, number];
+    drift?: number;
+    amp?: number;
+    from?: number;
+    rate?: number;
+  } = {},
 ): Float32Array {
   const SR = o.rate ?? 48000;
   const total = notes.reduce((s, [, d]) => s + d, 0);
@@ -31,6 +38,8 @@ function sing(
     // a scoop up from `from` semitones below, over the first 120 ms
     if (o.from && i === 0 && t < 0.12) m -= o.from * (1 - t / 0.12);
     if (o.vibrato) m += (o.vibrato[1] / 100) * Math.sin(2 * Math.PI * o.vibrato[0] * t);
+    // a drift: cents a second, up
+    if (o.drift) m += (o.drift / 100) * t;
     phase += (440 * 2 ** ((m - 69) / 12)) / SR;
     phase -= Math.floor(phase);
     let v = 0;
@@ -278,6 +287,27 @@ describe('notes found to edit', () => {
     }
     // the same samples, the same notes
     expect(detectNotes([samples], SR)).toEqual(found);
+  });
+
+  it('measures each note as sung: its drift, and its vibrato’s rate and depth', () => {
+    const shape = (o: Parameters<typeof sing>[1]) => {
+      const { notes, curves } = notesAndCurves([join(silence(0.2), sing([[64, 2]], o), silence(0.2))], SR);
+      const held = notes.n.find((n) => n.p !== null) as AudioNote;
+      return noteShape(held, curves);
+    };
+    const plain = shape({});
+    expect(plain?.vibrato).toBeNull();
+    expect(Math.abs(plain?.drift ?? 99)).toBeLessThan(3);
+    const vib = shape({ vibrato: [5.5, 30] })?.vibrato;
+    expect(Math.abs((vib?.rate ?? 0) - 5.5)).toBeLessThan(0.3);
+    expect(Math.abs((vib?.depth ?? 0) - 30) / 30).toBeLessThan(0.2);
+    // 20 cents a second over the held part (2 s, less its attack and release)
+    const drift = shape({ drift: 20 })?.drift ?? 0;
+    expect(drift).toBeGreaterThan(34);
+    expect(drift).toBeLessThan(42);
+    // a note with no pitch has no shape
+    const { curves } = notesAndCurves([sing([[64, 1]])], SR);
+    expect(noteShape({ t: 0.1, d: 0.3, p: null }, curves)).toBeNull();
   });
 
   it('draws its curves every 5 ms: the pitch where it is voiced, the power, and where sound has no pitch', () => {

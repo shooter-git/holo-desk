@@ -829,6 +829,29 @@ function curvesOf(h: Heard): NoteCurves {
   };
 }
 
+/**
+ * A note's drift and vibrato as sung, from the curves it's drawn with: over its held part from its
+ * beat, as its pitch was found (line.ts `heldPart`, `heldPitch`), so they read as a take's notes do.
+ * Drift is the cents a straight line through it moves (0 under 250 ms); vibrato its rate (Hz) and
+ * depth (± cents). Null for a note with no pitch, or nothing voiced in it.
+ */
+export function noteShape(
+  n: AudioNote,
+  curves: NoteCurves,
+): { drift: number; vibrato: { rate: number; depth: number } | null } | null {
+  if (n.p === null) return null;
+  const beat = n.t + (n.u ?? 0);
+  const stop = n.t + n.d;
+  const a = Math.max(0, Math.floor((beat - curves.t0) / curves.step));
+  const b = Math.min(curves.midi.length, Math.ceil((stop - curves.t0) / curves.step) + 1);
+  if (b <= a) return null;
+  const t = Array.from({ length: b - a }, (_, k) => curves.t0 + (a + k) * curves.step);
+  const { ht, hp } = heldPart(t, curves.midi.subarray(a, b), 0, b - a, beat, stop);
+  if (!hp.length) return null;
+  const { drift, vibrato } = heldPitch(ht, hp);
+  return { drift, vibrato };
+}
+
 /** Where the level jumps up 10 dB or more within 40 ms, 40 dB or less under the loudest, 50 ms apart at least. */
 function onsetsOf(power: Float64Array): number {
   let loudest = 0;

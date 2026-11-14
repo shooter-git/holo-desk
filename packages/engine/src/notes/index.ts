@@ -12,6 +12,7 @@ export {
   detectNotes,
   type NoteCurves,
   noteCurves,
+  noteShape,
   notesAndCurves,
   type RecordingKind,
 } from './detect.ts';

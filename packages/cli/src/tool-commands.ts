@@ -1,10 +1,10 @@
 /**
- * The `holo` commands that do what the in-app agent's tools do: `holo regions`, `timeline`, `measure`,
- * `played`, `details`, `import`, `packs`, `holo listen --analyze`, and `holo tool NAME` for any of the
- * agent's tools by name. Each runs the agent's own tool (@holo/agent) through the terminal's API
- * (terminal-api.ts), so it does exactly what the agent does and says what it says, with the command
- * line's names for things: flags (`--to-track`) where the tool says fields ("to_track"), and `holo`
- * commands where it names its other tools.
+ * The `holo` commands that do what the in-app agent's tools do: `holo regions`, `notes`, `timeline`,
+ * `measure`, `played`, `details`, `import`, `packs`, `holo listen --analyze`, and `holo tool NAME` for
+ * any of the agent's tools by name. Each runs the agent's own tool (@holo/agent) through the
+ * terminal's API (terminal-api.ts), so it does exactly what the agent does and says what it says, with
+ * the command line's names for things: flags (`--to-track`) where the tool says fields ("to_track"),
+ * and `holo` commands where it names its other tools.
  */
 import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
@@ -13,6 +13,7 @@ import {
   check,
   describeTool,
   newMemory,
+  noteArgText,
   TOOLS,
   type Tool,
   ToolError,
@@ -20,7 +21,7 @@ import {
   type ToolResult,
   toolNamed,
 } from '@holo/agent';
-import type { MiddleC } from '@holo/session';
+import { type MiddleC, NOTE_EDITS, type NoteArg, noteEdit } from '@holo/session';
 import { TOOL_PARITY } from './parity.ts';
 import { aboutLines, type TerminalApi, terminalApi } from './terminal-api.ts';
 
@@ -70,6 +71,7 @@ const COMMAND_FOR: Record<string, string> = {
   packs: 'holo packs',
   plugins: 'holo plugins',
   regions: 'holo regions',
+  audio_notes: 'holo notes',
   timeline: 'holo timeline',
   measure: 'holo measure',
   played: 'holo played',
@@ -125,6 +127,8 @@ export function terminalWords(text: string, tool: Tool | null, how: Wording | nu
     });
     for (const d of tool.args) {
       const said = d.name === how.positional?.field ? how.positional.say : flagName(d.name);
+      // ("Say "keep": …", as the note edits ask for one, is no JSON)
+      out = out.replace(new RegExp(`\\b([Ss]ay (?:which )?)"${d.name}":`, 'g'), `$1${said}:`);
       out = out.replace(new RegExp(`"${d.name}"(?!:)`, 'g'), said);
     }
   }
@@ -224,6 +228,66 @@ function toolHelp(t: Tool, middleC: MiddleC): string {
   return lines.join('\n');
 }
 
+// ---- holo notes ----
+
+const NOTES_SELECT = 'all, selected, note numbers (1-12,15), "bars 9-13" or "pitch E4"';
+const NOTES_REGION =
+  '--track T, --region R: the recording, a region by id, name or "selected" on an audio track (when left out: the only audio track\'s only recording)';
+
+/** What a note edit's flag takes, said shortly: N, PITCH, a list of values. */
+function flagValue(a: NoteArg): string {
+  if (a.values) return a.values.join('|');
+  if (a.kind === 'pitch') return 'PITCH';
+  if (a.kind === 'boolean') return 'on|off';
+  return 'N';
+}
+
+/** `holo notes help`, or one action's flags (`holo notes ACTION --help`), from the list of note edits. */
+export function notesHelp(action: string | undefined): string {
+  const edit = action ? noteEdit(action) : undefined;
+  if (edit) {
+    const lines = [`holo notes ${edit.name}: ${edit.summary}`];
+    if (edit.modes.length < 3)
+      lines.push(
+        `  (for ${edit.modes.map((m) => (m === 'mono' ? "a line's notes" : m === 'poly' ? "chords' notes" : 'hits')).join(' and ')} only)`,
+      );
+    if (edit.selection)
+      lines.push(`  --notes SELECT (required): which notes: ${NOTES_SELECT}; or the words after ${edit.name}`);
+    for (const a of edit.args) lines.push(`  --${a.name} ${flagValue(a)}: ${noteArgText(a)}`);
+    lines.push(`  ${NOTES_REGION}`);
+    return lines.join('\n');
+  }
+  if (action === 'show')
+    return [
+      "holo notes show: a recording's notes, 40 a page: each one's number, where it is, its pitch found with its cents → where it's moved, its length, its vibrato and drift as sung, and its edits (holo notes alone shows them)",
+      `  --notes SELECT: only those: ${NOTES_SELECT}`,
+      '  --page N: which page',
+      `  ${NOTES_REGION}`,
+    ].join('\n');
+  if (action === 'detect')
+    return [
+      "holo notes detect: find a recording's notes, as the studio's Notes view finds them; nothing is kept in the song until the first edit, which keeps them with it, as one undo step",
+      `  ${NOTES_REGION}`,
+    ].join('\n');
+  const lines = [
+    "holo notes ACTION [--track T] [--region R] [--notes SELECT] [--ARG value…]: a recording's notes, edited one by one as the Audio Editor edits them (the in-app agent's audio_notes)",
+    `  --notes SELECT: which notes: ${NOTES_SELECT} (or the words after ACTION)`,
+    `  ${NOTES_REGION}`,
+    'Actions:',
+    '  show [--page N]   the notes, 40 a page (holo notes alone)',
+    '  detect            find them; nothing is kept in the song until the first edit',
+  ];
+  for (const e of NOTE_EDITS) {
+    const flags = e.args.map((a) => (a.required ? `--${a.name} ${flagValue(a)}` : `[--${a.name} ${flagValue(a)}]`));
+    lines.push(`  ${[e.name, ...flags].join(' ')}`);
+    lines.push(`        ${e.summary}`);
+  }
+  lines.push(
+    'holo notes ACTION --help shows its flags. Every edit is one undo step; the recording itself never changes.',
+  );
+  return lines.join('\n');
+}
+
 /** The notes `holo listen` heard, analyzed as the agent's analyze_played does. */
 export async function analyzeNotes(
   ctx: Pick<ToolCommandContext, 'base' | 'author' | 'middleC' | 'songId'>,
@@ -255,6 +319,10 @@ export async function toolCommand(ctx: ToolCommandContext): Promise<void> {
     console.log(toolList(ctx.middleC));
     return;
   }
+  if (command === 'notes' && (flags.has('help') || words[0] === 'help')) {
+    console.log(notesHelp(words[0] === 'help' ? words[1] : words[0]));
+    return;
+  }
   const song = await ctx.songId();
   const api = terminalApi({ base: ctx.base, song, author: ctx.author });
   const env: ToolEnv = { api, middleC: ctx.middleC, memory: newMemory() };
@@ -271,6 +339,26 @@ export async function toolCommand(ctx: ToolCommandContext): Promise<void> {
       const region = words.join(' ').trim();
       if (region && args.region === undefined) args.region = region;
       say(await runTool(env, 'regions', { ...args, action }, how));
+      return;
+    }
+
+    case 'notes': {
+      const how: Wording = { command: 'holo notes', positional: { field: 'action', say: 'ACTION' } };
+      const tool = toolNamed('audio_notes') as Tool;
+      const args = toolArgs(tool, flags, how, ['wait']);
+      const actions = tool.args.find((d) => d.name === 'action')?.values ?? [];
+      // the words after the action choose the notes: holo notes shift 5 --semitones 2
+      const action = actions.includes(words[0] ?? '') ? (words.shift() as string) : 'show';
+      const chosen = words.join(' ').trim();
+      if (chosen && args.notes === undefined) args.notes = chosen;
+      const wait = Number(flag('wait') ?? 0);
+      if (!Number.isFinite(wait) || wait < 0) throw new Error('--wait takes seconds');
+      const until = Date.now() + wait * 1000;
+      const finding = (r: ToolResult) => !!api.measured && !api.measured.done && /^Still finding/.test(r.text);
+      let r = await runTool(env, 'audio_notes', { ...args, action }, how);
+      // asked to wait: the same question again joins the finding of the notes (each call waits up to 40 s)
+      while (finding(r) && Date.now() < until) r = await runTool(env, 'audio_notes', { ...args, action }, how);
+      say(finding(r) ? { text: stillText(r.text) } : r);
       return;
     }
 

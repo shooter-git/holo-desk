@@ -1,51 +1,81 @@
 /**
- * A line's notes moved in pitch, offline (the patches of a `mono` region: patch.ts): pitch-synchronous
- * overlap-add (TD-PSOLA). The same recording and patch give the same samples wherever it runs.
+ * A line's notes moved in pitch and formant, offline (the patches of a `mono` region: patch.ts):
+ * pitch-synchronous overlap-add (TD-PSOLA). The same recording and patch give the same samples
+ * wherever it runs.
  *
- * - **Hearing it.** The mean of the channels, from 200 ms before anything moves to 200 ms after (within
- *   the frames the patch may read, `ctx`). Its pitch is the fine track (analysis/take.ts: every 5 ms, as
- *   note-finding hears it), its gaps up to 25 ms filled in and its voiced runs shorter than 15 ms let go.
- *   A patch that only changes levels isn't heard at all.
+ * - **Hearing it.** The mean of the channels, from 200 ms before anything can move to 200 ms after
+ *   (and 100 ms past the patch at least; within the frames the patch may read, `ctx`). Its pitch is the
+ *   fine track (analysis/take.ts: every 5 ms, as note-finding hears it), its voiced runs shorter than
+ *   15 ms let go and its gaps filled in where the sound still repeats itself near the period between
+ *   the pitches either side: up to 25 ms, or 60 ms where its level doesn't dip (the track loses a fast
+ *   glide; a consonant isn't filled in). In a gap filled in, the pitch is read from the analysis marks,
+ *   which follow the sound itself. A patch that only changes levels isn't heard at all.
  * - **Analysis marks.** Through a voiced run, one period apart: the first at the run's loudest sample in
  *   its first period, each next where the period around it best matches the one around the mark before
  *   (normalized cross-correlation, within 20% of the period the track says). Elsewhere, every 5 ms from
  *   the recording's first frame, so they fall in the same places whatever stretch is read. (A voiced run
- *   more than 100 ms from any shift is only ever copied: it's marked every 5 ms too.)
- * - **The shift.** curve.ts `targetShift`, nothing where the sound isn't voiced.
+ *   more than 100 ms from where anything can move is only ever copied: it's marked every 5 ms too.)
+ * - **The shift and the formant.** curve.ts `targetShift` (from the pitch heard: the notes' centres,
+ *   drift, vibrato and glides) and `formantShift`; neither where the sound isn't voiced, so a consonant
+ *   or a breath inside a moved note isn't moved.
  * - **Synthesis marks.** Each lies the period divided by the ratio (2^(shift/12)) after the one before,
  *   and takes the grain of the analysis mark nearest it: the sound around that mark under a Hann window
  *   whose halves reach as far as the nearer of the analysis mark's neighbour and the synthesis mark's,
  *   so that from one synthesis mark to the next one grain fades out as the next fades in (adding to
  *   one, except where the pitch goes down: the grains are then further apart than the sound they were
  *   read from, and keep to its length). A grain placed between samples is read between them (interp.ts).
+ * - **Formant.** A voiced grain is read 2^(formant/12) times as fast as it was recorded (through the
+ *   same windowed sinc, its cutoff lowered as much as it's sped up), under the same window: its
+ *   formants move by that much, its pitch (where the grains are) doesn't. Grains of unvoiced sound are
+ *   read as they were.
+ * - **Level.** Grains brought closer together or further apart overlap more or less, and a voice's
+ *   energy sits in a pulse each period: moved a few semitones, the level would drift by a dB or two.
+ *   So each period the voiced grains make (between two synthesis marks) is measured against the
+ *   recording around the marks it was read from, over the five periods around it, and its level put
+ *   back (between periods in line, back to 1 where the sound is copied).
  * - **Locked.** Wherever nothing moves, the synthesis marks are the analysis marks and the sound is
  *   copied, to the bit (overlap-added, it would be a rounding away). A shift starts from an analysis
- *   mark; once it's back to nothing for good, the synthesis marks drift back onto the analysis marks
- *   over the last of the shift's descent and four more marks (at least eight where it's voiced, where a
- *   drift is a tiny change of pitch; in noise it's none), and lock again. So a patch, which reaches past
- *   its edits, starts and ends as the recording does.
- * - **Level** (curve.ts `noteGain`), last.
+ *   mark. Once nothing moves from a synthesis mark on, the marks lock again. Into sound with no pitch,
+ *   straight onto the first analysis mark there a grid step past the last voiced grain (a jump in noise
+ *   is heard as nothing, and that grain fades over it). Where it's voiced they follow the recording's
+ *   periods and drift onto its marks bit by bit: each period changed by a hundredth at most where the
+ *   patch has room (over up to 64 periods), by what its room allows where it hasn't, the change coming
+ *   in and going over the first and last quarter of them so that neighbouring periods differ by much
+ *   less. So a patch, which reaches past its edits, starts and ends as the recording does, and a breath
+ *   between moved notes is copied as it is.
+ * - **Level edits** (curve.ts `noteGain`), last.
  *
- * Every channel is moved by the same marks, so a stereo image stays where it was.
+ * Every channel is moved by the same marks and levels, so a stereo image stays where it was.
  */
 import { FINE_STEP_S, fineTrack } from '../analysis/take.ts';
-import { noteGain, targetShift } from './curve.ts';
-import { FIRST_TAP, fractionalTaps, INTERP_TAPS } from './interp.ts';
+import { formantShift, noteGain, pitchSpan, targetShift } from './curve.ts';
+import { cutoffTable, FIRST_TAP, fractionalTaps, INTERP_TAPS, tableTaps } from './interp.ts';
 import type { PatchSpec } from './plan.ts';
 
-/** Gaps in the pitch track up to this many steps are filled in; voiced runs shorter than this many are let go. */
+/** Gaps in the pitch track up to this many steps are filled in, up to this many where the level doesn't dip this far; voiced runs shorter than this many are let go. */
 const FILL_STEPS = 5;
+const BRIDGE_STEPS = 12;
+const BRIDGE_DIP = 10 ** (-12 / 10);
+/** A gap's sound repeats itself near the period with a normalized difference under this, to be filled (noise is near 1). */
+const BRIDGE_VOICED = 0.35;
 const MIN_RUN_STEPS = 3;
 /** How far from the period the track says a mark's next is looked for (a share of the period). */
 const SEARCH = 0.2;
 /** Where nothing is voiced, analysis marks lie this far apart (s). */
 const GRID_S = 0.005;
-/** How far around where anything moves the sound is heard (s); and how close to a shift a voiced run is marked period by period. */
+/** How far around where anything can move the sound is heard (s); and how close to a move a voiced run is marked period by period. */
 const HEARD_S = 0.2;
 const MARK_REACH_S = 0.1;
-/** Marks after a shift's end that drift back onto the analysis marks, and the fewest that drift where it's voiced. */
+/** Where it's voiced, marks drift back onto the analysis marks over this many at least (fewer only where the patch ends first, down to SETTLE) and this many at most. */
 const SETTLE = 4;
 const SETTLE_VOICED = 8;
+const SETTLE_MAX = 64;
+/** The most a period changes as the marks drift back (a share of it), where there's room; the drift's share that comes in and goes at either end. */
+const SETTLE_CHANGE = 0.01;
+const SETTLE_RAMP = 0.25;
+/** A period's level is measured over this many periods either side; it's put back by this much at most either way. */
+const LEVEL_REACH = 2;
+const LEVEL_MAX = 2;
 
 /** The patch of a line: the frames `a` to `b` of `base` with its notes' edits, rendered. */
 export function renderLinePatch(base: readonly Float32Array[], sr: number, spec: PatchSpec): Float32Array[] {
@@ -61,27 +91,46 @@ export function renderLinePatch(base: readonly Float32Array[], sr: number, spec:
   const scale = sr * spec.stretch;
   const times = new Float64Array(c1 - c0);
   for (let i = 0; i < times.length; i++) times[i] = (c0 + i) / scale;
-  const moves = targetShift(spec.notes, times);
-  let first = 0;
-  while (first < moves.length && moves[first] === 0) first++;
-  if (first < moves.length) {
-    // the frames read: 200 ms either side of where anything moves (frame w0 of the recording is frame 0 here)
-    let last = moves.length - 1;
-    while (moves[last] === 0) last--;
+  const span = pitchSpan(spec.notes);
+  const first = span ? Math.max(c0, Math.ceil(span[0] * scale)) : c1;
+  const last = span ? Math.min(c1 - 1, Math.floor(span[1] * scale)) : c0;
+  if (last >= first) {
+    // the frames read: 200 ms either side of where anything can move (frame w0 of the recording is frame 0 here)
     const reach = Math.round(HEARD_S * sr);
-    const w0 = c0 + Math.max(0, first - reach);
-    const w1 = c0 + Math.min(moves.length, last + 1 + reach);
+    const w0 = Math.max(c0, first - reach);
+    // (and 100 ms past the patch at least: the fine track stops short of the end of what it hears, and the
+    // marks drifting back onto the recording's want to follow its periods to the patch's end)
+    const w1 = Math.min(c1, Math.max(last + 1 + reach, b + (reach >> 1)));
     const n = w1 - w0;
-    const shift = moves.slice(w0 - c0, w1 - c0);
     const mono = new Float64Array(n);
     for (const c of base) for (let i = 0; i < n; i++) mono[i] = (mono[i] as number) + (c[w0 + i] as number);
     if (base.length > 1) for (let i = 0; i < n; i++) mono[i] = (mono[i] as number) / base.length;
-    const period = periodsOf(mono, sr);
-    for (let i = 0; i < n; i++) if (Number.isNaN(period[i] as number)) shift[i] = 0;
-    if (shift.some((s) => s !== 0)) {
-      const still = stillness(shift);
-      const marks = analysisMarks(mono, period, still, w0, sr);
-      overlapAdd(base, out, marks.at, synthesisPlan(marks, shift, still), w0, a - w0, b - w0);
+    const heard = periodsOf(mono, sr);
+    const { period } = heard;
+    const energy = new Float64Array(n + 1);
+    for (let i = 0; i < n; i++) energy[i + 1] = (energy[i] as number) + (mono[i] as number) * (mono[i] as number);
+    // marked period by period: the voiced runs within 100 ms of where anything can move
+    const lo = first - w0;
+    const hi = last - w0;
+    const marks = analysisMarks(mono, energy, period, (x, y) => y < lo || x > hi, w0, sr);
+    // the pitch heard, at seconds of the file (where the track lost it, from the marks)
+    pitchFromMarks(heard, marks, sr);
+    const track = { t: Float64Array.from(heard.t, (s) => (w0 + s * sr) / scale), midi: heard.midi };
+    const at = times.subarray(w0 - c0, w1 - c0);
+    const shift = targetShift(spec.notes, at, track);
+    const formant = formantShift(spec.notes, at);
+    let moves = false;
+    for (let i = 0; i < n; i++) {
+      if (Number.isNaN(period[i] as number)) {
+        shift[i] = 0;
+        formant[i] = 0;
+      }
+      if (shift[i] !== 0 || formant[i] !== 0) moves = true;
+    }
+    if (moves) {
+      const still = stillness(shift, formant);
+      const plan = synthesisPlan(marks, shift, still, b - w0, Math.round(GRID_S * sr));
+      overlapAdd(base, out, energy, marks, plan, formant, w0, a - w0, b - w0);
     }
   }
   const gain = noteGain(spec.notes, times.subarray(a - c0, b - c0));
@@ -91,15 +140,28 @@ export function renderLinePatch(base: readonly Float32Array[], sr: number, spec:
   return out;
 }
 
+/** A line heard: the period (samples) at each sample, NaN where it isn't voiced; and its pitch track (gaps filled, short runs let go). */
+interface Heard {
+  period: Float64Array;
+  /** Each step's time (s from the first sample) and its pitch (MIDI with cents, NaN where it isn't voiced). */
+  t: Float64Array;
+  midi: Float64Array;
+  /** 1 at the steps of a gap filled in. */
+  filled: Uint8Array;
+}
+
 /**
  * The period (samples) at each sample of a line, from its fine track: NaN where it isn't voiced. Gaps
- * up to FILL_STEPS steps are filled in (between the pitches either side), and runs shorter than
- * MIN_RUN_STEPS let go; each step stands for the 5 ms around it, the period between steps in line.
+ * where the sound still repeats itself near the period between the pitches either side are filled in
+ * (between those pitches): up to FILL_STEPS steps, or up to BRIDGE_STEPS where its level doesn't dip
+ * either (the track losing a fast glide); a consonant isn't. Runs shorter than MIN_RUN_STEPS are let
+ * go. Each step stands for the 5 ms around it, the period between steps in line.
  */
-function periodsOf(mono: Float64Array, sr: number): Float64Array {
+function periodsOf(mono: Float64Array, sr: number): Heard {
   const track = fineTrack(Float32Array.from(mono), sr);
   const steps = track.midi.length;
   const midi = Float64Array.from(track.midi);
+  const filled = new Uint8Array(steps);
   const runEnd = (k: number, voiced: boolean): number => {
     let e = k;
     while (e < steps && Number.isNaN(midi[e] as number) !== voiced) e++;
@@ -111,10 +173,21 @@ function periodsOf(mono: Float64Array, sr: number): Float64Array {
       continue;
     }
     const e = runEnd(k, false);
-    if (k > 0 && e < steps && e - k <= FILL_STEPS) {
+    let bridge = k > 0 && e < steps && e - k <= BRIDGE_STEPS;
+    if (bridge && e - k > FILL_STEPS) {
+      const floor = Math.min(track.power[k - 1] as number, track.power[e] as number) * BRIDGE_DIP;
+      for (let j = k; j < e && bridge; j++) bridge = (track.power[j] as number) >= floor;
+    }
+    // (and only where the sound repeats itself near the period between: a glide, not a consonant)
+    for (let j = k; j < e && bridge; j++) {
+      const m = (midi[k - 1] as number) + (((midi[e] as number) - (midi[k - 1] as number)) * (j - k + 1)) / (e - k + 1);
+      bridge = periodic(mono, Math.round((track.t[j] as number) * sr), sr / (440 * 2 ** ((m - 69) / 12)));
+    }
+    if (bridge) {
       const m0 = midi[k - 1] as number;
       const m1 = midi[e] as number;
       for (let j = k; j < e; j++) midi[j] = m0 + ((m1 - m0) * (j - k + 1)) / (e - k + 1);
+      filled.fill(1, k, e);
     }
     k = e;
   }
@@ -136,32 +209,101 @@ function periodsOf(mono: Float64Array, sr: number): Float64Array {
         const p = steady[j] as number;
         period[i] = j + 1 < e ? p + ((steady[j + 1] as number) - p) * (f - j) : p;
       }
+    } else {
+      midi.fill(Number.NaN, k, e);
+      filled.fill(0, k, e);
     }
     k = e;
   }
-  return period;
+  return { period, t: track.t, midi, filled };
+}
+
+/**
+ * Whether the sound around sample c repeats itself near a period of p samples: its normalized squared
+ * difference against itself under BRIDGE_VOICED at some shift within SEARCH of p, over a period and a
+ * half (a glide's period changes as it goes).
+ */
+function periodic(x: Float64Array, c: number, p: number): boolean {
+  const lo = Math.max(2, Math.floor(p * (1 - SEARCH)));
+  const hi = Math.ceil(p * (1 + SEARCH));
+  const w = Math.round(1.5 * p);
+  const a = Math.round(c - (w + p) / 2);
+  if (a < 0 || a + w + hi >= x.length) return false;
+  for (let tau = lo; tau <= hi; tau++) {
+    let d = 0;
+    let m = 0;
+    for (let j = 0; j < w; j++) {
+      const u = x[a + j] as number;
+      const v = x[a + j + tau] as number;
+      d += (u - v) * (u - v);
+      m += u * u + v * v;
+    }
+    if (m > 0 && d / m < BRIDGE_VOICED) return true;
+  }
+  return false;
+}
+
+/**
+ * The pitch at a line's filled-in steps from its analysis marks instead, where they're marked period
+ * by period: each period's pitch at its middle, in line between periods. (The marks follow the sound
+ * itself, a glide the track lost too.)
+ */
+function pitchFromMarks(heard: Heard, marks: Marks, sr: number): void {
+  const t = marks.at;
+  const K = t.length;
+  /** The pitch of the period from mark i to the next, or NaN where it isn't one (unvoiced, or across runs). */
+  const pitchOf = (i: number): number => {
+    if (i < 0 || i + 1 >= K || !marks.voiced[i] || !marks.voiced[i + 1]) return Number.NaN;
+    const len = (t[i + 1] as number) - (t[i] as number);
+    const guess = heard.period[Math.round(((t[i] as number) + (t[i + 1] as number)) / 2)] as number;
+    if (!(Math.abs(len - guess) < 0.25 * guess)) return Number.NaN;
+    return 69 + 12 * Math.log2(sr / (440 * len));
+  };
+  let i = 0;
+  for (let k = 0; k < heard.t.length; k++) {
+    if (!heard.filled[k]) continue;
+    const x = (heard.t[k] as number) * sr;
+    while (i + 1 < K && (t[i + 1] as number) <= x) i++;
+    const centre = ((t[i] as number) + (t[Math.min(K - 1, i + 1)] as number)) / 2;
+    const j = x < centre ? i - 1 : i;
+    const a = pitchOf(j);
+    const b = pitchOf(j + 1);
+    const ca = ((t[Math.max(0, j)] as number) + (t[Math.max(0, Math.min(K - 1, j + 1))] as number)) / 2;
+    const cb = ((t[Math.max(0, Math.min(K - 1, j + 1))] as number) + (t[Math.min(K - 1, j + 2)] as number)) / 2;
+    if (!Number.isNaN(a) && !Number.isNaN(b) && cb > ca)
+      heard.midi[k] = a + (b - a) * Math.min(1, Math.max(0, (x - ca) / (cb - ca)));
+    else if (!Number.isNaN(a)) heard.midi[k] = a;
+    else if (!Number.isNaN(b)) heard.midi[k] = b;
+  }
 }
 
 /** Whether nothing moves anywhere from sample lo up to hi (of the frames read). */
 type Still = (lo: number, hi: number) => boolean;
 
-function stillness(shift: Float64Array): Still {
+function stillness(shift: Float64Array, formant: Float64Array): Still {
   const moved = new Int32Array(shift.length + 1);
-  for (let i = 0; i < shift.length; i++) moved[i + 1] = (moved[i] as number) + (shift[i] !== 0 ? 1 : 0);
+  for (let i = 0; i < shift.length; i++)
+    moved[i + 1] = (moved[i] as number) + (shift[i] !== 0 || formant[i] !== 0 ? 1 : 0);
   const at = (i: number) => moved[Math.max(0, Math.min(shift.length, Math.floor(i)))] as number;
   return (lo, hi) => at(hi) === at(lo);
 }
 
-/** Analysis marks (samples of the frames read, ascending), and whether each is a voiced run's. */
+/** Analysis marks (samples of the frames read, ascending), whether each is a voiced run's, and whether it's in sound with no pitch (a grid mark where it isn't voiced). */
 interface Marks {
   at: Int32Array;
   voiced: Uint8Array;
+  noise: Uint8Array;
 }
 
-function analysisMarks(x: Float64Array, period: Float64Array, still: Still, w0: number, sr: number): Marks {
+function analysisMarks(
+  x: Float64Array,
+  energy: Float64Array,
+  period: Float64Array,
+  still: Still,
+  w0: number,
+  sr: number,
+): Marks {
   const n = x.length;
-  const energy = new Float64Array(n + 1);
-  for (let i = 0; i < n; i++) energy[i + 1] = (energy[i] as number) + (x[i] as number) * (x[i] as number);
   const reach = Math.round(MARK_REACH_S * sr);
   const grid = Math.round(GRID_S * sr);
   const at: number[] = [];
@@ -194,7 +336,8 @@ function analysisMarks(x: Float64Array, period: Float64Array, still: Still, w0: 
     last = run[run.length - 1] as number;
   }
   fill(last + grid / 2, n - 1);
-  return { at: Int32Array.from(at), voiced: Uint8Array.from(voiced) };
+  const noise = Uint8Array.from(at, (m, k) => (!voiced[k] && Number.isNaN(period[m] as number) ? 1 : 0));
+  return { at: Int32Array.from(at), voiced: Uint8Array.from(voiced), noise };
 }
 
 /** A voiced run's marks, from..to (samples), one period apart. */
@@ -237,7 +380,17 @@ interface Plan {
   src: number[];
 }
 
-function synthesisPlan(marks: Marks, shift: Float64Array, still: Still): Plan {
+/** How much of a drift back onto the analysis marks is done a share `u` of the way through it: its pace rises over the first SETTLE_RAMP of it and falls over the last. */
+function settled(u: number): number {
+  const r = SETTLE_RAMP;
+  const k = 1 / (2 * r * (1 - r));
+  if (u <= r) return k * u * u;
+  if (u >= 1 - r) return 1 - k * (1 - u) * (1 - u);
+  return (u - r / 2) / (1 - r);
+}
+
+/** The synthesis marks, locked again by `end` (a frame of those read: the patch's last) wherever they can be; `grid`: the grid's step (samples). */
+function synthesisPlan(marks: Marks, shift: Float64Array, still: Still, end: number, grid: number): Plan {
   const t = marks.at;
   const K = t.length;
   const tau: number[] = [];
@@ -260,51 +413,79 @@ function synthesisPlan(marks: Marks, shift: Float64Array, still: Still): Plan {
     return i + 1 < K && (t[i + 1] as number) - x < x - (t[i] as number) ? i + 1 : i;
   };
   const shiftAt = (x: number): number => shift[Math.max(0, Math.min(shift.length - 1, Math.round(x)))] as number;
+  const lockOn = (m: number): number => {
+    tau.push(t[m] as number);
+    src.push(m);
+    return m;
+  };
 
   /**
-   * The shift is over at synthesis mark j: lock again, if nothing moves until the analysis mark SETTLE
-   * steps on is reached. The marks from the start of the shift's last descent (not before the run's
-   * first, `from`) drift onto it bit by bit. The analysis mark locked onto, or −1.
+   * Nothing moves at synthesis mark j: lock again, if nothing moves from there on until the marks are
+   * back on the analysis marks (before `end`). Into noise, onto its first analysis mark straight away
+   * (a grid step past the last voiced grain, in place of mark j where it can be, else half a grid step
+   * past the marks followed so far, so the grains between still cross over); where it's voiced, after
+   * following the recording's periods and drifting back bit by bit. The analysis mark locked onto, or −1.
    */
-  const relock = (j: number, from: number): number => {
+  const relock = (j: number): number => {
+    const x0 = tau[j] as number;
     const steps: number[] = [];
-    let x = tau[j] as number;
-    for (let q = 0; q < SETTLE; q++) {
+    let x = x0;
+    for (let q = 0; q < SETTLE_MAX; q++) {
       const i = interval(x);
       if (i + 1 >= K) return -1;
-      x += (t[i + 1] as number) - (t[i] as number);
-      steps.push(x);
+      if (marks.noise[i + 1]) {
+        // into noise: lock onto its next mark, a grid step past the mark before at least (in place
+        // of mark j itself where nothing moves from there on, so no grain read off the recording's time plays)
+        if (q === 0 && j > 0) {
+          const before = tau[j - 1] as number;
+          let m = interval(before) + 1;
+          while (m < K && ((t[m] as number) < before + grid || !still(t[m] as number, x0 + 1))) m++;
+          if (m < K && marks.noise[m] && (t[m] as number) < end && still(x0, (t[m] as number) + 1)) {
+            tau.pop();
+            src.pop();
+            return lockOn(m);
+          }
+        }
+        let m = i + 1;
+        if ((t[m] as number) - x < grid / 2) m++;
+        if (m >= K || !marks.noise[m] || (t[m] as number) >= end || !still(x0, (t[m] as number) + 1)) return -1;
+        for (const s of steps) {
+          tau.push(s);
+          src.push(nearest(s));
+        }
+        return lockOn(m);
+      }
+      // (where its periods aren't marked, they can't be followed)
+      if (!marks.voiced[i] || !marks.voiced[i + 1]) break;
+      const next = x + ((t[i + 1] as number) - (t[i] as number));
+      // (a period's room left after it, for the mark it locks onto)
+      if (next > last || 2 * next - x >= end || !still(x, 2 * next - x + 1)) break;
+      steps.push(next);
+      x = next;
     }
-    if (x > last) return -1;
-    const m = nearest(x);
+    if (steps.length < SETTLE) return -1;
+    // how far the marks are off the analysis marks, and over how many marks that's made up
+    const S = steps.length;
+    const off0 = (t[nearest(steps[S - 1] as number)] as number) - (steps[S - 1] as number);
+    const p = (t[Math.min(K - 1, interval(x0) + 1)] as number) - (t[interval(x0)] as number);
+    const need = Math.ceil(Math.abs(off0) / (SETTLE_CHANGE * p * (1 - SETTLE_RAMP)));
+    const N = Math.min(S, Math.max(SETTLE_VOICED, need));
+    const xN = steps[N - 1] as number;
+    const m = nearest(xN);
     const target = t[m] as number;
-    if (target <= (tau[j] as number) || !still(tau[j] as number, target + 1)) return -1;
-    let c = j - 1;
-    while (c > from) {
-      const s = Math.abs(shiftAt(tau[c] as number));
-      if (s === 0 || s >= Math.abs(shiftAt(tau[c - 1] as number))) break;
-      c--;
-    }
-    if (steps.some((s) => marks.voiced[nearest(s)])) c = Math.max(from, Math.min(c, j + SETTLE - SETTLE_VOICED));
-    for (const s of steps) {
+    if (target <= x0 || target >= end || !still(xN, target + 1)) return -1;
+    const off = target - xN;
+    for (let q = 1; q < N; q++) {
+      const s = (steps[q - 1] as number) + off * settled(q / N);
       tau.push(s);
-      src.push(0);
+      src.push(nearest(s));
     }
-    const end = tau.length - 1;
-    const off = target - x;
-    for (let q = c + 1; q < end; q++) {
-      tau[q] = (tau[q] as number) + (off * (q - c)) / (end - c);
-      src[q] = nearest(tau[q] as number);
-    }
-    tau[end] = target;
-    src[end] = m;
-    return m;
+    return lockOn(m);
   };
 
   tau.push(t[0] as number);
   src.push(0);
   let k = 0; // the analysis mark the synthesis marks are locked on, or −1
-  let from = 0; // where the marks last left the analysis marks
   for (;;) {
     const j = tau.length - 1;
     const x = tau[j] as number;
@@ -316,7 +497,6 @@ function synthesisPlan(marks: Marks, shift: Float64Array, still: Still): Plan {
         src.push(k);
         continue;
       }
-      from = j;
       k = -1;
     }
     const i = interval(x);
@@ -326,82 +506,181 @@ function synthesisPlan(marks: Marks, shift: Float64Array, still: Still): Plan {
     if (next >= last) break;
     tau.push(next);
     src.push(nearest(next));
-    if (shiftAt(next) === 0) k = relock(j + 1, from);
+    if (shiftAt(next) === 0) k = relock(j + 1);
   }
   return { tau, src };
 }
 
+/** A grain read faster than recorded reads through a cutoff table: its cutoff, down to a 64th, so few are made (and kept). */
+const CUTOFF_STEPS = 64;
+const tables: (Float64Array | undefined)[] = [];
+
+function tableFor(pace: number): Float64Array {
+  const step = Math.max(1, Math.floor(Math.min(1, 1 / pace) * CUTOFF_STEPS));
+  let table = tables[step];
+  if (!table) {
+    table = cutoffTable(step / CUTOFF_STEPS);
+    tables[step] = table;
+  }
+  return table;
+}
+
 /**
  * The channels overlap-added by the plan into `out` (frames lo to hi of those read; `out` holds the
- * recording's own, which stay wherever the marks are locked).
+ * recording's own, which stay wherever the marks are locked), each voiced period's level put back to
+ * the recording's around it (`energy`: the running sum of squares of the line heard).
  */
 function overlapAdd(
   base: readonly Float32Array[],
   out: Float32Array[],
-  t: Int32Array,
+  energy: Float64Array,
+  marks: Marks,
   plan: Plan,
+  formant: Float64Array,
   w0: number,
   lo: number,
   hi: number,
 ): void {
+  const t = marks.at;
   const { tau, src } = plan;
   const J = tau.length;
   const K = t.length;
+  const C = base.length;
   if (J < 2) return;
   const gap = (k: number): number =>
     K < 2 ? Number.POSITIVE_INFINITY : (t[Math.min(K - 1, k + 1)] as number) - (t[Math.max(0, k)] as number);
-  // each grain's reach either side, and how it's read (whole samples off its analysis mark, the taps between)
+  // each grain's reach either side, and how it's read: as recorded (its pace 1), whole samples off its
+  // analysis mark and the taps between, made once; or at its pace, through the cutoff table for it
   const left = new Float64Array(J);
   const right = new Float64Array(J);
   const whole = new Int32Array(J);
+  const pace = new Float64Array(J);
   const taps: (Float64Array | null)[] = [];
   for (let q = 0; q < J; q++) {
     const s = src[q] as number;
     const x = tau[q] as number;
     left[q] = Math.min(gap(s > 0 ? s - 1 : 0), q > 0 ? x - (tau[q - 1] as number) : Number.POSITIVE_INFINITY);
     right[q] = Math.min(gap(s < K - 1 ? s : K - 2), q + 1 < J ? (tau[q + 1] as number) - x : Number.POSITIVE_INFINITY);
+    const f = marks.voiced[s] ? (formant[Math.max(0, Math.min(formant.length - 1, Math.round(x)))] as number) : 0;
+    pace[q] = f === 0 ? 1 : 2 ** (f / 12);
     const off = (t[s] as number) - x;
     whole[q] = Math.floor(off);
     const frac = off - Math.floor(off);
-    taps.push(frac === 0 ? null : fractionalTaps(frac));
+    taps.push(pace[q] !== 1 ? tableFor(pace[q] as number) : frac === 0 ? null : fractionalTaps(frac));
   }
-  /** Grain q's sound at frame i (of those read), from channel c. */
-  const read = (c: Float32Array, q: number, i: number): number => {
-    const at = w0 + i + (whole[q] as number);
-    const h = taps[q];
-    if (!h) return at >= 0 && at < c.length ? (c[at] as number) : 0;
-    const z = at + FIRST_TAP;
-    let v = 0;
-    if (z >= 0 && z + INTERP_TAPS <= c.length)
-      for (let m = 0; m < INTERP_TAPS; m++) v += (h[m] as number) * (c[z + m] as number);
-    else
-      for (let m = 0; m < INTERP_TAPS; m++)
-        if (z + m >= 0 && z + m < c.length) v += (h[m] as number) * (c[z + m] as number);
-    return v;
+  const hA = new Float64Array(INTERP_TAPS);
+  const hB = new Float64Array(INTERP_TAPS);
+  const vA = new Float64Array(C);
+  const vB = new Float64Array(C);
+  /** Grain q's sound at frame i (of those read), each channel's into `v` (taps worked out in `h`, where its pace isn't 1). */
+  const read = (q: number, i: number, h: Float64Array, v: Float64Array): void => {
+    const a = pace[q] as number;
+    let z: number;
+    let k: Float64Array | null;
+    if (a === 1) {
+      z = w0 + i + (whole[q] as number);
+      k = taps[q] as Float64Array | null;
+    } else {
+      const at = w0 + (t[src[q] as number] as number) + a * (i - (tau[q] as number));
+      z = Math.floor(at);
+      const frac = at - z;
+      k = frac === 0 && a < 1 ? null : tableTaps(taps[q] as Float64Array, frac, h);
+    }
+    for (let ch = 0; ch < C; ch++) {
+      const c = base[ch] as Float32Array;
+      if (!k) {
+        v[ch] = z >= 0 && z < c.length ? (c[z] as number) : 0;
+        continue;
+      }
+      const from = z + FIRST_TAP;
+      let y = 0;
+      if (from >= 0 && from + INTERP_TAPS <= c.length)
+        for (let m = 0; m < INTERP_TAPS; m++) y += (k[m] as number) * (c[from + m] as number);
+      else
+        for (let m = 0; m < INTERP_TAPS; m++)
+          if (from + m >= 0 && from + m < c.length) y += (k[m] as number) * (c[from + m] as number);
+      v[ch] = y;
+    }
+  };
+  // what each period between synthesis marks is: copied (0), made (1), made of voiced grains (2); its
+  // energy made, mean of the channels, and the recording's around the marks it was read from
+  const kind = new Uint8Array(J);
+  const made = new Float64Array(J);
+  const wanted = new Float64Array(J);
+  /** The recording's power around analysis mark s: from halfway to the mark before to halfway to the next. */
+  const power = (s: number): number => {
+    const a = Math.max(0, Math.round(((t[Math.max(0, s - 1)] as number) + (t[s] as number)) / 2));
+    const b = Math.min(energy.length - 1, Math.round(((t[s] as number) + (t[Math.min(K - 1, s + 1)] as number)) / 2));
+    return b > a ? ((energy[b] as number) - (energy[a] as number)) / (b - a) : 0;
   };
   for (let q = 0; q + 1 < J; q++) {
     const x0 = tau[q] as number;
     const x1 = tau[q + 1] as number;
-    // between two marks locked on neighbouring analysis marks, the recording as it is
+    // between two marks locked on neighbouring analysis marks, read as recorded, the recording as it is
     const s0 = src[q] as number;
     const s1 = src[q + 1] as number;
-    if (s1 === s0 + 1 && x0 === t[s0] && x1 === t[s1]) continue;
+    if (s1 === s0 + 1 && x0 === t[s0] && x1 === t[s1] && pace[q] === 1 && pace[q + 1] === 1) continue;
+    kind[q] = marks.voiced[s0] && marks.voiced[s1] ? 2 : 1;
     const from = Math.max(lo, Math.ceil(x0));
     const to = Math.min(hi, Math.ceil(x1));
     const r = right[q] as number;
     const l = left[q + 1] as number;
+    let sum = 0;
     for (let i = from; i < to; i++) {
       const du = i - x0;
       const dv = x1 - i;
       const fade = du < r ? 0.5 + 0.5 * Math.cos((Math.PI * du) / r) : 0;
       const rise = dv < l ? 0.5 + 0.5 * Math.cos((Math.PI * dv) / l) : 0;
-      for (let ch = 0; ch < base.length; ch++) {
-        const c = base[ch] as Float32Array;
-        let y = 0;
-        if (fade > 0) y += fade * read(c, q, i);
-        if (rise > 0) y += rise * read(c, q + 1, i);
+      if (fade > 0) read(q, i, hA, vA);
+      if (rise > 0) read(q + 1, i, hB, vB);
+      let mean = 0;
+      for (let ch = 0; ch < C; ch++) {
+        const y = (fade > 0 ? fade * (vA[ch] as number) : 0) + (rise > 0 ? rise * (vB[ch] as number) : 0);
         (out[ch] as Float32Array)[i - lo] = y;
+        mean += y;
       }
+      mean /= C;
+      sum += mean * mean;
+    }
+    made[q] = sum;
+    wanted[q] = (Math.max(0, to - from) * (power(s0) + power(s1))) / 2;
+  }
+  // each voiced period's level, against the recording's, over the periods around it made of voiced grains
+  const level = new Float64Array(J).fill(1);
+  for (let q = 0; q + 1 < J; q++) {
+    if (kind[q] !== 2) continue;
+    let m = 0;
+    let w = 0;
+    for (let d = -LEVEL_REACH; d <= LEVEL_REACH; d++) {
+      // (as far as the periods made of voiced grains run on unbroken)
+      const e = q + d;
+      let ok = e >= 0 && e + 1 < J;
+      for (let g = Math.min(q, e); ok && g <= Math.max(q, e); g++) ok = kind[g] === 2;
+      if (!ok) continue;
+      m += made[e] as number;
+      w += wanted[e] as number;
+    }
+    if (m > 0 && w > 0) level[q] = Math.min(LEVEL_MAX, Math.max(1 / LEVEL_MAX, Math.sqrt(w / m)));
+  }
+  // put back, in line from each period's middle to the next's (1 where a period is copied)
+  for (let q = 0; q + 1 < J; q++) {
+    if (kind[q] === 0) continue;
+    const g = level[q] as number;
+    const before = q > 0 && kind[q - 1] !== 0 ? ((level[q - 1] as number) + g) / 2 : 1;
+    const after = q + 2 < J && kind[q + 1] !== 0 ? ((level[q + 1] as number) + g) / 2 : 1;
+    if (g === 1 && before === 1 && after === 1) continue;
+    const x0 = tau[q] as number;
+    const x1 = tau[q + 1] as number;
+    const middle = (x0 + x1) / 2;
+    const from = Math.max(lo, Math.ceil(x0));
+    const to = Math.min(hi, Math.ceil(x1));
+    for (let i = from; i < to; i++) {
+      const v =
+        i < middle
+          ? before + ((g - before) * (i - x0)) / (middle - x0)
+          : g + ((after - g) * (i - middle)) / (x1 - middle);
+      for (let ch = 0; ch < C; ch++)
+        (out[ch] as Float32Array)[i - lo] = ((out[ch] as Float32Array)[i - lo] as number) * v;
     }
   }
 }

@@ -14,7 +14,6 @@ import {
   type Project,
   quantize,
   type Region,
-  type Track,
   ticksPerBar,
   ticksPerBeat,
   tickToBarBeat,
@@ -34,7 +33,7 @@ import { isPhone, useLayout } from '../app/layout.ts';
 import { store, useApp } from '../app/store.ts';
 import { engine } from '../audio/engine.ts';
 import { midi } from '../audio/midi.ts';
-import { alpha, prepare, roundRect, useFrame, useMedia, useSize, velocityColor } from './frame.ts';
+import { alpha, movePlayhead, prepare, roundRect, useFrame, useMedia, useSize, velocityColor } from './frame.ts';
 import {
   capture,
   edgeScroll,
@@ -82,7 +81,6 @@ function velColor(v: number): string {
 interface NoteRef {
   note: Note;
   region: Region;
-  track: Track;
 }
 
 interface Preview {
@@ -129,7 +127,6 @@ export function PianoRoll() {
   const laneBox = useRef<HTMLDivElement>(null);
   const keysCanvas = useRef<HTMLCanvasElement>(null);
   const notesCanvas = useRef<HTMLCanvasElement>(null);
-  const overlay = useRef<HTMLCanvasElement>(null);
   const rulerCanvas = useRef<HTMLCanvasElement>(null);
   const laneCanvas = useRef<HTMLCanvasElement>(null);
   const rulerBox = useRef<HTMLDivElement>(null);
@@ -158,31 +155,37 @@ export function PianoRoll() {
   const tapAt = useRef<(() => void) | null>(null);
   const pinch = useRef(new Pinch());
   const zoomTimer = useRef(0);
-  const lastOverlay = useRef({ x: -1, w: 0, h: 0, rec: false, dpr: 0 });
+  const playhead = useRef<HTMLDivElement>(null);
   const lastDpr = useRef(screenDpr());
   const lastTick = useRef(Number.NaN);
 
   const gridTicks = DIVISIONS[grid] ?? PPQ / 4;
   const total = 128 * keyHeight;
 
-  // the notes on screen: every region of the selected track, in order of where they start
+  // The notes on screen: every region of the selected track, in order of where they start. They
+  // are the track's regions and nothing else of it: a fader moved on the track's strip gives a new
+  // track with the same regions, and the notes aren't gone through again for it.
+  const regions = track?.regions;
   const refs = useMemo<NoteRef[]>(() => {
-    if (!track) return [];
-    const out = track.regions.flatMap((region) => region.notes.map((note) => ({ note, region, track })));
+    if (!regions) return [];
+    const out = regions.flatMap((region) => region.notes.map((note) => ({ note, region })));
     return out.sort((a, b) => startOf(a) - startOf(b));
-  }, [track]);
+  }, [regions]);
   // the longest note: how far left of the view a note may start and still reach into it
   const longest = useMemo(() => refs.reduce((m, r) => Math.max(m, r.note.d), 0), [refs]);
-  const regions = track?.regions;
   const lanePts = useMemo(() => (regions && lane !== 'velocity' ? lanePoints(regions, lane) : []), [regions, lane]);
 
-  // everything the surfaces read: a change to any of it redraws them all
+  // Everything the surfaces read: a change to any of it redraws them all. Of the song that is its
+  // meter, and the track's regions and color, not the song itself: every fader, knob and mute
+  // anywhere is a new song, and none of them is drawn here.
   // biome-ignore lint/correctness/useExhaustiveDependencies: the list is what drawing reads, not what the effect touches
   useEffect(() => {
     dirty.current = true;
   }, [
-    project,
-    track,
+    project?.meter,
+    regions,
+    track?.id,
+    track?.color,
     selectedRegionIds,
     selected,
     keyHeight,
@@ -555,21 +558,8 @@ export function PianoRoll() {
         drawLane(p);
       }
     }
-    // the playhead, on its own layer, redrawn only when it has moved a pixel
-    const x = Math.round(rollView.tickToX(Math.max(0, tick))) + 0.5;
-    const rec = s.recording;
-    const last = lastOverlay.current;
-    if (x !== last.x || size.w !== last.w || size.h !== last.h || rec !== last.rec || dpr !== last.dpr) {
-      lastOverlay.current = { x, w: size.w, h: size.h, rec, dpr };
-      const octx = prepare(overlay.current, size.w, size.h);
-      if (octx) {
-        octx.clearRect(0, 0, size.w, size.h);
-        if (x >= 0 && x <= size.w) {
-          octx.fillStyle = rec ? '#ff4f5e' : '#ffffff';
-          octx.fillRect(x - 0.5, 0, 1.5, size.h);
-        }
-      }
-    }
+    // the playhead is an element of its own, moved only when it has gone a pixel
+    movePlayhead(playhead.current, Math.round(rollView.tickToX(Math.max(0, tick))), size.w, s.recording);
   });
 
   const onWheel = (e: WheelEvent, dx: number, dy: number) => {
@@ -1142,7 +1132,7 @@ export function PianoRoll() {
         onContextMenu={(e) => e.preventDefault()}
       >
         <canvas ref={notesCanvas} />
-        <canvas ref={overlay} style={{ pointerEvents: 'none' }} />
+        <div ref={playhead} className="playhead" />
       </div>
       <div
         className="splitter"

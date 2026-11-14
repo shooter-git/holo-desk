@@ -95,4 +95,29 @@ describe('the meters kept for the agent while the song plays', () => {
     expect(now).toBeLessThan(stopAt + 300);
     expect(w.report(now, ['master'], 8000)).toMatchObject({ playing: false, seconds: 2 });
   });
+
+  it('keeps every reading of the seconds kept however fast they come, and through one array handed in for all', () => {
+    const w = new MeterWatch(1000);
+    // one array reused for every channel and every reading, as the studio's reader does
+    const shared: [number, number, number] = [0, 0, 0];
+    let level = 0;
+    const read = (id: string): MeterReading => {
+      shared[0] = id === 'master' ? level : level / 2;
+      shared[1] = shared[0];
+      shared[2] = id === 'master' ? 0 : -level * 10;
+      return shared;
+    };
+    w.start(0);
+    // a reading a millisecond for two seconds: far more than the room first made for a second's worth
+    for (let t = 0; t <= 2000; t++) {
+      level = t === 1200 ? 0.8 : t === 300 ? 0.9 : 0.1;
+      w.sample(['master', 'trk_a'], read, t);
+    }
+    const r = w.report(2000, ['master', 'trk_a'], 1000);
+    // the last second holds the 0.8 at 1200 ms, not the 0.9 at 300 ms; since play started, the 0.9
+    expect(r.channels[0]).toMatchObject({ id: 'master', peak: [db(0.8), db(0.8)], max: [db(0.9), db(0.9)] });
+    expect(r.channels[1]).toMatchObject({ id: 'trk_a', peak: [db(0.4), db(0.4)], gr: -8, grMax: -9 });
+    // a narrower look back misses the 0.8 as well
+    expect(w.report(2000, ['master'], 500).channels[0]).toMatchObject({ peak: [db(0.1), db(0.1)] });
+  });
 });

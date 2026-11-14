@@ -80,7 +80,7 @@ import {
   pointAt,
   targetOf,
 } from './automation.ts';
-import { alpha, prepare, roundRect, useFrame, useSize } from './frame.ts';
+import { alpha, movePlayhead, prepare, roundRect, useFrame, useSize } from './frame.ts';
 import {
   capture,
   edgeScroll,
@@ -924,7 +924,9 @@ export function TracksArea() {
   const pinch = useRef(new Pinch());
   const lastTap = useRef(0);
   const zoomTimer = useRef(0);
-  const lastOverlay = useRef({ x: -1, w: 0, h: 0, rec: false, dpr: 0 });
+  const playhead = useRef<HTMLDivElement>(null);
+  /** The overlay holds a take's notes from the last frame (it's cleared once the take ends). */
+  const takesDrawn = useRef(false);
   const lastDpr = useRef(screenDpr());
   const lastTick = useRef(Number.NaN);
 
@@ -1047,26 +1049,19 @@ export function TracksArea() {
       const rctx = prepare(rulerCanvas.current, rulerSize.w, rulerSize.h);
       if (rctx) drawRuler(rctx, p, cycle, s.show.markers, rulerSize.w, rulerSize.h);
     }
-    // the playhead, on its own layer, redrawn only when it has moved a pixel
-    const x = Math.round(tracksView.tickToX(Math.max(0, tick))) + 0.5;
-    const rec = s.recording;
-    const last = lastOverlay.current;
+    // what's being recorded is drawn on a layer over the timeline, each frame while there is any
+    // (and once more as it ends, to clear it): nothing is drawn there the rest of the time
     const recording = liveTakes().size > 0;
-    if (recording || x !== last.x || size.w !== last.w || size.h !== last.h || rec !== last.rec || dpr !== last.dpr) {
-      lastOverlay.current = { x, w: size.w, h: size.h, rec, dpr };
+    if (recording || takesDrawn.current) {
+      takesDrawn.current = recording;
       const octx = prepare(overlay.current, size.w, size.h);
       if (octx) {
         octx.clearRect(0, 0, size.w, size.h);
         if (recording) drawLiveTakes(octx, p, trackHeight);
-        if (x >= 0 && x <= size.w) {
-          // a soft band under the line stands in for a glow, without a blur pass per frame
-          octx.fillStyle = rec ? 'rgba(255,79,94,0.25)' : 'rgba(255,255,255,0.25)';
-          octx.fillRect(x - 2, 0, 3, size.h);
-          octx.fillStyle = rec ? '#ff4f5e' : '#ffffff';
-          octx.fillRect(x - 0.5, 0, 1.5, size.h);
-        }
       }
     }
+    // the playhead is an element of its own, moved only when it has gone a pixel
+    movePlayhead(playhead.current, Math.round(tracksView.tickToX(Math.max(0, tick))), size.w, s.recording);
   });
 
   const onWheel = (e: WheelEvent, dx: number, dy: number) => {
@@ -1802,6 +1797,7 @@ export function TracksArea() {
       >
         <canvas ref={canvas} />
         <canvas ref={overlay} style={{ pointerEvents: 'none' }} />
+        <div ref={playhead} className="playhead" />
         <div ref={laneTip} className="lane-tip" />
         {project.tracks.every((t) => t.regions.length === 0) && (
           <div className="empty-hint">

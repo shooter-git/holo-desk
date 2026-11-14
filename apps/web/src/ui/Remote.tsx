@@ -46,6 +46,7 @@ import {
   command,
   levels,
   optimistic,
+  remote,
   STALE_MS,
   type StudioState,
   type StudioTrack,
@@ -53,7 +54,7 @@ import {
   useRemote,
 } from '../app/remote.ts';
 import { dbToFader, Fader, faderToDb, formatDb, Wordmark } from './controls.tsx';
-import { useFrame } from './frame.ts';
+import { keepAwake, useFrame, wake } from './frame.ts';
 import { PlayPad } from './PlayPad.tsx';
 
 type Tab = 'tracks' | 'mixer' | 'play' | 'markers' | 'scan';
@@ -126,6 +127,9 @@ export function Remote() {
   // out of touch: the host is unreachable, or the studio has gone quiet while it should be talking
   const lost = connection !== 'online' || stale !== null;
   useWakeLock();
+  // the screen's pace while the studio plays, and for a moment after anything it says
+  useEffect(() => keepAwake(() => activeStudio()?.state.playing === true), []);
+  useEffect(() => remote.subscribe(wake), []);
   useEffect(() => {
     document.title = 'HO[LO] Remote';
     // a keyboard on the remote: Space plays and stops, R records
@@ -403,6 +407,8 @@ function LevelBar({ id, vertical = false }: { id: string; vertical?: boolean }) 
     shown.current = v;
     const db = v > 1e-5 ? 20 * Math.log10(v) : -90;
     const f = Math.max(0, Math.min(1, (db + 60) / 66));
+    // (a level still showing keeps the screen's pace)
+    if (f > 0) wake();
     if (cover.current) cover.current.style[vertical ? 'bottom' : 'left'] = `${f * 100}%`;
     bar.current?.classList.toggle('hot', db > -1);
   });

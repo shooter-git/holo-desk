@@ -312,7 +312,7 @@ export function Meter({ id, width = 14, height }: { id: string; width?: number; 
   const canvas = useRef<HTMLCanvasElement>(null);
   const hold = useRef({ l: 0, r: 0, t: 0 });
   // what the last frame drew, to the half pixel: a quiet meter is not repainted
-  const drawn = useRef({ w: 0, h: 0, l: -1, r: -1, hl: -1, hr: -1, over: -1 });
+  const drawn = useRef({ w: 0, h: 0, dpr: 0, l: -1, r: -1, hl: -1, hr: -1, over: -1 });
   const grad = useRef<{ h: number; fill: CanvasGradient } | null>(null);
   const seen = useRef(true);
   const last = useRef(0);
@@ -328,8 +328,6 @@ export function Meter({ id, width = 14, height }: { id: string; width?: number; 
   useFrame((now) => {
     if (!seen.current || now - last.current < METER_EVERY) return;
     last.current = now;
-    const ctx = prepare(canvas.current, width, height);
-    if (!ctx) return;
     const [l, r] = engine.meter(id);
     const h = hold.current;
     if (l > h.l || r > h.r || now - h.t > 1500) {
@@ -340,13 +338,29 @@ export function Meter({ id, width = 14, height }: { id: string; width?: number; 
     const px = (g: number) => Math.round(meterPos(g) * height * 2) / 2;
     const pl = px(l);
     const pr = px(r);
+    // a level on a meter keeps the screen's pace, song or no song (a part played live, a tail still
+    // showing): that is what this frame returns
+    const lit = pl > 0 || pr > 0;
     const phl = px(h.l);
     const phr = px(h.r);
     const over = (h.l > 1 ? 1 : 0) + (h.r > 1 ? 2 : 0);
     const d = drawn.current;
-    if (d.w === width && d.h === height && d.l === pl && d.r === pr && d.hl === phl && d.hr === phr && d.over === over)
-      return;
-    drawn.current = { w: width, h: height, l: pl, r: pr, hl: phl, hr: phr, over };
+    const dpr = window.devicePixelRatio || 1;
+    if (
+      d.w === width &&
+      d.h === height &&
+      d.dpr === dpr &&
+      d.l === pl &&
+      d.r === pr &&
+      d.hl === phl &&
+      d.hr === phr &&
+      d.over === over
+    )
+      return lit;
+    // (the canvas is only touched once there is something new to draw on it)
+    const ctx = prepare(canvas.current, width, height);
+    if (!ctx) return lit;
+    drawn.current = { w: width, h: height, dpr, l: pl, r: pr, hl: phl, hr: phr, over };
     ctx.clearRect(0, 0, width, height);
     ctx.fillStyle = '#07090b';
     ctx.fillRect(0, 0, width, height);
@@ -379,6 +393,7 @@ export function Meter({ id, width = 14, height }: { id: string; width?: number; 
       const y = height - ((db - METER_MIN) / (6 - METER_MIN)) * height;
       ctx.fillRect(0, y, width, 1);
     }
+    return lit;
   });
   return <canvas ref={canvas} className="meter-canvas" style={{ width, height }} />;
 }

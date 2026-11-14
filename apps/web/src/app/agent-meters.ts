@@ -17,14 +17,26 @@ const EVERY_MS = 50;
 const watch = new MeterWatch();
 let timer: ReturnType<typeof setInterval> | null = null;
 
+// The channels' ids, made again only when the song's tracks or buses are other lists, and one
+// array every reading goes through: twenty times a second, for every channel, nothing is made.
+let listed: { tracks: unknown; buses: unknown; ids: string[] } = { tracks: null, buses: null, ids: [] };
 const ids = (): string[] => {
   const p = store.get().project;
-  return p ? ['master', ...p.tracks.map((t) => t.id), ...p.buses.map((b) => b.id)] : [];
+  if (!p) return [];
+  if (listed.tracks !== p.tracks || listed.buses !== p.buses)
+    listed = {
+      tracks: p.tracks,
+      buses: p.buses,
+      ids: ['master', ...p.tracks.map((t) => t.id), ...p.buses.map((b) => b.id)],
+    };
+  return listed.ids;
 };
+const reading: [number, number, number] = [0, 0, 0];
+const readMeter = (id: string) => engine.meterInto(id, reading);
 
 function read(): void {
   if (!engine.started) return;
-  watch.sample(ids(), (id) => engine.meter(id), performance.now());
+  watch.sample(ids(), readMeter, performance.now());
 }
 
 store.subscribe(() => {

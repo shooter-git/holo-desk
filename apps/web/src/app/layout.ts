@@ -46,6 +46,9 @@ export function useLayout(): Layout {
   );
 }
 
+/** The layout as it is now, for code outside a component (a component reads it with useLayout). */
+export const layoutNow = (): Layout => current;
+
 export const isPhone = (l: Layout) => l === 'phone-portrait' || l === 'phone-landscape';
 export const isTouch = () => window.matchMedia('(pointer: coarse)').matches;
 

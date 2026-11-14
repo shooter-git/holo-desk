@@ -867,6 +867,18 @@ a.btn {
     display: none;
   }
 }
+/* a tablet held upright: the name is HO[LO] alone, View is in Settings (as on a phone), and the
+   display's cells sit closer, so the display doesn't run under the buttons beside it */
+@media (max-width: 860px) and (pointer: coarse) {
+  .app:not(.phone) .control-bar .wordmark .desk,
+  .app:not(.phone) .control-bar .cb-view {
+    display: none;
+  }
+  .app:not(.phone) .control-bar .lcd > div,
+  .app:not(.phone) .control-bar .lcd > .cell {
+    padding: 0 8px;
+  }
+}
 
 /* ---------- tracks area ---------- */
 
@@ -1004,6 +1016,55 @@ a.btn {
   }
 }
 
+/* a phone held sideways has the width and not the height: the buttons sit beside the name, on one line */
+.app.phone-landscape .track-row,
+.app.phone-landscape .track-row.no-icon {
+  grid-template-columns: 5px minmax(0, 1fr) auto;
+  grid-template-rows: auto;
+}
+
+.app.phone-landscape .track-row .swatch {
+  grid-row: auto;
+}
+
+.app.phone-landscape .track-row .chips,
+.app.phone-landscape .track-row.no-icon .chips {
+  grid-column: auto;
+  flex-wrap: nowrap;
+}
+
+/* An automation lane's picker in a track's header: the setting the lane shows, and Read or Off
+   beside it. In the buttons' row (touch screens) it takes that row's width and no more, so the
+   button stays in the header however long the setting's name is. */
+.lane-select {
+  gap: 4px;
+  min-width: 0;
+}
+
+.lane-select .select {
+  flex: 1 1 0;
+  min-width: 0;
+  height: 22px;
+  padding: 0 18px 0 4px;
+  font-size: 10.5px;
+}
+
+.track-row .chips .lane-select {
+  flex: 1 1 0;
+}
+
+.app.phone-landscape .track-row .chips .lane-select {
+  flex: none;
+  width: 132px;
+}
+
+@media (pointer: coarse) {
+  .lane-select .select {
+    height: 32px;
+    font-size: 16px;
+  }
+}
+
 .timeline {
   position: relative;
   min-width: 0;
@@ -1109,6 +1170,23 @@ a.btn {
   scrollbar-width: none;
 }
 
+/* wider than its pane (a phone held upright), the bar scrolls sideways: the edge that has more
+   fades (data-before and data-after are kept by useScrollCue) */
+.pane-bar[data-after] {
+  -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 32px), transparent);
+  mask-image: linear-gradient(to right, #000 calc(100% - 32px), transparent);
+}
+
+.pane-bar[data-before] {
+  -webkit-mask-image: linear-gradient(to right, transparent, #000 32px);
+  mask-image: linear-gradient(to right, transparent, #000 32px);
+}
+
+.pane-bar[data-before][data-after] {
+  -webkit-mask-image: linear-gradient(to right, transparent, #000 32px, #000 calc(100% - 32px), transparent);
+  mask-image: linear-gradient(to right, transparent, #000 32px, #000 calc(100% - 32px), transparent);
+}
+
 .pane-bar > .seg,
 .pane-bar > .select,
 .pane-bar > .btn {
@@ -1190,6 +1268,14 @@ a.btn {
     height: 32px;
     font-size: 16px;
   }
+}
+
+/* (a phone's keys are narrow: the lane's short name has the picker's whole width, without the arrow) */
+.app.phone .roll .lane-label .select {
+  padding: 0 2px;
+  background-image: none;
+  text-align: center;
+  text-align-last: center;
 }
 
 /* ---------- audio editor ---------- */
@@ -3131,6 +3217,41 @@ html[data-layout="phone-landscape"] .bar .field input {
   min-width: 0;
 }
 
+/* the narrowest phones (under 360 px): the buttons and the display's cells sit closer, so the time
+   signature stays on the screen */
+@media (max-width: 359px) {
+  .phone-portrait .phone-transport {
+    gap: 4px;
+    padding: 6px;
+  }
+  .phone-portrait .phone-transport .transport {
+    gap: 3px;
+  }
+  .phone-portrait .phone-transport .transport .btn {
+    width: 35px;
+  }
+  .phone-portrait .phone-transport .lcd > div,
+  .phone-portrait .phone-transport .lcd > .cell {
+    padding: 0 6px;
+  }
+}
+
+@media (max-width: 339px) {
+  .phone-portrait .phone-transport {
+    padding: 6px 4px;
+  }
+  .phone-portrait .phone-transport .transport {
+    gap: 2px;
+  }
+  .phone-portrait .phone-transport .transport .btn {
+    width: 32px;
+  }
+  .phone-portrait .phone-transport .lcd > div,
+  .phone-portrait .phone-transport .lcd > .cell {
+    padding: 0 3px;
+  }
+}
+
 /* the compact display's cells sit closer, so the time signature keeps its place on a narrow phone */
 .phone-transport .lcd > div {
   padding: 0 8px;
@@ -3786,8 +3907,11 @@ html[data-layout="phone-landscape"] .toasts {
   overscroll-behavior: contain;
 }
 
+/* (one row, however many views there are) */
 .remote-tabs {
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: none;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(0, 1fr);
   padding-bottom: var(--safe-bottom);
   background: linear-gradient(180deg, #1f2328, #1a1d21);
 }
@@ -5020,13 +5144,17 @@ footer.scan-bar {
   inset: 0;
   z-index: 60;
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   grid-template-rows: auto minmax(0, 1fr);
   background: var(--bg-1);
   padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
 }
 
+/* (a part with a long name doesn't make the picker, and the page under it, wider than a phone) */
 .print-window .scan-bar .input {
   width: auto;
+  min-width: 0;
+  max-width: 100%;
 }
 
 .print-sheets {

@@ -100,7 +100,7 @@ export function ViewMenu() {
       <button
         ref={button}
         type="button"
-        className={`btn icon ghost${open ? ' on' : ''}`}
+        className={`btn icon ghost cb-view${open ? ' on' : ''}`}
         title={
           hidden ? `View: ${hidden} part${hidden === 1 ? '' : 's'} hidden` : 'View: show or hide parts of the studio'
         }

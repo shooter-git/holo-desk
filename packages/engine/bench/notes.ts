@@ -8,11 +8,13 @@
  *   node packages/engine/bench/notes.ts --seconds 60 --rate 44100 --runs 9
  *   node packages/engine/bench/notes.ts --file take.wav  a recording (its notes found, every other one
  *                                                        moved a semitone up, every fourth 3 dB down)
+ *   node packages/engine/bench/notes.ts --centre         only the notes' centres moved (and levels)
  *
  * The made-up voice sings phrases of legato notes with a vibrato and rests between them (a pulse train
  * through three formants, the right side a little different from the left), and every other note is
- * moved: up or down a few semitones, some made louder or softer. Each run renders every patch; the
- * median run is reported.
+ * edited: moved up or down a few semitones, some made louder or softer, and (unless `--centre`) each
+ * with its drift and vibrato kept by half, its formant moved two semitones and the glide into it
+ * twice as quick. Each run renders every patch; the median run is reported.
  */
 import { readFileSync } from 'node:fs';
 import { type AudioClip, type AudioNote, type AudioNotes, parseAudioNotes } from '@holo/session';
@@ -28,6 +30,7 @@ function arg(name: string): string | undefined {
 
 const file = arg('file');
 const runs = Number(arg('runs') ?? 5);
+const centre = process.argv.includes('--centre');
 
 /** A made-up voice, `seconds` long at `sr`: its two channels, and the notes it sings. */
 function madeUp(seconds: number, sr: number): { channels: Float32Array[]; notes: AudioNote[] } {
@@ -114,8 +117,11 @@ if (file) {
   channels = made.channels;
   found = made.notes;
   const steps = [2, -3, 5, -1];
+  const more = centre ? {} : { dr: 0.5, mo: 0.5, fo: 2, tr: 0.5 };
   moves = (n, i) =>
-    i % 2 ? n : { ...n, to: (n.p as number) + (steps[(i / 2) % 4] as number), ...(i % 6 === 0 ? { g: 4 } : {}) };
+    i % 2
+      ? n
+      : { ...n, to: (n.p as number) + (steps[(i / 2) % 4] as number), ...more, ...(i % 6 === 0 ? { g: 4 } : {}) };
 }
 const notes = parseAudioNotes({ mode: 'mono', v: 1, n: found.map(moves) }) as AudioNotes;
 const clip: AudioClip = { file: 'bench', offset: 0, gain: 0, fadeIn: 0, fadeOut: 0, stretch: 1, notes };

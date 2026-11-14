@@ -581,7 +581,8 @@ export class AudioEngine {
         if (this.ahead) this.post({ type: 'sequence', num: this.numOf(t.id), events: sharedEvents(events) });
         else this.post({ type: 'sequence', num: this.numOf(t.id), events }, [events.buffer]);
         if (t.kind === 'audio')
-          this.post({ type: 'clips', num: this.numOf(t.id), clips: compileClips(t, this.segments, sr) });
+          // (note edits play as recorded until the studio renders their patches)
+          this.post({ type: 'clips', num: this.numOf(t.id), clips: compileClips(t, this.segments, sr, () => false) });
         this.sentTracks.set(t.id, t.regions);
         this.sentArts.set(t.id, t.articulations);
       }

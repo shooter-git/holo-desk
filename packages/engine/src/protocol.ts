@@ -195,6 +195,18 @@ export interface ClipSpec {
   gain: number;
   fadeIn: number;
   fadeOut: number;
+  /**
+   * Where it meets the piece before or after it of the same region (a note edit's patch, notes/plan.ts):
+   * the two join sample to sample, with no ramp there.
+   */
+  seamIn?: true;
+  seamOut?: true;
+  /**
+   * A piece that plays a patch: the recording it's a part of (its key) and that recording's frame at
+   * `start`. A ramp where the piece starts or stops is where the recording would have one.
+   */
+  base?: string;
+  at?: number;
 }
 
 /** An audio track's input: what it monitors and records. */

@@ -1308,7 +1308,8 @@ export async function hitsToMidi(trackId: string, pluginId: string): Promise<voi
   const loaded = new Map<string, Float32Array[]>();
   const frames: { frame: number; velocity: number }[] = [];
   try {
-    for (const clip of compileClips(t, segments, sr)) {
+    // (the recordings as they were: hits are found in what was played, edits or not)
+    for (const clip of compileClips(t, segments, sr, () => false)) {
       const audio = audioOf.get(clip.key);
       if (!audio) continue;
       let channels = loaded.get(clip.key);

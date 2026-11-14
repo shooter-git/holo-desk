@@ -29,6 +29,8 @@ import {
 import { prepareImpulse } from './convolver.ts';
 import { EngineCore } from './core.ts';
 import { finish } from './master.ts';
+import { renderNotePatch } from './notes/patch.ts';
+import { songPatches } from './notes/plan.ts';
 import { isPlanned, type PerformanceManifest, partReach, partSamples, planTrack, wrapPlans } from './parts.ts';
 import { EV_OFF, EV_ON, EVENT_SIZE, type SamplerSpec, type SampleZone } from './protocol.ts';
 import { resample } from './resample.ts';
@@ -317,10 +319,21 @@ export async function renderSession(written: Project, source: RenderSource, opts
     core.receive({ type: 'sampler', spec: await buildSampler(source, pack, rest.join('/'), sr) });
   }
   const clips = songClips(project);
+  const recordings = new Map<string, Float32Array[]>();
   let c = 0;
   for (const clip of clips) {
     opts.onProgress?.(`Loading audio (${++c}/${clips.length})`);
-    core.receive({ type: 'audio', key: clipKey(clip), channels: await loadClipAudio(source, clip, sr) });
+    const channels = await loadClipAudio(source, clip, sr);
+    recordings.set(clipKey(clip), channels);
+    core.receive({ type: 'audio', key: clipKey(clip), channels });
+  }
+  // note edits: each stretch they change, rendered from its recording (notes/plan.ts)
+  const patches = songPatches(project, sr);
+  let edited = 0;
+  for (const job of patches) {
+    opts.onProgress?.(`Rendering note edits (${++edited}/${patches.length})`);
+    const base = recordings.get(clipKey(job.base));
+    if (base) core.receive({ type: 'audio', key: job.key, channels: renderNotePatch(base, sr, job.spec) });
   }
   const impulses = songImpulses(project, sr);
   let q = 0;

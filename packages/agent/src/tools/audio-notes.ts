@@ -20,6 +20,12 @@
  *   measures with the notes (`levels`, matched to the region's notes by start and length).
  * - **`midi`** (the registry's `NOTE_EXTRAS`) adds a MIDI track playing the region's notes as they
  *   play (`notesToMidi`), velocities from their levels; the recording's notes stay as they are.
+ * - **Copying from a note** (`paste`, `copy-settings`): `from` is its number among the region's notes,
+ *   or among another region's of the same recording (`from_region`); the note itself goes to the edit
+ *   (its `source`), as the studio's clipboard does. Another recording's is refused: pasting between
+ *   recordings comes in a later version.
+ * - **`linked`**: the edit is made in every other region of the song playing the same recording too,
+ *   on the same notes (`linkedNoteEdits`), all in the one batch, and the answer says which changed.
  */
 import {
   type AudioClip,
@@ -30,6 +36,9 @@ import {
   isNoteEdited,
   keyAt,
   keysOf,
+  type LinkedChange,
+  linkedNoteEdits,
+  linkedRegions,
   MIDI_NOTE_VELOCITY,
   type MiddleC,
   NOTE_ARG_UNITS,
@@ -39,6 +48,7 @@ import {
   type NoteArg,
   type NoteArgValue,
   type NoteEdit,
+  type NoteEditContext,
   noteChanges,
   noteChangesText,
   noteEdit,
@@ -61,7 +71,7 @@ import { barsText, change, num, plural, str, type Tool, type ToolContext, ToolEr
 import { keyName } from './measure.ts';
 
 /** The tool's own fields; every other field is an edit's argument, as the registry names it. */
-export const NOTE_TOOL_FIELDS = ['action', 'track', 'region', 'notes', 'page'] as const;
+export const NOTE_TOOL_FIELDS = ['action', 'track', 'region', 'notes', 'page', 'linked', 'from_region'] as const;
 /** Its actions besides the edits: the views, then the registry's extras (`midi`) after the edits. */
 const VIEWS = ['show', 'detect'] as const;
 /** Notes on a page of `show`. */
@@ -461,6 +471,7 @@ function argsWords(
       const v = read[a.name];
       const unit = NOTE_ARG_UNITS[a.kind];
       if (a.kind === 'pitch' && typeof v === 'number') return `${a.name} ${noteName(v, middleC)}`;
+      if (a.kind === 'index') return `${a.name} note ${v}`;
       if (typeof v !== 'number') return `${a.name} ${v}`;
       const bare = a.name === unit || (a.name === 'seconds' && unit === 's') || (a.name === 'db' && unit === 'dB');
       const value = `${v}${unit === '%' ? '%' : unit ? ` ${unit}` : ''}`;
@@ -477,7 +488,7 @@ export const audioNotes: Tool = {
   name: 'audio_notes',
   kind: 'change',
   summary: ({ middleC }) =>
-    `Edit a recording's notes one by one, as the studio's Audio Editor does: their pitch, drift, vibrato, glide, formant, level and timing (an audio region; the recording itself is never changed). The region: "region" (its id, its name or "selected") and/or "track" (alone: its only recording; neither: the only audio track's). Actions: show (the notes, ${PAGE} a "page": number, where, the pitch found with its cents → where it's moved, length, vibrato and drift as sung, edits); detect (find them; nothing is kept in the song until the first edit, which keeps them with it as one undo step); the edits, each on "notes" chosen as ${NOTES_HELP} (middle C is ${middleC}): ${NOTE_EDITS.map(editLine).join('; ')}; and midi (a new MIDI track playing the region's notes as they play, velocities from their levels; no "notes"). Example: {"action": "shift", "track": "Vocal", "notes": "5", "semitones": 2}. Check an edit with measure ("take"): it measures what plays, edits in.`,
+    `Edit a recording's notes one by one, as the studio's Audio Editor does: their pitch, drift, vibrato, glide, formant, level and timing (an audio region; the recording itself is never changed). The region: "region" (its id, its name or "selected") and/or "track" (alone: its only recording; neither: the only audio track's). Actions: show (the notes, ${PAGE} a "page": number, where, the pitch found with its cents → where it's moved, length, vibrato and drift as sung, edits); detect (find them; nothing is kept in the song until the first edit, which keeps them with it as one undo step); the edits, each on "notes" chosen as ${NOTES_HELP} (middle C is ${middleC}): ${NOTE_EDITS.map(editLine).join('; ')}; and midi (a new MIDI track playing the region's notes as they play, velocities from their levels; no "notes"). Any edit with "linked": true is also made in every other region playing the same recording, on the same notes (one undo step). Example: {"action": "shift", "track": "Vocal", "notes": "5", "semitones": 2}. Check an edit with measure ("take"): it measures what plays, edits in.`,
   args: [
     { name: 'action', type: 'enum', values: ACTIONS, describe: 'What to do', required: true },
     { name: 'track', type: 'string', describe: 'The audio track (name or id)' },
@@ -494,6 +505,19 @@ export const audioNotes: Tool = {
       maxLength: 400,
     },
     { name: 'page', type: 'integer', describe: `show: which page of ${PAGE} notes`, min: 1, max: 1000 },
+    {
+      name: 'linked',
+      type: 'boolean',
+      describe:
+        'An edit: made in every other region playing the same recording too, on the same notes where each plays them (one undo step)',
+    },
+    {
+      name: 'from_region',
+      type: 'string',
+      describe:
+        'paste, copy-settings: the region "from" is numbered in, when it isn’t this one: another region of the same recording (its id or name)',
+      maxLength: 120,
+    },
     ...editFields(),
   ],
   async run(ctx, args) {
@@ -523,6 +547,11 @@ export const audioNotes: Tool = {
     if (num(args, 'page') !== undefined && action !== 'show') throw new ToolError('"page" is for show');
     if (action === 'midi' && notesText)
       throw new ToolError('midi writes all the notes the region plays: leave "notes" out');
+    const linked = args.linked === true;
+    if (args.linked !== undefined && !edit) throw new ToolError(`"linked" is for an edit: ${action} isn't one`);
+    const fromRegion = str(args, 'from_region')?.trim() || undefined;
+    if (fromRegion && !edit?.source)
+      throw new ToolError('"from_region" is for paste and copy-settings: the region "from" is numbered in');
 
     const f = await audioRegion(ctx, project, str(args, 'region'), str(args, 'track'));
     const clip = f.region.audio as AudioClip;
@@ -570,16 +599,62 @@ export const audioNotes: Tool = {
       throw new ToolError(
         `${e.name} needs the notes' levels as recorded, and ${indices.length === 1 ? 'that note’s level' : 'those notes’ levels'} couldn't be measured from the recording (a note split or added since the notes were found has none)`,
       );
-    const editCtx = { project, region: placing, middleC: ctx.middleC, ...(levels ? { levels } : {}) };
+    // the note copied from, as itself (in this region, or another of the same recording)
+    let source: AudioNote | undefined;
+    let sourceText = '';
+    if (e.source) {
+      const copied = await copiedNote(ctx, project, f, rn, fromRegion, read[e.source] as number);
+      if ('pending' in copied) return { text: copied.pending };
+      source = copied.note;
+      sourceText = copied.where;
+    }
+    // the notes as found: a first edit in a region linked, and a paste put back (its own pitch as found)
+    let found = rn.found;
+    const unpasting = e.name === 'reset' && indices.some((i) => rn.notes.n[i]?.s !== undefined);
+    const firsts = linked && linkedRegions(project, f.region.id).some((x) => !x.region.audio?.notes);
+    if (!found && (unpasting || firsts)) {
+      const a = await ctx.api.measure({ what: 'notes', track: f.track.id, region: f.region.id });
+      if (!a.done)
+        return { text: pendingText(a, project.files?.find((x) => x.id === clip.file)?.name ?? 'the recording') };
+      if (a.result.kind === 'notes') found = a.result;
+    }
+    const editCtx: NoteEditContext = {
+      project,
+      region: placing,
+      middleC: ctx.middleC,
+      ...(levels ? { levels } : {}),
+      ...(source ? { source } : {}),
+      ...(found ? { found: found.notes.n } : {}),
+    };
     const next = e.apply(rn.notes, indices, read, editCtx);
     const said = [
       e.selection ? chosenWords(notesText as string, indices.length) : '',
-      argsWords(e, given, read, ctx.middleC),
+      argsWords(e, given, read, ctx.middleC).replace(/\bfrom note \d+/, (m) => `${m}${sourceText}`),
     ]
       .filter(Boolean)
       .join(', ');
-    const label = `"${f.region.name || 'the region'}": ${e.name}${said ? ` ${said}` : ''}`;
-    if (next === rn.notes) {
+    let label = `"${f.region.name || 'the region'}": ${e.name}${said ? ` ${said}` : ''}`;
+    // linked: the same edit in the other regions playing the recording, one batch with this one's
+    let others: LinkedChange[] = [];
+    let ops: Op[] = [
+      { op: 'updateRegion', track: f.track.id, region: f.region.id, patch: { audio: { ...clip, notes: next } } },
+    ];
+    if (linked) {
+      const step = { name: e.name, indices, args: read, ...(source ? { source } : {}) };
+      const made = linkedNoteEdits(project, { track: f.track.id, region: f.region.id }, [step], {
+        base: rn.notes,
+        next,
+        middleC: ctx.middleC,
+        ...(found ? { found: found.notes } : {}),
+        ...(e.needsLevels
+          ? { levels: (notes: AudioNotes) => notes.n.map((n) => rn.levels.get(spanKey(n)) ?? null) }
+          : {}),
+      });
+      ops = made.ops;
+      others = made.changes.filter((c) => c.region.id !== f.region.id);
+      if (others.length) label += `, linked: ${plural(made.changes.length, 'region')}`;
+    }
+    if (next === rn.notes && !others.length) {
       // the notes chosen have no pitch, and the edit would change them if they had (a pitch edit on a breath)
       const unpitched = indices.length > 0 && indices.every((i) => rn.notes.n[i]?.p === null);
       const pitched = unpitched && {
@@ -590,11 +665,10 @@ export const audioNotes: Tool = {
         pitched && e.apply(pitched, indices, read, editCtx) !== pitched
           ? `${indices.length === 1 ? `note ${(indices[0] as number) + 1} has` : 'those notes have'} no pitch (a breath, a consonant or a noise) for it to change`
           : 'they are that way already';
-      return { text: `Nothing changed: ${label} leaves the notes as they are: ${why}.` };
+      return {
+        text: `Nothing changed: ${label} leaves the notes as they are: ${why}${linked ? ', here and in the regions linked' : ''}.`,
+      };
     }
-    const ops: Op[] = [
-      { op: 'updateRegion', track: f.track.id, region: f.region.id, patch: { audio: { ...clip, notes: next } } },
-    ];
     await change(ctx, project, ops, label);
     // (against the notes as found, before a first edit: a split or an added note is said too)
     const changes = noteChanges(rn.notes, next);
@@ -603,16 +677,66 @@ export const audioNotes: Tool = {
     const window = windowOf(project, f.region, clip);
     const touched = new Set(changes.now);
     const shown = next.n.map((n, i) => (touched.has(n) ? i : -1)).filter((i) => i >= 0);
-    const lines = [
-      `${label}: ${noteChangesText(changes) || 'changed'}${rn.kept ? '' : '; its notes are kept in the song from now on, as found, with this edit'}.`,
-    ];
+    const here =
+      next === rn.notes
+        ? 'nothing changed here'
+        : `${noteChangesText(changes) || 'changed'}${rn.kept ? '' : '; its notes are kept in the song from now on, as found, with this edit'}`;
+    const lines = [`${label}: ${here}.`];
     if (shown.length) {
       lines.push(shown.length > 12 ? `The first 12 of the ${shown.length} changed, now:` : 'Now:');
       for (const i of shown.slice(0, 12)) lines.push(noteLine(project, after, i, tickOf, window, ctx.middleC));
     }
+    if (linked) lines.push(linkedText(project, others));
     return { text: lines.join('\n'), progress: label };
   },
 };
+
+/**
+ * The note `paste` or `copy-settings` copies from: number `from` among this region's notes, or another
+ * region's of the same recording (`fromRegion`), and where, said after its number (` of "Verse"`).
+ */
+async function copiedNote(
+  ctx: ToolContext,
+  project: Project,
+  f: Found,
+  rn: RegionNotes,
+  fromRegion: string | undefined,
+  from: number,
+): Promise<{ note: AudioNote; where: string } | { pending: string }> {
+  let notes = rn.notes;
+  let where = '';
+  if (fromRegion) {
+    const other = await audioRegion(ctx, project, fromRegion, undefined);
+    const file = (r: Region) => project.files?.find((x) => x.id === r.audio?.file)?.name ?? 'a recording';
+    if (other.region.audio?.file !== f.region.audio?.file)
+      throw new ToolError(
+        `"${other.region.name || other.region.id}" plays ${file(other.region)}, and "${f.region.name || f.region.id}" plays ${file(f.region)}: notes are copied within one recording (between recordings comes in a later version)`,
+      );
+    if (other.region.id !== f.region.id) {
+      const got = await regionNotes(ctx, project, other, 'notes');
+      if ('pending' in got) return got;
+      notes = got.notes;
+      where = ` of "${other.region.name || other.region.id}"`;
+    }
+  }
+  const note = notes.n[from - 1];
+  if (!note)
+    throw new ToolError(
+      `There ${notes.n.length === 1 ? 'is 1 note' : `are ${notes.n.length} notes`}${where ? ` in${where.replace(/^ of/, '')}` : ''}: "from" ${from} isn't one`,
+    );
+  return { note, where };
+}
+
+/** What linking made in the other regions, in a line. */
+function linkedText(project: Project, others: readonly LinkedChange[]): string {
+  if (!others.length)
+    return 'Linked: no other region playing this recording plays those notes, so only this one changed.';
+  const each = others.map((c) => {
+    const what = noteChangesText(noteChanges(c.was, c.now)) || 'changed';
+    return `${regionLine(project, c)} (${what}${c.kept ? '' : '; its notes kept in the song from now on'})`;
+  });
+  return `Linked: also made in ${each.join('; ')}.`;
+}
 
 /** `midi`: a new MIDI track playing the region's notes as they play, one batch. */
 async function midiOf(ctx: ToolContext, project: Project, f: Found, rn: RegionNotes) {

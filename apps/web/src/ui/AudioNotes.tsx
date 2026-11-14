@@ -19,6 +19,12 @@
  * selected (or all the region plays), previewing as it goes, one undo step when applied; Level reads
  * each note's level as recorded from the curve the notes were found with. "Notes to MIDI track" (the
  * menu on the space between notes, and the bar's More menu) adds a MIDI track playing them.
+ *
+ * Ctrl+C (⌘C) copies the first note selected (note-clipboard.ts); Ctrl+V pastes its sound onto the notes
+ * selected and Ctrl+Shift+V its edits (`paste`, `copy-settings`), in this region or another of the
+ * same recording; the note's menu has them too. The bar's Link makes each edit, once made, in every
+ * other region playing the recording too, on the same notes (the session's `linkedNoteEdits`, from
+ * the edits that made it: each `runEdit` remembers what it was made from), in the same undo step.
  */
 import { DETECT_V, editedPitch, isEdited, regionPatches } from '@holo/engine';
 import {
@@ -26,13 +32,17 @@ import {
   type AudioClip,
   type AudioNote,
   fileSpan,
+  linkedNoteEdits,
+  linkedRegions,
   type MiddleC,
   type NoteArgs,
   type NoteEditContext,
+  type NoteEditStep,
   type AudioNotes as NoteList,
   noteEdit,
   noteName,
   notesToMidi,
+  type Op,
   PITCH_SNAPS,
   type PitchSnap,
   type Project,
@@ -87,6 +97,7 @@ import {
 import { drawKeys, drawLanes } from './keys.ts';
 import { type MenuEntry, openMenu, openMenuAt } from './menu.tsx';
 import { type MacroSession, NoteMacros } from './NoteMacros.tsx';
+import { copiedNote, copiedText, copyNotes, pasteRefusal, settingsRefusal } from './note-clipboard.ts';
 import {
   capsule,
   capsuleHalf,
@@ -215,15 +226,23 @@ function setSelected(region: string, notes: readonly number[]): void {
   store.set({ selectedAudioNotes: notes.length ? { region, notes: [...notes] } : null });
 }
 
-/** What a note edit needs to know beyond the notes: the song and the region they're in (for the key's scale). */
+/**
+ * What a note edit needs to know beyond the notes: the song and the region they're in (for the key's
+ * scale), and the notes as found in the recording (for a paste put back: its own pitch as found).
+ */
 function editContext(project: Project, region: Region, clip: AudioClip, notes: NoteList, middleC: MiddleC) {
+  const state = recordingNotes.of(project.id, clip.file);
   const ctx: NoteEditContext = {
     project,
     region: { start: region.start, audio: { offset: clip.offset, stretch: clip.stretch, notes } },
     middleC,
+    ...(state?.state === 'found' ? { found: state.found.notes } : {}),
   };
   return ctx;
 }
+
+/** Each set of notes an edit made, with the notes it was made from and the edit: so a commit can make the same edits elsewhere (Link). */
+const madeBy = new WeakMap<NoteList, { from: NoteList; step: NoteEditStep }>();
 
 /** A note edit by its name in NOTE_EDITS: the notes as edited, or as they were when it doesn't apply. */
 function runEdit(
@@ -233,8 +252,65 @@ function runEdit(
   args: NoteArgs,
   ctx: NoteEditContext,
 ): NoteList {
-  return noteEdit(name)?.apply(notes, indices, args, ctx) ?? notes;
+  const next = noteEdit(name)?.apply(notes, indices, args, ctx) ?? notes;
+  if (next !== notes)
+    madeBy.set(next, {
+      from: notes,
+      step: { name, indices: [...indices], args, ...(ctx.source ? { source: ctx.source } : {}) },
+    });
+  return next;
 }
+
+/** The edits that made `next` from `base`, in order (null when something else made it). */
+function stepsBetween(base: NoteList, next: NoteList): NoteEditStep[] | null {
+  const steps: NoteEditStep[] = [];
+  for (let at = next; at !== base; ) {
+    const made = madeBy.get(at);
+    if (!made) return null;
+    steps.unshift(made.step);
+    at = made.from;
+  }
+  return steps;
+}
+
+/**
+ * The operations that make a region's notes `next`: in the region; and while Link is on, the same
+ * edits (`steps`, else those that made it from `base`) in every other region playing its recording,
+ * as the song is now (or as it was before a preview: `before`).
+ */
+function editOps(
+  regionId: string,
+  base: NoteList,
+  next: NoteList,
+  middleC: MiddleC,
+  steps?: NoteEditStep[],
+  before?: Project,
+): Op[] {
+  const now = shownNow(regionId, before);
+  if (!now) return [];
+  const own: Op = {
+    op: 'updateRegion',
+    track: now.track.id,
+    region: now.region.id,
+    patch: { audio: { ...now.clip, notes: next } },
+  };
+  const made = steps ?? (store.get().linkRegions ? stepsBetween(base, next) : null);
+  if (!store.get().linkRegions || !made) return next === base ? [] : [own];
+  const state = recordingNotes.of(now.project.id, now.clip.file);
+  const found = state?.state === 'found' ? { mode: 'mono' as const, v: DETECT_V, n: [...state.found.notes] } : null;
+  const { ops } = linkedNoteEdits(now.project, { track: now.track.id, region: now.region.id }, made, {
+    base,
+    next,
+    middleC,
+    ...(found ? { found } : {}),
+    levels: (notes) => levelsFor(notes, state),
+  });
+  return ops;
+}
+
+/** An undo step's name, with how many regions a linked edit changed. */
+const linkedLabel = (label: string, ops: readonly Op[]) =>
+  ops.length > 1 ? `${label} (${ops.length} Regions)` : label;
 
 const onPatches = (fn: () => void) => engine.onPatches(fn);
 const patchVersion = () => engine.patchVersion;
@@ -281,9 +357,9 @@ function levelsFor(notes: NoteList, state: NotesState | null): (number | null)[]
   return state?.state === 'found' ? notesLevels(notes.n, state.found.curve) : null;
 }
 
-/** The region shown, its track and recording, as the song has them now (null when it isn't a recording). */
-function shownNow(regionId: string) {
-  const p = store.get().project;
+/** The region shown, its track and recording, as the song has them now, or in `project` (null when it isn't a recording). */
+function shownNow(regionId: string, project?: Project) {
+  const p = project ?? store.get().project;
   const found = p && findRegion(p, regionId);
   return p && found?.region.audio
     ? { project: p, track: found.track, region: found.region, clip: found.region.audio }
@@ -308,6 +384,8 @@ function macroSession(regionId: string, middleC: MiddleC): MacroSession | null {
     indices: sel.length ? sel : plays,
     selected: sel.length > 0,
     ctx: editContext(project, region, clip, base, middleC),
+    // (the song as the dialog opened: its previews change the regions linked too)
+    opsFor: (next, step) => editOps(region.id, base, next, middleC, [step], project),
   };
 }
 
@@ -594,19 +672,35 @@ export function AudioNotes() {
    */
   const commit = (next: NoteList, base: NoteList, label: string, select?: number[]) => {
     if (select) setSelected(region.id, select);
-    const now = current();
-    if (next === base || !now) return;
-    apply(
-      [
-        {
-          op: 'updateRegion',
-          track: now.track.id,
-          region: now.region.id,
-          patch: { audio: { ...now.clip, notes: next } },
-        },
-      ],
-      label,
-    );
+    if (next === base) return;
+    // (and with Link on, the same edits in the other regions playing the recording)
+    const ops = editOps(region.id, base, next, middleC);
+    if (ops.length) apply(ops, linkedLabel(label, ops));
+  };
+
+  /** The first note selected, copied: its sound and its edits, to paste here or in another region of the recording. */
+  const copySelected = (base: NoteList, group: readonly number[]) => {
+    const c = copyNotes(clip.file, region.id, base, group);
+    if (c) toast(copiedText(c));
+  };
+
+  /** The note copied pasted onto notes: its sound (`paste`) or its edits (`copy-settings`); null when it can't be. */
+  const pasted = (base: NoteList, group: readonly number[], ctx: NoteEditContext, what: 'sound' | 'settings') => {
+    const c = copiedNote();
+    if (!c || (what === 'sound' ? pasteRefusal(c, clip.file) : settingsRefusal(c))) return null;
+    return runEdit(what === 'sound' ? 'paste' : 'copy-settings', base, group, {}, { ...ctx, source: c.note });
+  };
+
+  /** Ctrl+V or Ctrl+Shift+V: the note copied pasted onto the notes selected, or why it can't be. */
+  const pasteKey = (base: NoteList, group: readonly number[], ctx: NoteEditContext, what: 'sound' | 'settings') => {
+    const c = copiedNote();
+    const refused = what === 'sound' ? pasteRefusal(c, clip.file) : settingsRefusal(c);
+    if (refused) {
+      toast(refused);
+      return;
+    }
+    const next = pasted(base, group, ctx, what);
+    if (next) commit(next, base, what === 'sound' ? 'Paste Note Sound' : 'Paste Note Settings');
   };
 
   const clearPreview = () => {
@@ -684,9 +778,10 @@ export function AudioNotes() {
     if (!base) return;
     const ctx = editContext(project, region, clip, base, middleC);
     const run = (name: string, idx: readonly number[], args: NoteArgs = {}) => runEdit(name, base, idx, args, ctx);
+    // (a phone's menus show no keys: it has none)
     const entry = (label: string, next: NoteList, undo: string, hint?: string, select?: number[]): MenuEntry => ({
       label,
-      hint,
+      ...(hint && !phone ? { hint } : {}),
       disabled: next === base,
       onSelect: () => commit(next, base, undo, select),
     });
@@ -705,6 +800,14 @@ export function AudioNotes() {
         entry('Snap pitch', snapped(base, group, ctx), 'Note Pitch', 'Double-click'),
         entry('Octave fix: up', run('octave', group, { direction: 'up' }), 'Octave Fix'),
         entry('Octave fix: down', run('octave', group, { direction: 'down' }), 'Octave Fix'),
+        'sep',
+        {
+          label: 'Copy',
+          ...(phone ? {} : { hint: 'Ctrl C' }),
+          onSelect: () => copySelected(base, group),
+        },
+        entry('Paste sound', pasted(base, group, ctx, 'sound') ?? base, 'Paste Note Sound', 'Ctrl V'),
+        entry('Paste settings', pasted(base, group, ctx, 'settings') ?? base, 'Paste Note Settings', 'Ctrl Shift V'),
         'sep',
         entry('Split here', run('split', [hit.i], { at: recordedAt(base, x) - n.t }), 'Split Note', undefined, [
           hit.i,
@@ -737,7 +840,7 @@ export function AudioNotes() {
         undefined,
         at >= 0 ? [at] : [],
       ),
-      { label: 'Select all', hint: 'Ctrl A', onSelect: selectAll },
+      { label: 'Select all', ...(phone ? {} : { hint: 'Ctrl A' }), onSelect: selectAll },
       { label: 'Notes to MIDI track', onSelect: () => notesToMidiTrack(region.id) },
       'sep',
       {
@@ -1137,7 +1240,12 @@ export function AudioNotes() {
       else if (sel.length) setSelected(region.id, []);
       else handled = false;
     } else if (ctrl && !e.altKey && key === 'a') selectAll();
-    else if (ctrl || e.altKey) handled = false;
+    else if (ctrl && !e.altKey && (key === 'c' || key === 'v')) {
+      // copy the first note selected; paste its sound, or with Shift its edits
+      if (!base || !ctx || !sel.length) handled = false;
+      else if (key === 'c') copySelected(base, sel);
+      else pasteKey(base, sel, ctx, e.shiftKey ? 'settings' : 'sound');
+    } else if (ctrl || e.altKey) handled = false;
     else if (key === 'Delete' || key === 'Backspace') {
       // (never the region itself, as Delete is elsewhere: here it's the notes' edits)
       if (base && ctx && sel.length) commit(runEdit('reset', base, sel, { what: 'all' }, ctx), base, 'Reset Notes');
@@ -1779,10 +1887,19 @@ export function AudioNotesBar() {
     if (session) setMacros(session);
     else toast('The notes are still being found');
   };
+  const link = useApp((s) => s.linkRegions);
+  /** The regions an edit here is made in with Link on: this one and the others playing its recording. */
+  const linked = project && region ? linkedRegions(project, region.id).length + 1 : 1;
+  const linkHelp = link
+    ? `Linked: an edit here is made in every region playing this recording (${linked === 1 ? 'only this one does' : `${linked} do`}), on the same notes; click to edit this region alone`
+    : 'Link: make each edit in every region playing this recording too, on the same notes';
+  const toggleLink = () => store.set({ linkRegions: !link });
   const more: MenuEntry[] = region
     ? [
         { label: 'Macros…', onSelect: openMacros },
         { label: 'Notes to MIDI track', onSelect: () => notesToMidiTrack(region.id) },
+        // (a phone's bar has no room for Link's button: it's here, with how many regions it links)
+        ...(phone ? [{ label: `Link regions (${linked})`, checked: link, onSelect: toggleLink }] : []),
       ]
     : [];
   const selected = useApp((s) =>
@@ -1824,6 +1941,18 @@ export function AudioNotesBar() {
           onClick={() => toggleEdits(track, region, clip)}
         >
           A/B
+        </button>
+      )}
+      {!phone && project && region && clip && (
+        <button
+          type="button"
+          className={`btn${link ? ' on' : ''}`}
+          title={linkHelp}
+          aria-pressed={link}
+          data-linked={linked}
+          onClick={toggleLink}
+        >
+          {link ? `Link · ${linked}` : 'Link'}
         </button>
       )}
       {!phone && project && region && clip && (

@@ -530,7 +530,7 @@ change may also post a line under the bar (`…/progress`).
 | `notes_write` | change | Write notes from a position, in the compact notation. |
 | `notes_clear` | change | Remove the notes that start in a span. |
 | `regions` | change | Show, split (chop), delete (with `confirm`), copy, move, repeat, trim, gain, fade, stretch, mute, rename audio and MIDI regions; quantize and transpose MIDI; write a MIDI region's controller and pitch-bend lanes. A region by id, name or "selected". |
-| `audio_notes` | change | A recording's notes, note by note, as the Audio Editor's Notes edits them: show, detect, one action for each of the session's note edits (`NOTE_EDITS`): pitch, drift, vibrato, glide, formant, level, mute, timing, split, join, octave, add, remove, reset, and the macros (correct pitch, quantize time, level); and `midi`, the notes as a new MIDI track (below). |
+| `audio_notes` | change | A recording's notes, note by note, as the Audio Editor's Notes edits them: show, detect, one action for each of the session's note edits (`NOTE_EDITS`): pitch, drift, vibrato, glide, formant, level, mute, timing, split, join, octave, add, remove, reset, a note's sound or edits pasted onto others (`paste`, `copy-settings`), and the macros (correct pitch, quantize time, level); and `midi`, the notes as a new MIDI track (below). Any edit can be `linked`: made in every region playing the same recording too. |
 | `track_add` | change | Add a track: a built-in synth, a pack's instrument, or a palette's sound. |
 | `track_set` | change | A track's name, fader, pan, mute, solo, arm, instrument, place and sends. |
 | `synth_set` | change | List or set a built-in synth's knobs. |
@@ -611,6 +611,28 @@ parity test (`packages/cli/test/parity.test.ts`) fails if either lacks one.
   are left out. One batch, one undo step; the recording's notes aren't kept by it. It takes no
   `notes`. The parity tests check `NOTE_EXTRAS` in the agent, `holo notes` and the studio as they check
   the edits.
+- **A note's sound or edits, pasted** (`paste`, `copy-settings`, `audio-notes-edit.ts` `pasteNotes`,
+  `copySettings`): `from` is the number of the note copied from, among the region's notes, or among
+  another region's of the same recording (`from_region`: its id or name); the tool hands the note
+  itself to the edit (its context's `source`), so the edit carries what it copies. A region playing
+  another recording is refused: pasting between recordings needs a source-file field, a later stage.
+  `paste` (a line's notes) makes each note play the copied note's sound in its place (`s`, its pitch
+  and unvoiced start as found, `p` and `u`, as the renderer reads a pasted note); the note's other
+  edits stay, its pitch move kept as a distance from the semitone nearest its pitch as found, carried
+  onto the new pitch's. It never reads past the copied sound's end: a note no longer than it plays its
+  start; a longer one is cut where it runs out, its first part playing all of it and the rest muted.
+  `copy-settings` gives each note the copied note's drift, vibrato, glide, formant, level, mute and
+  attack (`COPIED_SETTINGS`), each put back where that note has none, and its pitch move as a
+  distance from each note's own nearest semitone (so a source tuned onto its semitone tunes each onto
+  its own); never where a note starts or ends, nor its sound. `reset` gives a pasted note back its own
+  pitch as found, from the notes measured (it waits for them while they're being found).
+- **`linked`** (any edit): the edit is made in every other region of the song playing the same
+  recording too (`linkedNoteEdits`, `packages/session/src/note-link.ts`), on the same notes: those
+  found by the same detection at the same start in the recording that the region plays. A region with
+  no notes of its own yet gets those found, cut to what it plays, with the edit (the notes are
+  measured for it, waiting while they're being found). Every region changed is one `updateRegion` in
+  the one batch (one undo step, its label ending "linked: N regions"), and the answer ends with a
+  "Linked:" line saying which regions changed and how, or that none plays those notes.
 
 ### Bringing things in: `import`, a bounce, a creation's render
 

@@ -84,6 +84,14 @@ wraps `EngineCore` from `@holo/engine`):
   Macros dialog (`NoteMacros.tsx`) is made from the macros' arguments in the same list, previews
   through a gesture and applies as one undo step; Level reads each note's level from the curve the
   notes were found with (`noteLevel`), as the host reads it for the agent.
+- **A note copied is the note itself; a linked edit is the same edits again.** The Notes view's
+  clipboard (`note-clipboard.ts`, in memory, the tab's own) holds the note copied and its recording;
+  `paste` and `copy-settings` take it as their context's `source`, so a paste is self-contained
+  wherever it's made (the agent hands them the note `from` numbers). With Link on, every set of notes
+  `runEdit` makes remembers the notes and the edit it was made from, so a commit knows the edits that
+  made it and `@holo/session`'s `linkedNoteEdits` makes them again in each other region playing the
+  recording (on the notes found at the same place, where that region plays them), all one batch:
+  the agent's and `holo notes`' `linked` go through the same function.
 - **Convolution is spread over the period.** A hall's long partitions take their forward transform,
   the sum over the spectrum and the inverse transform in about-equal pieces, one or two per block,
   so no single block pays for a 32768-point transform; the output lands in the same block as before,

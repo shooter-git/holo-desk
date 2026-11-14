@@ -10,7 +10,8 @@ const ZEROS = 32;
 const TAPS = ZEROS * 2;
 const BETA = 12;
 
-function besselI0(x: number): number {
+/** The modified Bessel function of the first kind, order zero (Kaiser windows are made of it). */
+export function besselI0(x: number): number {
   let sum = 1;
   let term = 1;
   for (let k = 1; k < 64; k++) {

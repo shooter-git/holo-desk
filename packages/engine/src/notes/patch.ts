@@ -3,14 +3,16 @@
  * stretched) as its note edits make them, rendered from that recording and the notes around it. The
  * same recording and spec give the same samples, wherever it runs.
  *
- * This first renderer changes nothing: a patch is the recording's own frames. It proves the way a
- * patch is planned, keyed, rendered and played in place (bit for bit what the recording would have
- * played) before any edit changes the sound.
+ * A line's notes (`mono`) are moved in pitch and level by pitch-synchronous overlap-add (psola.ts),
+ * which copies the recording to the bit wherever nothing changes. The notes of chords and hits
+ * (`poly`, `perc`) aren't rendered yet: their patches are the recording's own frames.
  */
 import type { PatchSpec } from './plan.ts';
+import { renderLinePatch } from './psola.ts';
 
 /** A patch's channels, from the recording's (`base`): `b − a` frames, fewer where the recording ends first. */
-export function renderNotePatch(base: readonly Float32Array[], _sr: number, spec: PatchSpec): Float32Array[] {
+export function renderNotePatch(base: readonly Float32Array[], sr: number, spec: PatchSpec): Float32Array[] {
+  if (spec.mode === 'mono') return renderLinePatch(base, sr, spec);
   return base.map((c) => c.slice(Math.min(spec.a, c.length), Math.min(spec.b, c.length)));
 }
 

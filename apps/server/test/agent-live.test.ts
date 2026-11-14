@@ -474,3 +474,94 @@ describe('A/B', () => {
     expect(refused.json()).toEqual({ error: 'Nothing to compare yet' });
   });
 });
+
+describe('the studio that asked, away a moment', () => {
+  it('a tool waits for it to come back (a reload), goes on there, and the job runs on', async () => {
+    const { start, tool, s, token, desk, admit, studio, status } = await setup();
+    const phone = await admit(token);
+    const phoneStudio = studio(phone.token, s.id, 'phone');
+    const { job, token: jobToken } = await start({ project: s.id, text: 'Play it' });
+    await tool(job, jobToken, 'POST', '/progress', { line: 'Writing the bass' });
+
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    desk.close();
+    const played = pending(tool(job, jobToken, 'POST', '/transport', { action: 'play' }));
+    // the other devices with the song open see why it waits
+    await until(() => status(phoneStudio, job)?.line === 'Waiting for the studio that asked to come back');
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(played.done).toBe(false);
+
+    // the page reloaded: the same device's studio, the song open again
+    const back = studio(token, s.id, 'desk');
+    await until(() => played.done);
+    expect((played.value as Awaited<ReturnType<typeof tool>>).json()).toEqual({ ok: true });
+    expect(back.got('transport')).toHaveLength(1);
+    expect(status(phoneStudio, job)).toMatchObject({ state: 'running', line: 'Writing the bass' });
+    // and its changes go there
+    const ops = [{ op: 'setProject', patch: { title: 'After the reload' } }];
+    expect((await tool(job, jobToken, 'POST', '/ops', { ops, label: 'Title', batch: 'b1' })).json()).toMatchObject({
+      ok: true,
+    });
+    expect(back.got('agent-ops')).toHaveLength(1);
+  });
+
+  it('is away (409 `away`) if it doesn’t come back while the tool waits, and the tool may try again', async () => {
+    const { start, tool, s, token, desk, admit, studio, status } = await setup();
+    const phone = await admit(token);
+    const phoneStudio = studio(phone.token, s.id, 'phone');
+    const { job, token: jobToken } = await start({ project: s.id, text: 'Change it' });
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    desk.close();
+    const waiting = () => status(phoneStudio, job)?.line === 'Waiting for the studio that asked to come back';
+    const ops = [{ op: 'setProject', patch: { title: 'Later' } }];
+    const first = pending(tool(job, jobToken, 'POST', '/ops', { ops, label: 'Title', batch: 'b1' }));
+    await until(waiting);
+    await vi.advanceTimersByTimeAsync(14_999);
+    expect(first.done).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    await until(() => first.done);
+    const refused = first.value as Awaited<ReturnType<typeof tool>>;
+    expect(refused.statusCode).toBe(409);
+    expect(refused.json()).toMatchObject({ reason: 'away', error: expect.stringContaining('try again') });
+    // tried again, it's back this time
+    const again = pending(tool(job, jobToken, 'POST', '/ops', { ops, label: 'Title', batch: 'b1' }));
+    await until(waiting);
+    await vi.advanceTimersByTimeAsync(1000);
+    const back = studio(token, s.id, 'desk');
+    await until(() => again.done);
+    expect((again.value as Awaited<ReturnType<typeof tool>>).statusCode).toBe(200);
+    expect(back.got('agent-ops')).toHaveLength(1);
+  });
+
+  it('a change sent as it goes hears so at once: to read the song before making it again', async () => {
+    const { start, tool, s, desk } = await setup();
+    const { job, token: jobToken } = await start({ project: s.id, text: 'Change it' });
+    // (it never answers this one)
+    desk.answer = (msg) => (msg.type === 'agent-ops' ? null : { ok: true, revision: 0 });
+    const ops = [{ op: 'setProject', patch: { title: 'Lost?' } }];
+    const sent = pending(tool(job, jobToken, 'POST', '/ops', { ops, label: 'Title', batch: 'b1' }));
+    await waitFor(() => desk.got('agent-ops').length === 1);
+    desk.close();
+    await waitFor(() => sent.done, 1000);
+    const went = sent.value as Awaited<ReturnType<typeof tool>>;
+    expect(went.statusCode).toBe(409);
+    expect(went.json()).toMatchObject({ reason: 'away', error: expect.stringContaining('read the song again') });
+  });
+
+  it('reading the song waits for it too, and reads it as saved here if it doesn’t come back', async () => {
+    const { start, tool, s, token, desk, admit, studio, status } = await setup();
+    const phone = await admit(token);
+    const phoneStudio = studio(phone.token, s.id, 'phone');
+    const { job, token: jobToken } = await start({ project: s.id, text: 'What key is it in?' });
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    desk.close();
+    const read = pending(tool(job, jobToken, 'GET', '/song'));
+    await until(() => status(phoneStudio, job)?.line === 'Waiting for the studio that asked to come back');
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(read.done).toBe(false);
+    await vi.advanceTimersByTimeAsync(5_000);
+    await until(() => read.done);
+    const song = read.value as Awaited<ReturnType<typeof tool>>;
+    expect([song.statusCode, song.json().id]).toEqual([200, s.id]);
+  });
+});

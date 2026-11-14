@@ -113,12 +113,16 @@ export type Answer = { ok: boolean; revision?: number; error?: string } & Record
 
 /** What `request` answers when the studio doesn't in time. */
 export const NO_ANSWER = 'The studio did not answer in time';
+/** The answer of a studio whose connection closed (a reload, its network) before it answered. */
+export const GONE = 'The studio went away before it answered';
 
 interface Pending {
   resolve: (v: Answer) => void;
   timer: NodeJS.Timeout;
   /** Only the connection asked may answer. */
   client: Client;
+  /** Answered GONE as soon as that connection closes (otherwise it waits for its timeout). */
+  early: boolean;
 }
 
 interface Listener {
@@ -178,6 +182,13 @@ export class Live {
     });
     ws.on('close', () => {
       this.clients.delete(client);
+      // what was asked of it and asked to hear at once that it went, hears it now
+      for (const [id, p] of this.pending) {
+        if (p.client !== client || !p.early) continue;
+        clearTimeout(p.timer);
+        this.pending.delete(id);
+        p.resolve({ ok: false, error: GONE });
+      }
       if (client.role === 'editor') this.toRemotes({ type: 'studio-gone', name: client.name });
       this.agent?.gone(client);
       this.broadcastPeers();
@@ -425,15 +436,22 @@ export class Live {
     };
   }
 
-  /** Ask an open studio to do something and wait for its answer. */
-  request(editor: Client, msg: Record<string, unknown>, timeoutMs = 8000) {
+  /**
+   * Ask an open studio to do something and wait for its answer. With `early`, a studio whose
+   * connection closes first (or has closed) answers GONE at once, not NO_ANSWER at the timeout.
+   */
+  request(editor: Client, msg: Record<string, unknown>, timeoutMs = 8000, early = false) {
     const id = `r${++this.counter}`;
     return new Promise<Answer>((resolve) => {
+      if (early && editor.ws.readyState !== editor.ws.OPEN) {
+        resolve({ ok: false, error: GONE });
+        return;
+      }
       const timer = setTimeout(() => {
         this.pending.delete(id);
         resolve({ ok: false, error: NO_ANSWER });
       }, timeoutMs);
-      this.pending.set(id, { resolve, timer, client: editor });
+      this.pending.set(id, { resolve, timer, client: editor, early });
       this.send(editor, { ...msg, id });
     });
   }

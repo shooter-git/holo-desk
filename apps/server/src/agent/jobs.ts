@@ -14,7 +14,7 @@ import { randomBytes } from 'node:crypto';
 import { SCAN_ID, type Scan } from '@holo/score';
 import { applyOps, barToTick, type MiddleC, type Op, type Project, parseProject } from '@holo/session';
 import type { Store } from '../db.ts';
-import { type AgentHooks, type Live, type LiveClient, NO_ANSWER, type PlayedNote } from '../live.ts';
+import { type AgentHooks, type Answer, GONE, type Live, type LiveClient, NO_ANSWER, type PlayedNote } from '../live.ts';
 import { hashToken, newToken, sameHash } from './auth.ts';
 import {
   type AttachmentInfo,
@@ -170,6 +170,13 @@ export const JOB_ID = /^agj_[0-9a-f]{12}$/;
 
 const MINUTE = 60_000;
 
+/** What a tool hears when the requester's studio is away, and doesn't come back while it waits. */
+export const AWAY =
+  'The studio that asked is away (reloading, or its network dropped): wait a moment and try again; once it’s back, read the song again before changing it';
+/** What a change hears when the studio went away before saying whether it went in. */
+export const WENT =
+  'The studio that asked went away before saying whether this change went in: once it’s back, read the song again, and make the change again only if it isn’t there';
+
 export interface Limits {
   /** A request's wall clock, and a scan preset's. */
   clockMs: number;
@@ -187,6 +194,11 @@ export interface Limits {
   /** How long the studio has to say what was just played, and to start A/B. */
   playedMs: number;
   compareMs: number;
+  /**
+   * How long a tool that needs the requester's studio waits for it to come back (a reload, its
+   * network back) before it's told the studio is away.
+   */
+  awayMs: number;
 }
 
 export const LIMITS: Limits = {
@@ -199,6 +211,8 @@ export const LIMITS: Limits = {
   listenGraceMs: 15_000,
   playedMs: 3_000,
   compareMs: 50_000,
+  // (most tool calls are given up after 30 s: the wait, then what the studio does, fits in that)
+  awayMs: 15_000,
 };
 
 export interface JobsOptions {
@@ -252,6 +266,8 @@ export class Jobs implements AgentHooks {
   private readonly starting = new Set<string>();
   /** Told when a job ends, however it ends (its state says how). */
   private readonly endings: ((job: AgentJob) => void)[] = [];
+  /** Tools waiting for a device's studio to come back with a song open: by device and song. */
+  private readonly comingBack = new Map<string, Set<() => void>>();
 
   constructor(options: JobsOptions) {
     this.o = options;
@@ -861,6 +877,8 @@ export class Jobs implements AgentHooks {
   state(client: LiveClient, was: string | null): void {
     const device = client.device;
     const now = client.state?.project ?? null;
+    // a studio back with the song open (after a reload, its network back): the tools waiting for it go on
+    if (device && now) for (const back of [...(this.comingBack.get(backKey(device, now)) ?? [])]) back();
     if (!device || !was || was === now) return;
     for (const job of this.jobs.values()) {
       // a scan preset carries on without the studio (its changes are saved here, with a restore point)
@@ -978,8 +996,51 @@ export class Jobs implements AgentHooks {
     return this.o.live.studioFor(job.view.device, job.view.project);
   }
 
+  /**
+   * The requester's studio with the job's song open: at once, or once it's back within `awayMs` (and
+   * `budgetMs`): a reload, or its network back after dropping. Meanwhile the line under the bar says
+   * so, for the other devices that have the song open. Refused 409 `away` if it isn't back by then. A
+   * scan preset carries on without its studio, so it isn't waited for: 403 at once, as ever.
+   */
+  async studioBack(job: AgentJob, budgetMs = this.limits.awayMs): Promise<LiveClient> {
+    const here = this.studio(job);
+    if (here) return here;
+    if (job.preset) throw new Refusal(403, 'The song isn’t open in the studio that asked');
+    const wait = Math.min(this.limits.awayMs, budgetMs);
+    if (wait > 0 && isLive(job) && !job.ending) {
+      const key = backKey(job.view.device, job.view.project);
+      const before = job.view.line;
+      const waiting = 'Waiting for the studio that asked to come back';
+      this.progress(job, waiting);
+      await new Promise<void>((done) => {
+        const backs = this.comingBack.get(key) ?? new Set<() => void>();
+        this.comingBack.set(key, backs);
+        const timer = setTimeout(() => back(), wait);
+        timer.unref?.();
+        const back = () => {
+          clearTimeout(timer);
+          backs.delete(back);
+          if (!backs.size) this.comingBack.delete(key);
+          done();
+        };
+        backs.add(back);
+      });
+      // (the line it had comes back, unless the agent said another meanwhile)
+      if (job.view.line === waiting && isLive(job) && !job.ending) {
+        if (before === undefined) delete job.view.line;
+        else job.view.line = before;
+        this.tell(job);
+      }
+    }
+    const back = this.studio(job);
+    if (back) return back;
+    throw new Refusal(409, AWAY, 'away');
+  }
+
   /** The song as the studio has it now (it saves first, so nothing it applied is missed). */
   async song(job: AgentJob): Promise<Project> {
+    // (a studio away a moment is waited for; one that doesn't come back leaves the song as saved here)
+    if (!job.preset) await this.studioBack(job).catch(() => null);
     await this.flush(job.view.device, job.view.project);
     const song = this.o.store.get(job.view.project);
     if (!song) throw new Refusal(404, 'The song is gone');
@@ -992,9 +1053,9 @@ export class Jobs implements AgentHooks {
   }
 
   /** What the requester's studio shows: the playhead, the selection, the cycle, the view. */
-  studioState(job: AgentJob): Record<string, unknown> {
-    const studio = this.studio(job);
-    const s = studio?.state;
+  async studioState(job: AgentJob): Promise<Record<string, unknown>> {
+    const studio = await this.studioBack(job);
+    const s = studio.state;
     if (!s) throw new Refusal(403, 'The song isn’t open in the studio that asked');
     const extra = s as unknown as Record<string, unknown>;
     return {
@@ -1019,13 +1080,19 @@ export class Jobs implements AgentHooks {
    * went away: then it's saved as a revision of the agent's, as a scan read always was.
    */
   async ops(job: AgentJob, ops: Op[], label: string, batch: string): Promise<{ ok: true; revision?: number }> {
-    const studio = this.studio(job);
+    const arrived = Date.now();
+    // (a scan preset carries on without its studio: no waiting for it)
+    const studio = job.preset ? this.studio(job) : await this.studioBack(job);
     if (studio) {
+      // (the time waited for the studio comes out of the minute it has to apply them)
+      const left = Math.max(5_000, this.limits.opsMs - (Date.now() - arrived));
       const answer = await this.o.live.request(
         studio,
         { type: 'agent-ops', project: job.view.project, job: job.view.id, batch, ops, label },
-        this.limits.opsMs,
+        left,
+        true,
       );
+      if (answer.error === GONE) throw new Refusal(409, WENT, 'away');
       if (!answer.ok)
         throw new Refusal(answer.error === NO_ANSWER ? 504 : 400, answer.error ?? 'The studio refused the change');
       return typeof answer.revision === 'number' ? { ok: true, revision: answer.revision } : { ok: true };
@@ -1050,27 +1117,27 @@ export class Jobs implements AgentHooks {
 
   /** Play, stop, or move the playhead to a bar, in the requester's studio. */
   async transport(job: AgentJob, action: 'play' | 'stop' | 'locate', bar?: number): Promise<{ ok: boolean }> {
-    const studio = this.studio(job);
-    if (!studio) throw new Refusal(403, 'The song isn’t open in the studio that asked');
+    const studio = await this.studioBack(job);
     let at: number | undefined;
     if (bar !== undefined) {
       const song = this.o.store.get(job.view.project);
       if (!song) throw new Refusal(404, 'The song is gone');
       at = barToTick(song.meter, bar);
     }
-    const answer = await this.o.live.request(studio, {
-      type: 'transport',
-      action,
-      ...(at !== undefined ? { at } : {}),
-    });
+    const answer = await this.o.live.request(
+      studio,
+      { type: 'transport', action, ...(at !== undefined ? { at } : {}) },
+      undefined,
+      true,
+    );
+    awayIfGone(answer);
     if (!answer.ok) throw new Refusal(409, answer.error ?? 'The studio couldn’t do that');
     return { ok: true };
   }
 
   /** Notes played in the requester's studio now (not recorded). */
-  audition(job: AgentJob, events: number[][], track?: string): void {
-    const studio = this.studio(job);
-    if (!studio) throw new Refusal(403, 'The song isn’t open in the studio that asked');
+  async audition(job: AgentJob, events: number[][], track?: string): Promise<void> {
+    const studio = await this.studioBack(job);
     this.o.live.sendTo(studio, { type: 'play-notes', events, track: track ?? null, port: 'Agent' });
   }
 
@@ -1269,9 +1336,9 @@ export class Jobs implements AgentHooks {
 
   /** What the requester's studio has just played (its memory of the last `seconds`, at most 60). */
   async played(job: AgentJob, seconds: number): Promise<{ notes: PlayedNote[] }> {
-    const studio = this.studio(job);
-    if (!studio) throw new Refusal(403, 'The song isn’t open in the studio that asked');
-    const answer = await this.o.live.request(studio, { type: 'agent-played', seconds }, this.limits.playedMs);
+    const studio = await this.studioBack(job);
+    const answer = await this.o.live.request(studio, { type: 'agent-played', seconds }, this.limits.playedMs, true);
+    awayIfGone(answer);
     if (!answer.ok || !Array.isArray(answer.notes)) {
       if (answer.error === NO_ANSWER) throw new Refusal(504, 'The studio didn’t say in time what was just played');
       throw new Refusal(409, answer.error ?? 'The studio can’t say what was just played');
@@ -1281,17 +1348,28 @@ export class Jobs implements AgentHooks {
 
   /** A/B: the requester's studio plays bars `from` to `to` (not played) from before the job, then as they are now. */
   async compare(job: AgentJob, from: number, to: number): Promise<{ ok: true }> {
-    const studio = this.studio(job);
-    if (!studio) throw new Refusal(403, 'The song isn’t open in the studio that asked');
+    const studio = await this.studioBack(job);
     const answer = await this.o.live.request(
       studio,
       { type: 'agent-compare', job: job.view.id, from, to },
       this.limits.compareMs,
+      true,
     );
+    awayIfGone(answer);
     if (!answer.ok)
       throw new Refusal(answer.error === NO_ANSWER ? 504 : 409, answer.error ?? 'The studio couldn’t play them');
     return { ok: true };
   }
+}
+
+/** Tools waiting for a device's studio with a song open are found by this. */
+function backKey(device: string, project: string): string {
+  return `${device}\n${project}`;
+}
+
+/** A studio that went away before it answered: the tool hears it's away (409 `away`). */
+export function awayIfGone(answer: Answer): void {
+  if (answer.error === GONE) throw new Refusal(409, AWAY, 'away');
 }
 
 /** What a turn keeps of its job besides its reply. */

@@ -5,10 +5,10 @@ import { newRegion, newTrack, type Project, type Track } from '@holo/session';
 import Fastify from 'fastify';
 import { afterAll, describe, expect, it, vi } from 'vitest';
 import type { JobRouteKit } from '../src/agent/job-routes/index.ts';
-import { type AgentJob, Refusal } from '../src/agent/jobs.ts';
+import { type AgentJob, AWAY, Refusal } from '../src/agent/jobs.ts';
 import measureRoutes from '../src/agent/measure/routes.ts';
 import { MeasureRunner } from '../src/agent/measure/runner.ts';
-import { NO_ANSWER } from '../src/live.ts';
+import { GONE, NO_ANSWER } from '../src/live.ts';
 import { agentWorld, auth } from './agent-fakes.ts';
 import { BAR, FakeChild, SR, takeWorld, tone } from './measure-fakes.ts';
 
@@ -54,6 +54,11 @@ function served(o: KitOptions = {}) {
     jobs: {
       song: async () => structuredClone(song),
       studio: () => (o.studio === false ? null : {}),
+      // (a studio that doesn't come back while the call waits is away)
+      studioBack: async () => {
+        if (o.studio === false) throw new Refusal(409, AWAY, 'away');
+        return {};
+      },
       mayRead: () => true,
       onJobEnd: (fn: (j: AgentJob) => void) => ends.push(fn),
       progress: (_j: AgentJob, line: string) => lines.push(line),
@@ -343,8 +348,15 @@ describe('measuring through the job’s routes', () => {
     } finally {
       await s.close();
     }
-    const gone = served({ studio: false });
-    expect((await gone.post({ what: 'meters' })).statusCode).toBe(403);
+    const away = served({ studio: false });
+    const refused = await away.post({ what: 'meters' });
+    expect([refused.statusCode, refused.json().reason]).toEqual([409, 'away']);
+    await away.close();
+    // a studio that goes as it's asked: away too, at once
+    const gone = served({ meters: { ok: false, error: GONE } });
+    const went = await gone.post({ what: 'meters' });
+    expect([went.statusCode, went.json().reason]).toEqual([409, 'away']);
+    expect((gone.asked.at(-1) as unknown[])?.[0]).toMatchObject({ type: 'agent-meters' });
     await gone.close();
     const silent = served();
     expect((await silent.post({ what: 'meters' })).statusCode).toBe(504);

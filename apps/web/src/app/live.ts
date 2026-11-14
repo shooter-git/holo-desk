@@ -18,6 +18,7 @@ import {
   endGesture,
   ensureAudio,
   gestureChange,
+  keepNow,
   locate,
   moveBars,
   openProject,
@@ -198,7 +199,8 @@ async function onMessage(msg: Record<string, unknown>): Promise<void> {
       return;
     }
     case 'agent-ops': {
-      // the in-app agent's changes: one undo step per request, answered as soon as they're in the song
+      // the in-app agent's changes: one undo step per request, answered once they're in the song and kept
+      // on this device (a page that goes before then never answers, and the agent hears it went)
       const s = store.get();
       if (!s.project || s.project.id !== msg.project) {
         ack(false, { error: 'That song is not open in the studio' });
@@ -213,8 +215,13 @@ async function onMessage(msg: Record<string, unknown>): Promise<void> {
       }
       const ops = Array.isArray(msg.ops) ? (msg.ops as Op[]) : [];
       const r = await applyJob(ops, job, batch, String(msg.label ?? 'Changes'));
-      if (r.ok) ack(true, { revision: store.get().serverRevision });
-      else ack(false, { error: r.error ?? 'The changes did not apply' });
+      if (!r.ok) {
+        ack(false, { error: r.error ?? 'The changes did not apply' });
+        return;
+      }
+      // (a reload or a closed tab after this brings them back, and saves them: they're never lost unsaid)
+      await keepNow();
+      ack(true, { revision: store.get().serverRevision });
       return;
     }
     case 'agent-flush': {

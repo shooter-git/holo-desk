@@ -204,9 +204,9 @@ export function agentRoutes(app: FastifyInstance, o: AgentOptions): { jobs: Jobs
       if (!token) return reply.code(401).send({ error: 'This needs the job’s token' });
       const job = theJobs.forTool((req.params as Params).job ?? '', token);
       if (!job) return reply.code(403).send({ error: 'This job has ended, or the token isn’t its' });
-      if (studio && !theJobs.studio(job))
-        return reply.code(403).send({ error: 'The song isn’t open in the studio that asked' });
       try {
+        // (a studio away a moment, reloading or its network dropped, is waited for: 409 `away` if it isn't back)
+        if (studio) await theJobs.studioBack(job);
         return await handler(req, reply, job);
       } catch (err) {
         if (err instanceof Refusal) return refuse(reply, err);
@@ -652,7 +652,7 @@ export function agentRoutes(app: FastifyInstance, o: AgentOptions): { jobs: Jobs
         ];
       });
       const track = b.track === undefined || b.track === null ? undefined : line(b.track, 'track', 64);
-      theJobs.audition(job, checked, track);
+      await theJobs.audition(job, checked, track);
       return { ok: true };
     }, true),
   );
@@ -663,13 +663,17 @@ export function agentRoutes(app: FastifyInstance, o: AgentOptions): { jobs: Jobs
     forJob(async (req, _reply, job) => {
       const b = body(req);
       if (b.last !== undefined && typeof b.last !== 'boolean') throw bad('last is true or false');
-      return theJobs.listen(
-        job,
-        int(b.maxMs, 'maxMs', 100, 45_000),
-        int(b.quietMs, 'quietMs', 500, 10_000),
-        b.last === true,
-      );
-    }, true),
+      const maxMs = int(b.maxMs, 'maxMs', 100, 45_000);
+      const quietMs = int(b.quietMs, 'quietMs', 500, 10_000);
+      // (a studio away a moment is waited for, and the part is that much shorter: the call keeps its time)
+      let waited = 0;
+      if (!theJobs.studio(job)) {
+        const from = Date.now();
+        await theJobs.studioBack(job);
+        waited = Date.now() - from;
+      }
+      return theJobs.listen(job, Math.max(100, maxMs - waited), quietMs, b.last === true);
+    }),
   );
   app.get(
     `${J}/played`,

@@ -16,7 +16,7 @@ import { NO_ANSWER } from '../../live.ts';
 import { ATTACHMENT_ID } from '../attachments.ts';
 import { type Body, bad, body, ID, int, isObj, num, type Params } from '../check.ts';
 import type { JobRouteKit } from '../job-routes/index.ts';
-import { type AgentJob, Refusal } from '../jobs.ts';
+import { type AgentJob, awayIfGone, Refusal } from '../jobs.ts';
 import {
   type Lane,
   type MeasureAnswer,
@@ -38,6 +38,8 @@ const METERS_S = 8;
 const METERS_MAX_S = 30;
 /** How long the studio has to read out its meters, past the seconds it may wait for them (ms). */
 const METERS_MS = 4000;
+/** The meters' call, all told: the tool's client gives a measure call 50 s; this leaves it a little. */
+const METERS_CALL_MS = 45_000;
 /** A bounce file, as the server names them. */
 const BOUNCE_FILE = /^[\w .()'-]+\.wav$/;
 /** Audio attachments the host decodes (MP3, OGG and M4A are measured in the studio, as their meta). */
@@ -397,11 +399,12 @@ export default function measureRoutes(kit: JobRouteKit, options: MeasureRoutesOp
       const what = b.what as MeasureWhat;
       if (!MEASURE_WHAT.includes(what)) throw bad(`what is ${MEASURE_WHAT.join(', ')}`);
       if (what === 'meters') {
-        const studio = jobs.studio(job);
-        if (!studio) throw new Refusal(403, 'The song isn’t open in the studio that asked');
         const seconds = opt(b.seconds) ? METERS_S : num(b.seconds, 'seconds', 1, METERS_MAX_S);
+        // a studio away a moment is waited for, as long as the call's 50 s leave after the meters' own time
+        const studio = await jobs.studioBack(job, METERS_CALL_MS - (seconds * 1000 + METERS_MS));
         // the studio waits until it has watched that much play (playing started less than that ago)
-        const answer = await live.request(studio, { type: 'agent-meters', seconds }, seconds * 1000 + METERS_MS);
+        const answer = await live.request(studio, { type: 'agent-meters', seconds }, seconds * 1000 + METERS_MS, true);
+        awayIfGone(answer);
         if (!answer.ok)
           throw new Refusal(
             answer.error === NO_ANSWER ? 504 : 409,

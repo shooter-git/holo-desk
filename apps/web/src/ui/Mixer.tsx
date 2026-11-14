@@ -25,7 +25,7 @@ import {
   samplerKnobValue,
   type Track,
 } from '@holo/session';
-import { Headphones, Power, RotateCcw, SlidersHorizontal, X } from 'lucide-react';
+import { ChevronDown, Headphones, Power, RotateCcw, SlidersHorizontal, X } from 'lucide-react';
 import { memo, type ReactNode, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react';
 import {
   addBusWithSend,
@@ -789,6 +789,121 @@ function EqDisplay({
 }
 
 /** Parametric EQ's eight bands, side by side: each one's type, and its frequency, gain and Q. */
+interface SettingProps {
+  def: ParamDef;
+  value: number;
+  onBegin: () => void;
+  onEnd: () => void;
+  onChange: (v: number) => void;
+  color?: string;
+  size?: number;
+  label?: string;
+}
+
+/**
+ * One of a window's settings. A number is a knob. A setting that is one of a few names is a button:
+ * with two or three it goes round them, with more it opens a menu of them, since a knob swept
+ * through names shows one at a time and none of the others.
+ */
+function Setting({ def, value, onBegin, onEnd, onChange, color, size, label }: SettingProps) {
+  const options = def.options;
+  if (!options)
+    return (
+      <Knob
+        def={def}
+        value={value}
+        onBegin={onBegin}
+        onEnd={onEnd}
+        onChange={onChange}
+        color={color}
+        size={size}
+        label={label}
+      />
+    );
+  const at = Math.round(value);
+  const set = (v: number) => {
+    if (v === at) return;
+    onBegin();
+    onChange(v);
+    onEnd();
+  };
+  const few = options.length <= 3;
+  // (names too long for a knob's width, an organ's drawbars, have two)
+  const wide = !few && options.some((o) => o.length > 8);
+  return (
+    <div className={`knob choice${wide ? ' wide' : ''}`}>
+      <button
+        type="button"
+        className={`btn${few ? (value >= 0.5 ? ' on' : '') : ' choice-menu'}`}
+        aria-haspopup={few ? undefined : 'menu'}
+        aria-label={`${def.name}: ${options[at] ?? at}`}
+        onClick={(e) =>
+          few
+            ? set((at + 1) % options.length)
+            : openMenuAt(
+                e.currentTarget,
+                options.map((name, i) => ({ label: name, checked: i === at, focus: i === at, onSelect: () => set(i) })),
+              )
+        }
+      >
+        <span className="grow">{options[at] ?? at}</span>
+        {!few && <ChevronDown size={12} aria-hidden="true" />}
+      </button>
+      <span className="knob-label">{label ?? def.name}</span>
+    </div>
+  );
+}
+
+/** Channel EQ's bands, low to high: each one's switch, frequency, gain and Q, as it has them. */
+const EQ_BANDS: { name: string; on?: string; f: string; g?: string; q?: string }[] = [
+  { name: 'Low Cut', on: 'hpOn', f: 'hpFreq' },
+  { name: 'Low Shelf', f: 'lsFreq', g: 'lsGain' },
+  { name: 'Low Mid', f: 'b1Freq', g: 'b1Gain', q: 'b1Q' },
+  { name: 'Mid', f: 'b2Freq', g: 'b2Gain', q: 'b2Q' },
+  { name: 'High Mid', f: 'b3Freq', g: 'b3Gain', q: 'b3Q' },
+  { name: 'High Shelf', f: 'hsFreq', g: 'hsGain' },
+  { name: 'High Cut', on: 'lpOn', f: 'lpFreq' },
+];
+/** The settings the bands show (the rest of Channel EQ's, its output, is a knob under them). */
+const EQ_BANDED = new Set(EQ_BANDS.flatMap((b) => [b.on, b.f, b.g, b.q]).filter((x): x is string => !!x));
+
+/**
+ * Channel EQ, a band to a column as its curve reads, low to high: frequency, then gain, then Q on
+ * the same lines across the bands, and a cut's switch where the others have their gain.
+ */
+function EqBands({
+  def,
+  params,
+  setting,
+}: {
+  def: PluginDef;
+  params: Record<string, number>;
+  setting: (p: ParamDef, label: string, dim?: boolean) => ReactNode;
+}) {
+  const param = (id?: string) => (id ? def.params.find((p) => p.id === id) : undefined);
+  return (
+    <div className="eq-bands">
+      {EQ_BANDS.map((b) => {
+        const on = param(b.on);
+        const off = !!on && paramValue('eq', params, on.id) < 0.5;
+        const f = param(b.f);
+        const g = param(b.g);
+        const q = param(b.q);
+        return (
+          <div key={b.name} className="eq-band">
+            <span className="label">{b.name}</span>
+            {f && setting(f, 'Freq', off)}
+            {/* (its button says On or Off: it needs no name under it) */}
+            {on && setting(on, '')}
+            {g && setting(g, 'Gain')}
+            {q && setting(q, 'Q')}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 function PeqBands({
   def,
   params,
@@ -1007,7 +1122,7 @@ export function PluginWindow() {
   const def = plugin ? pluginDef(plugin.type) : undefined;
   if (!owner || !plugin || !def) return null;
   // Parametric EQ's eight bands want more room than a row of knobs
-  const width = phone ? vp.w : plugin.type === 'peq' ? 600 : 460;
+  const width = phone ? vp.w : plugin.type === 'peq' ? 600 : plugin.type === 'eq' ? 540 : 460;
   const change = (param: string, value: number) =>
     gestureChange([{ op: 'updatePlugin', target, plugin: id, patch: { params: { [param]: value } } } satisfies Op]);
   const close = () => store.set({ plugin: null });
@@ -1063,6 +1178,25 @@ export function PluginWindow() {
           />
         </div>
       )}
+      {plugin.type === 'eq' && (
+        <EqBands
+          def={def}
+          params={plugin.params}
+          setting={(p, label, dim) => (
+            <div key={p.id} className={`peq-knob${dim ? ' dim' : ''}`}>
+              <Setting
+                def={p}
+                value={paramValue(def.type, plugin.params, p.id)}
+                size={30}
+                label={label}
+                onBegin={() => beginGesture(`${def.name}: ${p.name}`)}
+                onEnd={endGesture}
+                onChange={(v) => change(p.id, v)}
+              />
+            </div>
+          )}
+        />
+      )}
       {plugin.type === 'peq' && (
         <PeqBands
           def={def}
@@ -1084,6 +1218,8 @@ export function PluginWindow() {
       <div className="face">
         {def.params
           .filter((p) => plugin.type !== 'peq' || p.id === 'output')
+          // (Channel EQ's bands have their settings, above)
+          .filter((p) => plugin.type !== 'eq' || !EQ_BANDED.has(p.id))
           .filter(
             (p) =>
               (plugin.type !== 'space' && plugin.type !== 'shimmer') || spaceKnob(plugin.type, p.id, plugin.params),
@@ -1092,47 +1228,17 @@ export function PluginWindow() {
           .filter(() => plugin.type !== 'wow' || !plugin.settings?.curve)
           // (a Drum Replacer's piece has its own menu, by its kit)
           .filter((p) => plugin.type !== 'replacer' || p.id !== 'piece')
-          .map((p) =>
-            p.options && p.options.length <= 3 ? (
-              <div key={p.id} className="knob choice">
-                <button
-                  type="button"
-                  className={`btn${paramValue(def.type, plugin.params, p.id) >= 0.5 ? ' on' : ''}`}
-                  onClick={() =>
-                    apply(
-                      [
-                        {
-                          op: 'updatePlugin',
-                          target,
-                          plugin: id,
-                          patch: {
-                            params: {
-                              [p.id]:
-                                (Math.round(paramValue(def.type, plugin.params, p.id)) + 1) % (p.options?.length ?? 2),
-                            },
-                          },
-                        },
-                      ],
-                      p.name,
-                    )
-                  }
-                >
-                  {p.options[Math.round(paramValue(def.type, plugin.params, p.id))]}
-                </button>
-                <span className="knob-label">{p.name}</span>
-              </div>
-            ) : (
-              <Knob
-                key={p.id}
-                def={p}
-                value={paramValue(def.type, plugin.params, p.id)}
-                onBegin={() => beginGesture(`${def.name}: ${p.name}`)}
-                onEnd={endGesture}
-                onChange={(v) => change(p.id, v)}
-                color={def.kind === 'midi' ? 'var(--midi)' : 'var(--accent)'}
-              />
-            ),
-          )}
+          .map((p) => (
+            <Setting
+              key={p.id}
+              def={p}
+              value={paramValue(def.type, plugin.params, p.id)}
+              onBegin={() => beginGesture(`${def.name}: ${p.name}`)}
+              onEnd={endGesture}
+              onChange={(v) => change(p.id, v)}
+              color={def.kind === 'midi' ? 'var(--midi)' : 'var(--accent)'}
+            />
+          ))}
       </div>
       <div className="muted plugin-note">{def.description}</div>
     </Floating>
@@ -1207,7 +1313,7 @@ export function SynthWindow() {
     >
       <div className="face">
         {defs.map((p) => (
-          <Knob
+          <Setting
             key={p.id}
             def={p}
             value={macroValue(inst.preset, inst.params, p.id)}
@@ -1279,7 +1385,7 @@ function KitWindow({
     >
       <div className="face">
         {defs.map((p) => (
-          <Knob
+          <Setting
             key={p.id}
             def={p}
             value={samplerKnobValue(defs, inst.params, p.id)}

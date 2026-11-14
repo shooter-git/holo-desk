@@ -3,9 +3,9 @@
  * stretched) as its note edits make them, rendered from that recording and the notes around it. The
  * same recording and spec give the same samples, wherever it runs.
  *
- * A line's notes (`mono`) are moved in pitch and level by pitch-synchronous overlap-add (psola.ts),
- * which copies the recording to the bit wherever nothing changes. The notes of chords and hits
- * (`poly`, `perc`) aren't rendered yet: their patches are the recording's own frames.
+ * A line's notes (`mono`) are moved in pitch, formant, level and time, and pasted, by pitch-synchronous
+ * overlap-add (psola.ts), which copies the recording to the bit wherever nothing changes. The notes of
+ * chords and hits (`poly`, `perc`) aren't rendered yet: their patches are the recording's own frames.
  */
 import type { PatchSpec } from './plan.ts';
 import { renderLinePatch } from './psola.ts';

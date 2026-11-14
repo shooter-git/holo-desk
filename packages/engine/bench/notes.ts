@@ -9,15 +9,29 @@
  *   node packages/engine/bench/notes.ts --file take.wav  a recording (its notes found, every other one
  *                                                        moved a semitone up, every fourth 3 dB down)
  *   node packages/engine/bench/notes.ts --centre         only the notes' centres moved (and levels)
+ *   node packages/engine/bench/notes.ts --time           moved in time instead: every other note moved
+ *                                                        40 ms or 120 ms either way, stretched or squeezed
+ *                                                        by a fifth, or its attack twice as quick or slow
+ *   node packages/engine/bench/notes.ts --time --centre  both: moved in time, and their centres too
  *
  * The made-up voice sings phrases of legato notes with a vibrato and rests between them (a pulse train
  * through three formants, the right side a little different from the left), and every other note is
  * edited: moved up or down a few semitones, some made louder or softer, and (unless `--centre`) each
  * with its drift and vibrato kept by half, its formant moved two semitones and the glide into it
- * twice as quick. Each run renders every patch; the median run is reported.
+ * twice as quick. With `--time`, the edits are moves in time (as the Audio Editor makes them, as far
+ * as each fits), alone or with the centres moved too. Each run renders every patch; the median run is
+ * reported.
  */
 import { readFileSync } from 'node:fs';
-import { type AudioClip, type AudioNote, type AudioNotes, parseAudioNotes } from '@holo/session';
+import {
+  type AudioClip,
+  type AudioNote,
+  type AudioNotes,
+  moveNotes,
+  parseAudioNotes,
+  resizeNote,
+  setAttack,
+} from '@holo/session';
 import { lineNotes, monoOf } from '../src/analysis/take.ts';
 import { renderNotePatch } from '../src/notes/patch.ts';
 import { isEdited, regionPatches } from '../src/notes/plan.ts';
@@ -31,6 +45,7 @@ function arg(name: string): string | undefined {
 const file = arg('file');
 const runs = Number(arg('runs') ?? 5);
 const centre = process.argv.includes('--centre');
+const time = process.argv.includes('--time');
 
 /** A made-up voice, `seconds` long at `sr`: its two channels, and the notes it sings. */
 function madeUp(seconds: number, sr: number): { channels: Float32Array[]; notes: AudioNote[] } {
@@ -123,7 +138,20 @@ if (file) {
       ? n
       : { ...n, to: (n.p as number) + (steps[(i / 2) % 4] as number), ...more, ...(i % 6 === 0 ? { g: 4 } : {}) };
 }
-const notes = parseAudioNotes({ mode: 'mono', v: 1, n: found.map(moves) }) as AudioNotes;
+if (time) {
+  // the centres moved too only with --centre
+  const pitch = moves;
+  moves = (n, i) => (centre && !file ? pitch(n, i) : n);
+}
+let notes = parseAudioNotes({ mode: 'mono', v: 1, n: found.map(moves) }) as AudioNotes;
+if (time)
+  for (let i = 0; i < notes.n.length; i += 2) {
+    const n = notes.n[i] as AudioNote;
+    const kind = (i / 2) % 6;
+    if (kind < 4) notes = moveNotes(notes, [i], [0.04, -0.12, 0.12, -0.04][kind] as number);
+    else if (kind === 4) notes = resizeNote(notes, i, 'end', (n.ts ?? n.t) + n.d * (i % 4 ? 1.2 : 0.8));
+    else notes = setAttack(notes, [i], i % 4 ? 2 : 0.5);
+  }
 const clip: AudioClip = { file: 'bench', offset: 0, gain: 0, fadeIn: 0, fadeOut: 0, stretch: 1, notes };
 const jobs = regionPatches(clip, sr);
 const patchSeconds = jobs.reduce((s, j) => s + (j.spec.b - j.spec.a), 0) / sr;

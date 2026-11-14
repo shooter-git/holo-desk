@@ -14,9 +14,15 @@
  *
  * A stretch is an edited note's sound and 30 ms either side of it; a note whose pitch changes takes
  * the glide into it and out of it too (up to 180 ms either side), and one moved in time the whole
- * island it warps (audio-notes.ts). Stretches closer than 40 ms are one patch. The renderer reads the
- * notes within 200 ms of a patch (its `notes`), and the recording from 200 ms before it to 200 ms
- * after (`ctx`).
+ * island it warps (audio-notes.ts). Where the voice may go on past what changes (past a pasted note,
+ * past an island that ends at a note's edge rather than in a rest), it reaches 180 ms further, for the
+ * renderer to settle back onto the recording. Stretches closer than 40 ms are one patch.
+ *
+ * The renderer reads the notes within 200 ms of a patch (its `notes`), and where notes move in time, as
+ * many more either side as it takes for the warp those notes make alone to be the region's all through
+ * the patch and its context (the notes past a long rest place its middle, which doesn't move). It reads
+ * the recording from 200 ms before the patch to 200 ms after, and 200 ms either side of where a pasted
+ * note's sound comes from (`ctx`, one stretch from the first of those frames to the last).
  */
 import {
   type AudioClip,
@@ -25,13 +31,16 @@ import {
   movesInTime,
   type Project,
   tickToSeconds,
+  unwarpAt,
+  type Warp,
+  warpAt,
   warpOf,
 } from '@holo/session';
 import { clipKey } from '../compile.ts';
 import { sha256 } from '../random.ts';
 
 /** The renderer's version: a change to what any edit sounds like changes it, so every patch is rendered again. */
-export const RENDER_V = 3;
+export const RENDER_V = 4;
 /** Around an edited note's sound, seconds. */
 const PAD_S = 0.03;
 /** The most a glide into or out of a note reaches past it, seconds. */
@@ -53,7 +62,7 @@ export interface PatchSpec {
   stretch: number;
   mode: AudioNotes['mode'];
   v: number;
-  /** The notes within 200 ms of it, as kept. */
+  /** The notes within 200 ms of it, as kept (and those further out its warp needs). */
   notes: AudioNote[];
 }
 
@@ -83,29 +92,54 @@ export function isEdited(n: AudioNote): boolean {
   );
 }
 
-/** A note's edited stretch, seconds of the file as the region plays it (after the warp, before the stretch). */
-function spanOf(n: AudioNote, notes: AudioNotes): [number, number] {
+const pasted = (n: AudioNote) => n.s !== undefined && n.s !== n.t;
+
+/**
+ * A note's edited stretch, seconds of the file as the region plays it (after the warp, before the
+ * stretch). Where the sound it changes may be voiced on past it (the glides of a pitch moved, a pasted
+ * note's end, an island that ends at a note's edge), it reaches far enough past for the marks to settle
+ * back onto the recording's.
+ */
+function spanOf(n: AudioNote, notes: AudioNotes, w: Warp): [number, number] {
   let lo = Math.min(n.t, n.ts ?? n.t) - PAD_S;
   let hi = Math.max(n.t + n.d, n.te ?? n.t + n.d) + PAD_S;
   if (pitchEdited(n)) {
     lo -= GLIDE_S;
     hi += GLIDE_S;
   }
+  if (pasted(n)) hi += GLIDE_S;
   if (movesInTime(n) && notes.mode === 'mono') {
     // the island it warps: out to the places either side that don't move
-    const w = warpOf(notes);
     let left = Number.NEGATIVE_INFINITY;
     let right = Number.POSITIVE_INFINITY;
+    let voiced = false;
+    // (a note's end anchor is its end rounded as kept: 1.6 + 0.3 reads 1.9000000000000001)
     for (let i = 0; i < w.src.length; i++) {
       const s = w.src[i] as number;
       if (s !== w.out[i]) continue;
-      if (s <= n.t) left = Math.max(left, s);
-      if (s >= n.t + n.d) right = Math.min(right, s);
+      if (s <= n.t + 1e-9) left = Math.max(left, s);
+      if (s >= n.t + n.d - 1e-9 && s < right) {
+        right = s;
+        voiced = (w.of[i] as number) >= 0;
+      }
     }
     if (Number.isFinite(left)) lo = Math.min(lo, left - PAD_S);
-    if (Number.isFinite(right)) hi = Math.max(hi, right + PAD_S);
+    if (Number.isFinite(right)) hi = Math.max(hi, right + PAD_S + (voiced ? GLIDE_S : 0));
   }
   return [Math.max(0, lo), hi];
+}
+
+/**
+ * Where two warps first differ from `x0` to `x1` (seconds, as recorded or as played: each one's anchors
+ * there, both ways), or NaN where they don't.
+ */
+function warpsDiffer(w: Warp, v: Warp, x0: number, x1: number): number {
+  const at = [x0, x1];
+  for (const u of [w, v]) for (const x of [...u.src, ...u.out]) if (x > x0 && x < x1) at.push(x);
+  at.sort((p, q) => p - q);
+  for (const x of at)
+    if (Math.abs(warpAt(w, x) - warpAt(v, x)) > 1e-9 || Math.abs(unwarpAt(w, x) - unwarpAt(v, x)) > 1e-9) return x;
+  return Number.NaN;
 }
 
 /** A note as the hash reads it: its fields in a fixed order (however its object was made). */
@@ -131,9 +165,10 @@ export function regionPatches(clip: AudioClip, sr: number): PatchJob[] {
   let kept = plans.get(notes);
   const found = kept?.get(memo);
   if (found) return found;
+  const warp = warpOf(notes);
   const spans = notes.n
     .filter(isEdited)
-    .map((n) => spanOf(n, notes))
+    .map((n) => spanOf(n, notes, warp))
     .sort((x, y) => x[0] - y[0]);
   const joined: [number, number][] = [];
   for (const s of spans) {
@@ -146,11 +181,19 @@ export function regionPatches(clip: AudioClip, sr: number): PatchJob[] {
   const jobs = joined.map(([lo, hi]): PatchJob => {
     const a = Math.max(0, Math.floor(lo * scale));
     const b = Math.ceil(hi * scale);
-    const near = notes.n.filter((n) => n.t < hi + CONTEXT_S && n.t + n.d > lo - CONTEXT_S);
+    const near = nearNotes(notes, warp, lo - CONTEXT_S, hi + CONTEXT_S);
+    // (and the sound pasted notes play, wherever it is)
+    let c0 = Math.max(0, Math.floor((lo - CONTEXT_S) * scale));
+    let c1 = Math.ceil((hi + CONTEXT_S) * scale);
+    for (const n of near)
+      if (pasted(n)) {
+        c0 = Math.min(c0, Math.max(0, Math.floor(((n.s as number) - CONTEXT_S) * scale)));
+        c1 = Math.max(c1, Math.ceil(((n.s as number) + n.d + CONTEXT_S) * scale));
+      }
     const spec: PatchSpec = {
       a,
       b,
-      ctx: [Math.max(0, Math.floor((lo - CONTEXT_S) * scale)), Math.ceil((hi + CONTEXT_S) * scale)],
+      ctx: [c0, c1],
       sr,
       stretch: clip.stretch,
       mode: notes.mode,
@@ -166,6 +209,33 @@ export function regionPatches(clip: AudioClip, sr: number): PatchJob[] {
   }
   kept.set(memo, jobs);
   return jobs;
+}
+
+/**
+ * The notes a patch is rendered with: those within 200 ms of it (`x0` to `x1`, seconds), and where some
+ * move in time, as many more either side as it takes for the warp they make alone to be the region's
+ * there (a note moved from further away, the rest before the first of them).
+ */
+function nearNotes(notes: AudioNotes, warp: Warp, x0: number, x1: number): AudioNote[] {
+  const all = notes.n;
+  if (notes.mode !== 'mono' || !warp.src.length) return all.filter((n) => n.t < x1 && n.t + n.d > x0);
+  let i0 = all.findIndex((n) => n.t + n.d > x0);
+  if (i0 < 0) i0 = all.length;
+  let i1 = i0 - 1;
+  while (i1 + 1 < all.length && (all[i1 + 1] as AudioNote).t < x1) i1++;
+  for (;;) {
+    const bad = i1 >= i0 ? warpsDiffer(warpOf(all.slice(i0, i1 + 1)), warp, x0, x1) : x0;
+    if (Number.isNaN(bad)) break;
+    // widened on the side it differs (the notes' middle splits them), else on whichever side is left
+    const first = all[i0];
+    const last = all[i1];
+    const mid = first && last ? (first.t + last.t + last.d) / 2 : bad;
+    if (bad < mid && i0 > 0) i0--;
+    else if (i1 + 1 < all.length) i1++;
+    else if (i0 > 0) i0--;
+    else break;
+  }
+  return all.slice(i0, i1 + 1);
 }
 
 /**

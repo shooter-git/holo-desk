@@ -2,12 +2,18 @@ import {
   type AudioClip,
   type AudioNote,
   type AudioNotes,
+  moveNotes,
   newAudioTrack,
   newProject,
   newRegion,
   PPQ,
   type Project,
   parseAudioNotes,
+  resizeNote,
+  setAttack,
+  unwarpAt,
+  warpAt,
+  warpOf,
 } from '@holo/session';
 import { describe, expect, it } from 'vitest';
 import { fineTrack } from '../src/analysis/take.ts';
@@ -24,8 +30,8 @@ const SR = 48000;
 
 /**
  * A sung note: from `t` for `d` seconds at a MIDI pitch, with a vibrato ([Hz, ± cents]) if asked, a
- * drift (the cents its pitch moves through it, in line) and, into the next note where they touch, a
- * glide this long (s; 40 ms if not said).
+ * drift (the cents its pitch moves through it, in line), into the next note where they touch, a glide
+ * this long (s; 40 ms if not said), and from silence an attack this long (s; 20 ms if not said).
  */
 interface Sung {
   t: number;
@@ -34,6 +40,7 @@ interface Sung {
   vibrato?: [number, number];
   drift?: number;
   glide?: number;
+  attack?: number;
 }
 
 /**
@@ -66,7 +73,10 @@ function voice(notes: Sung[], seconds: number): Float32Array {
         m += (intoNext.midi - m) * u * u * (3 - 2 * u);
       }
       f0[i] = 440 * 2 ** ((m - 69) / 12);
-      env[i] = Math.min(fromPrev ? 1 : Math.min(1, t / 0.02), intoNext ? 1 : Math.min(1, (s.d - t) / 0.02));
+      env[i] = Math.min(
+        fromPrev ? 1 : Math.min(1, t / (s.attack ?? 0.02)),
+        intoNext ? 1 : Math.min(1, (s.d - t) / 0.02),
+      );
     }
   });
   const pulses = new Float64Array(n);
@@ -377,6 +387,23 @@ function maxStep(x: Float32Array, at: number): number {
   for (let i = Math.max(1, at - w); i < Math.min(x.length, at + w); i++)
     m = Math.max(m, Math.abs((x[i] as number) - (x[i - 1] as number)));
   return m;
+}
+
+/** Noise (first differences of white noise, from a fixed seed) from..to (s), added in. */
+function noise(x: Float32Array, from: number, to: number, level: number, seed: number): void {
+  let s = seed;
+  let prev = 0;
+  for (let i = Math.round(from * SR); i < Math.round(to * SR); i++) {
+    s ^= s << 13;
+    s >>>= 0;
+    s ^= s >>> 17;
+    s ^= s << 5;
+    s >>>= 0;
+    const w = s / 4294967296 - 0.5;
+    const t = i / SR;
+    x[i] = (x[i] as number) + level * Math.min(1, (t - from) / 0.01, (to - t) / 0.01) * (w - prev);
+    prev = w;
+  }
 }
 
 const bytes = (c: Float32Array | undefined) =>
@@ -759,22 +786,6 @@ describe('a line’s note moved, its level and its edges', () => {
   });
 
   it('leaves unvoiced sound where it was: a consonant in a moved note, its lead, a breath between moved notes', () => {
-    /** Noise (first differences of white noise, from a fixed seed) from..to (s), added in. */
-    const noise = (x: Float32Array, from: number, to: number, level: number, seed: number) => {
-      let s = seed;
-      let prev = 0;
-      for (let i = Math.round(from * SR); i < Math.round(to * SR); i++) {
-        s ^= s << 13;
-        s >>>= 0;
-        s ^= s >>> 17;
-        s ^= s << 5;
-        s >>>= 0;
-        const w = s / 4294967296 - 0.5;
-        const t = i / SR;
-        x[i] = (x[i] as number) + level * Math.min(1, (t - from) / 0.01, (to - t) / 0.01) * (w - prev);
-        prev = w;
-      }
-    };
     const same = (x: Float32Array, y: Float32Array, from: number, to: number) => {
       for (let i = Math.round(from * SR); i < Math.round(to * SR); i++) if (x[i] !== y[i]) return false;
       return true;
@@ -843,6 +854,389 @@ describe('a line’s note’s level', () => {
   });
 });
 
+// ---- time: notes moved, stretched, their attacks; notes pasted ----
+
+/** The level of a sound at each sample: its RMS over 5 ms either side. */
+function envelope(x: Float32Array): Float64Array {
+  const w = Math.round(0.005 * SR);
+  const sum = new Float64Array(x.length + 1);
+  for (let i = 0; i < x.length; i++) sum[i + 1] = (sum[i] as number) + (x[i] as number) * (x[i] as number);
+  return Float64Array.from({ length: x.length }, (_, i) => {
+    const a = Math.max(0, i - w);
+    const b = Math.min(x.length, i + w);
+    return Math.sqrt(((sum[b] as number) - (sum[a] as number)) / (b - a));
+  });
+}
+
+/** Where a sound's level first rises (`up`) or falls through `share` of what it holds from held[0] to held[1] (s), looking from `from` (s). */
+function crosses(x: Float32Array, up: boolean, from: number, held: [number, number], share = 0.5): number {
+  const e = envelope(x);
+  let sum = 0;
+  for (let i = Math.round(held[0] * SR); i < Math.round(held[1] * SR); i++) sum += e[i] as number;
+  const l = (share * sum) / (Math.round(held[1] * SR) - Math.round(held[0] * SR));
+  for (let i = Math.round(from * SR) + 1; i < x.length; i++) {
+    const a = (e[i - 1] as number) - l;
+    const b = (e[i] as number) - l;
+    if (up ? a < 0 && b >= 0 : a >= 0 && b < 0) return (i - 1 + a / (a - b)) / SR;
+  }
+  return Number.NaN;
+}
+
+/** Where a sound's pitch, period by period, crosses `m` (MIDI) from `from` to `to` (s): the crossing nearest `near`. */
+function glideAt(x: Float32Array, m: number, from: number, to: number, near: number): number {
+  const { t, len } = periodsOf(x, 440 * 2 ** ((m - 69) / 12), from, to);
+  const midi = len.map((l) => 69 + 12 * Math.log2(SR / l / 440) - m);
+  let best = Number.NaN;
+  for (let k = 1; k < t.length; k++) {
+    const a = midi[k - 1] as number;
+    const b = midi[k] as number;
+    if (a < 0 === b < 0) continue;
+    const c = (t[k - 1] as number) + (((t[k] as number) - (t[k - 1] as number)) * a) / (a - b);
+    if (Number.isNaN(best) || Math.abs(c - near) < Math.abs(best - near)) best = c;
+  }
+  return best;
+}
+
+/** The fine track's pitch of `x` at each time from `from` to `to` (s) against that of `base` at f(time): the mean difference and the worst (cents). */
+function pitchAlong(
+  x: Float32Array,
+  base: Float32Array,
+  from: number,
+  to: number,
+  f: (s: number) => number,
+): { mean: number; worst: number } {
+  const a = fineTrack(x, SR);
+  const b = fineTrack(base, SR);
+  const step = (b.t[1] as number) - (b.t[0] as number);
+  const diffs: number[] = [];
+  for (let k = 0; k < a.t.length; k++) {
+    const s = a.t[k] as number;
+    if (s < from || s > to || Number.isNaN(a.midi[k] as number)) continue;
+    const u = (f(s) - (b.t[0] as number)) / step;
+    const j = Math.floor(u);
+    const m = (b.midi[j] as number) + ((b.midi[j + 1] as number) - (b.midi[j] as number)) * (u - j);
+    if (!Number.isNaN(m)) diffs.push(((a.midi[k] as number) - m) * 100);
+  }
+  return { mean: diffs.reduce((s, d) => s + d, 0) / diffs.length, worst: Math.max(...diffs.map(Math.abs)) };
+}
+
+/** A sound's level above 9 kHz within 5 ms of frame `at`: its RMS through a windowed-sinc high pass (255 taps). */
+const highTaps = (() => {
+  const n = 255;
+  const fc = 9000 / SR;
+  return Float64Array.from({ length: n }, (_, i) => {
+    const m = i - (n - 1) / 2;
+    const low = m === 0 ? 2 * fc : Math.sin(2 * Math.PI * fc * m) / (Math.PI * m);
+    const w = 0.42 - 0.5 * Math.cos((2 * Math.PI * i) / (n - 1)) + 0.08 * Math.cos((4 * Math.PI * i) / (n - 1));
+    return (m === 0 ? 1 : 0) - low * w;
+  });
+})();
+function above9k(x: Float32Array, at: number): number {
+  const w = Math.round(0.005 * SR);
+  let sum = 0;
+  for (let i = at - w; i < at + w; i++) {
+    let y = 0;
+    for (let k = 0; k < highTaps.length; k++) {
+      const j = i + k - 127;
+      if (j >= 0 && j < x.length) y += (highTaps[k] as number) * (x[j] as number);
+    }
+    sum += y * y;
+  }
+  return Math.sqrt(sum / (2 * w));
+}
+
+/** Where a frame's sound comes from (s): through the warp the notes' moves make, and a pasted note's offset. */
+const sourceOf = (notes: AudioNotes) => {
+  const w = warpOf(notes);
+  return (s: number): number => {
+    const x = unwarpAt(w, s);
+    const p = notes.n.find((n) => n.s !== undefined && x >= n.t && x < n.t + n.d);
+    return p ? x + (p.s as number) - p.t : x;
+  };
+};
+
+/**
+ * Whether an edit's seams (where it starts and stops changing the recording, its patches' edges) click:
+ * the largest step from one sample to the next within 5 ms of each, against the recording's over the
+ * sound those 10 ms play (through the warp, half a low period wider: a grain is read from its own
+ * mark) and over the same frames; and the sound above 9 kHz there, against the recording's at both.
+ */
+function seamsOf(out: Float32Array, base: Float32Array, notes: AudioNotes, patches: PatchJob[]) {
+  const from = sourceOf(notes);
+  const loudest = base.reduce((m, v) => Math.max(m, Math.abs(v)), 0);
+  const stepsIn = (x: Float32Array, a: number, b: number) => {
+    let m = 0;
+    for (let i = Math.max(1, a); i < Math.min(x.length, b); i++)
+      m = Math.max(m, Math.abs((x[i] as number) - (x[i - 1] as number)));
+    return m;
+  };
+  const pad = Math.round(0.006 * SR);
+  return [...differing(base, out).flat(), ...patches.flatMap((p) => [p.spec.a, p.spec.b])].map((y) => {
+    const s0 = Math.round(from(y / SR - 0.005) * SR);
+    const s1 = Math.round(from(y / SR + 0.005) * SR);
+    const ref = Math.max(stepsIn(base, Math.min(s0, s1) - pad, Math.max(s0, s1) + pad), maxStep(base, y));
+    const src = Math.round(from(y / SR) * SR);
+    return {
+      step: maxStep(out, y) / Math.max(ref, 1e-6),
+      high: above9k(out, y),
+      highRef: Math.max(2 * Math.max(above9k(base, src), above9k(base, y)), 1e-4 * loudest),
+    };
+  });
+}
+
+/** The highest normalized autocorrelation of a sound from `from` to `to` (s), at lags from lo to hi (samples). */
+function periodicity(x: Float32Array, from: number, to: number, lo: number, hi: number): number {
+  const a = Math.round(from * SR);
+  const b = Math.round(to * SR);
+  let best = 0;
+  for (let l = lo; l <= hi; l++) {
+    let xy = 0;
+    let xx = 0;
+    let yy = 0;
+    for (let i = a; i < b; i++) {
+      xy += (x[i] as number) * (x[i + l] as number);
+      xx += (x[i] as number) ** 2;
+      yy += (x[i + l] as number) ** 2;
+    }
+    best = Math.max(best, xy / Math.sqrt(xx * yy));
+  }
+  return best;
+}
+
+// three notes with rests between them; three far apart; one pasted from another
+const APART: Sung[] = [
+  { t: 0.3, d: 0.5, midi: 57, vibrato: [5.5, 20] },
+  { t: 1.4, d: 0.5, midi: 60, vibrato: [5.5, 20] },
+  { t: 2.5, d: 0.5, midi: 59, vibrato: [5.5, 20] },
+];
+const apart = voice(APART, 3.4);
+const apartNotes = (middle: Partial<AudioNote> = {}) =>
+  line([
+    { t: 0.3, d: 0.5, p: 57 },
+    { t: 1.4, d: 0.5, p: 60, ...middle },
+    { t: 2.5, d: 0.5, p: 59 },
+  ]);
+const wide = voice(
+  APART.map((s, i) => ({ ...s, t: 0.3 + 1.7 * i })),
+  4.6,
+);
+const wideNotes = (middle: Partial<AudioNote> = {}) =>
+  line([
+    { t: 0.3, d: 0.5, p: 57 },
+    { t: 2, d: 0.5, p: 60, ...middle },
+    { t: 3.7, d: 0.5, p: 59 },
+  ]);
+// two legato phrases, the middle of the first pasted from the middle of the second
+const phrases = voice(
+  [0.3, 2.5].flatMap((t0, k) => [
+    { t: t0, d: 0.6, midi: 57, vibrato: [5.5, 25] as [number, number] },
+    { t: t0 + 0.6, d: 0.6, midi: 60 + k, vibrato: [5.3, 30] as [number, number] },
+    { t: t0 + 1.2, d: 0.6, midi: 59, vibrato: [5.5, 25] as [number, number] },
+  ]),
+  4.6,
+);
+const pastedPhrase = line([
+  { t: 0.3, d: 0.6, p: 57 },
+  { t: 0.9, d: 0.6, p: 61, s: 3.1 },
+  { t: 1.5, d: 0.6, p: 59 },
+  { t: 2.5, d: 0.6, p: 57 },
+  { t: 3.1, d: 0.6, p: 61 },
+  { t: 3.7, d: 0.6, p: 59 },
+]);
+
+/** Edits in time, each with the recording it's made on. */
+const timeEdits = (): [string, Float32Array, AudioNotes][] => [
+  ['moved after a rest', apart, moveNotes(apartNotes(), [1], 0.12)],
+  ['moved earlier and tuned', apart, moveNotes(apartNotes({ to: 62 }), [1], -0.25)],
+  ['moved in a legato line', legato, moveNotes(legatoNotes({}), [1], 0.12)],
+  ['moved earlier in a legato line, tuned', legato, moveNotes(legatoNotes({ to: 61 }), [1], -0.04)],
+  ['stretched twice as long', wide, resizeNote(wideNotes(), 1, 'end', 3)],
+  ['squeezed to half', wide, resizeNote(wideNotes({ to: 62 }), 1, 'end', 2.25)],
+  ['its attack twice as quick', wide, setAttack(wideNotes(), [1], 0.5)],
+  ['pasted after a rest', wide, wideNotes({ p: 57, s: 0.3 })],
+  ['pasted in a legato line', phrases, pastedPhrase],
+];
+
+describe('a line’s note moved in time', () => {
+  it('lands where it was moved to after a rest: 40, 120 and 250 ms either way, to within 2 ms, its pitch to within 3 cents', () => {
+    const held: [number, number] = [1.5, 1.8];
+    const start = crosses(apart, true, 1.2, held);
+    const end = crosses(apart, false, 1.7, held);
+    const pitch = pitchOf(apart, ...held);
+    for (const dt of [0.04, 0.12, 0.25, -0.04, -0.12, -0.25]) {
+      const notes = moveNotes(apartNotes(), [1], dt);
+      expect(notes.n[1]?.ts).toBeCloseTo(1.4 + dt, 9);
+      const o = edited([apart], notes).out[0] as Float32Array;
+      const now: [number, number] = [held[0] + dt, held[1] + dt];
+      expect(Math.abs(crosses(o, true, 1.2 + dt, now) - start - dt)).toBeLessThan(0.002);
+      expect(Math.abs(crosses(o, false, 1.7 + dt, now) - end - dt)).toBeLessThan(0.002);
+      expect(Math.abs(pitchOf(o, ...now) - pitch) * 100).toBeLessThan(3);
+    }
+  }, 30_000);
+
+  it('moved and tuned at once: both hold', () => {
+    const start = crosses(apart, true, 1.2, [1.5, 1.8]);
+    const pitch = pitchOf(apart, 1.5, 1.8);
+    for (const dt of [0.12, -0.25]) {
+      const o = edited([apart], moveNotes(apartNotes({ to: 62 }), [1], dt)).out[0] as Float32Array;
+      expect(Math.abs(crosses(o, true, 1.2 + dt, [1.5 + dt, 1.8 + dt]) - start - dt)).toBeLessThan(0.002);
+      expect(Math.abs(pitchOf(o, 1.5 + dt, 1.8 + dt) - pitch - 2) * 100).toBeLessThan(3);
+    }
+  });
+
+  it('in a legato line: the glides into and out of it where the warp puts them, to within 2 ms, and it sings as it did', () => {
+    const into = glideAt(legato, 58.5, 0.7, 1.1, 0.9);
+    const out = glideAt(legato, 59.5, 1.3, 1.7, 1.5);
+    for (const dt of [0.04, 0.12, -0.04, -0.12])
+      for (const up of [0, 1]) {
+        const notes = moveNotes(legatoNotes(up ? { to: 61 } : {}), [1], dt);
+        const w = warpOf(notes);
+        const o = edited([legato], notes).out[0] as Float32Array;
+        expect(Math.abs(glideAt(o, 58.5 + up / 2, 0.7 + dt, 1.1 + dt, warpAt(w, into)) - warpAt(w, into))).toBeLessThan(
+          0.002,
+        );
+        expect(Math.abs(glideAt(o, 59.5 + up / 2, 1.3 + dt, 1.7 + dt, warpAt(w, out)) - warpAt(w, out))).toBeLessThan(
+          0.002,
+        );
+        const n = notes.n[1] as AudioNote;
+        const sung = pitchAlong(o, legato, (n.ts as number) + 0.08, (n.te as number) - 0.08, (s) => unwarpAt(w, s));
+        expect(Math.abs(sung.mean - 100 * up)).toBeLessThan(3);
+      }
+  }, 30_000);
+
+  it('stretched to twice its length or squeezed to half: its start and end where the warp puts them, to within 2 ms, its pitch held', () => {
+    const held: [number, number] = [2.1, 2.4];
+    const start = crosses(wide, true, 1.8, held);
+    const end = crosses(wide, false, 2.3, held);
+    for (const f of [2, 0.5]) {
+      const notes = resizeNote(wideNotes(), 1, 'end', 2 + 0.5 * f);
+      expect(notes.n[1]?.te).toBeCloseTo(2 + 0.5 * f, 9);
+      const w = warpOf(notes);
+      const o = edited([wide], notes).out[0] as Float32Array;
+      const now: [number, number] = [2.1, 2.1 + 0.3 * f];
+      expect(Math.abs(crosses(o, true, 1.8, now) - warpAt(w, start))).toBeLessThan(0.002);
+      expect(Math.abs(crosses(o, false, 2 + 0.4 * f, now) - warpAt(w, end))).toBeLessThan(0.002);
+      expect(Math.abs(pitchAlong(o, wide, 2.06, 2 + 0.5 * f - 0.06, (s) => unwarpAt(w, s)).mean)).toBeLessThan(3);
+    }
+  });
+
+  it('plays its attack `at` times as long: half, or twice, to within 10%', () => {
+    const slow = voice([{ t: 2, d: 0.6, midi: 60, vibrato: [5.5, 20], attack: 0.05 }], 3);
+    const rising = (x: Float32Array) => crosses(x, true, 1.9, [2.2, 2.5], 0.9) - crosses(x, true, 1.9, [2.2, 2.5], 0.1);
+    const before = rising(slow);
+    for (const at of [0.5, 2]) {
+      const notes = setAttack(line([{ t: 2, d: 0.6, p: 60 }]), [0], at);
+      expect(notes.n[0]?.at).toBe(at);
+      const o = edited([slow], notes).out[0] as Float32Array;
+      expect(Math.abs(rising(o) / before / at - 1)).toBeLessThan(0.1);
+      expect(Math.abs(pitchOf(o, 2.15, 2.5) - pitchOf(slow, 2.15, 2.5)) * 100).toBeLessThan(3);
+    }
+  });
+
+  it('copies the recording to the bit outside the islands it warps, its patches’ first and last frames too', () => {
+    for (const [name, base, notes] of timeEdits()) {
+      const { out, patches } = edited([base], notes);
+      const o = out[0] as Float32Array;
+      expect(patches.length, name).toBeGreaterThan(0);
+      for (const p of patches) {
+        const rendered = renderNotePatch([base], SR, p.spec)[0] as Float32Array;
+        expect(rendered.length, name).toBe(p.spec.b - p.spec.a);
+        expect(rendered[0], name).toBe(base[p.spec.a]);
+        expect(rendered[rendered.length - 1], name).toBe(base[p.spec.b - 1]);
+      }
+      for (const [first, last] of differing(base, o))
+        expect(
+          patches.some((p) => first > p.spec.a && last < p.spec.b),
+          name,
+        ).toBe(true);
+    }
+  }, 30_000);
+
+  it('doesn’t click where it leaves the recording, locks onto a note moved or pasted, or settles back', () => {
+    for (const [name, base, notes] of timeEdits()) {
+      const { out, patches } = edited([base], notes);
+      for (const seam of seamsOf(out[0] as Float32Array, base, notes, patches)) {
+        expect(seam.step, name).toBeLessThanOrEqual(1.5);
+        expect(seam.high, name).toBeLessThanOrEqual(seam.highRef);
+      }
+    }
+  }, 60_000);
+
+  it('plays a consonant moved with its note as it was, and a breath stretched as the note after it moves without buzzing', () => {
+    // a word: its consonant leads it, then the voice; moved 40 ms later (whole frames: read as it was)
+    const word = voice(
+      [
+        { t: 0.3, d: 0.4, midi: 55 },
+        { t: 1.08, d: 0.6, midi: 57 },
+      ],
+      2.4,
+    );
+    noise(word, 1, 1.085, 0.08, 3);
+    const notes = moveNotes(
+      line([
+        { t: 0.3, d: 0.4, p: 55 },
+        { t: 1, d: 0.68, u: 0.08, p: 57 },
+      ]),
+      [1],
+      0.04,
+    );
+    const moved = edited([word], notes).out[0] as Float32Array;
+    let worst = 0;
+    for (let i = Math.round(1.055 * SR); i < Math.round(1.6 * SR); i++)
+      worst = Math.max(worst, Math.abs((moved[i] as number) - (word[i - 0.04 * SR] as number)));
+    expect(worst).toBeLessThan(1e-6);
+    // a breath between two notes, played 1.6 times as long as the second moves 300 ms later
+    const phrase = voice(
+      [
+        { t: 0.3, d: 0.5, midi: 57 },
+        { t: 1.3, d: 0.5, midi: 59 },
+      ],
+      2.4,
+    );
+    noise(phrase, 0.85, 1.25, 0.05, 1);
+    const later = moveNotes(
+      line([
+        { t: 0.3, d: 0.5, p: 57 },
+        { t: 0.8, d: 0.5, p: null },
+        { t: 1.3, d: 0.5, p: 59 },
+      ]),
+      [2],
+      0.3,
+    );
+    expect(later.n[1]?.te).toBeCloseTo(1.6, 9);
+    const breath = edited([phrase], later).out[0] as Float32Array;
+    expect(periodicity(phrase, 0.9, 1.2, 60, 600)).toBeLessThan(0.1);
+    expect(periodicity(breath, 0.9, 1.44, 60, 600)).toBeLessThan(0.1);
+    expect(Math.abs(20 * Math.log10(rmsOf(breath, 0.95, 1.4) / rmsOf(phrase, 0.9, 1.2)))).toBeLessThan(1);
+  });
+
+  it('renders the same twice, to the byte', () => {
+    const right = Float32Array.from(legato, (v, i) => v * 0.7 + 0.01 * Math.sin(i / 10));
+    for (const notes of [moveNotes(legatoNotes({ to: 61.5, g: -2 }), [1], 0.07), setAttack(legatoNotes({}), [2], 3)]) {
+      const [job] = regionPatches(clip(notes), SR);
+      if (!job) throw new Error('no patch');
+      const one = renderNotePatch([legato, right], SR, job.spec);
+      const two = renderNotePatch([legato, right], SR, job.spec);
+      expect(bytes(one[0]).equals(bytes(two[0]))).toBe(true);
+      expect(bytes(one[1]).equals(bytes(two[1]))).toBe(true);
+    }
+  });
+});
+
+describe('a line’s note pasted', () => {
+  it('plays the pitch of the sound it’s pasted from where it’s pasted, to within 3 cents, after a rest and in a legato line', () => {
+    const o = edited([wide], wideNotes({ p: 57, s: 0.3 })).out[0] as Float32Array;
+    expect(pitchAlong(o, wide, 2.06, 2.44, (s) => s - 1.7).worst).toBeLessThan(3);
+    const start = crosses(o, true, 1.8, [2.1, 2.4]) - crosses(wide, true, 0.1, [0.4, 0.7]);
+    expect(Math.abs(start - 1.7)).toBeLessThan(0.002);
+    // (in a line, once it's settled onto its own sound from the recording's marks)
+    const p = edited([phrases], pastedPhrase).out[0] as Float32Array;
+    const sung = pitchAlong(p, phrases, 1.08, 1.45, (s) => s + 2.2);
+    expect(sung.worst).toBeLessThan(3);
+    expect(Math.abs(pitchAlong(p, phrases, 0.95, 1.45, (s) => s + 2.2).mean)).toBeLessThan(3);
+  });
+});
+
 describe('a song with a line’s notes edited, rendered', () => {
   const take = voice(LEGATO, 2.4);
   const source = {
@@ -883,6 +1277,50 @@ describe('a song with a line’s notes edited, rendered', () => {
       for (const c of patched) expect(differing(x.subarray(c.start, c.end), y.subarray(c.start, c.end)).length).toBe(1);
     }
     // and the same again
+    const again = await renderSession(song(notes), source, { sampleRate: SR, tail: 0.5, finish: false });
+    expect(bytes(again.channels[0]).equals(bytes(withEdits.channels[0]))).toBe(true);
+    expect(bytes(again.channels[1]).equals(bytes(withEdits.channels[1]))).toBe(true);
+  });
+
+  it('with notes moved in time, an attack quicker and a note pasted: the recording to the bit outside its patches, the same every time', async () => {
+    const notes = setAttack(
+      moveNotes(
+        line([
+          { t: 0.3, d: 0.6, p: 57 },
+          { t: 0.9, d: 0.6, p: 60 },
+          { t: 1.5, d: 0.6, p: 57, s: 0.3 },
+        ]),
+        [1],
+        0.05,
+      ),
+      [0],
+      0.5,
+    );
+    expect(notes.n.map((n) => [n.ts, n.te, n.at, n.s])).toEqual([
+      [undefined, 0.95, 0.5, undefined],
+      [0.95, 1.55, undefined, undefined],
+      [1.55, undefined, undefined, 0.3],
+    ]);
+    const plain = await renderSession(song(), source, { sampleRate: SR, tail: 0.5, finish: false });
+    const withEdits = await renderSession(song(notes), source, { sampleRate: SR, tail: 0.5, finish: false });
+    expect(withEdits.errors).toEqual([]);
+    const pieces = compileClips(song(notes).tracks[0] as Project['tracks'][number], compileTempo(song(notes), SR), SR);
+    const patched = pieces.filter((c) => c.key.includes('#'));
+    expect(patched.length).toBeGreaterThan(0);
+    const inPatch = (i: number) => patched.some((c) => i >= c.start && i < c.end);
+    for (const ch of [0, 1]) {
+      const x = plain.channels[ch] as Float32Array;
+      const y = withEdits.channels[ch] as Float32Array;
+      let outside = 0;
+      let inside = 0;
+      for (let i = 0; i < x.length; i++)
+        if (x[i] !== y[i]) {
+          if (inPatch(i)) inside++;
+          else outside++;
+        }
+      expect(outside).toBe(0);
+      expect(inside).toBeGreaterThan(SR);
+    }
     const again = await renderSession(song(notes), source, { sampleRate: SR, tail: 0.5, finish: false });
     expect(bytes(again.channels[0]).equals(bytes(withEdits.channels[0]))).toBe(true);
     expect(bytes(again.channels[1]).equals(bytes(withEdits.channels[1]))).toBe(true);

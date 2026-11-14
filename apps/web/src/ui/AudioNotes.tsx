@@ -1823,10 +1823,15 @@ export function AudioNotesBar() {
     if (session) setMacros(session);
     else toast('The notes are still being found');
   };
+  const hearNotes = useApp((s) => s.hearNotes);
   const more: MenuEntry[] = region
     ? [
         { label: 'Macros…', onSelect: openMacros },
         { label: 'Notes to MIDI track', onSelect: () => notesToMidiTrack(region.id) },
+        // (a phone's bar has no room for the toggle: it's here instead)
+        ...(phone
+          ? [{ label: 'Hear notes', checked: hearNotes, onSelect: () => store.set({ hearNotes: !hearNotes }) }]
+          : []),
       ]
     : [];
   const selected = useApp((s) =>
@@ -1870,7 +1875,7 @@ export function AudioNotesBar() {
           A/B
         </button>
       )}
-      {clip && <HearNotes />}
+      {!phone && clip && <HearNotes />}
       {!phone && project && region && clip && (
         <button
           type="button"

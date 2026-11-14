@@ -75,6 +75,12 @@ wraps `EngineCore` from `@holo/engine`):
   `fade`: the audio thread plays the old and new lists together for 256 frames, crossfading, with
   nothing allocated. Patches are kept by the memory they take (256 MB, 96 MB on a phone), so an undo
   or a redo is heard at once. A bounce renders every patch first and never fades.
+- **A recording's notes are edited from one list.** The Audio Editor's Notes view
+  (`apps/web/src/ui/AudioNotes.tsx`, its tools' arithmetic in `note-tools.ts`) makes every edit
+  through `@holo/session`'s `NOTE_EDITS`, as the agent's `audio_notes` and `holo notes` do, and a
+  test fails when an edit there has no control in the studio. A drag shows its result as it goes and
+  is one undo step when it's let go; a region's first edit keeps the notes found in its recording,
+  pruned to what it plays (as a split keeps them), so the studio and the agent number them alike.
 - **Convolution is spread over the period.** A hall's long partitions take their forward transform,
   the sum over the spectrum and the inverse transform in about-equal pieces, one or two per block,
   so no single block pays for a 32768-point transform; the output lands in the same block as before,

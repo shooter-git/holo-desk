@@ -24,24 +24,41 @@ const placing = (regionStart: number, clip: Placing): NotesPlacing => ({ start: 
 /**
  * Where times in a region's recording play on the song's timeline: seconds of the file as recorded
  * to ticks, by the session's own reckoning (audio-notes.ts: a note moved in time is drawn where it now
- * plays). The region's start is worked out once, for drawing many points.
+ * plays). The region's start is worked out once, for drawing many points. `played`: the seconds are
+ * as the region plays them already (a note's `ts` and `te`), past its notes' moves.
  */
 export function fileToTicks(
   tempo: readonly TempoPoint[],
   regionStart: number,
   clip: Placing,
+  played = false,
 ): (seconds: number) => number {
-  return placedTicks({ tempo }, placing(regionStart, clip));
+  return placedTicks({ tempo }, placing(regionStart, clip), played);
 }
 
 /** Where a time in a region's recording (seconds of the file as recorded) plays on the song's timeline, in ticks. */
-export function fileToTick(tempo: readonly TempoPoint[], regionStart: number, clip: Placing, seconds: number): number {
-  return fileToTicks(tempo, regionStart, clip)(seconds);
+export function fileToTick(
+  tempo: readonly TempoPoint[],
+  regionStart: number,
+  clip: Placing,
+  seconds: number,
+  played = false,
+): number {
+  return fileToTicks(tempo, regionStart, clip, played)(seconds);
 }
 
-/** The time in a region's recording (seconds of the file as recorded) that plays at a tick: `fileToTick` the other way. */
-export function tickToFile(tempo: readonly TempoPoint[], regionStart: number, clip: Placing, tick: number): number {
-  return placedFile({ tempo }, placing(regionStart, clip), tick);
+/**
+ * The time in a region's recording (seconds of the file as recorded) that plays at a tick: `fileToTick`
+ * the other way. `played`: as the region plays it, past its notes' moves.
+ */
+export function tickToFile(
+  tempo: readonly TempoPoint[],
+  regionStart: number,
+  clip: Placing,
+  tick: number,
+  played = false,
+): number {
+  return placedFile({ tempo }, placing(regionStart, clip), tick, played);
 }
 
 // ---- pitch: the semitone lanes, scrolled and zoomed ----
@@ -220,6 +237,15 @@ export function curveRuns(
     runs.push({ x, p });
   }
   return runs;
+}
+
+/**
+ * How thick, at most, half a note is drawn: within its lane (a little under half a semitone), and no
+ * more than a fifth of its length (the whole of it two fifths), so a short note in a zoomed-out view
+ * is a slim pill along its time, never a round bubble. A pixel at least.
+ */
+export function capsuleHalf(keyHeight: number, lengthPx: number): number {
+  return Math.max(1, Math.min(Math.max(2, keyHeight * 0.475), lengthPx * 0.2));
 }
 
 /** How many steps round each end of a capsule. */

@@ -46,6 +46,7 @@ import {
   type Region,
   secondsToTick,
   soundTrack,
+  splitRegionAt,
   TRACK_COLORS,
   type Track,
   type TrackPatch,
@@ -1578,28 +1579,8 @@ export function splitAtPlayhead(): void {
     if (!found) continue;
     const { track, region } = found;
     if (at <= region.start || at >= region.start + region.length) continue;
-    const cut = at - region.start;
-    const left: Region = { ...region, length: cut, notes: region.notes.filter((n) => n.t < cut) };
-    const right: Region = {
-      ...region,
-      id: newId('rgn'),
-      start: at,
-      length: region.length - cut,
-      notes: region.notes.filter((n) => n.t >= cut).map((n) => ({ ...n, t: n.t - cut })),
-      cc: Object.fromEntries(
-        Object.entries(region.cc).map(([k, v]) => [
-          k,
-          v.filter((x) => x[0] >= cut).map(([t, y]): [number, number] => [t - cut, y]),
-        ]),
-      ),
-    };
-    left.cc = Object.fromEntries(Object.entries(region.cc).map(([k, v]) => [k, v.filter((x) => x[0] < cut)]));
-    if (region.audio) {
-      // the right half plays on from where the cut fell in the recording
-      const a = region.audio;
-      left.audio = { ...a, fadeOut: 0 };
-      right.audio = { ...a, fadeIn: 0, offset: a.offset + secondsBetween(p, region.start, at) / a.stretch };
-    }
+    // as the session splits one: score marks and a recording's notes go to the half that plays them
+    const [left, right] = splitRegionAt(p, region, at, newId('rgn'));
     ops.push(
       { op: 'removeRegion', track: track.id, region: region.id },
       { op: 'addRegion', track: track.id, region: left },

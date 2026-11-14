@@ -3,10 +3,11 @@
  * out. One small store; components read slices of it with useApp(selector).
  */
 import type { ClickSound } from '@holo/engine';
-import type { DIVISIONS, MiddleC, Note, Project } from '@holo/session';
+import type { DIVISIONS, MiddleC, Note, PitchSnap, Project } from '@holo/session';
 import { useSyncExternalStore } from 'react';
 import type { LatencyMode } from '../audio/engine.ts';
 import type { MidiStatus, PortInfo } from '../audio/midi.ts';
+import type { NoteTool } from '../ui/note-tools.ts';
 
 export interface Step {
   project: Project;
@@ -52,10 +53,18 @@ export interface AppState {
   selectedTrack: string | null;
   selectedRegions: string[];
   selectedNotes: Note[];
+  /**
+   * The notes selected in the Audio Editor's Notes view: a region's, by their indices in its notes as
+   * it keeps them (or will keep them with its first edit); null when none are.
+   */
+  selectedAudioNotes: { region: string; notes: number[] } | null;
 
   editor: EditorPane;
   noteView: NoteView;
   audioMode: AudioMode;
+  /** The Notes view's tool, and where a pitch dragged in it lands. */
+  noteTool: NoteTool;
+  pitchSnap: PitchSnap;
   /** The Score shows every track (a full score), not just the selected one. */
   scoreAll: boolean;
   /** The Score's size, as a percentage. */
@@ -187,9 +196,12 @@ const initial: AppState = {
   selectedTrack: null,
   selectedRegions: [],
   selectedNotes: [],
+  selectedAudioNotes: null,
   editor: 'piano',
   noteView: 'roll',
   audioMode: 'wave',
+  noteTool: 'pointer',
+  pitchSnap: 'semitone',
   scoreAll: false,
   scoreZoom: 45,
   scoreWrite: false,
@@ -254,6 +266,8 @@ const REMEMBER: (keyof AppState)[] = [
   'editor',
   'noteView',
   'audioMode',
+  'noteTool',
+  'pitchSnap',
   'scoreAll',
   'scoreZoom',
   'editorHeight',

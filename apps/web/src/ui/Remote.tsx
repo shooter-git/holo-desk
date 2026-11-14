@@ -396,6 +396,7 @@ function LevelBar({ id, vertical = false }: { id: string; vertical?: boolean }) 
   // the dark cover over the bar's scale: it is drawn back as far as the level reaches
   const cover = useRef<HTMLDivElement>(null);
   const shown = useRef(0);
+  const drawn = useRef(-1);
   const lastFrame = useRef(0);
   useFrame((now) => {
     const [l = 0, r = 0] = levels.get(id) ?? [];
@@ -409,7 +410,11 @@ function LevelBar({ id, vertical = false }: { id: string; vertical?: boolean }) 
     const f = Math.max(0, Math.min(1, (db + 60) / 66));
     // (a level still showing keeps the screen's pace)
     if (f > 0) wake();
-    if (cover.current) cover.current.style[vertical ? 'bottom' : 'left'] = `${f * 100}%`;
+    // written only when it has moved a five-hundredth of the bar, and as a scale: nothing is laid out
+    const at = Math.round(f * 500) / 500;
+    if (at === drawn.current) return;
+    drawn.current = at;
+    if (cover.current) cover.current.style.transform = `scale${vertical ? 'Y' : 'X'}(${1 - at})`;
     bar.current?.classList.toggle('hot', db > -1);
   });
   return (

@@ -124,9 +124,9 @@ export function AudioEditor() {
     }
     if (dirty.current) {
       dirty.current = false;
-      const ctx = prepare(canvas.current, size.w, size.h);
+      const ctx = prepare(canvas.current, size.w, size.h, true);
       if (ctx) draw(ctx, p, track, region, preview.current, size.w, size.h);
-      const rctx = prepare(rulerCanvas.current, rulerSize.w, rulerSize.h);
+      const rctx = prepare(rulerCanvas.current, rulerSize.w, rulerSize.h, true);
       if (rctx) drawRuler(rctx, p, rulerSize.w, rulerSize.h);
     }
     // the playhead is an element of its own, moved only when it has gone a pixel

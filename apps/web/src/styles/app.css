@@ -1788,6 +1788,7 @@ a.btn {
 
 .fader-cap {
   position: absolute;
+  top: 0;
   left: 3px;
   width: 24px;
   height: 20px;
@@ -3421,9 +3422,11 @@ html[data-layout="phone-landscape"] .bar .field input {
   direction: rtl;
 }
 
+/* (as wide as its track, scaled from the right: see GainReduction) */
 .gr-bar {
   height: 100%;
-  width: 0;
+  transform: scaleX(0);
+  transform-origin: right;
   background: linear-gradient(90deg, var(--rec), var(--cycle));
   box-shadow: 0 0 8px rgb(var(--cycle-rgb) / 0.5);
 }
@@ -3742,6 +3745,48 @@ html[data-layout="phone-landscape"] .bar .field input {
   height: 100%;
   min-height: 120px;
   touch-action: none;
+}
+
+/* The keys are drawn, and named for a screen reader; the keyboard itself takes the touches. A key
+   held down is lit by its class (PlayPad puts it on): nothing is rendered again for a note played. */
+.keyboard .key {
+  all: unset;
+  position: absolute;
+  top: 0;
+  pointer-events: none;
+}
+
+.keyboard .key.white {
+  bottom: 0;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  padding-bottom: 8px;
+  border-radius: 0 0 8px 8px;
+  background: linear-gradient(180deg, #e6e9ee, #fbfcfd 85%, #d6dae0);
+  box-shadow:
+    inset 0 -4px 0 rgba(0, 0, 0, 0.12),
+    0 2px 3px rgba(0, 0, 0, 0.5);
+  color: #5b636f;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.keyboard .key.white.lit {
+  background: linear-gradient(180deg, #fff, var(--pad-color, var(--accent)));
+}
+
+.keyboard .key.black {
+  height: 60%;
+  border-radius: 0 0 6px 6px;
+  background: linear-gradient(180deg, #1a1d22, #33383f 90%, #1a1d22);
+  box-shadow:
+    0 3px 6px rgba(0, 0, 0, 0.6),
+    inset 0 -3px 0 rgba(255, 255, 255, 0.06);
+}
+
+.keyboard .key.black.lit {
+  background: var(--pad-color, var(--accent));
 }
 
 /* ---------- toasts and banners ---------- */
@@ -4302,10 +4347,17 @@ html[data-layout="phone-landscape"] .toasts {
   background: linear-gradient(90deg, #2fbf71, #8be04e 70%, var(--cycle) 88%, var(--rec));
 }
 
+/* (the cover over the scale, drawn back from the left as far as the level reaches: scaled, so a
+   level that moves lays nothing out) */
 .level > div {
   position: absolute;
   inset: 0;
   background: var(--bg-0);
+  transform-origin: right;
+}
+
+.level.vertical > div {
+  transform-origin: top;
 }
 
 .level.hot {

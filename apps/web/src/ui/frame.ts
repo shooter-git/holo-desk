@@ -164,8 +164,21 @@ export function movePlayhead(el: HTMLElement | null, x: number, width: number, r
   if (was?.rec !== rec) el.classList.toggle('rec', rec);
 }
 
-/** Size a canvas for the screen's pixel density and return its 2D context, scaled to CSS pixels. */
-export function prepare(canvas: HTMLCanvasElement | null, w: number, h: number): CanvasRenderingContext2D | null {
+/** What a canvas that paints every pixel of itself is made with: nothing shows through it. */
+const OPAQUE: CanvasRenderingContext2DSettings = { alpha: false };
+
+/**
+ * Size a canvas for the screen's pixel density and return its 2D context, scaled to CSS pixels.
+ * `opaque` is for a canvas whose every drawing starts by filling all of it (a timeline, a ruler, a
+ * meter): it has no alpha channel, so the page under it needn't be blended with it each time it
+ * changes. It must be asked for the same way every time: a canvas keeps the context it's first given.
+ */
+export function prepare(
+  canvas: HTMLCanvasElement | null,
+  w: number,
+  h: number,
+  opaque = false,
+): CanvasRenderingContext2D | null {
   if (!canvas || w <= 0 || h <= 0) return null;
   const dpr = Math.min(3, window.devicePixelRatio || 1);
   const pw = Math.round(w * dpr);
@@ -176,7 +189,7 @@ export function prepare(canvas: HTMLCanvasElement | null, w: number, h: number):
     canvas.style.width = `${w}px`;
     canvas.style.height = `${h}px`;
   }
-  const ctx = canvas.getContext('2d');
+  const ctx = canvas.getContext('2d', opaque ? OPAQUE : undefined);
   if (!ctx) return null;
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   return ctx;

@@ -1,4 +1,5 @@
 export { type ArrangeEdit, type Arrangement, arrange, meterBefore, onBarLine } from './arrange.ts';
+export * from './audio-notes.ts';
 export * from './audio-region.ts';
 export * from './automation.ts';
 export * from './defaults.ts';

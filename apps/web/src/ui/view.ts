@@ -2,6 +2,7 @@
  * Scrolling and zoom for a timeline (the tracks area and the piano roll each have one). Kept out
  * of React: scrolling redraws canvases, not components.
  */
+import { wake } from './frame.ts';
 
 /** Pixels per quarter note each editor allows, [min, max]. */
 export const ZOOM = { tracks: [3, 600], roll: [10, 2400], audio: [4, 4000] } as const;
@@ -132,6 +133,8 @@ export class Viewport {
     return () => this.listeners.delete(fn);
   }
   emit(): void {
+    // (the view moved: the canvases follow at the screen's pace, wherever the move came from)
+    wake();
     for (const l of this.listeners) l();
   }
 }

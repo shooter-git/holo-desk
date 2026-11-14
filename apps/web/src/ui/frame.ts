@@ -8,10 +8,67 @@ type Frame = (now: number) => void;
 const frames = new Set<Frame>();
 let running = false;
 
+// The loop keeps the screen's pace while there is something to keep up with: a song playing, sound
+// on the meters, a hand on the mouse, the keys or the glass, the song or the view changing. With
+// none of that for a moment it rests, and looks ten times a second: a studio left open, stopped,
+// no longer runs every frame's work at the screen's rate. Whatever needs the pace again asks for
+// it (wake), and gets its frame at once.
+
+/** How long the loop keeps the screen's pace after the last thing that asked for it (ms). */
+const AWAKE_MS = 1200;
+/** Its pace at rest (ms a frame). */
+const REST_MS = 100;
+let awakeUntil = 0;
+/** The timer of a frame put off while at rest (0: none). */
+let resting = 0;
+const keeping = new Set<() => boolean>();
+
+/** Ask for the screen's pace, from now and for a moment after. */
+export function wake(): void {
+  awakeUntil = performance.now() + AWAKE_MS;
+  if (!resting) return;
+  window.clearTimeout(resting);
+  resting = 0;
+  requestAnimationFrame(loop);
+}
+
+/** Keep the screen's pace for as long as `busy` says so (a song playing); what it returns ends that. */
+export function keepAwake(busy: () => boolean): () => void {
+  keeping.add(busy);
+  wake();
+  return () => {
+    keeping.delete(busy);
+  };
+}
+
+function awake(now: number): boolean {
+  if (now < awakeUntil) return true;
+  for (const busy of keeping) if (busy()) return true;
+  return false;
+}
+
 function loop(now: number): void {
   for (const f of frames) f(now);
-  if (frames.size) requestAnimationFrame(loop);
-  else running = false;
+  if (!frames.size) {
+    running = false;
+    return;
+  }
+  if (awake(now)) requestAnimationFrame(loop);
+  else
+    resting = window.setTimeout(() => {
+      resting = 0;
+      requestAnimationFrame(loop);
+    }, REST_MS);
+}
+
+if (typeof window !== 'undefined') {
+  // a hand on the studio: it draws at the screen's pace while it's used
+  const heard = { capture: true, passive: true } as const;
+  for (const type of ['pointerdown', 'pointermove', 'pointerup', 'wheel', 'keydown', 'touchstart', 'touchmove'])
+    window.addEventListener(type, wake, heard);
+  window.addEventListener('resize', wake);
+  window.addEventListener('focus', wake);
+  document.addEventListener('visibilitychange', wake);
 }
 
 /** Whether a media query holds, kept current as the window changes. */
@@ -34,6 +91,8 @@ export function useFrame(fn: Frame): void {
   useEffect(() => {
     const f: Frame = (now) => ref.current(now);
     frames.add(f);
+    // (something new is on the screen: it's drawn at once)
+    wake();
     if (!running) {
       running = true;
       requestAnimationFrame(loop);
@@ -72,6 +131,31 @@ export function useSize(ref: RefObject<HTMLElement | null>): Size {
   });
   useEffect(() => () => observer.current?.disconnect(), []);
   return size;
+}
+
+/** Where each playhead was last put, so a frame that leaves it there writes nothing. */
+const placed = new WeakMap<HTMLElement, { x: number; rec: boolean }>();
+
+/**
+ * Put a playhead at x, in its pane's pixels, or hide it when that's outside the pane (`width`).
+ * The playhead is an element of its own, a line as tall as the pane (.playhead), and moving it is
+ * a transform: nothing is laid out or painted again. Drawn on a canvas the size of the pane, every
+ * pixel it moved had the whole canvas cleared and put on the screen again.
+ */
+export function movePlayhead(el: HTMLElement | null, x: number, width: number, rec = false): void {
+  if (!el) return;
+  const at = x >= 0 && x <= width ? x : Number.NaN;
+  const was = placed.get(el);
+  if (was && Object.is(was.x, at) && was.rec === rec) return;
+  placed.set(el, { x: at, rec });
+  if (Number.isNaN(at)) {
+    el.style.visibility = 'hidden';
+    return;
+  }
+  el.style.visibility = 'visible';
+  // (the line is the middle of a band three pixels wide)
+  el.style.transform = `translateX(${at - 1}px)`;
+  if (was?.rec !== rec) el.classList.toggle('rec', rec);
 }
 
 /** Size a canvas for the screen's pixel density and return its 2D context, scaled to CSS pixels. */

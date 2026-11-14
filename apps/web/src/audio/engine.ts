@@ -1235,10 +1235,17 @@ export class AudioEngine {
 
   /** Peak left, peak right (0..1+) and gain reduction (dB) of a track, bus or "master". */
   meter(id: string): [number, number, number] {
+    return this.meterInto(id, [0, 0, 0]);
+  }
+
+  /** A channel's meter read into an array of the caller's (what reads every channel many times a second makes none). */
+  meterInto(id: string, out: [number, number, number]): [number, number, number] {
     const num = id === 'master' ? 0 : this.nums.get(id);
-    if (num === undefined) return [0, 0, 0];
-    const at = num * METER_FLOATS;
-    return [this.meters[at] ?? 0, this.meters[at + 1] ?? 0, this.meters[at + 2] ?? 0];
+    const at = num === undefined ? -1 : num * METER_FLOATS;
+    out[0] = at < 0 ? 0 : (this.meters[at] ?? 0);
+    out[1] = at < 0 ? 0 : (this.meters[at + 1] ?? 0);
+    out[2] = at < 0 ? 0 : (this.meters[at + 2] ?? 0);
+    return out;
   }
 
   /** A plugin window opened: meter that plugin's own gain reduction (not the whole channel's). */

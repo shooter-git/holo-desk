@@ -10,6 +10,7 @@ import { Bar } from './Bar.tsx';
 import { BarButton, ControlBar, Lcd, SaveDot, TransportButtons } from './ControlBar.tsx';
 import { Wordmark } from './controls.tsx';
 import { Dialogs } from './Dialogs.tsx';
+import { keepAwake, wake } from './frame.ts';
 import { Mixer, PluginWindow, StageWindow, SynthWindow } from './Mixer.tsx';
 import { MenuHost } from './menu.tsx';
 import { Inspector, LibraryPanel } from './Panels.tsx';
@@ -460,6 +461,18 @@ export function App() {
   useEffect(() => {
     document.documentElement.dataset.layout = layout;
   }, [layout]);
+
+  // The screen is drawn at its own pace while a song plays or records, and for a moment after
+  // anything changes in the studio (an edit from here, from the agent or from a remote); left
+  // alone and stopped, the frame loop rests (frame.ts).
+  useEffect(() => {
+    const playing = keepAwake(() => store.get().playing || store.get().recording);
+    const changed = store.subscribe(wake);
+    return () => {
+      playing();
+      changed();
+    };
+  }, []);
 
   // on a tablet the Inspector is an overlay: it doesn't start open over the tracks, however it was left
   // biome-ignore lint/correctness/useExhaustiveDependencies: once, at launch

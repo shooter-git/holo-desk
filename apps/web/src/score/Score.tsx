@@ -21,11 +21,16 @@ import { UndoRedo } from '../ui/UndoRedo.tsx';
 import { Entry } from './entry.ts';
 import { buildIndex, placeOf, type ScoreIndex, tickAt } from './layout-index.ts';
 import { Palette } from './Palette.tsx';
+import { sameMusic } from './same-music.ts';
 import { renderScore } from './verovio.ts';
 
 const ZOOM_RANGE: [number, number] = [20, 120];
 
-/** The score as laid out now: shared by the drawing and the writing, made again only when the song changes. */
+/**
+ * The score as laid out now: shared by the drawing and the writing, made again only when the
+ * song's music changes. A change to the mix (a fader, a knob, a mute) is a new song with the same
+ * music, and keeps the score it has: nothing is notated, engraved or measured again for it.
+ */
 let cached: { project: Project; key: string; doc: ScoreDoc } | null = null;
 
 function scoreOf(project: Project): ScoreDoc {
@@ -33,7 +38,10 @@ function scoreOf(project: Project): ScoreDoc {
   const track = project.tracks.find((t) => t.id === s.selectedTrack);
   const part = !s.scoreAll && track?.kind === 'instrument' ? track.id : null;
   const key = s.scoreAll ? '*' : (part ?? '');
-  if (cached && cached.project === project && cached.key === key) return cached.doc;
+  if (cached && cached.key === key && sameMusic(cached.project, project)) {
+    cached.project = project;
+    return cached.doc;
+  }
   const doc = notate(project, s.scoreAll || !part ? {} : { tracks: [part] });
   cached = { project, key, doc };
   return doc;

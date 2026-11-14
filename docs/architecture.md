@@ -67,6 +67,14 @@ wraps `EngineCore` from `@holo/engine`):
   seconds of work: the studio makes a song's halls on up to three workers, side by side, and keeps
   each prepared response in the device's cache under the engine that made it, so a song opened again
   has its halls at once.
+- **A recording's note edits play as they're made.** Each stretch the edits change is a patch, keyed
+  by what it sounds like (`@holo/engine`'s `notes/plan.ts`). The studio renders the song's patches on
+  up to three workers, from the recording in shared memory (`apps/web/src/audio/patches.ts`): the
+  region shown in the Audio Editor first, then what the playhead comes to next. Until a patch is
+  ready, the recording plays there as it was. Once it is, the track's clips are sent again with a
+  `fade`: the audio thread plays the old and new lists together for 256 frames, crossfading, with
+  nothing allocated. Patches are kept by the memory they take (256 MB, 96 MB on a phone), so an undo
+  or a redo is heard at once. A bounce renders every patch first and never fades.
 - **Convolution is spread over the period.** A hall's long partitions take their forward transform,
   the sum over the spectrum and the inverse transform in about-equal pieces, one or two per block,
   so no single block pays for a 32768-point transform; the output lands in the same block as before,

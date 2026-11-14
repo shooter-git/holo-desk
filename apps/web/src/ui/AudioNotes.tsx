@@ -3,9 +3,11 @@
  * Piano Roll's keys and lanes. Each note is a capsule at its pitch from its start to its end, as thick
  * as it's loud, with its pitch every 5 ms drawn through it. The region's own span is lit and the rest
  * of its recording dim, as in the waveform. Time scrolls and zooms with the waveform's view, so
- * switching between the two keeps the place; the lanes scroll and zoom on their own. Only to look at,
- * for now: nothing here changes the song.
+ * switching between the two keeps the place; the lanes scroll and zoom on their own. Nothing here
+ * edits notes yet; an edited region's edits can be switched off and on, to hear the recording as it
+ * was (A/B). While an edit's sound is being rendered, its stretch is striped and the bar says so.
  */
+import { isEdited, regionPatches } from '@holo/engine';
 import {
   type AudioClip,
   type AudioNote,
@@ -27,7 +29,7 @@ import {
   useRef,
   useSyncExternalStore,
 } from 'react';
-import { locate } from '../app/actions.ts';
+import { apply, locate } from '../app/actions.ts';
 import { isPhone, useLayout } from '../app/layout.ts';
 import { store, useApp } from '../app/store.ts';
 import { engine } from '../audio/engine.ts';
@@ -88,6 +90,41 @@ function notesShown(clip: AudioClip, state: NotesState | null): readonly AudioNo
   return state?.state === 'found' ? state.found.notes : null;
 }
 
+const onPatches = (fn: () => void) => engine.onPatches(fn);
+const patchVersion = () => engine.patchVersion;
+
+/** Where a region's note edits are in being heard: rendered from its recording, or still on their way. */
+interface PatchStatus {
+  /** Its patches the engines play, and those still rendering (the recording plays there as it was). */
+  ready: number;
+  pending: number;
+  /** The edited notes in those still rendering. */
+  notes: number;
+  /** Where those are, in seconds of its recording as the region plays it. */
+  spans: [number, number][];
+}
+
+function patchStatus(clip: AudioClip): PatchStatus {
+  const out: PatchStatus = { ready: 0, pending: 0, notes: 0, spans: [] };
+  const notes = clip.notes;
+  if (!notes || notes.off) return out;
+  const sr = engine.sampleRate;
+  const scale = clip.stretch * sr;
+  const counted = new Set<number>();
+  for (const job of regionPatches(clip, sr)) {
+    const state = engine.patchState(job.key);
+    if (state === 'ready') out.ready++;
+    if (state !== 'pending') continue;
+    out.pending++;
+    out.spans.push([job.spec.a / scale, job.spec.b / scale]);
+    notes.n.forEach((n, i) => {
+      if (isEdited(n) && n.t * scale < job.spec.b && (n.t + n.d) * scale > job.spec.a) counted.add(i);
+    });
+  }
+  out.notes = Math.max(counted.size, out.pending);
+  return out;
+}
+
 /** The seconds of its recording a region plays, [from, to). */
 function fileWindow(project: Project, region: Region, clip: AudioClip): [number, number] {
   return [clip.offset, tickToFile(project.tempo, region.start, clip, region.start + region.length)];
@@ -113,6 +150,7 @@ export function AudioNotes() {
   const keysWidth = phone ? 44 : 66;
   const clip = region?.audio;
   const state = useFound(project?.id, clip?.file);
+  const patches = useSyncExternalStore(onPatches, patchVersion);
 
   const box = useRef<HTMLDivElement>(null);
   const keysBox = useRef<HTMLDivElement>(null);
@@ -135,8 +173,13 @@ export function AudioNotes() {
   // biome-ignore lint/correctness/useExhaustiveDependencies: the list is what drawing reads, not what the effect touches
   useEffect(() => {
     dirty.current = true;
-  }, [project, track, region, state, size, rulerSize, keysWidth, middleC]);
+  }, [project, track, region, state, size, rulerSize, keysWidth, middleC, patches]);
   useEffect(() => audioView.subscribe(() => (dirty.current = true)), []);
+  // the region shown has its edits rendered first
+  useEffect(() => {
+    engine.focusPatches(region?.id ?? null);
+    return () => engine.focusPatches(null);
+  }, [region?.id]);
   useEffect(() => () => gesture.current?.abort(), []);
 
   // a region opens: its whole recording in view, as the waveform shows it
@@ -200,6 +243,7 @@ export function AudioNotes() {
           region,
           clip,
           state,
+          pending: patchStatus(clip).spans,
           view: v,
           w: size.w,
           h: size.h,
@@ -370,6 +414,8 @@ interface Scene {
   region: Region;
   clip: AudioClip;
   state: NotesState | null;
+  /** The stretches whose edits are still being rendered (seconds of the recording as the region plays it). */
+  pending: [number, number][];
   view: PitchView;
   w: number;
   h: number;
@@ -411,6 +457,7 @@ function draw(ctx: CanvasRenderingContext2D, s: Scene): void {
   ctx.fillRect(xb, 0, Math.max(0, w - xb), h);
   ctx.fillStyle = alpha(track.color, 0.07);
   ctx.fillRect(x0, 0, x1 - x0, h);
+  drawPending(ctx, s);
 
   const notes = notesShown(clip, s.state);
   const found = s.state?.state === 'found' ? s.state.found : null;
@@ -473,6 +520,35 @@ function draw(ctx: CanvasRenderingContext2D, s: Scene): void {
     ctx.fill();
     ctx.fillStyle = '#a9b1be';
     ctx.fillText(status, tx, h / 2);
+  }
+}
+
+/** Where edits are still being rendered: faint stripes, top to bottom, under the notes. */
+function drawPending(ctx: CanvasRenderingContext2D, s: Scene): void {
+  const { project, region, clip, w, h } = s;
+  if (!s.pending.length) return;
+  const ticks = fileToTicks(project.tempo, region.start, clip);
+  for (const [a, b] of s.pending) {
+    // (the stripes keep to where the stretch starts, wherever it's scrolled to)
+    const start = audioView.tickToX(ticks(a));
+    const xa = Math.max(0, start);
+    const xb = Math.min(w, audioView.tickToX(ticks(b)));
+    if (xb <= xa) continue;
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(xa, 0, xb - xa, h);
+    ctx.clip();
+    ctx.fillStyle = 'rgba(255,255,255,0.025)';
+    ctx.fillRect(xa, 0, xb - xa, h);
+    ctx.beginPath();
+    for (let x = start - h + Math.floor((xa - start) / 10) * 10; x < xb; x += 10) {
+      ctx.moveTo(x, h);
+      ctx.lineTo(x + h, 0);
+    }
+    ctx.strokeStyle = 'rgba(255,255,255,0.055)';
+    ctx.lineWidth = 3;
+    ctx.stroke();
+    ctx.restore();
   }
 }
 
@@ -564,11 +640,31 @@ function drawNotes(
   }
 }
 
+/** The region's note edits off (the recording as it was) or on again: one step to undo. */
+function toggleEdits(track: Track, region: Region, clip: AudioClip): void {
+  const notes = clip.notes;
+  if (!notes) return;
+  const { off, ...on } = notes;
+  apply(
+    [
+      {
+        op: 'updateRegion',
+        track: track.id,
+        region: region.id,
+        patch: { audio: { ...clip, notes: off ? on : { ...notes, off: true } } },
+      },
+    ],
+    off ? 'Note Edits On' : 'Note Edits Off',
+  );
+}
+
 export function AudioNotesBar() {
   const { project, track, region } = useAudioRegion();
   const phone = isPhone(useLayout());
   const clip = region?.audio;
   const state = useFound(project?.id, clip?.file);
+  useSyncExternalStore(onPatches, patchVersion);
+  const patches = clip ? patchStatus(clip) : null;
   return (
     <>
       {!phone && <span className="title">Audio Editor</span>}
@@ -576,9 +672,28 @@ export function AudioNotesBar() {
         {track?.name ?? ''}
       </span>
       {project && region && clip && (
-        <span className="muted" style={{ whiteSpace: 'nowrap' }}>
+        <span
+          className="muted"
+          style={{ whiteSpace: 'nowrap' }}
+          data-patches={patches ? `${patches.ready}/${patches.pending}` : '0/0'}
+        >
           {notesStatus(project, region, clip, state)}
+          {patches?.pending ? ` · Rendering ${patches.notes === 1 ? '1 note' : `${patches.notes} notes`}…` : ''}
         </span>
+      )}
+      {track && region && clip?.notes && (
+        <button
+          type="button"
+          className={`btn${clip.notes.off ? ' on' : ''}`}
+          title={
+            clip.notes.off
+              ? 'Hearing the recording as it was: click to hear the note edits again'
+              : 'Hear the recording as it was, without the note edits'
+          }
+          onClick={() => toggleEdits(track, region, clip)}
+        >
+          A/B
+        </button>
       )}
       <span className="grow" />
       {/* a phone has them in its control bar or side rail, on the same screen */}

@@ -281,7 +281,12 @@ export type ToWorklet =
   /** Audio for clips: one or two channels at the context's rate (transferred). */
   | { type: 'audio'; key: string; channels: Float32Array[] }
   | { type: 'forgetAudio'; key: string }
-  | { type: 'clips'; num: number; clips: ClipSpec[] }
+  /**
+   * A track's clips. `fade`: frames to crossfade from the clips it played to these, both playing
+   * meanwhile (the studio's, when a note edit's patch comes in or goes, so the switch doesn't click);
+   * absent, they take over at once (a bounce never fades).
+   */
+  | { type: 'clips'; num: number; clips: ClipSpec[]; fade?: number }
   | { type: 'inputs'; tracks: InputSpec[] }
   /** Punching in and out while playing. */
   | { type: 'record'; on: boolean }

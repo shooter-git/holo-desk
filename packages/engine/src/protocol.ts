@@ -287,6 +287,15 @@ export type ToWorklet =
    * absent, they take over at once (a bounce never fades).
    */
   | { type: 'clips'; num: number; clips: ClipSpec[]; fade?: number }
+  /**
+   * A stretch of a track's audio heard now, once, through its channel, while the song is stopped (the
+   * Notes view's audition: a note as it sounds edited). `clips` are laid out from the audition's own
+   * frame 0 and play audio the engine already holds (a recording, a patch). They take over from one
+   * still sounding, which fades out over a few ms; an empty list stops it, and so does the song
+   * starting. The engine that plays live notes plays it (the audio thread, not a worker rendering
+   * ahead). Engines from before it let it go by.
+   */
+  | { type: 'audition'; num: number; clips: ClipSpec[] }
   | { type: 'inputs'; tracks: InputSpec[] }
   /** Punching in and out while playing. */
   | { type: 'record'; on: boolean }

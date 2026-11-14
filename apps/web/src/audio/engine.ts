@@ -58,6 +58,7 @@ import {
 import type { CompanionDevice } from '@holo/engine/companion';
 import {
   type AudioClip,
+  type AudioNotes,
   type PlayMap,
   type Project,
   performed,
@@ -69,11 +70,13 @@ import {
   writtenAt,
 } from '@holo/session';
 import { aheadThreads, loadAheadScale, loadAheadTimings, saveAhead, startAhead, warmAhead } from './ahead.ts';
+import { auditionClips, auditionPatches, auditionRange } from './audition.ts';
 import { companion, STUDIO_ENGINE } from './companion.ts';
 import { engineRate } from './engine-rate.ts';
 import { audioFiles } from './files.ts';
 import ImpulseWorker from './impulse.worker.ts?worker';
 import { instrumentManifest, sampleFile } from './pack-files.ts';
+import { PatchStore } from './patch-store.ts';
 import { PatchRenderer, type PatchWorker, planPatches, recordingOf } from './patches.ts';
 import processorUrl from './worklet/processor.ts?worker&url';
 
@@ -101,6 +104,8 @@ const FORGET_AFTER = 30_000;
 const PATCH_FADE = 256;
 /** How long the engines keep a patch the song no longer plays, ms (the crossfade away from it, and the workers' lead). */
 const PATCH_FORGET_AFTER = 1000;
+/** How long past an audition's end the patches it plays are kept with the engines, ms (rendering ahead, messages arrive a few blocks late). */
+const AUDITION_KEEP = 500;
 
 /** Whether this page has shared memory (cross-origin isolated). */
 const sharedMemory = () => globalThis.crossOriginIsolated === true && typeof SharedArrayBuffer !== 'undefined';
@@ -239,6 +244,26 @@ export class AudioEngine {
   private patchListeners = new Set<() => void>();
   /** Goes up whenever the patches' state does (what the Notes view reads). */
   patchVersion = 0;
+  /**
+   * The audition last sent (hearNote): the patches it plays, kept with the engines till it's over, and
+   * its clips as text (the same again, as a drag's patch comes in, isn't sent again).
+   */
+  private heard: { keys: Set<string>; until: number; text: string } | null = null;
+  /**
+   * A note being dragged in the Notes view (previewNote): its track and region, the region's recording
+   * as the drag leaves its notes, the note, and the patches its audition plays. `released`: the drag is
+   * over, and the note is heard once more when they're in.
+   */
+  private previewing: {
+    track: string;
+    region: string;
+    clip: AudioClip;
+    index: number;
+    jobs: PatchJob[];
+    released: boolean;
+  } | null = null;
+  /** The recording the region shown in the Notes view plays: held by the patch workers, for a drag's patches. */
+  private previewBase: { key: string; base: PatchJob['base'] } | null = null;
   /** Space Designer responses the audio thread has (or is being given), by key. */
   private impulsesSent = new Set<string>();
   private sentInputs = '';
@@ -777,8 +802,13 @@ export class AudioEngine {
         shared: sharedMemory(),
         make: () =>
           new Worker(new URL('./patch.worker.ts', import.meta.url), { type: 'module' }) as unknown as PatchWorker,
+        // (kept on the device too, under the engine that renders them)
+        store: new PatchStore({ engine: STUDIO_ENGINE, budget: (phone ? 128 : 512) * 2 ** 20 }),
       });
-      renderer.onRendered(() => this.patchesSoon());
+      renderer.onRendered(() => {
+        this.previewReady();
+        this.patchesSoon();
+      });
       renderer.onError((message) => {
         for (const fn of this.errorListeners) fn(message);
       });
@@ -800,8 +830,10 @@ export class AudioEngine {
     if (!jobs.length && !this.patchRenderer) return;
     const renderer = this.patches();
     // the recordings they're rendered from: given to the workers, let go when no patch needs them
+    // (nor a drag in the Notes view)
     const bases = new Map<string, PatchJob['base']>();
     for (const j of jobs) bases.set(recordingOf(j), j.base);
+    if (this.previewBase) bases.set(this.previewBase.key, this.previewBase.base);
     this.patchBases = new Set(bases.keys());
     for (const key of renderer.held()) if (!bases.has(key)) renderer.release(key);
     for (const [key, base] of bases) if (!renderer.holds(key)) this.holdRecording(project, key, base, ctx);
@@ -813,6 +845,11 @@ export class AudioEngine {
       playhead: this.songFrame(),
     });
     renderer.want(plan.render);
+    // (on the device, what the song plays: a drag's patch once it's let go where it landed)
+    renderer.keep(plan.wanted.keys());
+    // (a drag's patches, whose recording may only now be held)
+    const p = this.previewing;
+    if (p && !p.released) renderer.preview(p.region, p.jobs);
     for (const key of plan.send) {
       const channels = renderer.get(key);
       if (!channels) continue;
@@ -889,6 +926,11 @@ export class AudioEngine {
         let gone = false;
         for (const [key, since] of this.patchUnused) {
           if (now - since < PATCH_FORGET_AFTER) continue;
+          if (this.heard?.keys.has(key) && now < this.heard.until) {
+            // (an audition still plays it: asked again in a second)
+            this.patchUnused.set(key, now);
+            continue;
+          }
           this.patchUnused.delete(key);
           if (!this.patchSent.delete(key)) continue;
           this.post({ type: 'forgetAudio', key });
@@ -945,7 +987,117 @@ export class AudioEngine {
   focusPatches(regionId: string | null): void {
     if (this.patchFocus === regionId) return;
     this.patchFocus = regionId;
+    // (the recording a drag rendered from is let go with it)
+    this.previewBase = null;
+    this.previewing = null;
     if (this.patchRenderer) this.patchesSoon();
+  }
+
+  /**
+   * A note heard now through its track, as the song plays it edited (a press in the Notes view): from
+   * just before it starts to its end (auditionRange). Where its patch isn't rendered yet, the recording
+   * plays there as it is, and that's all: nothing waits for it. A press again, or on another note,
+   * takes over. Never while the song plays. `notes`: the region's, or those found in its recording
+   * before its first edit.
+   */
+  hearNote(trackId: string, clip: AudioClip, notes: AudioNotes, index: number): void {
+    this.previewing = null;
+    if (this.playing) return;
+    this.sendAudition(trackId, { ...clip, notes }, index, true);
+    // a drag may follow: its recording held by the patch workers from now on
+    this.holdPreviewBase(clip);
+  }
+
+  /**
+   * A note being dragged (`notes`: the region's as the drag leaves them): the patches of that state are
+   * rendered before anything else (patches.ts' preview: one at a time for the region, the latest after
+   * it), and the note is heard again as they come in. They're the patches the song plays once the drag
+   * is let go, under the same keys, so its sound is usually there already.
+   */
+  previewNote(trackId: string, regionId: string, clip: AudioClip, notes: AudioNotes, index: number): void {
+    if (!this.ctx || this.playing) return;
+    const heard = { ...clip, notes };
+    const range = auditionRange(notes, index);
+    if (!range) return;
+    const jobs = auditionPatches(heard, range, this.sampleRate);
+    this.previewing = { track: trackId, region: regionId, clip: heard, index, jobs, released: false };
+    this.holdPreviewBase(clip);
+    this.patches().preview(regionId, jobs);
+    this.previewReady();
+  }
+
+  /**
+   * The drag is over. Let go (`kept`), the note is heard once more when the patches of where it landed
+   * are in (unless they are already, and it has been); cancelled, those not begun are dropped.
+   */
+  endPreview(kept: boolean): void {
+    const p = this.previewing;
+    if (!p) return;
+    if (kept) {
+      p.released = true;
+      this.previewReady();
+      return;
+    }
+    this.previewing = null;
+    this.patchRenderer?.preview(p.region, []);
+  }
+
+  /**
+   * A drag's patches, once all are rendered: handed to the engines (not yet the song's: let go of a
+   * second after, unless the edit is let go there), and the note heard with them, if it sounds other
+   * than it last did.
+   */
+  private previewReady(): void {
+    const p = this.previewing;
+    const renderer = this.patchRenderer;
+    if (!p || !renderer) return;
+    if (!p.jobs.every((j) => this.patchSent.has(j.key) || renderer.has(j.key))) return;
+    const now = performance.now();
+    for (const j of p.jobs) {
+      if (this.patchSent.has(j.key)) continue;
+      const channels = renderer.get(j.key);
+      if (!channels) continue;
+      this.post({ type: 'audio', key: j.key, channels });
+      this.patchSent.add(j.key);
+      if (!this.patchWanted.has(j.key)) this.patchUnused.set(j.key, now);
+    }
+    this.forgetPatchesSoon();
+    if (!this.playing) this.sendAudition(p.track, p.clip, p.index, false);
+    if (p.released) this.previewing = null;
+  }
+
+  /**
+   * An audition of a note to the engines, as `clip` plays it: its pieces cut where the patches the
+   * engines have start and end. Not sent when it's the one last sent, unless `again`.
+   */
+  private sendAudition(trackId: string, clip: AudioClip, index: number, again: boolean): void {
+    const track = this.project?.tracks.find((t) => t.id === trackId);
+    const range = clip.notes ? auditionRange(clip.notes, index) : null;
+    if (!this.port || !track || !range) return;
+    const sr = this.sampleRate;
+    const clips = auditionClips(track, clip, range, sr, (key) => this.patchSent.has(key));
+    const text = JSON.stringify(clips);
+    if (!again && text === this.heard?.text) return;
+    const frames = clips.reduce((n, c) => Math.max(n, c.end), 0);
+    this.heard = {
+      keys: new Set(clips.flatMap((c) => (c.base === undefined ? [] : [c.key]))),
+      until: performance.now() + (frames / sr) * 1000 + AUDITION_KEEP,
+      text,
+    };
+    this.post({ type: 'audition', num: this.numOf(trackId), clips });
+  }
+
+  /** The recording a region plays, held by the patch workers while the Notes view shows it (a drag renders from it). */
+  private holdPreviewBase(clip: AudioClip): void {
+    const ctx = this.ctx;
+    const project = this.project;
+    const base = { file: clip.file, stretch: clip.stretch };
+    const key = clipKey(base);
+    if (!ctx || !project || this.previewBase?.key === key) return;
+    this.previewBase = { key, base };
+    this.patchBases.add(key);
+    const renderer = this.patches();
+    if (!renderer.holds(key)) this.holdRecording(project, key, base, ctx);
   }
 
   /**
@@ -1243,6 +1395,8 @@ export class AudioEngine {
   }
 
   play(fromTick: number, record = false, countInBars = 0): void {
+    // (a drag's note isn't heard again once the song plays: the song stops any audition itself)
+    this.previewing = null;
     // starting: the strips laid out afresh by how long each has been taking, if that helps a good deal
     // (a strip that moves builds what it plays with as it starts)
     if (this.ahead && !this.playing) for (const m of this.ahead.rebalance(1.25)) this.post(m);

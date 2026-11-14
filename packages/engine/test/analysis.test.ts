@@ -4,6 +4,8 @@ import {
   bandLevels,
   bandResponse,
   type Decoded,
+  FINE_STEP_S,
+  fineTrack,
   LoudnessMeter,
   lineNotes,
   masking,
@@ -134,6 +136,45 @@ describe('a line’s pitch', () => {
     expect(notes.map((n) => Math.round(n.pitch))).toEqual([60, 62, 64]);
     expect(notes.map((n) => n.attack)).toEqual([true, false, false]);
     expect(notes[1]?.start).toBeCloseTo(0.7, 1);
+  });
+});
+
+describe('a line’s pitch every 5 ms', () => {
+  it('follows a vibrato to within 3 cents, from just before the voice to the end of the samples', () => {
+    const at = 0.3;
+    const len = 1.2;
+    const track = fineTrack(join(silence(at), tone(64, len, { vibrato: [5.5, 40], saw: true }), silence(0.2)), SR);
+    // every 5 ms, from 30 ms before the voice
+    expect((track.t[1] as number) - (track.t[0] as number)).toBeCloseTo(FINE_STEP_S, 12);
+    expect(track.t[0]).toBeGreaterThan(at - 0.05);
+    expect(track.t[0]).toBeLessThan(at);
+    expect(track.t[track.t.length - 1]).toBeGreaterThan(at + len + 0.15);
+    let worst = 0;
+    for (let k = 0; k < track.t.length; k++) {
+      const t = track.t[k] as number;
+      // the held part, its first and last 40 ms left out
+      if (t < at + 0.04 || t > at + len - 0.04) continue;
+      const truth = 64 + 0.4 * Math.sin(2 * Math.PI * 5.5 * (t - at));
+      worst = Math.max(worst, Math.abs((track.midi[k] as number) - truth) * 100);
+    }
+    expect(worst).toBeLessThan(3);
+    // no pitch, and next to no power, in the silence after
+    const after = track.t.findIndex((t) => t > at + len + 0.05);
+    expect(Number.isNaN(track.midi[after] as number)).toBe(true);
+    expect(track.power[after] as number).toBeLessThan(1e-6);
+    expect(track.power[after - 40] as number).toBeGreaterThan(0.01);
+  });
+
+  it('is what the notes are found by: the same pitch, and nothing where nothing is voiced', () => {
+    const samples = join(silence(0.2), tone(60, 0.5), tone(62, 0.5), silence(0.2));
+    const track = fineTrack(samples, SR);
+    for (const n of lineNotes(samples, SR)) {
+      const held = [...track.midi].filter(
+        (_m, k) => (track.t[k] as number) > n.start + 0.08 && (track.t[k] as number) < n.end - 0.05,
+      );
+      expect(Math.abs(held.reduce((a, m) => a + m, 0) / held.length - n.pitch) * 100).toBeLessThan(1);
+    }
+    expect(fineTrack(silence(1), SR).t).toHaveLength(0);
   });
 });
 

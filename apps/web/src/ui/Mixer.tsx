@@ -50,6 +50,8 @@ import { prepare, useFrame, useSize } from './frame.ts';
 import { isMenuPress } from './gesture.ts';
 import { openMenu, openMenuAt } from './menu.tsx';
 import { pressToReorder, useNoScrollWhileDragging } from './reorder.ts';
+import { useScrollCue } from './scroll-cue.ts';
+import { slotName, stripRows } from './strips.ts';
 import { inputLabel, instrumentLabel, instrumentMenu } from './Tracks.tsx';
 
 function pluginsOf(kind: 'audio' | 'midi'): PluginDef[] {
@@ -109,7 +111,7 @@ function PluginSlot({ target, plugin }: { target: string; plugin: Plugin }) {
       >
         <Power size={10} />
       </button>
-      <span className="grow">{def?.name ?? plugin.type}</span>
+      <span className="grow">{slotName(plugin.type, def?.name ?? plugin.type)}</span>
     </div>
   );
 }
@@ -156,9 +158,12 @@ export const Strip = memo(function Strip({ id, kind, name, color, channel, track
     () => library.packs,
   );
   const set = (patch: Partial<Channel>) => gestureChange([{ op: 'updateChannel', target: id, patch }]);
-  // the fader takes whatever height is left; the slots above scroll when the strip is short
+  // the fader has the height its row gives it (the same on every strip: see strips.ts); the slots
+  // above scroll where there are more than fit, and fade at the edge that has more
   const faderBox = useRef<HTMLDivElement>(null);
   const faderHeight = Math.max(56, useSize(faderBox).h - 2);
+  const slots = useRef<HTMLDivElement>(null);
+  useScrollCue(slots);
   // a tap on the strip selects its track; a scroll, a fader drag or a right-click doesn't
   const press = useRef<{ x: number; y: number } | null>(null);
   // in the mixer, a track strip's name is its handle: drag it (a finger holds it first) to move the track
@@ -177,7 +182,7 @@ export const Strip = memo(function Strip({ id, kind, name, color, channel, track
       }}
       aria-label={`${name} channel strip`}
     >
-      <div className="strip-top">
+      <div className="strip-top" ref={slots}>
         {track?.kind === 'audio' && show.stripInstrument && (
           <div className="section">
             <span className="label">Input</span>
@@ -338,74 +343,75 @@ export const Strip = memo(function Strip({ id, kind, name, color, channel, track
             </div>
           </div>
         )}
+        {/* (the stage is a slot like the others: it scrolls with them where the strip is short) */}
+        {kind !== 'master' && show.stripStage && (
+          <div className="section">
+            <span className="label">Stage</span>
+            {channel.stage ? (
+              <div
+                className="slot send drag"
+                title="Stage: drag to move it nearer or further back, click for its seats, right-click for more"
+                onPointerDown={(e) => {
+                  if (e.button !== 0) return;
+                  e.stopPropagation();
+                  const stage = channel.stage as Stage;
+                  let d = stage.distance;
+                  // a tap opens the seats; the distance only moves once the finger has clearly dragged
+                  let tx = 0;
+                  let ty = 0;
+                  let moved = false;
+                  beginGesture('Distance');
+                  startDrag(e, {
+                    onMove: (dx, dy) => {
+                      tx += dx;
+                      ty += dy;
+                      if (!moved && Math.hypot(tx, ty) < TAP) return;
+                      moved = true;
+                      d = Math.max(0, Math.min(1, d + (dx - dy) * 0.004));
+                      gestureChange([
+                        {
+                          op: 'updateChannel',
+                          target: id,
+                          patch: { stage: { ...stage, distance: Math.round(d * 1000) / 1000 } },
+                        },
+                      ]);
+                    },
+                    onEnd: (canceled) => {
+                      endGesture();
+                      // a scroll that began on the slot is canceled by the browser: not a tap
+                      if (!moved && !canceled) store.set({ stage: id });
+                    },
+                  });
+                }}
+                onContextMenu={(e) => {
+                  e.preventDefault();
+                  openMenu(e.clientX, e.clientY, [
+                    { label: 'Seats…', onSelect: () => store.set({ stage: id }) },
+                    {
+                      label: 'Take it off the stage',
+                      onSelect: () => updateChannel(id, { stage: null }, 'Remove Stage'),
+                    },
+                  ]);
+                }}
+              >
+                <span className="grow">Distance</span>
+                <span className="mono">{Math.round(channel.stage.distance * 100)}%</span>
+              </div>
+            ) : (
+              <div
+                className="slot empty"
+                title="Put it on a stage: a near and a far seat, each with its own rooms, and a distance between them"
+                onClick={() => {
+                  updateChannel(id, { stage: newStage() }, 'Stage');
+                  store.set({ stage: id });
+                }}
+              >
+                +
+              </div>
+            )}
+          </div>
+        )}
       </div>
-      {kind !== 'master' && show.stripStage && (
-        <div className="section">
-          <span className="label">Stage</span>
-          {channel.stage ? (
-            <div
-              className="slot send drag"
-              title="Stage: drag to move it nearer or further back, click for its seats, right-click for more"
-              onPointerDown={(e) => {
-                if (e.button !== 0) return;
-                e.stopPropagation();
-                const stage = channel.stage as Stage;
-                let d = stage.distance;
-                // a tap opens the seats; the distance only moves once the finger has clearly dragged
-                let tx = 0;
-                let ty = 0;
-                let moved = false;
-                beginGesture('Distance');
-                startDrag(e, {
-                  onMove: (dx, dy) => {
-                    tx += dx;
-                    ty += dy;
-                    if (!moved && Math.hypot(tx, ty) < TAP) return;
-                    moved = true;
-                    d = Math.max(0, Math.min(1, d + (dx - dy) * 0.004));
-                    gestureChange([
-                      {
-                        op: 'updateChannel',
-                        target: id,
-                        patch: { stage: { ...stage, distance: Math.round(d * 1000) / 1000 } },
-                      },
-                    ]);
-                  },
-                  onEnd: (canceled) => {
-                    endGesture();
-                    // a scroll that began on the slot is canceled by the browser: not a tap
-                    if (!moved && !canceled) store.set({ stage: id });
-                  },
-                });
-              }}
-              onContextMenu={(e) => {
-                e.preventDefault();
-                openMenu(e.clientX, e.clientY, [
-                  { label: 'Seats…', onSelect: () => store.set({ stage: id }) },
-                  {
-                    label: 'Take it off the stage',
-                    onSelect: () => updateChannel(id, { stage: null }, 'Remove Stage'),
-                  },
-                ]);
-              }}
-            >
-              <span className="grow">Distance</span>
-              <span className="mono">{Math.round(channel.stage.distance * 100)}%</span>
-            </div>
-          ) : (
-            <div
-              className="slot empty"
-              title="Put it on a stage: a near and a far seat, each with its own rooms, and a distance between them"
-              onClick={() => {
-                updateChannel(id, { stage: newStage() }, 'Stage');
-                store.set({ stage: id });
-              }}
-            >
-              +
-            </div>
-          )}
-        </div>
-      )}
       {kind !== 'master' && show.stripOutput && (
         <select
           className="select strip-output"
@@ -520,8 +526,8 @@ export const Strip = memo(function Strip({ id, kind, name, color, channel, track
   );
 });
 
-/** The editor pane's height the mixer wants at least: its slots, a fader and the name, all in view. */
-const MIXER_PANE = 420;
+/** The editor pane's height the mixer wants at least: a few of its slots, a fader with room to travel, and the name, all in view. */
+const MIXER_PANE = 480;
 
 export function Mixer() {
   // the slices are stable while something else changes, so an edit redraws one strip, not the row
@@ -537,7 +543,7 @@ export function Mixer() {
   }, [phone]);
   if (!tracks || !buses || !master) return null;
   return (
-    <div className="mixer">
+    <div className="mixer" ref={stripRows}>
       {tracks.map((t) => (
         <Strip
           key={t.id}

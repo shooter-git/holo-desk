@@ -1238,6 +1238,26 @@ a.btn {
 
 /* ---------- mixer ---------- */
 
+/* A row of strips: the mixer, and the Inspector's two. The fader keeps a share of the row's height
+   (--strips-h, which the row measures: see strips.ts) whatever a strip holds, so it always has room
+   to travel; the slots above it take what's left, and scroll where a strip has more than fit. */
+.mixer,
+.inspector-strips {
+  /* under this height a strip can't be shown whole: see [data-short] */
+  --strips-short: 360px;
+  /* a strip's foot without its fader: the level, the buttons and the name, and a sliver of the pan above */
+  --strip-foot: 96px;
+  --fader-min: clamp(110px, calc(var(--strips-h, 420px) * 0.34), 280px);
+}
+
+@media (pointer: coarse) {
+  .mixer,
+  .inspector-strips {
+    --strips-short: 410px;
+    --strip-foot: 118px;
+  }
+}
+
 .mixer {
   display: flex;
   min-height: 0;
@@ -1246,7 +1266,6 @@ a.btn {
   background: var(--bg-1);
 }
 
-/* a short editor pane: the slots keep a few rows, the fader its travel, and the strip scrolls for the rest */
 .strip {
   display: flex;
   flex-direction: column;
@@ -1257,8 +1276,6 @@ a.btn {
   border-right: 1px solid var(--line);
   background: linear-gradient(180deg, #1e2227, #191c21);
   box-shadow: inset 1px 0 0 var(--hi);
-  overflow-y: auto;
-  scrollbar-width: none;
 }
 
 @media (pointer: coarse) {
@@ -1279,14 +1296,31 @@ a.btn {
   background: linear-gradient(180deg, #252019, #1c1915);
 }
 
+/* the slots: they scroll where there are more than fit, and the edge that has more fades (the box
+   has no scrollbar to say so; data-above and data-below are kept by useScrollCue) */
 .strip-top {
   display: flex;
   flex-direction: column;
   gap: 4px;
   flex: 0 1 auto;
-  min-height: 120px;
+  min-height: 60px;
   overflow-y: auto;
   scrollbar-width: none;
+}
+
+.strip-top[data-below] {
+  -webkit-mask-image: linear-gradient(#000 calc(100% - 22px), transparent);
+  mask-image: linear-gradient(#000 calc(100% - 22px), transparent);
+}
+
+.strip-top[data-above] {
+  -webkit-mask-image: linear-gradient(transparent, #000 22px);
+  mask-image: linear-gradient(transparent, #000 22px);
+}
+
+.strip-top[data-above][data-below] {
+  -webkit-mask-image: linear-gradient(transparent, #000 22px, #000 calc(100% - 22px), transparent);
+  mask-image: linear-gradient(transparent, #000 22px, #000 calc(100% - 22px), transparent);
 }
 
 .strip-fader {
@@ -1294,7 +1328,76 @@ a.btn {
   justify-content: center;
   gap: 6px;
   flex: 1 1 0;
-  min-height: 72px;
+  min-height: var(--fader-min);
+  overflow: hidden;
+}
+
+/* The strips share the row's lines, so every strip's pan, level, fader, buttons and name sit side
+   by side, and a fader's place says the same on each: the slots' line is as tall as the fullest
+   strip's slots (as far as the faders' share lets it be), the faders' takes the rest. */
+@supports (grid-template-rows: subgrid) {
+  .mixer,
+  .inspector-strips {
+    display: grid;
+    grid-auto-flow: column;
+    grid-auto-columns: max-content;
+    grid-template-rows: minmax(60px, auto) auto auto auto minmax(var(--fader-min), 1fr) auto auto;
+    row-gap: 4px;
+    overflow-y: auto;
+    scrollbar-width: none;
+  }
+
+  .strip {
+    display: grid;
+    /* (one column as wide as the strip, whatever a long name or slot would like) */
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: subgrid;
+    grid-row: 1 / -1;
+  }
+
+  .strip-top {
+    grid-row: 1;
+    min-height: 0;
+  }
+
+  .strip-output {
+    grid-row: 2;
+  }
+
+  .strip-pan {
+    grid-row: 3;
+  }
+
+  .strip .db-readout {
+    grid-row: 4;
+  }
+
+  .strip-fader {
+    grid-row: 5;
+    min-height: 0;
+  }
+
+  .strip-chips {
+    grid-row: 6;
+  }
+
+  .strip-name {
+    grid-row: 7;
+  }
+
+  /* Too short for a strip whole (a phone on its side, an editor pane dragged small): the row is two
+     screens. Its foot, the fader with the level, the buttons and the name, fills one, and the row
+     opens on it; the slots, the output and the pan are above, a scroll away, the pan's edge showing.
+     The slots are all laid out there (nothing scrolls inside what scrolls). */
+  .mixer[data-short],
+  .inspector-strips[data-short] {
+    --fader-min: max(96px, calc(var(--strips-h) - var(--strip-foot)));
+    grid-template-rows: max-content auto auto auto minmax(var(--fader-min), 1fr) auto auto;
+  }
+
+  [data-short] .strip-top {
+    overflow: visible;
+  }
 }
 
 .strip .section {
@@ -1411,8 +1514,13 @@ a.btn {
   opacity: 0.4;
 }
 
+/* (a narrower arrow than a select's elsewhere: "Stereo Out" fits beside it) */
 .strip-output {
   height: 22px;
+  padding: 0 15px 0 5px;
+  background-position:
+    right 4px center,
+    0 0;
   font-size: 10.5px;
 }
 
@@ -1454,6 +1562,9 @@ a.btn {
 }
 
 .strip-name {
+  /* (it keeps its height in a row too short for everything: a name squeezed to a sliver can't be read) */
+  flex: none;
+  min-height: max-content;
   padding: 4px 2px;
   border-radius: var(--radius-s);
   font-weight: 600;
@@ -1806,10 +1917,17 @@ button.list-item {
 .inspector-strips {
   display: flex;
   justify-content: center;
-  gap: 2px;
+  column-gap: 2px;
   padding: 8px;
   flex: 1 1 auto;
-  min-height: 320px;
+  /* (never a short row: the panel scrolls instead) */
+  min-height: calc(var(--strips-short) + 20px);
+}
+
+@supports (grid-template-rows: subgrid) {
+  .inspector-strips {
+    display: grid;
+  }
 }
 
 /* the Library */

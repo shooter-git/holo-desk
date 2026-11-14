@@ -160,6 +160,11 @@ export class TouchPan {
     this.y0 = from.clientY;
   }
 
+  /** Whether the finger has gone past the slop and moved the view: a finger that lifts before it has tapped. */
+  get panned(): boolean {
+    return this.axis !== null;
+  }
+
   move(ev: PanPoint): void {
     if (!this.axis) {
       const dx = Math.abs(ev.clientX - this.x0);

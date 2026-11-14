@@ -121,6 +121,18 @@ describe('a finger dragging the view', () => {
     expect(view.stopFling()).toBe(false);
   });
 
+  it('tells a tap from a scroll: the view moves only once the finger is past the slop', () => {
+    const view = new Viewport(100);
+    const tap = new TouchPan(view, 'xy', () => 10000, at(100, 300, 0));
+    tap.move(at(102, 303, 20));
+    expect(tap.panned).toBe(false);
+    expect(view.y).toBe(0);
+    const scroll = new TouchPan(view, 'xy', () => 10000, at(100, 300, 0));
+    scroll.move(at(100, 280, 20));
+    expect(scroll.panned).toBe(true);
+    expect(view.y).toBeGreaterThan(0);
+  });
+
   it("doesn't coast when the finger stopped before it lifted", () => {
     const view = new Viewport(100);
     const pan = new TouchPan(view, 'y', () => 10000, at(0, 300, 0));

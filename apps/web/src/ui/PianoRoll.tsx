@@ -154,6 +154,8 @@ export function PianoRoll() {
   const lastLanePress = useRef(0);
   const gesture = useRef<Gesture | null>(null);
   const menuAt = useRef<((ev: PointerEvent) => void) | null>(null);
+  /** What the next gesture does if it turns out to be a tap (a finger's second tap on a note), set as it starts. */
+  const tapAt = useRef<(() => void) | null>(null);
   const pinch = useRef(new Pinch());
   const zoomTimer = useRef(0);
   const lastOverlay = useRef({ x: -1, w: 0, h: 0, rec: false, dpr: 0 });
@@ -618,11 +620,14 @@ export function PianoRoll() {
   const start = (e: ReactPointerEvent, o: GestureOptions) => {
     gesture.current?.abort();
     const menu = menuAt.current;
+    const tap = tapAt.current;
+    tapAt.current = null;
     const g = capture(e, {
       ...o,
       onUp: (ev, gg) => {
         gesture.current = null;
         o.onUp?.(ev, gg);
+        if (!gg.moved) tap?.();
       },
       onAbort: () => {
         gesture.current = null;
@@ -672,12 +677,18 @@ export function PianoRoll() {
   };
 
   /** A finger scrolling the roll, as a phone scrolls a page (TouchPan): a flick carries on after it lifts. */
-  const panDrag = (e: ReactPointerEvent) => {
+  const panDrag = (e: ReactPointerEvent, onTap?: () => void) => {
     const pan = new TouchPan(rollView, 'xy', () => maxY, e);
     start(e, {
-      threshold: 0,
+      // over a note the finger may also rest for its menu: a wobble isn't a move (the gesture's own threshold)
+      threshold: onTap ? undefined : 0,
       onMove: (ev) => pan.move(ev),
-      onUp: (ev) => pan.end(ev.timeStamp),
+      onUp: (ev) => {
+        pan.end(ev.timeStamp);
+        // (a scroll isn't the first tap of a double tap: a second swipe soon after draws no note)
+        if (pan.panned) lastTap.current = 0;
+        else onTap?.();
+      },
     });
   };
 
@@ -704,8 +715,25 @@ export function PianoRoll() {
     }
     if (h) {
       const { ref } = h;
-      if (tool === 'eraser' || (doubleTap && touch)) {
+      if (tool === 'eraser') {
         deleteNotes(selected.has(ref.note) ? [...selected] : [ref.note]);
+        return;
+      }
+      // a finger's second tap on a note deletes it (and the notes selected with it) once it lifts:
+      // a tap that selects a note and a drag straight after it move the note
+      if (doubleTap && touch && selected.has(ref.note)) tapAt.current = () => deleteNotes([...selected]);
+      // A finger on a note that isn't selected scrolls the roll, as it does beside the note: a tap
+      // selects it (and plays it), and a selected note is the one a finger moves and stretches. A
+      // scroll that happened to begin on a note used to drag it to another pitch or beat.
+      if (touch && !selected.has(ref.note)) {
+        const select = () => {
+          store.set({ selectedNotes: [ref.note] });
+          audition(ref.note.p, ref.note.v);
+          lastVelocity.current = ref.note.v;
+          lastLength.current = ref.note.d;
+        };
+        menuAt.current = (ev) => noteMenu(ev.clientX, ev.clientY, ref.note);
+        panDrag(e, select);
         return;
       }
       let sel = selectedNotes;

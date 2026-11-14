@@ -1,6 +1,6 @@
 import { type AudioNote, parseAudioNotes, roundPitch, roundTime } from '@holo/session';
 import { describe, expect, it } from 'vitest';
-import { classifyRecording, DETECT_V, detectNotes, noteCurves } from '../src/notes/index.ts';
+import { classifyRecording, DETECT_V, detectNotes, noteCurves, notesAndCurves } from '../src/notes/index.ts';
 
 const SR = 48000;
 
@@ -230,6 +230,22 @@ describe('notes found to edit', () => {
     const curves = noteCurves([samples], SR);
     const k = Math.round((0.8 - curves.t0) / curves.step);
     expect(Math.abs((curves.midi[k] as number) - 57)).toBeLessThan(0.5);
+  });
+
+  it('gives the notes and the curves heard once exactly as it gives each alone', () => {
+    const samples = join(
+      silence(0.2),
+      sing([
+        [60, 0.4],
+        [62, 0.4],
+        [64, 0.5],
+      ]),
+      silence(0.2),
+    );
+    const both = notesAndCurves([samples], SR);
+    expect(both.notes).toEqual(detectNotes([samples], SR));
+    expect(both.curves).toEqual(noteCurves([samples], SR));
+    expect(notesAndCurves([], SR).notes).toEqual(detectNotes([], SR));
   });
 
   it('keeps what it finds canonical: as a song keeps it, read back the same', () => {

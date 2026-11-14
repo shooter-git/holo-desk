@@ -799,6 +799,24 @@ export function noteCurves(channels: readonly Float32Array[], sampleRate: number
   const h = hear(channels.length ? monoOf(channels) : new Float32Array(0), sampleRate);
   // (octaves the notes put back are put back in the curve too)
   if (h.tracked) notesOf(h);
+  return curvesOf(h);
+}
+
+/**
+ * A recording's notes and the curves they're drawn with, heard once: `detectNotes` and `noteCurves`
+ * together, for the note editor, which wants both (hearing is most of the work).
+ */
+export function notesAndCurves(
+  channels: readonly Float32Array[],
+  sampleRate: number,
+): { notes: AudioNotes; curves: NoteCurves } {
+  const h = hear(channels.length ? monoOf(channels) : new Float32Array(0), sampleRate);
+  const n = channels.length ? canonical(notesOf(h)) : [];
+  return { notes: { mode: 'mono', v: DETECT_V, n }, curves: curvesOf(h) };
+}
+
+/** The curves of a recording heard (its octaves put back as its notes were found). */
+function curvesOf(h: Heard): NoteCurves {
   const unvoiced = new Uint8Array(h.n);
   for (let k = 0; k < h.n; k++)
     unvoiced[k] = (h.power[k] as number) >= h.sound && Number.isNaN(h.midi[k] as number) ? 1 : 0;

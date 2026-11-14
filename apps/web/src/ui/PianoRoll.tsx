@@ -45,6 +45,7 @@ import {
   screenDpr,
   useWheel,
 } from './gesture.ts';
+import { drawKeys, drawLanes } from './keys.ts';
 import { openMenu } from './menu.tsx';
 import { UndoRedo } from './UndoRedo.tsx';
 import { DOUBLE_TAP_MS, gridStep, TouchPan, Viewport, WHEEL_ZOOM, ZOOM } from './view.ts';
@@ -64,9 +65,6 @@ const LANES: [string, string, string][] = [
   ['2', 'Breath', 'Breath (CC 2)'],
   ['74', 'Bright', 'Brightness (CC 74)'],
 ];
-
-const BLACK = new Set([1, 3, 6, 8, 10]);
-const isBlack = (p: number) => BLACK.has(((p % 12) + 12) % 12);
 
 // the velocity colors are mixed once per velocity, not per note per frame
 const velColors = new Map<number, string>();
@@ -235,49 +233,18 @@ export function PianoRoll() {
 
   // ---- drawing ----
 
-  const drawKeys = () => {
-    const h = size.h;
-    const kw = keysWidth;
-    const kctx = prepare(keysCanvas.current, kw, h);
+  const drawKeyboard = () => {
+    const kctx = prepare(keysCanvas.current, keysWidth, size.h);
     if (!kctx) return;
-    const color = track?.color ?? '#5cb8ff';
-    kctx.fillStyle = '#0b0d10';
-    kctx.fillRect(0, 0, kw, h);
-    // the white keys' sheen runs sideways, so one gradient serves every key
-    const white = kctx.createLinearGradient(0, 0, kw, 0);
-    white.addColorStop(0, '#d9dde3');
-    white.addColorStop(1, '#f1f3f6');
-    const whiteLit = kctx.createLinearGradient(0, 0, kw, 0);
-    whiteLit.addColorStop(0, color);
-    whiteLit.addColorStop(1, alpha(color, 0.7));
-    const blackW = Math.round(kw * 0.6);
-    const font = `600 ${Math.min(11, keyHeight - 2)}px Inter Variable, system-ui, sans-serif`;
-    kctx.font = font;
-    kctx.textBaseline = 'middle';
-    for (let pitch = 0; pitch < 128; pitch++) {
-      const y = yOf(pitch);
-      if (y > h || y + keyHeight < 0) continue;
-      const lit = held.current.has(pitch);
-      if (isBlack(pitch)) {
-        kctx.fillStyle = lit ? color : '#1d2026';
-        kctx.fillRect(0, y, blackW, keyHeight);
-        kctx.fillStyle = lit ? alpha(color, 0.6) : '#e9ecf1';
-        kctx.fillRect(blackW, y, kw - blackW, keyHeight);
-      } else {
-        kctx.fillStyle = lit ? whiteLit : white;
-        kctx.fillRect(0, y, kw, keyHeight);
-      }
-      if (pitch % 12 === 0 || pitch % 12 === 5) {
-        kctx.fillStyle = '#9aa1ab';
-        kctx.fillRect(0, y + keyHeight - 0.5, kw, 1);
-      }
-      if (pitch % 12 === 0 && keyHeight >= 9) {
-        kctx.fillStyle = '#3a414c';
-        kctx.fillText(noteName(pitch, middleC), kw - 22, y + keyHeight / 2);
-      }
-    }
-    kctx.fillStyle = '#0b0d10';
-    kctx.fillRect(kw - 1, 0, 1, h);
+    drawKeys(kctx, {
+      width: keysWidth,
+      height: size.h,
+      keyHeight,
+      yOf,
+      color: track?.color ?? '#5cb8ff',
+      lit: held.current,
+      middleC,
+    });
   };
 
   /** The refs that can reach into the view, from the first that may to the first that can't. */
@@ -305,16 +272,7 @@ export function PianoRoll() {
 
     const ctx = prepare(notesCanvas.current, w, h);
     if (ctx) {
-      for (let pitch = 0; pitch < 128; pitch++) {
-        const y = yOf(pitch);
-        if (y > h || y + keyHeight < 0) continue;
-        ctx.fillStyle = isBlack(pitch) ? '#121418' : '#181b20';
-        ctx.fillRect(0, y, w, keyHeight);
-        if (pitch % 12 === 0 || pitch % 12 === 5) {
-          ctx.fillStyle = pitch % 12 === 0 ? '#2a2f37' : '#1f2329';
-          ctx.fillRect(0, y + keyHeight - 1, w, 1);
-        }
-      }
+      drawLanes(ctx, w, h, keyHeight, yOf);
       // regions: lighter where the track has one, the selected ones a touch more
       for (const r of track?.regions ?? []) {
         const x0 = v.tickToX(r.start);
@@ -540,13 +498,13 @@ export function PianoRoll() {
       dirty.current = false;
       keysDirty.current = false;
       laneDirty.current = false;
-      drawKeys();
+      drawKeyboard();
       drawNotes(p);
       drawLane(p);
     } else {
       if (keysDirty.current) {
         keysDirty.current = false;
-        drawKeys();
+        drawKeyboard();
       }
       if (laneDirty.current) {
         laneDirty.current = false;

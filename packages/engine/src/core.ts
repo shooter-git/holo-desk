@@ -772,6 +772,17 @@ class TrackNode extends Strip {
   oldFrom = Number.NEGATIVE_INFINITY;
   fadeStart = 0;
   fadeLength = 0;
+  /**
+   * An audition ('audition'): pieces of held audio heard once, laid out from its own frame 0, and the
+   * frame it has got to and ends at (null: none sounding). The one it took over from fades out over
+   * DECLICK frames from where it was (`auditionFading` frames of it left).
+   */
+  audition: ClipSpec[] | null = null;
+  auditionPos = 0;
+  auditionEnd = 0;
+  auditionOld: ClipSpec[] | null = null;
+  auditionOldPos = 0;
+  auditionFading = 0;
   part: PartRuntime | null = null;
   input: InputSpec | null = null;
   capture: Capture | null = null;
@@ -1093,6 +1104,13 @@ export class EngineCore implements Host {
       case 'forgetAudio':
         this.audio.delete(msg.key);
         break;
+      case 'audition': {
+        // (a worker rendering ahead plays nothing live: the audio thread does, its twin if need be)
+        if (this.split && this.split.self >= 0) break;
+        const t = this.tracks.get(msg.num);
+        if (t) this.startAudition(t, msg.clips.length && !this.playing ? msg.clips : null);
+        break;
+      }
       case 'clips': {
         const t = this.tracks.get(msg.num);
         if (t) {
@@ -1173,6 +1191,8 @@ export class EngineCore implements Host {
         this.playing = true;
         this.recording = msg.record;
         for (const t of this.trackOrder) {
+          // (an audition is for the song stopped: the song takes over)
+          if (t.audition) this.startAudition(t, null);
           this.seek(t, Math.max(0, this.pos));
           if (msg.record && t.input?.record) this.beginCapture(t);
         }
@@ -1731,6 +1751,81 @@ export class EngineCore implements Host {
     }
   }
 
+  /**
+   * A track's audition becomes these pieces (null: none), the one sounding fading out from where it
+   * is. Nothing is made: the pieces are the message's own.
+   */
+  private startAudition(t: TrackNode, clips: ClipSpec[] | null): void {
+    if (t.audition && t.auditionPos < t.auditionEnd) {
+      t.auditionOld = t.audition;
+      t.auditionOldPos = t.auditionPos;
+      t.auditionFading = DECLICK;
+    }
+    t.audition = clips;
+    t.auditionPos = 0;
+    t.auditionEnd = 0;
+    if (clips)
+      for (let i = 0; i < clips.length; i++) t.auditionEnd = Math.max(t.auditionEnd, (clips[i] as ClipSpec).end);
+  }
+
+  /** A track's audition over this block (and the one it took over from, fading out), whether or not the song plays. */
+  private playAudition(t: TrackNode, n: number): void {
+    const old = t.auditionOld;
+    if (old) {
+      const count = Math.min(n, t.auditionFading);
+      this.auditionPieces(t, old, t.auditionOldPos, count, t.auditionFading);
+      t.auditionOldPos += count;
+      t.auditionFading -= count;
+      if (t.auditionFading <= 0) t.auditionOld = null;
+    }
+    const now = t.audition;
+    if (now) {
+      this.auditionPieces(t, now, t.auditionPos, n, 0);
+      t.auditionPos += n;
+      if (t.auditionPos >= t.auditionEnd) t.audition = null;
+    }
+  }
+
+  /**
+   * An audition's pieces from its frame `pos`, `count` frames, into the track's channels: each as a
+   * clip plays (its gain, its fades, a ramp where it cuts into its recording, none at a seam).
+   * `fading`: the frames left of a fade-out over DECLICK (0: none).
+   */
+  private auditionPieces(t: TrackNode, clips: ClipSpec[], pos: number, count: number, fading: number): void {
+    const end = pos + count;
+    for (let c = 0; c < clips.length; c++) {
+      const clip = clips[c] as ClipSpec;
+      if (clip.start >= end) break;
+      if (clip.end <= pos) continue;
+      const data = this.audio.get(clip.key);
+      const L = data?.[0];
+      if (!L) continue;
+      const R = data[1] ?? L;
+      const whole = clip.base === undefined ? L : this.audio.get(clip.base)?.[0];
+      const from = clip.base === undefined ? clip.source : (clip.at as number);
+      const cutIn = !clip.seamIn && from > 0;
+      const cutOut = !clip.seamOut && (!whole || from + (clip.end - clip.start) < whole.length);
+      const f1 = Math.min(end, clip.end);
+      for (let f = Math.max(pos, clip.start); f < f1; f++) {
+        const i = clip.source + (f - clip.start);
+        if (i < 0 || i >= L.length) continue;
+        let g = clip.gain;
+        const fromStart = f - clip.regionStart;
+        const toEnd = clip.regionEnd - f;
+        if (fromStart < clip.fadeIn) g *= fromStart / clip.fadeIn;
+        if (toEnd < clip.fadeOut) g *= toEnd / clip.fadeOut;
+        const a = f - clip.start;
+        const b = clip.end - f;
+        if (cutIn && a < DECLICK) g *= a / DECLICK;
+        if (cutOut && b < DECLICK) g *= b / DECLICK;
+        const o = f - pos;
+        if (fading > 0) g *= (fading - o) / DECLICK;
+        t.l[o] = (t.l[o] as number) + (L[i] as number) * g;
+        t.r[o] = (t.r[o] as number) + (R[i] as number) * g;
+      }
+    }
+  }
+
   private renderTrack(t: TrackNode, n: number, input: Float32Array[] | undefined, song = true): void {
     t.clear(n);
     let list = t.events;
@@ -1764,6 +1859,7 @@ export class EngineCore implements Host {
     t.events.clear();
     t.work.clear();
     if ((t.clips.length || t.oldClips) && this.playing && song) this.playClips(t);
+    if (t.audition || t.auditionOld) this.playAudition(t, n);
     if (t.part && this.playing && song) this.playPart(t, t.part);
     if (t.input && this.inputOf(t, input)) {
       const { inA, inB } = this;
@@ -1899,7 +1995,7 @@ export class EngineCore implements Host {
    * (Asked before it plays: playing empties its events.)
    */
   private trackBusy(t: TrackNode): boolean {
-    if (t.events.count > 0 || t.input || t.capture) return true;
+    if (t.events.count > 0 || t.input || t.capture || t.audition || t.auditionOld) return true;
     for (const inst of t.instruments) if (inst && inst.active > 0) return true;
     for (const m of t.midiFx) if (!m.bypass && m.fx.busy?.()) return true;
     return this.playing && (t.part !== null || (t.clips.length > 0 && this.clipsAhead(t)));
@@ -2351,7 +2447,7 @@ export class EngineCore implements Host {
 
   /** A twin plays while something live comes in or still sounds (its voices, its plugins' tails). */
   private twinAwake(t: TrackNode, k: number, hold: number): boolean {
-    if (t.events.count > 0 || t.input || k - t.twinSeen < hold) return true;
+    if (t.events.count > 0 || t.input || t.audition || t.auditionOld || k - t.twinSeen < hold) return true;
     for (const inst of t.instruments) if (inst && inst.active > 0) return true;
     for (const m of t.midiFx) if (!m.bypass && m.fx.busy?.()) return true;
     return false;

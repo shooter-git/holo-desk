@@ -3286,15 +3286,110 @@ html[data-layout="phone-landscape"] .bar .field input {
   white-space: nowrap;
 }
 
+/* the value is the knob's readout, and a click on it puts a field in its place to type one: the
+   two are the same height, so the knobs around don't move when it opens */
 .knob .knob-value {
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 3px;
   color: var(--lcd-text);
-  font: 500 10.5px var(--mono);
+  font: 500 10.5px / 16px var(--mono);
   white-space: nowrap;
+  cursor: text;
+}
+
+.knob .knob-value:hover {
+  background: rgb(255 255 255 / 0.07);
+}
+
+.knob .knob-entry {
+  width: 64px;
+  height: 16px;
+  padding: 0 2px;
+  border-radius: 3px;
+  color: var(--lcd-text);
+  font: 500 10.5px / 14px var(--mono);
+  text-align: center;
+}
+
+@media (pointer: coarse) {
+  .knob .knob-value {
+    height: 24px;
+    line-height: 24px;
+  }
+  .knob .knob-entry {
+    width: 76px;
+    height: 24px;
+    font-size: 16px;
+  }
 }
 
 .knob.choice {
   cursor: default;
   justify-content: center;
+  min-width: 0;
+}
+
+/* a setting that is one of several names: a button that opens a menu of them */
+.btn.choice-menu {
+  max-width: 100%;
+  gap: 4px;
+  padding: 0 6px 0 9px;
+}
+
+.face .knob.choice.wide {
+  grid-column: span 2;
+}
+
+.btn.choice-menu .grow {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Channel EQ's bands: a column each, low to high, with frequency, gain and Q on the same lines
+   across them (four columns across on a phone) */
+.eq-bands {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 10px 6px;
+  padding: 12px 12px 0;
+}
+
+@media (max-width: 700px) {
+  .eq-bands {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+
+.eq-band {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.eq-band > .label {
+  white-space: nowrap;
+}
+
+/* (a cut's switch stands where the other bands have their gain, as tall as a knob with its value,
+   so the names under them stay on one line) */
+.eq-band .knob.choice {
+  justify-content: flex-start;
+}
+
+.eq-band .knob.choice .btn {
+  height: 30px;
+  margin-bottom: 20px;
+}
+
+@media (pointer: coarse) {
+  .eq-band .knob.choice .btn {
+    margin-bottom: 28px;
+  }
 }
 
 /* the gain-reduction meter: a display, so its bar may glow */

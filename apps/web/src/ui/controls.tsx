@@ -9,9 +9,11 @@ import {
   useId,
   useMemo,
   useRef,
+  useState,
 } from 'react';
 import { engine } from '../audio/engine.ts';
 import { prepare, useFrame } from './frame.ts';
+import { entryText, parseParam } from './param-entry.ts';
 import { sideways, WheelSteps } from './wheel-steps.ts';
 
 // ---- the fader law: about 0 dB at 84% of the travel, +6 dB at the top ----
@@ -171,6 +173,20 @@ export function Knob({
   const zero = bipolar ? a0 + toUnit(def, 0) * 270 : a0;
   const name = label ?? def.name;
   const text = formatParam(def, value);
+  // The value, typed: a click on it (or Enter on the knob) puts a field in its place. Enter or
+  // leaving the field sets what was typed, as one step; Escape leaves the knob as it was.
+  const [typing, setTyping] = useState(false);
+  const canceled = useRef(false);
+  const enter = (typed: string) => {
+    setTyping(false);
+    const v = canceled.current ? null : parseParam(def, typed);
+    canceled.current = false;
+    if (v === null || v === value) return;
+    burst.flush();
+    onBegin?.();
+    onChange(v);
+    onEnd?.();
+  };
   // one step: the parameter's own, or a hundredth of the travel
   const continuous = !def.step || def.scale === 'log';
   const stepUnit = continuous ? 0.01 : (def.step as number) / (def.max - def.min);
@@ -191,7 +207,7 @@ export function Knob({
       aria-valuemax={def.max}
       aria-valuenow={value}
       aria-valuetext={text}
-      title={`${name}: ${text} (double-click resets, Shift for fine)`}
+      title={`${name}: ${text} (double-click resets, Shift for fine${compact ? '' : ', click the value to type one'})`}
       onPointerDown={(e) => {
         if (e.button !== 0) return;
         burst.flush();
@@ -215,6 +231,12 @@ export function Knob({
         onEnd?.();
       }}
       onKeyDown={(e) => {
+        if (e.key === 'Enter' && !compact && !typing) {
+          e.preventDefault();
+          e.stopPropagation();
+          setTyping(true);
+          return;
+        }
         const k = keyStep(e, continuous);
         if (k === null) return;
         e.preventDefault();
@@ -251,7 +273,42 @@ export function Knob({
           strokeLinecap="round"
         />
       </svg>
-      {!compact && <span className="knob-value">{text}</span>}
+      {!compact &&
+        (typing ? (
+          <input
+            className="input knob-entry"
+            // biome-ignore lint/a11y/noAutofocus: the field appears because the value was clicked
+            autoFocus
+            defaultValue={entryText(def, value)}
+            inputMode={def.options || def.unit === 'LR' ? 'text' : 'decimal'}
+            aria-label={`${name}: type a value`}
+            onFocus={(e) => e.currentTarget.select()}
+            // (the field is in the knob: a press, a double-click or a key in it isn't the knob's)
+            onPointerDown={(e) => e.stopPropagation()}
+            onDoubleClick={(e) => e.stopPropagation()}
+            onKeyDown={(e) => {
+              e.stopPropagation();
+              if (e.key === 'Escape') canceled.current = true;
+              if (e.key === 'Enter' || e.key === 'Escape') {
+                e.preventDefault();
+                e.currentTarget.blur();
+                root.current?.focus({ preventScroll: true });
+              }
+            }}
+            onBlur={(e) => enter(e.currentTarget.value)}
+          />
+        ) : (
+          // (the knob takes the keyboard, and Enter on it opens the field: this is its readout)
+          <span
+            className="knob-value"
+            title="Click to type a value"
+            onPointerDown={(e) => e.stopPropagation()}
+            onDoubleClick={(e) => e.stopPropagation()}
+            onClick={() => setTyping(true)}
+          >
+            {text}
+          </span>
+        ))}
       {!compact && <span className="knob-label">{name}</span>}
     </div>
   );

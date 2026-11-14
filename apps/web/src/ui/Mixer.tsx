@@ -50,7 +50,8 @@ import { prepare, useFrame, useSize } from './frame.ts';
 import { isMenuPress } from './gesture.ts';
 import { openMenu, openMenuAt } from './menu.tsx';
 import { pressToReorder, useNoScrollWhileDragging } from './reorder.ts';
-import { slotName, stripRows, useScrollCue } from './strips.ts';
+import { useScrollCue } from './scroll-cue.ts';
+import { slotName, stripRows } from './strips.ts';
 import { inputLabel, instrumentLabel, instrumentMenu } from './Tracks.tsx';
 
 function pluginsOf(kind: 'audio' | 'midi'): PluginDef[] {

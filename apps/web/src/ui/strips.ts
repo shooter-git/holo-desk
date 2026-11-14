@@ -4,7 +4,6 @@
  * a share of the height whatever a strip holds, and the slots above it take what's left and scroll.
  * The row tells its style how tall it is, and whether it is too short for all of that at once.
  */
-import { type RefObject, useEffect, useLayoutEffect } from 'react';
 
 /**
  * A plugin's name on a strip's slot, where there's room for about nine letters: the names that don't
@@ -36,41 +35,6 @@ const SLOT_NAMES: Record<string, string> = {
 
 export function slotName(type: string, name: string): string {
   return SLOT_NAMES[type] ?? name;
-}
-
-/** Whether a scrolled box holds more above and below what it shows. */
-export function scrollCue(top: number, content: number, box: number): { above: boolean; below: boolean } {
-  return { above: top > 1, below: content - box - top > 1 };
-}
-
-function mark(el: HTMLElement): void {
-  const c = scrollCue(el.scrollTop, el.scrollHeight, el.clientHeight);
-  el.toggleAttribute('data-above', c.above);
-  el.toggleAttribute('data-below', c.below);
-}
-
-/**
- * Marks a scrolling box with whether there is more above and below (data-above, data-below), for
- * its style to fade that edge: the box has no scrollbar to say so. Read again as it scrolls, as it
- * resizes, and when `holds` changes (what it holds, as the caller counts it).
- */
-export function useScrollCue(ref: RefObject<HTMLElement | null>, holds: unknown): void {
-  // biome-ignore lint/correctness/useExhaustiveDependencies: holds is what the box's content depends on
-  useLayoutEffect(() => {
-    if (ref.current) mark(ref.current);
-  }, [ref, holds]);
-  useEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-    const on = () => mark(el);
-    el.addEventListener('scroll', on, { passive: true });
-    const watch = new ResizeObserver(on);
-    watch.observe(el);
-    return () => {
-      el.removeEventListener('scroll', on);
-      watch.disconnect();
-    };
-  }, [ref]);
 }
 
 /**

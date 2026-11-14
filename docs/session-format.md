@@ -142,7 +142,20 @@ it's rendered, from the song and the recording alone:
   not 440) and `sens` (how readily chords' notes were found, 0–1).
 - Only a line's notes move in time. A move warps the sound between the rests on either side of it (the
   identity everywhere else, so no other sample moves); a move that would run time backwards, squeeze or
-  stretch any part past four times, or go more than 4 s is let go. A line's notes don't overlap.
+  stretch any part past four times, or go more than 4 s is let go. A line's notes don't overlap. Where
+  one note ends and the next starts (legato), both play that place at the same time: a note moved there
+  moves its neighbour's edge with it (the neighbour stretches or squeezes), as a rest between would.
+- The edits HO[LO] makes (the studio's tools, the agent, `holo notes`: `NOTE_EDITS` in
+  `packages/session/src/note-edits.ts`) never leave an edit that changes nothing (`to` equal to `p`,
+  `dr`, `mo`, `tr` or `at` of 1, `fo` or `g` of 0, `ts` at `t`, `te` at the note's end), and a move that
+  doesn't fit is made as far as it fits rather than let go.
+- **Splits and heals.** A region split in two (or cut by inserted, deleted or moved bars, or by repeats
+  written out) keeps in each piece the notes it plays and the two nearest past either edge; a note across
+  the cut goes to both pieces as it is, so each sounds as the region did. Past a note moved in time it
+  keeps on to the first that isn't, so the warp is the same where the piece plays; notes further out are
+  let go. Two pieces of one recording heal back into one region (bars deleted again) only when the notes
+  both keep are the same, with the same edits; the healed region has the notes of both. A piece only
+  played through a repeat (not written out) keeps the region's notes whole.
 - Every number is rounded as it's made (times to 0.1 ms, pitches to 0.1 cent, the rest to hundredths)
   and kept within its range, so a song read and saved again is the same to the bit. At most 20,000
   notes a region. A HO[LO] from before notes reads the region without them.

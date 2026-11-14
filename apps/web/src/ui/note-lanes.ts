@@ -3,36 +3,45 @@
  * on the song's timeline, where a pitch sits on the semitone lanes as they're scrolled and zoomed, and
  * how a note is outlined: a capsule as thick as it's loud.
  */
-import { type AudioClip, type AudioNote, secondsToTick, type TempoPoint, tickToSeconds } from '@holo/session';
+import {
+  type AudioClip,
+  type AudioNote,
+  type NotesPlacing,
+  tickToFile as placedFile,
+  fileToTicks as placedTicks,
+  type TempoPoint,
+} from '@holo/session';
 
 const clamp = (x: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, x));
 
 // ---- time: seconds of the file and ticks of the song ----
 
-/** Where a region places its recording: the second of the file it starts at, and how it's stretched. */
-type Placing = Pick<AudioClip, 'offset' | 'stretch'>;
+/** Where a region places its recording: the second of the file it starts at, how it's stretched, and its notes' moves. */
+type Placing = Pick<AudioClip, 'offset' | 'stretch'> & Partial<Pick<AudioClip, 'notes'>>;
+
+const placing = (regionStart: number, clip: Placing): NotesPlacing => ({ start: regionStart, audio: clip });
 
 /**
- * Where times in a region's recording play on the song's timeline: seconds of the file (before the
- * region's stretch) to ticks. The region's start is worked out once, for drawing many points.
+ * Where times in a region's recording play on the song's timeline: seconds of the file as recorded
+ * to ticks, by the session's own reckoning (audio-notes.ts: a note moved in time is drawn where it now
+ * plays). The region's start is worked out once, for drawing many points.
  */
 export function fileToTicks(
   tempo: readonly TempoPoint[],
   regionStart: number,
   clip: Placing,
 ): (seconds: number) => number {
-  const s0 = tickToSeconds(tempo, regionStart);
-  return (seconds) => secondsToTick(tempo, s0 + (seconds - clip.offset) * clip.stretch);
+  return placedTicks({ tempo }, placing(regionStart, clip));
 }
 
-/** Where a time in a region's recording (seconds of the file, before its stretch) plays on the song's timeline, in ticks. */
+/** Where a time in a region's recording (seconds of the file as recorded) plays on the song's timeline, in ticks. */
 export function fileToTick(tempo: readonly TempoPoint[], regionStart: number, clip: Placing, seconds: number): number {
   return fileToTicks(tempo, regionStart, clip)(seconds);
 }
 
-/** The time in a region's recording (seconds of the file) that plays at a tick: `fileToTick` the other way. */
+/** The time in a region's recording (seconds of the file as recorded) that plays at a tick: `fileToTick` the other way. */
 export function tickToFile(tempo: readonly TempoPoint[], regionStart: number, clip: Placing, tick: number): number {
-  return clip.offset + (tickToSeconds(tempo, tick) - tickToSeconds(tempo, regionStart)) / clip.stretch;
+  return placedFile({ tempo }, placing(regionStart, clip), tick);
 }
 
 // ---- pitch: the semitone lanes, scrolled and zoomed ----

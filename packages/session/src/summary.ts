@@ -1,12 +1,13 @@
 /**
  * Sessions as text a person or the AI can read: an overview, and a track's notes bar by bar.
  */
+import { isNoteEdited } from './audio-notes.ts';
 import { automationTargets } from './automation.ts';
 import { keyText } from './keysig.ts';
 import { type MiddleC, noteName } from './notation.ts';
 import { pluginDef } from './plugins.ts';
 import { formatBarBeat, meterAt, ticksPerBeat, tickToBarBeat, tickToSeconds } from './time.ts';
-import type { Instrument, Note, Project, Track } from './types.ts';
+import type { AudioNotes, Instrument, Note, Project, Track } from './types.ts';
 import { projectEnd } from './validate.ts';
 
 export function describeInstrument(i: Instrument): string {
@@ -25,6 +26,14 @@ function describeInput(t: Track): string {
 }
 
 const db = (v: number) => (v <= -144 ? '-∞' : `${v > 0 ? '+' : ''}${v.toFixed(1)} dB`);
+
+/** An audio region's notes: "12 of 140 notes edited", "140 notes found, none edited", and whether the edits are off. */
+function notesText(notes: AudioNotes): string {
+  const edited = notes.n.filter(isNoteEdited).length;
+  const total = `${notes.n.length} note${notes.n.length === 1 ? '' : 's'}`;
+  const text = edited ? `${edited} of ${total} edited` : `${total} found, none edited`;
+  return notes.off && edited ? `${text} (edits off)` : text;
+}
 
 export function describeProject(project: Project): string {
   const end = projectEnd(project);
@@ -114,6 +123,7 @@ export function describeProject(project: Project): string {
           a.stretch !== 1 && `stretched ×${a.stretch.toFixed(3)}`,
           a.fadeIn > 0 && `fade in ${a.fadeIn.toFixed(2)} s`,
           a.fadeOut > 0 && `fade out ${a.fadeOut.toFixed(2)} s`,
+          a.notes && notesText(a.notes),
           r.muted && 'muted',
         ].filter(Boolean);
         lines.push(

@@ -2,22 +2,27 @@
 /**
  * Finding a recording's notes off the page's thread. Its bytes come from the device's cache (else the
  * server), decoded as every renderer decodes them, at the file's own rate, so the studio and the host
- * find the same notes; mixed to one channel; then its pitch every 5 ms and its notes.
+ * find the same notes; then its notes and the curves they're drawn with, heard once (notes/detect.ts).
  */
 import { decodeWav } from '@holo/engine';
-import { fineTrack, lineNotes, monoOf } from '@holo/engine/analysis';
-import { type AudioNote, roundPitch, roundTime } from '@holo/session';
-import type { NotesReply, NotesRequest } from './notes.ts';
+import { notesAndCurves } from '@holo/engine/notes';
+import type { AudioNote } from '@holo/session';
+import type { NoteCurve, NotesReply, NotesRequest } from './notes.ts';
 
 const AUDIO = 'holo-audio-v1';
 
-/** The notes of one line, as the studio shows them: the one place its note-finding is chosen. */
-function findNotes(samples: Float32Array, rate: number): AudioNote[] {
-  return lineNotes(samples, rate).map((n) => ({
-    t: roundTime(n.start),
-    d: roundTime(n.end - n.start),
-    p: roundPitch(n.pitch),
-  }));
+/** A recording's notes and its curve, as the studio shows them: the one place its note-finding is chosen. */
+function findNotes(channels: Float32Array[], rate: number): { notes: AudioNote[]; curve: NoteCurve } {
+  const { notes, curves } = notesAndCurves(channels, rate);
+  const count = curves.midi.length;
+  return {
+    notes: notes.n,
+    curve: {
+      t: Float64Array.from({ length: count }, (_, k) => curves.t0 + k * curves.step),
+      midi: Float64Array.from(curves.midi),
+      power: Float64Array.from(curves.power),
+    },
+  };
 }
 
 async function bytesOf(url: string): Promise<Uint8Array> {
@@ -40,9 +45,8 @@ self.onmessage = async (e: MessageEvent<NotesRequest>) => {
   const transfer: ArrayBuffer[] = [];
   try {
     const decoded = decodeWav(await bytesOf(`/api/projects/${project}/files/${file}`));
-    const mono = monoOf(decoded.channels);
-    const curve = fineTrack(mono, decoded.rate);
-    reply = { id, notes: findNotes(mono, decoded.rate), curve };
+    const { notes, curve } = findNotes(decoded.channels, decoded.rate);
+    reply = { id, notes, curve };
     transfer.push(curve.t.buffer as ArrayBuffer, curve.midi.buffer as ArrayBuffer, curve.power.buffer as ArrayBuffer);
   } catch (err) {
     reply = { id, error: err instanceof Error ? err.message : String(err) };

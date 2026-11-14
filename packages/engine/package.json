@@ -10,7 +10,8 @@
     "./node": "./src/node.ts",
     "./companion": "./src/companion.ts",
     "./analysis": "./src/analysis/index.ts",
-    "./analysis/pitch": "./src/analysis/pitch.ts"
+    "./analysis/pitch": "./src/analysis/pitch.ts",
+    "./notes": "./src/notes/index.ts"
   },
   "scripts": {
     "typecheck": "tsc -p ."

@@ -31,7 +31,7 @@ import { clipKey } from '../compile.ts';
 import { sha256 } from '../random.ts';
 
 /** The renderer's version: a change to what any edit sounds like changes it, so every patch is rendered again. */
-export const RENDER_V = 1;
+export const RENDER_V = 2;
 /** Around an edited note's sound, seconds. */
 const PAD_S = 0.03;
 /** The most a glide into or out of a note reaches past it, seconds. */

@@ -9,12 +9,21 @@ import {
   type Project,
   parseAudioNotes,
 } from '@holo/session';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { clipKey, compileClips, compileTempo } from '../src/compile.ts';
 import { assembleClip, renderNotePatch } from '../src/notes/patch.ts';
-import { isEdited, regionPatches, songPatches } from '../src/notes/plan.ts';
+import { isEdited, type PatchSpec, regionPatches, songPatches } from '../src/notes/plan.ts';
 import { renderSession } from '../src/render.ts';
 import { encodeWav } from '../src/wav.ts';
+
+// How patches are planned, keyed, split and played, whatever they sound like: here each is rendered
+// as the recording's own frames, so a song with edits must play to the bit what it would without them.
+// (What a patch sounds like is notes-psola.test.ts's.)
+vi.mock('../src/notes/patch.ts', async (original) => ({
+  ...(await original<typeof import('../src/notes/patch.ts')>()),
+  renderNotePatch: (base: readonly Float32Array[], _sr: number, spec: PatchSpec) =>
+    base.map((c) => c.slice(Math.min(spec.a, c.length), Math.min(spec.b, c.length))),
+}));
 
 const SR = 48000;
 
@@ -191,7 +200,7 @@ describe('a song with edited notes, rendered', () => {
   const bytes = (c: Float32Array | undefined) => Buffer.from(c?.buffer ?? new ArrayBuffer(0));
 
   for (const stretch of [1, 1.25]) {
-    it(`plays to the bit what the recording would (patches that change nothing yet), stretch ${stretch}`, async () => {
+    it(`plays to the bit what the recording would with patches that change nothing, stretch ${stretch}`, async () => {
       const plain = await renderSession(song(false, stretch), source, { sampleRate: SR, tail: 0.5, finish: false });
       const edited = await renderSession(song(true, stretch), source, { sampleRate: SR, tail: 0.5, finish: false });
       expect(songPatches(song(true, stretch), SR).length).toBeGreaterThan(2);

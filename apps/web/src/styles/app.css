@@ -1244,8 +1244,19 @@ a.btn {
   cursor: ns-resize;
 }
 
+/* (the cursor over the notes follows the tool and what it's over) */
 .audio-notes .cell:last-child {
-  cursor: grab;
+  cursor: default;
+}
+
+/* the view takes the keyboard once pressed (arrows, M, Delete for its notes): no ring for a click */
+.audio-notes:focus {
+  outline: none;
+}
+
+.audio-notes:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
 }
 
 .audio-ed.empty {
@@ -2270,6 +2281,16 @@ button.list-item {
   background: var(--accent-2);
   color: white;
   outline: none;
+}
+
+/* an item that wouldn't change anything here (a note's edits put back when it has none) is greyed */
+.menu .item:disabled {
+  color: var(--text-3);
+  cursor: default;
+}
+
+.menu .item:disabled:hover {
+  background: none;
 }
 
 .menu .item .hint {

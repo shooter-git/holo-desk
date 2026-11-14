@@ -141,7 +141,14 @@ function report(): void {
     tick: Math.round(tick),
     position: p ? formatBarBeat(p.meter, Math.max(0, tick), true) : '',
     bpm: p?.tempo[0]?.bpm ?? 120,
-    selection: { track: s.selectedTrack, regions: s.selectedRegions, notes: s.selectedNotes.length },
+    selection: {
+      track: s.selectedTrack,
+      regions: s.selectedRegions,
+      notes: s.selectedNotes.length,
+      // the notes selected in the Audio Editor's Notes view, while it shows them: the agent's and
+      // `holo notes`' "selected" (indices into the region's notes as it keeps them)
+      ...(s.audioMode === 'notes' && s.selectedAudioNotes?.notes.length ? { audioNotes: s.selectedAudioNotes } : {}),
+    },
     cycle: p?.cycle ?? { on: false, start: 0, end: 0 },
     middleC: s.middleC,
     midiPorts: s.midiPorts.map((x) => x.name),

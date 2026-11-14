@@ -1385,8 +1385,8 @@ function turnExtra(job: AgentJob): string {
   return JSON.stringify(extra);
 }
 
-/** Notes the studio says were played, checked. */
-function parsePlayed(list: unknown[]): PlayedNote[] {
+/** Notes the studio says were played, checked (also for the command line's `GET /api/live/played`). */
+export function parsePlayed(list: unknown[]): PlayedNote[] {
   const n = (v: unknown, lo: number, hi: number): number | null =>
     typeof v === 'number' && Number.isFinite(v) && v >= lo && v <= hi ? v : null;
   const out: PlayedNote[] = [];

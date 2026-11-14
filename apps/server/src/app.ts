@@ -38,6 +38,7 @@ import {
   writeMidi,
 } from '@holo/session';
 import Fastify, { type FastifyInstance, type FastifyReply } from 'fastify';
+import { parsePlayed } from './agent/jobs.ts';
 import { runnerKey } from './agent/keys.ts';
 import { agentRoutes } from './agent/routes.ts';
 import { convertToWav, sweepAudio, TO_WAV } from './audio-files.ts';
@@ -45,7 +46,7 @@ import type { Config } from './config.ts';
 import { Creations, sessionText } from './creations.ts';
 import { type SongDetails, Store } from './db.ts';
 import { guard } from './guard.ts';
-import { Live, type RenderJob } from './live.ts';
+import { Live, NO_ANSWER, type RenderJob } from './live.ts';
 import { NetworkMidi } from './network-midi.ts';
 import { omrRoutes } from './omr.ts';
 import { audioInfo, extractZip, importFolder, saveStream } from './pack-import.ts';
@@ -976,6 +977,23 @@ export async function buildApp(config: Config): Promise<{ app: FastifyInstance; 
     if (!live.editor()) return reply.code(409).send({ error: 'No studio is open' });
     const seconds = Math.min(120, Math.max(1, Number(req.query.seconds ?? 8)));
     return { seconds, notes: await live.listen(seconds * 1000) };
+  });
+
+  // what was just played in a studio (its memory of the last minute, as the agent's `played` asks it):
+  // the one with `project` open, or the most recently active
+  app.get<{ Querystring: { seconds?: string; project?: string } }>('/api/live/played', async (req, reply) => {
+    const seconds = req.query.seconds === undefined ? 20 : Number(req.query.seconds);
+    if (!(seconds >= 1 && seconds <= 60)) return reply.code(400).send({ error: 'seconds is 1 to 60' });
+    const project = req.query.project || undefined;
+    const editor = live.editor(project);
+    if (!editor) return reply.code(409).send({ error: project ? 'No studio has this song open' : 'No studio is open' });
+    const answer = await live.request(editor, { type: 'agent-played', seconds }, 3000, true);
+    if (!answer.ok || !Array.isArray(answer.notes)) {
+      if (answer.error === NO_ANSWER)
+        return reply.code(504).send({ error: 'The studio didn’t say in time what was just played' });
+      return reply.code(409).send({ error: answer.error ?? 'The studio can’t say what was just played' });
+    }
+    return { notes: parsePlayed(answer.notes) };
   });
 
   // ---- the studio itself (and, through its sendFile, the files sent from disk above) ----

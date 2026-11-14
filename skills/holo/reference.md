@@ -91,6 +91,27 @@ send the whole object back with the field changed:
 
 Stretching changes how long the region plays, so set its `length` too (ticks).
 
+## Regions (holo regions ACTION [REGION] …)
+
+A region is its id (`rgn_…`), its name, or `selected` (what's selected in the studio); with only
+`--track`, the region there (`--at`, for split) or the track's only one. Actions and their flags:
+`show`; `split --at "17 21 25"`; `delete --confirm`; `copy`/`move --at 33 [--to-track T]`;
+`repeat --times 3`; `trim [--start 9.3] [--end 13]`; `gain --db -3` (audio: the region's gain; MIDI:
+scales velocities); `fade [--fade-in 0.01] [--fade-out 1.5]` (seconds; MIDI: a velocity ramp);
+`stretch --ratio 2` or `--end 17` (audio keeps its pitch); `mute`, `unmute`; `rename --name N`;
+`quantize [--unit 1/16] [--strength 100]` and `transpose --semitones 12` (MIDI); `cc --lane 1|7|11|64|pb|at
+[--points "9=0 9.3=64"] [--clear]` (MIDI: points replace the lane from the first to the last; CC 0–127,
+pb −8192–8191; no points: the lane as it is).
+
+## Measuring (holo measure WHAT …)
+
+`take` (an audio track's recording, `--track`, `--region`, `--against key|none|TRACK`, `--grid 1/16`,
+`--through effects`; or `--file REC.wav`), `mix` (`--source bounce` for the newest bounce), `tracks`
+(`--track T`, `--against T2` for masking), `plugin` (`--track T|BUS|master --plugin TYPE|TYPE#2|fx_…`),
+`meters` (`--seconds 1–30`, while the studio plays), `file` (a recording's path, or the newest
+bounce). `--from`/`--to` limit it to some bars. Pitch is in cents, loudness in LUFS (EBU R128), peaks
+in dBTP and dBFS, bands in dB. A render estimated past ten minutes is refused with what to do instead.
+
 ## Raw operations
 
 `holo ops file.json` applies a list of operations (the same ones the studio uses), e.g.

@@ -208,6 +208,7 @@ pnpm packs install vsco2 vcsl          # by name, or all
 pnpm packs install --from ~/samples    # from files you already have (hard-linked)
 pnpm packs import ~/Downloads/MyPiano.zip --name "My Piano"
 pnpm packs import ~/Samples/MyKit --name "My Kit"   # a kit: a folder for each piece, any microphones
+pnpm packs import ~/Library/Piano/Grand.exs        # Logic's sampler instruments (EXS), just those named
 pnpm packs import-bfd ~/BFD --name "BFD"           # your own BFD: its inventory, then a kit if it can
 pnpm packs remove rock-kit             # to make room: its samples go
 ```
@@ -263,7 +264,14 @@ kept in the song, and `holo kit Drums mic:room=-6 decay=70` sets them from the c
 You can also import your own from the studio: **Library → Import a sample pack (.zip)**. SFZ
 instruments come in with their mapping, their release samples (`trigger=release`: a piano's dampers
 falling, quieter the longer a note was held where `rt_decay` says so) and the sustain pedal's own
-sounds (regions `on_locc64` sets off). Folders of samples named by note (C4, F#3, `_v2`, `_rr1`…)
+sounds (regions `on_locc64` sets off). Logic's sampler instruments (EXS) come in the same way: their
+zones, the groups they play as the controls start (a piano's notes for the pedal up, not down), their
+release-triggered groups as release samples, and their samples found where they are now, from the
+folders the instrument names. `pnpm packs import` on one or more `.exs` files imports exactly those
+(a library's folders often hold dozens); a folder or ZIP brings in every one in it. Their samples need
+to be WAV, FLAC, OGG or MP3 (AIFF and CAF aren't read yet), and their envelopes and filters aren't
+read. Where an instrument's release samples stop short of its top keys, as a grand's dampers do, the
+keys above them ring on when let go. Folders of samples named by note (C4, F#3, `_v2`, `_rr1`…)
 become instruments, and a folder of one-shot hits becomes a drum kit on the General MIDI keys.
 
 A kit's folder with a folder for each piece (Kick, Snare, Hi-Hat Closed, Hi-Hat Open, Tom 1, Crash,

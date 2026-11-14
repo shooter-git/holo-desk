@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, relative, sep } from 'node:path';
 import { deflateRawSync } from 'node:zlib';
 import {
   decodeInput,
@@ -18,7 +18,17 @@ import {
 } from '@holo/music';
 import { afterAll, afterEach, describe, expect, it } from 'vitest';
 import { loadConfig } from '../src/config.ts';
-import { BFD_LICENSE, extractZip, importBfd, importFolder, instrumentFromSfz, noteNumber } from '../src/pack-import.ts';
+import { parseExs } from '../src/exs.ts';
+import {
+  BFD_LICENSE,
+  extractZip,
+  importBfd,
+  importFolder,
+  importPrograms,
+  instrumentFromExs,
+  instrumentFromSfz,
+  noteNumber,
+} from '../src/pack-import.ts';
 import { installedPack, installPack, packFiles, useShippedMaps } from '../src/pack-install.ts';
 import type { PackInstrument, Zone } from '../src/packs.ts';
 
@@ -45,6 +55,81 @@ function wav(path: string, frames = 4410, rate = 44100): void {
   head.writeUInt32LE(data.length, 40);
   mkdirSync(join(path, '..'), { recursive: true });
   writeFileSync(path, Buffer.concat([head, data]));
+}
+
+interface ExsSpec {
+  groups: { name: string; volume?: number; release?: boolean; select?: [number, number, number, number] }[];
+  zones: {
+    key: number;
+    lo?: number;
+    hi?: number;
+    vel?: [number, number];
+    opts?: number;
+    volume?: number;
+    pan?: number;
+    coarse?: number;
+    fine?: number;
+    group: number;
+    sample: number;
+  }[];
+  samples: { file: string; folder: string }[];
+}
+
+/** A tiny EXS instrument, its chunks laid out as Logic writes them (little-endian, else big). */
+function exs(path: string, spec: ExsSpec, big = false): void {
+  const out: Buffer[] = [];
+  const put32 = (b: Buffer, v: number, at: number) =>
+    big ? b.writeUInt32BE(v >>> 0, at) : b.writeUInt32LE(v >>> 0, at);
+  const s8 = (v: number) => (v < 0 ? v + 256 : v);
+  const chunk = (kind: number, name: string, d: Buffer) => {
+    const h = Buffer.alloc(84);
+    put32(h, (kind << 24) | 0x0101, 0);
+    put32(h, d.length, 4);
+    h.write(big ? 'SOBT' : 'TBOS', 16, 'latin1');
+    h.write(name, 20, 'latin1');
+    out.push(h, d);
+  };
+  chunk(0, 'Test', Buffer.alloc(40));
+  for (const [i, z] of spec.zones.entries()) {
+    const d = Buffer.alloc(108);
+    d[0] = z.opts ?? 0x08;
+    d[1] = z.key;
+    d[2] = s8(z.fine ?? 0);
+    d[3] = s8(z.pan ?? 0);
+    d[4] = s8(z.volume ?? 0);
+    d[6] = z.lo ?? z.key;
+    d[7] = z.hi ?? z.key;
+    d[9] = z.vel?.[0] ?? 0;
+    d[10] = z.vel?.[1] ?? 127;
+    put32(d, 4410, 16);
+    d[80] = s8(z.coarse ?? 0);
+    put32(d, z.group, 88);
+    put32(d, z.sample, 92);
+    chunk(1, `Zone #${i + 1}`, d);
+  }
+  for (const g of spec.groups) {
+    const d = Buffer.alloc(120);
+    d[0] = s8(g.volume ?? 0);
+    d[6] = 127;
+    d[73] = g.release ? 1 : 0;
+    put32(d, -1, 80);
+    const [type, cc, lo, hi] = g.select ?? [0, 0, 0, 127];
+    d.set([type, cc, lo, hi], 84);
+    chunk(2, g.name, d);
+  }
+  for (const s of spec.samples) {
+    const d = Buffer.alloc(592);
+    put32(d, 44, 0);
+    put32(d, 4410, 4);
+    put32(d, 44100, 8);
+    put32(d, 16, 12);
+    put32(d, 1, 16);
+    d.write(s.folder, 80, 'latin1');
+    d.write(s.file, 336, 'latin1');
+    chunk(3, s.file, d);
+  }
+  mkdirSync(join(path, '..'), { recursive: true });
+  writeFileSync(path, Buffer.concat(out));
 }
 
 const RATE = 22050;
@@ -192,6 +277,131 @@ describe('pack import', () => {
       ['c4_f.wav', 'room', undefined],
       ['pedal_down.wav', undefined, 'pedalDown'],
     ]);
+  });
+
+  /** A piano laid out as a Logic library is: its instruments in one folder, its samples in another. */
+  const exsPiano = () => {
+    const root = join(work, 'exs-lib', 'Piano');
+    for (const f of ['up/c4_p', 'up/c4_f', 'down/c4_down', 'up/c7', 'release/rel'])
+      wav(join(root, 'samples', `${f}.wav`));
+    exs(join(root, 'Instruments', 'Grand.exs'), {
+      groups: [
+        { name: 'pedal down', select: [3, 64, 64, 127] },
+        { name: 'pedal up', select: [3, 64, 0, 63] },
+        { name: 'release', release: true, volume: -19 },
+      ],
+      // the folders they were in on the machines the instrument was made on
+      samples: [
+        {
+          file: 'c4_p.wav',
+          folder: 'Macintosh HD:Library:Application Support:Logic:Sampler Instruments:Piano:samples:up',
+        },
+        { file: 'c4_f.wav', folder: '/Library/Application Support/Logic/Sampler Instruments/Piano/samples/up' },
+        { file: 'c4_down.wav', folder: '/Library/Application Support/Logic/Sampler Instruments/Piano/samples/down' },
+        { file: 'c7.wav', folder: 'C:\\Samples\\Piano\\samples\\up' },
+        { file: 'rel.wav', folder: '/Volumes/Library/Piano/samples/release' },
+        { file: 'gone.wav', folder: '/Volumes/Library/Piano/samples/up' },
+      ],
+      zones: [
+        { key: 60, vel: [0, 63], opts: 0x0a, group: 1, sample: 0 },
+        { key: 60, vel: [64, 127], opts: 0x0a, pan: 32, group: 1, sample: 1 },
+        { key: 60, opts: 0x0a, group: 0, sample: 2 },
+        { key: 96, lo: 95, hi: 97, opts: 0x00, coarse: 1, fine: -50, group: 1, sample: 3 },
+        { key: 60, lo: 59, hi: 61, opts: 0x0b, volume: -2, group: 2, sample: 4 },
+        { key: 62, group: 1, sample: 5 },
+        { key: 64, opts: 0x0c, group: 1, sample: 0 },
+      ],
+    });
+    exs(join(root, 'Instruments', 'Other.exs'), {
+      groups: [],
+      samples: [{ file: 'c4_p.wav', folder: '/Volumes/Old/samples/up' }],
+      zones: [{ key: 60, group: -1, sample: 0 }],
+    });
+    return root;
+  };
+
+  it("maps an EXS instrument: the pedal's notes as it starts, release samples, the undamped top keys", () => {
+    const root = exsPiano();
+    const { inst, files, referenced, skipped } = instrumentFromExs(join(root, 'Instruments', 'Grand.exs'));
+    // a sample that isn't there and a zone played backwards are left out, and counted
+    expect(skipped).toEqual({ missing: 1, format: 0, reverse: 1 });
+    // its release samples stop at C#4: the keys above have no dampers and ring on
+    expect([inst.pitched, inst.oneShot, inst.undamped]).toEqual([true, false, 62]);
+    const of = (f: string) => inst.zones.filter((z) => z.file.endsWith(f));
+    expect(of('c4_p.wav').map((z) => [z.lo, z.hi, z.root, z.lovel, z.hivel, z.trigger])).toEqual([
+      [60, 60, 60, 1, 63, undefined],
+    ]);
+    expect(of('c4_f.wav').map((z) => [z.lovel, z.hivel, z.pan])).toEqual([[64, 127, 0.5]]);
+    // the notes recorded with the pedal down wait for the pedal (it starts up), though they're the program's
+    expect(of('c4_down.wav')).toEqual([]);
+    expect(referenced.some((f) => f.endsWith(join('down', 'c4_down.wav')))).toBe(true);
+    // tuned a semitone up and half one down; its velocity range is off, so every velocity plays it
+    expect(of('c7.wav').map((z) => [z.lo, z.hi, z.root, z.lovel, z.hivel])).toEqual([[95, 97, 95.5, 1, 127]]);
+    // a release that doesn't follow the key: each key plays it as recorded, at its group's level and its own
+    expect(of('rel.wav').map((z) => [z.trigger, z.lo, z.hi, z.root, z.gain])).toEqual([
+      ['release', 59, 59, 59, -21],
+      ['release', 60, 60, 60, -21],
+      ['release', 61, 61, 61, -21],
+    ]);
+    // every sample found where it is now, from an old Mac's, a Mac's or Windows' path
+    expect(files.map((f) => relative(root, f).split(sep).join('/')).sort()).toEqual([
+      'samples/release/rel.wav',
+      'samples/up/c4_f.wav',
+      'samples/up/c4_p.wav',
+      'samples/up/c7.wav',
+    ]);
+  });
+
+  it('imports exactly the EXS instruments named; a folder brings in all of them', () => {
+    const root = exsPiano();
+    const packs = join(work, 'exs-packs');
+    const pack = importPrograms([join(root, 'Instruments', 'Grand.exs')], packs, { name: 'My Grand' });
+    expect([pack.id, pack.source]).toEqual(['mine-my-grand', { kind: 'imported', from: 'Grand.exs' }]);
+    expect(pack.instruments.map((i) => i.name)).toEqual(['grand']);
+    // its samples at their paths below the folder they share with the instrument
+    const placed = [...new Set(pack.instruments[0]?.zones.map((z) => z.file))].sort();
+    expect(placed).toEqual([
+      'samples/release/rel.wav',
+      'samples/up/c4_f.wav',
+      'samples/up/c4_p.wav',
+      'samples/up/c7.wav',
+    ]);
+    for (const f of placed) expect(existsSync(join(packs, pack.id, 'samples', f))).toBe(true);
+    // a sample an instrument names but doesn't play as it starts isn't an instrument of its own
+    const all = importFolder(root, packs, { name: 'Library' });
+    expect(all.instruments.map((i) => i.name).sort()).toEqual(['grand', 'other']);
+  });
+
+  it('reads an EXS instrument written big-end first, and refuses a file that is not one', () => {
+    const file = join(work, 'exs-big', 'Big.exs');
+    exs(
+      file,
+      {
+        groups: [{ name: 'release', release: true }],
+        samples: [{ file: 'rel.wav', folder: '/Volumes/Library/samples' }],
+        zones: [{ key: 60, lo: 59, hi: 61, vel: [10, 90], group: 0, sample: 0 }],
+      },
+      true,
+    );
+    const p = parseExs(readFileSync(file));
+    expect(p.zones[0]).toMatchObject({
+      key: 60,
+      keyLo: 59,
+      keyHi: 61,
+      velLo: 10,
+      velHi: 90,
+      end: 4410,
+      group: 0,
+      sample: 0,
+    });
+    expect(p.groups[0]?.release).toBe(true);
+    expect(p.samples[0]).toMatchObject({
+      file: 'rel.wav',
+      folder: '/Volumes/Library/samples',
+      frames: 4410,
+      rate: 44100,
+    });
+    expect(() => parseExs(Buffer.alloc(200))).toThrow('Not an EXS instrument');
   });
 
   it('turns a folder of unnamed hits into a kit on General MIDI keys', () => {

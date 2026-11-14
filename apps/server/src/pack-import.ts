@@ -26,6 +26,7 @@ import { basename, dirname, extname, join, normalize, relative, resolve, sep } f
 import { inflateRawSync } from 'node:zlib';
 import { type DecodedInput, decodeInput, loudness, onset, peakDb, spreadLayers } from '@holo/music';
 import { MIC_OFF, type SampleMic } from '@holo/session';
+import { type ExsGroup, type ExsSample, readExs } from './exs.ts';
 import type { Pack, PackInstrument, Zone } from './packs.ts';
 
 const AUDIO = new Set(['.wav', '.flac', '.ogg', '.mp3']);
@@ -383,6 +384,28 @@ export function numberReleaseParts(zones: Zone[], familyOf: (zone: Zone, index: 
   }
 }
 
+/**
+ * The key a piano's dampers stop below, from its samples: where its release samples (its dampers
+ * falling) cover its lowest keys but stop short of its highest, the keys above them have no dampers and
+ * ring on when let go, as a grand's top strings do (and no damper sound plays for them).
+ */
+export function undampedFrom(zones: readonly Zone[]): number | undefined {
+  let lo = 127;
+  let hi = 0;
+  let relLo = 127;
+  let relHi = -1;
+  for (const z of zones) {
+    if (!z.trigger) {
+      lo = Math.min(lo, z.lo);
+      hi = Math.max(hi, z.hi);
+    } else if (z.trigger === 'release') {
+      relLo = Math.min(relLo, z.lo);
+      relHi = Math.max(relHi, z.hi);
+    }
+  }
+  return relHi >= 0 && relLo <= lo && relHi < hi ? relHi + 1 : undefined;
+}
+
 /** An SFZ instrument as a HO[LO] instrument; its samples are listed so they can be copied. */
 export function instrumentFromSfz(file: string): { inst: PackInstrument; files: string[] } {
   const { regions, control, groupOf } = sfzRegions(file);
@@ -562,6 +585,7 @@ export function instrumentFromSfz(file: string): { inst: PackInstrument; files: 
 
   const zones = found.map((f) => f.zone);
   numberReleaseParts(zones, (_, i) => (found[i] as Found).family);
+  const undamped = pitched && !oneShot ? undampedFrom(zones) : undefined;
   const name = basename(file, extname(file));
   return {
     inst: {
@@ -573,12 +597,186 @@ export function instrumentFromSfz(file: string): { inst: PackInstrument; files: 
       attack,
       oneShot,
       velocityRange: zones.some((z) => !z.trigger && z.lovel > 1) ? 12 : 20,
+      ...(undamped !== undefined ? { undamped } : {}),
       ...(mics.length ? { mics } : {}),
       zones,
     },
     files: [...files],
   };
 }
+
+// ---- EXS (Logic's sampler instruments) ----
+
+/**
+ * Finds an EXS instrument's samples where they are now. Each sample names the folder it was in on the
+ * machine the instrument was made on (".../Logic/Sampler Instruments/Piano/samples/layer01"): the
+ * folder's last parts are looked for beside the instrument and in the folders above it, the most of
+ * them first ("Piano/samples/layer01", then "samples/layer01", then "layer01"), then the instrument's
+ * own folder. Each old folder is found once.
+ */
+function exsSampleFinder(exsFile: string): (s: ExsSample) => string | null {
+  const own = dirname(resolve(exsFile));
+  const ancestors: string[] = [];
+  for (let d = own; ; d = dirname(d)) {
+    ancestors.push(d);
+    if (dirname(d) === d) break;
+  }
+  const found = new Map<string, string>();
+  return (s) => {
+    // an old Mac's path is "Macintosh HD:Users:…"; Windows' "C:\Samples\…"
+    const path = /[\\/]/.test(s.folder) ? s.folder.replace(/\\/g, '/') : s.folder.replace(/:/g, '/');
+    const parts = path.split('/').filter((p) => p && p !== '.' && !/^[a-z]:$/i.test(p));
+    const key = parts.join('/');
+    const known = found.get(key);
+    if (known && existsSync(join(known, s.file))) return join(known, s.file);
+    for (let n = parts.length; n >= 1; n--) {
+      const tail = parts.slice(parts.length - n);
+      for (const a of ancestors) {
+        const p = join(a, ...tail, s.file);
+        if (existsSync(p)) {
+          found.set(key, dirname(p));
+          return p;
+        }
+      }
+    }
+    const beside = join(own, s.file);
+    return existsSync(beside) ? beside : null;
+  };
+}
+
+/** What players start a controller at, 0 to 127 (volume, pan and expression have their MIDI defaults). */
+const CC_REST: Record<number, number> = { 7: 100, 10: 64, 11: 127 };
+
+/**
+ * Whether a group plays with the controls where they start: one a controller chooses plays if the
+ * controller's starting value is in its range (a piano's notes for the sustain pedal up, not down).
+ * Groups a key switch, an articulation or anything else chooses all play.
+ */
+function exsGroupPlays(g: ExsGroup | undefined): boolean {
+  if (g?.select.type !== 3) return true;
+  const at = CC_REST[g.select.number] ?? 0;
+  return at >= g.select.lo && at <= g.select.hi;
+}
+
+/**
+ * An EXS instrument as a HO[LO] instrument: its zones as the controls start them (groups a controller
+ * chooses, as it starts), their keys, velocities, tuning, level and loop, its release-triggered groups'
+ * zones as release samples, and its exclusive groups as choke groups. A zone that doesn't follow the key
+ * plays as recorded on each of its keys. Zones whose sample can't be found, isn't WAV, FLAC, OGG or MP3,
+ * or plays backwards are left out (and counted in `skipped`).
+ */
+export function instrumentFromExs(file: string): {
+  inst: PackInstrument;
+  files: string[];
+  /** Every sample it names that was found, played where its controls start or not. */
+  referenced: string[];
+  skipped: { missing: number; format: number; reverse: number };
+} {
+  const program = readExs(file);
+  const find = exsSampleFinder(file);
+  const where = new Map<number, string | null>();
+  const skipped = { missing: 0, format: 0, reverse: 0 };
+  const files = new Set<string>();
+  const referenced = new Set<string>();
+  const zones: Zone[] = [];
+  const familyOf: number[] = [];
+  let struck = 0;
+  let oneShots = 0;
+  let untracked = 0;
+  for (const z of program.zones) {
+    const g = z.group >= 0 ? program.groups[z.group] : undefined;
+    const sample = program.samples[z.sample];
+    if (!sample) continue;
+    if (!where.has(z.sample)) where.set(z.sample, find(sample));
+    const path = where.get(z.sample);
+    if (path) referenced.add(path);
+    if (!exsGroupPlays(g)) continue;
+    if (z.reverse) {
+      skipped.reverse++;
+      continue;
+    }
+    if (!path) {
+      skipped.missing++;
+      continue;
+    }
+    if (!AUDIO.has(extname(path).toLowerCase())) {
+      skipped.format++;
+      continue;
+    }
+    const velLo = Math.max(1, z.velocityOn ? z.velLo : 1, g ? g.velLo : 1);
+    const velHi = Math.min(127, z.velocityOn ? z.velHi : 127, g ? g.velHi || 127 : 127);
+    if (velHi < velLo) continue;
+    files.add(path);
+    const info = audioInfo(path);
+    const release = g?.release === true;
+    if (!release) {
+      struck++;
+      if (z.oneShot) oneShots++;
+      if (!z.pitch) untracked++;
+    }
+    const lo = Math.min(z.keyLo, z.keyHi);
+    const hi = Math.max(z.keyLo, z.keyHi);
+    const end = z.end > z.start && z.end <= info.frames ? z.end : info.frames;
+    const pan = clamp((z.pan + (g?.pan ?? 0)) / 64, -1, 1);
+    const zone: Zone = {
+      file: path,
+      root: z.key - z.coarse - z.fine / 100,
+      lo,
+      hi,
+      lovel: velLo,
+      hivel: velHi,
+      gain: z.volume + (g?.volume ?? 0),
+      start: Math.min(z.start, Math.max(0, end - 1)),
+      end,
+      loopStart: z.loopOn && z.loopEnd > z.loopStart ? z.loopStart : 0,
+      loopEnd: z.loopOn && z.loopEnd > z.loopStart ? Math.min(z.loopEnd, end) : 0,
+      rate: info.rate,
+      rr: 1,
+      ...(release ? { trigger: 'release' as const } : {}),
+      ...(g?.exclusive ? { group: g.exclusive, offBy: g.exclusive } : {}),
+      ...(pan ? { pan } : {}),
+    };
+    // a zone that doesn't follow the key: each of its keys plays it as recorded
+    const spread = z.pitch ? [zone] : range(lo, hi).map((k) => ({ ...zone, root: k, lo: k, hi: k }));
+    for (const s of spread) {
+      zones.push(s);
+      familyOf.push(z.group);
+    }
+  }
+  // round robins: zones on the same keys and velocities take turns, numbered in their order
+  const turns = new Map<string, number>();
+  for (const z of zones) {
+    const slot = `${z.trigger ?? ''}:${z.lo}:${z.hi}:${z.lovel}:${z.hivel}`;
+    const n = (turns.get(slot) ?? 0) + 1;
+    turns.set(slot, n);
+    z.rr = n;
+  }
+  numberReleaseParts(zones, (_, i) => familyOf[i] ?? -1);
+  const name = basename(file, extname(file));
+  // a drum kit plays its hits through as recorded (every zone one-shot, none following the key)
+  const kit = struck > 0 && oneShots === struck && untracked === struck;
+  const oneShot = struck > 0 && oneShots === struck;
+  const undamped = !kit && !oneShot ? undampedFrom(zones) : undefined;
+  return {
+    inst: {
+      name: slug(name),
+      title: name.replace(/[_-]+/g, ' ').trim(),
+      category: 'Imported',
+      pitched: !kit,
+      release: 0.3,
+      attack: 0.002,
+      oneShot,
+      velocityRange: zones.some((z) => !z.trigger && z.lovel > 1) ? 12 : 20,
+      ...(undamped !== undefined ? { undamped } : {}),
+      zones,
+    },
+    files: [...files],
+    referenced: [...referenced],
+    skipped,
+  };
+}
+
+const range = (lo: number, hi: number) => Array.from({ length: hi - lo + 1 }, (_, i) => lo + i);
 
 // ---- the words in sample names ----
 
@@ -1635,15 +1833,24 @@ export function importFolder(
   opts: { id?: string; name?: string; license?: string; log?: (line: string) => void },
 ): Pack {
   const name = opts.name ?? basename(source).replace(/\.(zip)$/i, '');
-  const base = privateId(opts.id ?? name);
-  let id = base;
-  for (let n = 2; existsSync(join(packsDir, id)); n++) id = `${base}-${n}`;
   const all = walk(source);
-  const sfz = all.filter((f) => extname(f).toLowerCase() === '.sfz');
+  const programs = all.filter((f) => PROGRAMS.has(extname(f).toLowerCase()));
   const instruments: PackInstrument[] = [];
   const used = new Set<string>();
-  for (const f of sfz) {
-    const { inst, files } = instrumentFromSfz(f);
+  for (const f of programs) {
+    let made: { inst: PackInstrument; files: string[]; referenced?: string[] };
+    try {
+      made = instrumentFromProgram(f, opts.log);
+    } catch (err) {
+      // a file named .exs that isn't one doesn't stop the rest
+      if (extname(f).toLowerCase() !== '.exs') throw err;
+      opts.log?.(`${basename(f)}: ${err instanceof Error ? err.message : String(err)}`);
+      continue;
+    }
+    const { inst, files, referenced } = made;
+    // samples a program names but doesn't play where its controls start (a piano's notes for the
+    // pedal held down) are its own, not loose samples of an instrument of their own
+    for (const x of referenced ?? files) used.add(x);
     if (!inst.zones.length) continue;
     for (const x of files) used.add(x);
     instruments.push(inst);
@@ -1665,7 +1872,79 @@ export function importFolder(
   }
   for (const [dir, files] of byDir)
     instruments.push(instrumentFromFolder(dir, files, opts.log ? { log: opts.log } : {}));
-  if (!instruments.length) throw new Error('No SFZ instruments or audio files (WAV, FLAC, OGG) were found');
+  if (!instruments.length) throw new Error('No SFZ or EXS instruments or audio files (WAV, FLAC, OGG) were found');
+  return writeOwnPack(instruments, source, packsDir, { ...opts, name }, basename(source));
+}
+
+/** Sampler programs: each maps its samples to keys and velocities. */
+const PROGRAMS = new Set(['.sfz', '.exs']);
+
+/** An SFZ or EXS program as an instrument (an EXS's samples it couldn't use are logged). */
+function instrumentFromProgram(
+  file: string,
+  log?: (line: string) => void,
+): { inst: PackInstrument; files: string[]; referenced?: string[] } {
+  if (extname(file).toLowerCase() !== '.exs') return instrumentFromSfz(file);
+  const { inst, files, referenced, skipped } = instrumentFromExs(file);
+  const left = [
+    skipped.missing ? `${skipped.missing} whose sample wasn't found` : '',
+    skipped.format ? `${skipped.format} whose sample isn't WAV, FLAC, OGG or MP3` : '',
+    skipped.reverse ? `${skipped.reverse} played backwards` : '',
+  ].filter(Boolean);
+  const n = inst.zones.length;
+  log?.(`${basename(file)}: ${n} zone${n === 1 ? '' : 's'}${left.length ? `, left out ${left.join(', ')}` : ''}`);
+  return { inst, files, referenced };
+}
+
+/** The deepest folder that holds every one of these paths. */
+function commonFolder(paths: readonly string[]): string {
+  let common = dirname(resolve(paths[0] as string));
+  for (const p of paths) {
+    const r = resolve(p);
+    while (r !== common && !r.startsWith(common + sep)) {
+      const up = dirname(common);
+      if (up === common) break;
+      common = up;
+    }
+  }
+  return common;
+}
+
+/**
+ * Make a pack from SFZ or EXS programs, exactly the ones given (a library's folders often hold many
+ * more): each is an instrument. Its id starts with mine-. Files are hard-linked (else copied) into
+ * `packsDir/<id>/samples`, with their paths below the folder they all share.
+ */
+export function importPrograms(
+  programs: readonly string[],
+  packsDir: string,
+  opts: { id?: string; name?: string; license?: string; log?: (line: string) => void },
+): Pack {
+  if (!programs.length) throw new Error('Give the .sfz or .exs instruments to import');
+  const made = programs.map((f) => instrumentFromProgram(resolve(f), opts.log));
+  const instruments = made.map((m) => m.inst).filter((i) => i.zones.length);
+  if (!instruments.length) throw new Error('None of these instruments has a sample HO[LO] can play');
+  const first = programs[0] as string;
+  const name = opts.name ?? basename(first, extname(first));
+  const source = commonFolder([...programs, ...made.flatMap((m) => m.files)]);
+  return writeOwnPack(instruments, source, packsDir, { ...opts, name }, basename(first));
+}
+
+/**
+ * Instruments put into a new pack of your own: unique names, every sample hard-linked (else copied)
+ * into its samples folder at its path below `source`, and its holo-pack.json written.
+ */
+function writeOwnPack(
+  instruments: PackInstrument[],
+  source: string,
+  packsDir: string,
+  opts: { id?: string; name: string; license?: string },
+  from: string,
+): Pack {
+  const name = opts.name;
+  const base = privateId(opts.id ?? name);
+  let id = base;
+  for (let n = 2; existsSync(join(packsDir, id)); n++) id = `${base}-${n}`;
   // unique names, and the files put into the pack with paths relative to its samples folder
   const names = new Set<string>();
   const target = join(packsDir, id, 'samples');
@@ -1677,7 +1956,7 @@ export function importFolder(
     inst.name = n;
     for (const z of inst.zones) {
       let rel = relative(source, z.file).split(sep).join('/');
-      // a sample an SFZ found outside the folder goes in a folder of its own, never above the pack
+      // a sample a program found outside the folder goes in a folder of its own, never above the pack
       if (rel.startsWith('../') || rel === '..' || /^([a-z]:)?\//i.test(rel)) {
         rel = outside.get(z.file) ?? `outside/${outside.size + 1}-${basename(z.file)}`;
         outside.set(z.file, rel);
@@ -1691,8 +1970,8 @@ export function importFolder(
     id,
     name,
     license: opts.license ?? 'Imported (check its own license)',
-    credit: `Imported from ${basename(source)}.`,
-    source: { kind: 'imported', from: basename(source) },
+    credit: `Imported from ${from}.`,
+    source: { kind: 'imported', from },
     root: 'samples',
     instruments,
   };

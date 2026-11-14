@@ -11,7 +11,7 @@ import {
   useRef,
 } from 'react';
 import { engine } from '../audio/engine.ts';
-import { prepare, useFrame, wake } from './frame.ts';
+import { prepare, useFrame } from './frame.ts';
 import { sideways, WheelSteps } from './wheel-steps.ts';
 
 // ---- the fader law: about 0 dB at 84% of the travel, +6 dB at the top ----
@@ -338,8 +338,9 @@ export function Meter({ id, width = 14, height }: { id: string; width?: number; 
     const px = (g: number) => Math.round(meterPos(g) * height * 2) / 2;
     const pl = px(l);
     const pr = px(r);
-    // (a level on a meter keeps the screen's pace, song or no song: a part played live, a tail still showing)
-    if (pl > 0 || pr > 0) wake();
+    // a level on a meter keeps the screen's pace, song or no song (a part played live, a tail still
+    // showing): that is what this frame returns
+    const lit = pl > 0 || pr > 0;
     const phl = px(h.l);
     const phr = px(h.r);
     const over = (h.l > 1 ? 1 : 0) + (h.r > 1 ? 2 : 0);
@@ -355,10 +356,10 @@ export function Meter({ id, width = 14, height }: { id: string; width?: number; 
       d.hr === phr &&
       d.over === over
     )
-      return;
+      return lit;
     // (the canvas is only touched once there is something new to draw on it)
     const ctx = prepare(canvas.current, width, height);
-    if (!ctx) return;
+    if (!ctx) return lit;
     drawn.current = { w: width, h: height, dpr, l: pl, r: pr, hl: phl, hr: phr, over };
     ctx.clearRect(0, 0, width, height);
     ctx.fillStyle = '#07090b';
@@ -392,6 +393,7 @@ export function Meter({ id, width = 14, height }: { id: string; width?: number; 
       const y = height - ((db - METER_MIN) / (6 - METER_MIN)) * height;
       ctx.fillRect(0, y, width, 1);
     }
+    return lit;
   });
   return <canvas ref={canvas} className="meter-canvas" style={{ width, height }} />;
 }

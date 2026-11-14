@@ -4,7 +4,8 @@
  */
 import { type RefObject, useEffect, useLayoutEffect, useRef, useState } from 'react';
 
-type Frame = (now: number) => void;
+/** A frame's work. One that returns true asks for the screen's pace to be kept (it still has something moving). */
+type Frame = (now: number) => unknown;
 const frames = new Set<Frame>();
 let running = false;
 
@@ -48,7 +49,9 @@ function awake(now: number): boolean {
 }
 
 function loop(now: number): void {
-  for (const f of frames) f(now);
+  let asked = false;
+  for (const f of frames) if (f(now) === true) asked = true;
+  if (asked) awakeUntil = now + AWAKE_MS;
   if (!frames.size) {
     running = false;
     return;
@@ -84,7 +87,10 @@ export function useMedia(query: string): boolean {
   return match;
 }
 
-/** Call `fn` every animation frame while the component is mounted. */
+/**
+ * Call `fn` every animation frame while the component is mounted (ten times a second while the
+ * loop rests). Returning true from it keeps the screen's pace, as wake() does.
+ */
 export function useFrame(fn: Frame): void {
   const ref = useRef(fn);
   ref.current = fn;

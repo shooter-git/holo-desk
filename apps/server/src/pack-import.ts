@@ -1912,22 +1912,107 @@ function commonFolder(paths: readonly string[]): string {
 
 /**
  * Make a pack from SFZ or EXS programs, exactly the ones given (a library's folders often hold many
- * more): each is an instrument. Its id starts with mine-. Files are hard-linked (else copied) into
- * `packsDir/<id>/samples`, with their paths below the folder they all share.
+ * more): each is an instrument, or with `mics` all of them one instrument, each program a microphone
+ * (see micsFromPrograms; `mics` may name them). Its id starts with mine-. Files are hard-linked (else
+ * copied) into `packsDir/<id>/samples`, with their paths below the folder they all share.
  */
 export function importPrograms(
   programs: readonly string[],
   packsDir: string,
-  opts: { id?: string; name?: string; license?: string; log?: (line: string) => void },
+  opts: {
+    id?: string;
+    name?: string;
+    license?: string;
+    mics?: boolean | readonly string[];
+    log?: (line: string) => void;
+  },
 ): Pack {
   if (!programs.length) throw new Error('Give the .sfz or .exs instruments to import');
   const made = programs.map((f) => instrumentFromProgram(resolve(f), opts.log));
-  const instruments = made.map((m) => m.inst).filter((i) => i.zones.length);
-  if (!instruments.length) throw new Error('None of these instruments has a sample HO[LO] can play');
+  const playable = made.filter((m) => m.inst.zones.length);
+  if (!playable.length) throw new Error('None of these instruments has a sample HO[LO] can play');
   const first = programs[0] as string;
   const name = opts.name ?? basename(first, extname(first));
   const source = commonFolder([...programs, ...made.flatMap((m) => m.files)]);
-  return writeOwnPack(instruments, source, packsDir, { ...opts, name }, basename(first));
+  if (!opts.mics)
+    return writeOwnPack(
+      playable.map((m) => m.inst),
+      source,
+      packsDir,
+      { ...opts, name },
+      basename(first),
+    );
+  if (playable.length < programs.length) throw new Error('Every microphone needs samples HO[LO] can play');
+  const names = Array.isArray(opts.mics) ? opts.mics : micNames(programs);
+  const inst = micsFromPrograms(
+    made.map((m) => m.inst),
+    names,
+  );
+  return writeOwnPack([inst], source, packsDir, { ...opts, name }, basename(first));
+}
+
+/**
+ * What tells programs apart, as microphones' names: the first folder (or file name) where their paths
+ * differ, less the words all of them have ("P1 player perspective", "P3 room perspective": "P1
+ * player", "P3 room").
+ */
+export function micNames(programs: readonly string[]): string[] {
+  const segs = programs.map((f) => {
+    const parts = resolve(f).split(sep);
+    parts[parts.length - 1] = basename(f, extname(f));
+    return parts;
+  });
+  const shortest = Math.min(...segs.map((x) => x.length));
+  let at = 0;
+  while (at < shortest - 1 && segs.every((x) => x[at] === segs[0]?.[at])) at++;
+  const raw = segs.map((x) => x[at] as string);
+  const ws = raw.map((r) => words(r));
+  const shared = new Set(
+    (ws[0] ?? []).map((w) => w.toLowerCase()).filter((w) => ws.every((x) => x.some((y) => y.toLowerCase() === w))),
+  );
+  return ws.map((x, i) => x.filter((w) => !shared.has(w.toLowerCase())).join(' ') || (raw[i] as string));
+}
+
+/**
+ * Programs that play the same notes from different microphones (a piano's player, close and room
+ * perspectives, each its own instrument in its library) as one instrument: each program a microphone,
+ * every microphone's zone for a note sounding together, each at its own level in the instrument's
+ * window. The first starts at full level and the others off, so it first sounds as the first did.
+ * Each microphone's zones keep their own keys and velocity layers (one may have more than another).
+ */
+export function micsFromPrograms(instruments: readonly PackInstrument[], names: readonly string[]): PackInstrument {
+  if (instruments.length < 2) throw new Error('Give two programs or more to make microphones of');
+  if (names.length !== instruments.length)
+    throw new Error(`Give a name for each of the ${instruments.length} microphones`);
+  const own = instruments.find((i) => i.mics?.length);
+  if (own) throw new Error(`${own.title} has microphones of its own: import it alone`);
+  const mics: SampleMic[] = [];
+  names.forEach((n, i) => {
+    const base = slug(n) || `mic-${i + 1}`;
+    let id = base;
+    for (let k = 2; mics.some((m) => m.id === id); k++) id = `${base}-${k}`;
+    mics.push({ id, name: n, ...(i ? { level: MIC_OFF } : {}) });
+  });
+  const first = instruments[0] as PackInstrument;
+  // its name: the words every program's has ("Steinway P1 16", "Steinway P2 16": "Steinway 16")
+  const ws = instruments.map((i) => words(i.title));
+  const common = (ws[0] ?? []).filter((w) => ws.every((x) => x.some((y) => y.toLowerCase() === w.toLowerCase())));
+  const title = common.join(' ') || first.title;
+  const undamped = instruments.map((i) => i.undamped).filter((u): u is number => u !== undefined);
+  return {
+    name: slug(title),
+    title,
+    category: first.category,
+    pitched: instruments.some((i) => i.pitched !== false),
+    release: Math.max(...instruments.map((i) => i.release)),
+    attack: Math.max(...instruments.map((i) => i.attack)),
+    oneShot: instruments.every((i) => i.oneShot),
+    velocityRange: first.velocityRange,
+    // a key any microphone heard a damper on is damped
+    ...(undamped.length ? { undamped: Math.max(...undamped) } : {}),
+    mics,
+    zones: instruments.flatMap((inst, i) => inst.zones.map((z) => ({ ...z, mic: (mics[i] as SampleMic).id }))),
+  };
 }
 
 /**

@@ -215,6 +215,7 @@ pnpm packs install --from ~/samples    # from files you already have (hard-linke
 pnpm packs import ~/Downloads/MyPiano.zip --name "My Piano"
 pnpm packs import ~/Samples/MyKit --name "My Kit"   # a kit: a folder for each piece, any microphones
 pnpm packs import ~/Library/Piano/Grand.exs        # Logic's sampler instruments (EXS), just those named
+pnpm packs import "P1 Player/Grand.exs" "P3 Room/Grand.exs" --mics   # one instrument, a level for each
 pnpm packs import-bfd ~/BFD --name "BFD"           # your own BFD: its inventory, then a kit if it can
 pnpm packs remove rock-kit             # to make room: its samples go
 ```
@@ -277,7 +278,14 @@ folders the instrument names. `pnpm packs import` on one or more `.exs` files im
 (a library's folders often hold dozens); a folder or ZIP brings in every one in it. Their samples need
 to be WAV, FLAC, OGG or MP3 (AIFF and CAF aren't read yet), and their envelopes and filters aren't
 read. Where an instrument's release samples stop short of its top keys, as a grand's dampers do, the
-keys above them ring on when let go. Folders of samples named by note (C4, F#3, `_v2`, `_rr1`…)
+keys above them ring on when let go.
+
+A library that records the same notes from several places, each its own instrument (a piano's
+player, close and room perspectives), can come in as one instrument with `--mics`: each program a
+microphone, all of them sounding together, each with a level in the instrument's window (the first
+at full, the others off until you turn them up). They're named by what tells their folders or files
+apart, or by `--mic-names "Player,Close,Room"`. Every microphone's samples load, whatever its level:
+a studio holds every sample it plays in memory, so mind the size of a big library. Folders of samples named by note (C4, F#3, `_v2`, `_rr1`…)
 become instruments, and a folder of one-shot hits becomes a drum kit on the General MIDI keys.
 
 A kit's folder with a folder for each piece (Kick, Snare, Hi-Hat Closed, Hi-Hat Open, Tom 1, Crash,

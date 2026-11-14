@@ -697,6 +697,8 @@ describe('the note edits’ registry', () => {
       'add',
       'remove',
       'reset',
+      'paste',
+      'copy-settings',
       'correct-pitch',
       'quantize-time',
       'level',

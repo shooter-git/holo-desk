@@ -95,6 +95,8 @@ ${noteActions('        ')}
         e.g. holo notes show --track Vocal · holo notes shift --notes 5 --semitones 2
              holo notes vibrato --notes "bars 9-12" --keep 60 · holo notes reset --notes all
              holo notes correct-pitch --notes all --centre 90 --drift 40 · holo notes midi --track Vocal
+             holo notes paste 7 --from 3 · holo notes copy-settings 5-9 --from 3
+             holo notes shift 5 --semitones 2 --linked   (--linked: in every region playing the recording too)
         (holo notes help lists what each does; holo notes ACTION --help its flags)
   holo timeline insert|delete|copy|move [--at 17] [--from 9] [--to 17] [--bars 4] [--confirm]
         whole bars across every track (delete and move need --confirm)

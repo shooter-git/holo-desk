@@ -11,13 +11,17 @@
  * to know beyond the notes: the song and region for the grid, the notes' levels).
  *
  * The macros (`correct-pitch`, `quantize-time`, `level`: note-macros.ts) are edits here like the
- * rest. Beside the edits, each of the three offers what's in `NOTE_EXTRAS` by the same name: a
+ * rest, and so are `paste` and `copy-settings`, which copy from another note of the recording: one of
+ * these by its number (`from`), or one the context gives (`source`: copied in another region of the
+ * same recording, or an edit linked across regions, note-link.ts), so an edit carries what it copies
+ * wherever it's made. Beside the edits, each of the three offers what's in `NOTE_EXTRAS` by the same name: a
  * region's notes made a MIDI track (`midi`, notes-midi.ts), which adds a track rather than editing.
  */
 
 import { AUDIO_NOTES_MODES, fileToTicks, MAX_MOVE_S, MIN_NOTE_S } from './audio-notes.ts';
 import {
   addNote,
+  copySettings,
   editNotes,
   fixOctave,
   joinNotes,
@@ -30,6 +34,7 @@ import {
   noteIndices,
   PITCH_SNAPS,
   type PitchSnap,
+  pasteNotes,
   removeNote,
   resetNotes,
   resizeNote,
@@ -38,6 +43,7 @@ import {
   setAttack,
   shiftNotes,
   splitNote,
+  unpasteNotes,
 } from './audio-notes-edit.ts';
 import { type MiddleC, parseNoteName } from './notation.ts';
 import { correctPitch, levelNotes, quantizeNotes } from './note-macros.ts';
@@ -107,6 +113,17 @@ export interface NoteEditContext extends NoteSelectContext {
    * from the recording (the engine's `noteLevel`), as it isn't in the song. `level` needs them.
    */
   levels?: readonly (number | null)[];
+  /**
+   * The note `paste` and `copy-settings` copy from, when it isn't one of these notes (so its number,
+   * `from`, isn't needed): one of the same recording copied in another region (the studio's clipboard,
+   * another region named to the agent), or the note an edit linked across regions copies from.
+   */
+  source?: AudioNote;
+  /**
+   * The recording's notes as detection found them: `reset` gives a pasted note back its own pitch and
+   * unvoiced start as found with them (a paste brings its sound's); without them those stay.
+   */
+  found?: readonly AudioNote[];
 }
 
 export interface NoteEdit {
@@ -121,6 +138,11 @@ export interface NoteEdit {
   selection: boolean;
   /** It needs each note's level, measured from the recording (`levels` in its context); without them it doesn't apply. */
   needsLevels?: boolean;
+  /**
+   * It copies from another note: the argument that numbers it among these notes (`from`), which isn't
+   * needed when its context gives the note (`source`).
+   */
+  source?: string;
   /** The notes edited: canonical, or the notes as they were when it doesn't apply. Arguments outside their ranges are brought in. */
   apply(notes: AudioNotes, indices: readonly number[], args: NoteArgs, ctx?: NoteEditContext): AudioNotes;
 }
@@ -135,6 +157,12 @@ const LINE: readonly AudioNotesMode[] = ['mono'];
 const ALL = AUDIO_NOTES_MODES;
 
 const pct = (a: Record<string, NoteArgValue>, k: string) => (a[k] as number) / 100;
+
+/** The note an edit copies from: the context's, else the one `from` numbers among these (from 1). */
+function sourceOf(notes: AudioNotes, a: Record<string, NoteArgValue>, ctx: NoteEditContext): AudioNote | undefined {
+  if (ctx.source) return ctx.source;
+  return typeof a.from === 'number' ? notes.n[a.from - 1] : undefined;
+}
 
 /** The scale each note snaps to: the context's, else the song's key where the note's beat plays. */
 function scalesOf(notes: AudioNotes, ctx: NoteEditContext): NoteScales {
@@ -459,7 +487,53 @@ const DEFS: Def[] = [
         help: 'Which edits go back',
       },
     ],
-    run: (notes, idx, a) => resetNotes(notes, idx, RESETS[a.what as string] ?? NOTE_EDIT_FIELDS),
+    run: (notes, idx, a, ctx) => {
+      const fields = RESETS[a.what as string] ?? NOTE_EDIT_FIELDS;
+      const out = resetNotes(notes, idx, fields);
+      return ctx.found && fields.includes('s') ? unpasteNotes(notes, out, idx, ctx.found) : out;
+    },
+  },
+  {
+    name: 'paste',
+    summary:
+      'Make notes play another note’s sound in their place (from the same recording), with its pitch as found; a note longer than it plays all of it, then is muted.',
+    modes: LINE,
+    selection: true,
+    source: 'from',
+    args: [
+      {
+        name: 'from',
+        kind: 'index',
+        min: 1,
+        required: true,
+        help: 'The note whose sound is pasted: its number',
+      },
+    ],
+    run: (notes, idx, a, ctx) => {
+      const source = sourceOf(notes, a, ctx);
+      return source ? pasteNotes(notes, idx, source) : notes;
+    },
+  },
+  {
+    name: 'copy-settings',
+    summary:
+      'Give notes another note’s edits: its drift, vibrato, glide, formant, level, mute and attack, and its pitch move from its nearest semitone.',
+    modes: ALL,
+    selection: true,
+    source: 'from',
+    args: [
+      {
+        name: 'from',
+        kind: 'index',
+        min: 1,
+        required: true,
+        help: 'The note whose edits are copied: its number',
+      },
+    ],
+    run: (notes, idx, a, ctx) => {
+      const source = sourceOf(notes, a, ctx);
+      return source ? copySettings(notes, idx, source) : notes;
+    },
   },
   {
     name: 'correct-pitch',
@@ -662,15 +736,23 @@ export function readNoteArgs(
   return out;
 }
 
-/** Arguments as `apply` takes them: read leniently (out of range brought in), defaults filled; null when a required one is missing or can't be read. */
-function lenientArgs(def: Def, given: NoteArgs, middleC: MiddleC): Record<string, NoteArgValue> | null {
+/**
+ * Arguments as `apply` takes them: read leniently (out of range brought in), defaults filled; null when
+ * a required one is missing or can't be read (but `stoodFor`, which the context stands in for).
+ */
+function lenientArgs(
+  def: Def,
+  given: NoteArgs,
+  middleC: MiddleC,
+  stoodFor?: string,
+): Record<string, NoteArgValue> | null {
   const out: Record<string, NoteArgValue> = {};
   for (const a of def.args) {
     const v = given[a.name];
     const read = v === undefined ? undefined : readArg(a, v, middleC, false);
     if (read !== undefined) out[a.name] = read;
     else if (a.default !== undefined) out[a.name] = a.default;
-    else if (a.required) return null;
+    else if (a.required && a.name !== stoodFor) return null;
   }
   return out;
 }
@@ -684,9 +766,10 @@ export const NOTE_EDITS: readonly NoteEdit[] = DEFS.map(
     args: def.args,
     selection: def.selection,
     ...(def.needsLevels ? { needsLevels: true } : {}),
+    ...(def.source ? { source: def.source } : {}),
     apply(notes, indices, args, ctx = {}) {
       if (!def.modes.includes(notes.mode)) return notes;
-      const a = lenientArgs(def, args, ctx.middleC ?? 'C4');
+      const a = lenientArgs(def, args, ctx.middleC ?? 'C4', ctx.source ? def.source : undefined);
       if (!a) return notes;
       const idx = def.selection ? noteIndices(notes, indices) : [];
       if (def.selection && !idx.length) return notes;

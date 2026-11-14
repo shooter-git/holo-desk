@@ -138,8 +138,8 @@ it's rendered, from the song and the recording alone:
   formant moved (semitones, −12 to 12); `g` its level (dB, −60 to 24) and `m` muted; `ts` and `te` where
   it now starts and ends, and `at` its attack's length against as sung (0.25–4); `s` (pasted) the place
   in the recording it plays instead (from `s` for the note's length, where the note now plays, moved too
-  if it's moved; its other edits apply to the sound pasted, whose pitch as found is `p`); `off` (chords)
-  a note left out by hand.
+  if it's moved; its other edits apply to the sound pasted, whose pitch as found is `p` and unvoiced
+  start `u`: a paste brings them with it); `off` (chords) a note left out by hand.
 - The notes object may also carry `off` (edits kept but not played), `a4` (the pitch A4 is tuned to, when
   not 440) and `sens` (how readily chords' notes were found, 0–1).
 - Only a line's notes move in time. A move warps the sound between the rests on either side of it (the

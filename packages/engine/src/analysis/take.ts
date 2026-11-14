@@ -213,10 +213,45 @@ function vibratoOf(residual: number[]): { rate: number; depth: number } | null {
 }
 
 /**
- * The notes of one line (mono samples): their times, pitches, drift, vibrato and loudness. A level
- * 38 dB under the loudest is the room, not the line.
+ * A line's pitch every 5 ms (`FINE_STEP_S`), as note-finding hears it: at each step's time `t` (seconds
+ * from the start of the samples), the pitch as MIDI with cents (NaN where it isn't voiced), and the
+ * sound's power there (the mean square over 10 ms around it). It starts 30 ms before the first voiced
+ * sound (empty when nothing is voiced) and runs to the end of the samples.
  */
-export function lineNotes(samples: Float32Array, sampleRate: number): LineNote[] {
+export interface FineTrack {
+  t: Float64Array;
+  midi: Float64Array;
+  power: Float64Array;
+}
+
+/** How far apart a fine track's steps are, seconds. */
+export const FINE_STEP_S = FINE_S;
+
+/** The pitch of one line (mono samples) every 5 ms, as `lineNotes` finds its notes by. */
+export function fineTrack(samples: Float32Array, sampleRate: number): FineTrack {
+  const tr = trackOf(samples, sampleRate);
+  if (!tr) return { t: new Float64Array(0), midi: new Float64Array(0), power: new Float64Array(0) };
+  return {
+    t: Float64Array.from(tr.fineT),
+    midi: Float64Array.from(tr.fineP),
+    power: Float64Array.from(tr.fineT, (t) => tr.envAt(t)),
+  };
+}
+
+/** What note-finding works from: the fine track, and the sound at the low rate it measures loudness at. */
+interface Tracked {
+  /** The samples at the low rate, and their running sum of squares (for loudness). */
+  x: Float32Array;
+  lr: number;
+  sq: Float64Array;
+  fineT: number[];
+  fineP: number[];
+  /** The power around a time (half of 5 ms either side, unless said). */
+  envAt: (t: number, half?: number) => number;
+}
+
+/** The coarse track, then the fine track through it (null when nothing is voiced). */
+function trackOf(samples: Float32Array, sampleRate: number): Tracked | null {
   const sr = sampleRate;
   const low = downsample(samples, sr);
   const x = low.samples;
@@ -262,7 +297,7 @@ export function lineNotes(samples: Float32Array, sampleRate: number): LineNote[]
   const fineT: number[] = [];
   const fineP: number[] = [];
   const firstVoiced = coarse.findIndex((v) => !Number.isNaN(v));
-  if (firstVoiced < 0) return [];
+  if (firstVoiced < 0) return null;
   const coarseAt = (t: number): number => {
     // the coarse pitch at a time: between the two frames around it, if both have one; else the nearer's
     let i = Math.max(0, Math.min(count - 1, Math.floor((t * lr - FRAME / 4) / HOP)));
@@ -295,6 +330,19 @@ export function lineNotes(samples: Float32Array, sampleRate: number): LineNote[]
     const b = Math.min(x.length, Math.round((t + half) * lr));
     return b > a ? ((sq[b] as number) - (sq[a] as number)) / (b - a) : 0;
   };
+  return { x, lr, sq, fineT, fineP, envAt };
+}
+
+/**
+ * The notes of one line (mono samples): their times, pitches, drift, vibrato and loudness. A level
+ * 38 dB under the loudest is the room, not the line.
+ */
+export function lineNotes(samples: Float32Array, sampleRate: number): LineNote[] {
+  const sr = sampleRate;
+  const tracked = trackOf(samples, sr);
+  if (!tracked) return [];
+  const { x, lr, fineT, fineP, envAt } = tracked;
+  const end = samples.length / sr;
   // the fine track smoothed (median of five) for finding notes
   const smooth = fineP.map((_, k) => {
     const near: number[] = [];

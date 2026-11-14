@@ -18,6 +18,10 @@
  *   import A.exs [B.exs…] [--name N] [--id ID] [--license L]
  *                                Logic's sampler instruments (EXS), exactly those: each an instrument, its
  *                                samples found where they are now
+ *   import A B… --mics [--mic-names "Close,Room"]
+ *                                SFZ or EXS programs that play the same notes from different microphones (a
+ *                                piano's player, close and room perspectives) as one instrument, each program
+ *                                a microphone with its own level (the first at full, the others off)
  *   import-bfd FOLDER [--name N] BFD, your own copy, from its folder: an inventory of what's there goes to
  *                                the data folder (bfd-inventory.txt). Plain WAV or FLAC files in a folder for each
  *                                piece are imported as a multi-microphone kit (mine-bfd-…); BFD's own sample
@@ -143,19 +147,23 @@ async function main(): Promise<void> {
     const name = flag('name');
     const id = flag('id');
     const license = flag('license');
+    const micNames = flag('mic-names');
+    const mics = rest.includes('--mics') || micNames !== undefined;
+    if (rest.includes('--mics')) rest.splice(rest.indexOf('--mics'), 1);
     const path = rest[0];
     if (!path || !existsSync(path)) throw new Error('Give the .sfz, .exs, folder or .zip to import');
-    if (path.toLowerCase().endsWith('.exs')) {
-      // EXS instruments: exactly the ones named (a library's folders hold many), their samples where they are
+    if (path.toLowerCase().endsWith('.exs') || mics) {
+      // programs: exactly the ones named (a library's folders hold many), their samples where they are
       const missing = rest.find((p) => !existsSync(p));
       if (missing) throw new Error(`${missing} isn't there`);
       const pack = importPrograms(
         rest.map((p) => resolve(p)),
         packsDir,
         {
-          name: name ?? basename(path).replace(/\.exs$/i, ''),
+          name: name ?? basename(path).replace(/\.(exs|sfz)$/i, ''),
           ...(id ? { id } : {}),
           ...(license ? { license } : {}),
+          ...(mics ? { mics: micNames ? micNames.split(',').map((n) => n.trim()) : true } : {}),
           log: (line) => console.log(`  ${line}`),
         },
       );

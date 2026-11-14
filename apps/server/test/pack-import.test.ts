@@ -372,6 +372,53 @@ describe('pack import', () => {
     expect(all.instruments.map((i) => i.name).sort()).toEqual(['grand', 'other']);
   });
 
+  it('makes one instrument of programs heard from different microphones, each at a level of its own', () => {
+    const root = join(work, 'exs-mics', 'Grand');
+    const perspective = (folder: string, tag: string, layers: [number, number][]) => {
+      const files = [...layers.map((_, i) => `${tag}_${i}.wav`), `${tag}_rel.wav`];
+      for (const f of files) wav(join(root, folder, 'samples', f));
+      exs(join(root, folder, 'Instruments', `Grand ${tag.toUpperCase()}.exs`), {
+        groups: [{ name: 'notes' }, { name: 'release', release: true }],
+        samples: files.map((file) => ({ file, folder: `/Volumes/Library/Grand/${folder}/samples` })),
+        zones: [
+          ...layers.map((vel, i) => ({ key: 60, vel, opts: 0x0a, group: 0, sample: i })),
+          { key: 60, opts: 0x0b, group: 1, sample: layers.length },
+        ],
+      });
+      return join(root, folder, 'Instruments', `Grand ${tag.toUpperCase()}.exs`);
+    };
+    // the player's perspective has two velocity layers, the room's one
+    const near = perspective('P1 player perspective', 'p1', [
+      [0, 63],
+      [64, 127],
+    ]);
+    const far = perspective('P3 room perspective', 'p3', [[0, 127]]);
+    const packs = join(work, 'mic-packs');
+    const pack = importPrograms([near, far], packs, { name: 'Grand', mics: true });
+    expect(pack.instruments).toHaveLength(1);
+    const inst = pack.instruments[0] as PackInstrument;
+    expect(inst.title).toBe('Grand');
+    // named by what tells their folders apart; the first at full level, the other off until it's turned up
+    expect(inst.mics).toEqual([
+      { id: 'p1-player', name: 'P1 player' },
+      { id: 'p3-room', name: 'P3 room', level: -60 },
+    ]);
+    const on = (mic: string) => inst.zones.filter((z) => z.mic === mic).map((z) => [z.lovel, z.hivel, z.trigger ?? '']);
+    expect(on('p1-player')).toEqual([
+      [1, 63, ''],
+      [64, 127, ''],
+      [1, 127, 'release'],
+    ]);
+    expect(on('p3-room')).toEqual([
+      [1, 127, ''],
+      [1, 127, 'release'],
+    ]);
+    // names given, and a single program can't be a set of microphones
+    const named = importPrograms([near, far], packs, { name: 'Grand', mics: ['Near', 'Far'] });
+    expect(named.instruments[0]?.mics?.map((m) => m.name)).toEqual(['Near', 'Far']);
+    expect(() => importPrograms([near], packs, { name: 'Grand', mics: true })).toThrow('two programs or more');
+  });
+
   it('reads an EXS instrument written big-end first, and refuses a file that is not one', () => {
     const file = join(work, 'exs-big', 'Big.exs');
     exs(

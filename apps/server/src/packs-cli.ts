@@ -10,10 +10,14 @@
  *                                (hard-linked when it can); each file is checked against the pack's checksums.
  *                                A palette (ready-made sounds, no audio of its own) brings the packs it requires
  *   import PATH [--name N] [--id ID] [--license L]
- *                                your own pack: an .sfz, a folder (of SFZ, of samples named by note, or a drum
- *                                kit: a folder for each piece, its microphones in folders of their own or named
- *                                in its files), or a .zip. Its id starts with mine-, so installing HO[LO]'s packs
- *                                never touches it; its samples are hard-linked into the data folder when they can be
+ *                                your own pack: an .sfz, a folder (of SFZ or EXS instruments, of samples named
+ *                                by note, or a drum kit: a folder for each piece, its microphones in folders of
+ *                                their own or named in its files), or a .zip. Its id starts with mine-, so
+ *                                installing HO[LO]'s packs never touches it; its samples are hard-linked into the
+ *                                data folder when they can be
+ *   import A.exs [B.exs…] [--name N] [--id ID] [--license L]
+ *                                Logic's sampler instruments (EXS), exactly those: each an instrument, its
+ *                                samples found where they are now
  *   import-bfd FOLDER [--name N] BFD, your own copy, from its folder: an inventory of what's there goes to
  *                                the data folder (bfd-inventory.txt). Plain WAV or FLAC files in a folder for each
  *                                piece are imported as a multi-microphone kit (mine-bfd-…); BFD's own sample
@@ -30,7 +34,7 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, 
 import { basename, dirname, join, resolve } from 'node:path';
 import { formatLock, LOCK_FILE, lockAt, PackMaps, readLock } from '@holo/music';
 import { loadConfig } from './config.ts';
-import { extractZip, importBfd, importFolder, PRIVATE_AUDIO_NOTE } from './pack-import.ts';
+import { extractZip, importBfd, importFolder, importPrograms, PRIVATE_AUDIO_NOTE } from './pack-import.ts';
 import {
   availablePacks,
   packFiles as files,
@@ -140,7 +144,25 @@ async function main(): Promise<void> {
     const id = flag('id');
     const license = flag('license');
     const path = rest[0];
-    if (!path || !existsSync(path)) throw new Error('Give the .sfz, folder or .zip to import');
+    if (!path || !existsSync(path)) throw new Error('Give the .sfz, .exs, folder or .zip to import');
+    if (path.toLowerCase().endsWith('.exs')) {
+      // EXS instruments: exactly the ones named (a library's folders hold many), their samples where they are
+      const missing = rest.find((p) => !existsSync(p));
+      if (missing) throw new Error(`${missing} isn't there`);
+      const pack = importPrograms(
+        rest.map((p) => resolve(p)),
+        packsDir,
+        {
+          name: name ?? basename(path).replace(/\.exs$/i, ''),
+          ...(id ? { id } : {}),
+          ...(license ? { license } : {}),
+          log: (line) => console.log(`  ${line}`),
+        },
+      );
+      imported(pack);
+      await rescan();
+      return;
+    }
     let source = resolve(path);
     let temp: string | null = null;
     if (source.toLowerCase().endsWith('.zip')) {

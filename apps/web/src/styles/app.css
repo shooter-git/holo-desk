@@ -919,6 +919,20 @@ a.btn {
   background: var(--bg-2);
 }
 
+/* (the tools keep their width: squeezed, the last of them was cut off at its edge) */
+.tracks-toolbar .tool-seg {
+  flex: none;
+}
+
+/* A window narrower than a desktop's, with a mouse, has the tablet's narrower headers and the
+   mouse's tools above them: they sit a little closer there, so all of them fit. */
+@media not (pointer: coarse) {
+  [data-layout="tablet"] .tracks-toolbar {
+    gap: 2px;
+    padding: 0 4px;
+  }
+}
+
 /* the headers scroll as one block, moved by the viewport rather than a render per pixel: the box
    itself never scrolls (clip, where the browser has it: a box that only hides its overflow still
    scrolls to show what takes the keyboard, and the headers would leave their lanes) */
@@ -1506,7 +1520,10 @@ a.btn {
     display: grid;
     grid-auto-flow: column;
     grid-auto-columns: max-content;
-    grid-template-rows: minmax(60px, auto) auto auto auto minmax(var(--fader-min), 1fr) auto auto;
+    /* (the name's row is max-content: a name clips what's too long for it, and for what clips an
+       auto row may be given less than its height. WebKit gives it 8 px of its 23, and a row with
+       nothing to spare did the same everywhere) */
+    grid-template-rows: minmax(60px, auto) auto auto auto minmax(var(--fader-min), 1fr) auto max-content;
     row-gap: 4px;
     overflow-y: auto;
     scrollbar-width: none;
@@ -1557,9 +1574,7 @@ a.btn {
   .mixer[data-short],
   .inspector-strips[data-short] {
     --fader-min: max(96px, calc(var(--strips-h) - var(--strip-foot)));
-    /* (the name's row is max-content as the slots' is: a name clips what's too long for it, so an
-       auto row, with nothing to spare here, gave it less than its height, and it hung out of the
-       strip's foot with no margin under it) */
+    /* (the slots' row is max-content too: they are all laid out, with nothing scrolling inside) */
     grid-template-rows: max-content auto auto auto minmax(var(--fader-min), 1fr) auto max-content;
   }
 
@@ -5307,14 +5322,27 @@ footer.scan-bar {
   overflow: hidden;
 }
 
+/* In the middle where there's room. Where there isn't (a small phone's remote, its display and
+   transport above this) it starts at the top and scrolls: centred, it was cut off at both ends,
+   the second button under the tabs. (The margins centre it, and give way when it's too tall.) */
 .scan-start {
-  display: grid;
-  place-content: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
   gap: 18px;
   height: 100%;
   padding: 24px;
+  overflow-y: auto;
   text-align: center;
   color: var(--text-2);
+}
+
+.scan-start > :first-child {
+  margin-top: auto;
+}
+
+.scan-start > :last-child {
+  margin-bottom: auto;
 }
 
 .scan-actions,

@@ -25,7 +25,7 @@ describe('the agent, before any device is allowed', () => {
       enabled: false,
       allowed: false,
       pairing: true,
-      runner: { connected: false, keyed: false },
+      runner: { connected: false, keyed: false, state: 'none' },
     });
     const bogus = await app.inject({ method: 'GET', url: '/api/agent', headers: auth('x'.repeat(43)) });
     expect(bogus.json()).toMatchObject({ allowed: false });
@@ -86,8 +86,47 @@ describe('the agent, before any device is allowed', () => {
     expect((await pair(third)).statusCode).toBe(401);
   });
 
+  it('gives holo pair a code with the runner key: no runner needed, a new one each time', async () => {
+    const { app, key, runner } = await setup();
+    const ask = (headers: Record<string, string> = { 'x-holo-runner-key': key }, payload?: object) =>
+      app.inject({ method: 'POST', url: '/api/agent/pairing', headers, ...(payload ? { payload } : {}) });
+    const pair = (code: string) =>
+      app.inject({ method: 'POST', url: '/api/agent/pair', payload: { code, name: 'Phone' } });
+
+    // another key, or none that's a string: refused, and nothing printed
+    expect((await ask({ 'x-holo-runner-key': 'cd'.repeat(32) })).statusCode).toBe(403);
+    expect((await ask({ 'x-holo-runner-key': '' })).statusCode).toBe(403);
+
+    const first = await ask();
+    expect(first.statusCode).toBe(200);
+    const { code, expires } = first.json() as { code: string; expires: number };
+    expect(code).toMatch(/^\d{6}$/);
+    expect(expires - Date.now()).toBeGreaterThan(9 * MINUTE);
+    // asked again: a new one, and the first stops working
+    const second = (await ask()).json() as { code: string };
+    if (second.code !== code) expect((await pair(code)).statusCode).toBe(401);
+
+    // a studio turning the agent on keeps a code that still works: the runner prints the same one
+    const keyed = runner();
+    const studioAsks = await ask({});
+    expect(studioAsks.statusCode).toBe(200);
+    expect(keyed.got('pairing-code').at(-1)).toMatchObject({ code: second.code });
+    // New code, from the studio: a new one
+    await ask({}, { fresh: true });
+    const fresh = String(keyed.got('pairing-code').at(-1)?.code);
+    if (fresh !== second.code) expect((await pair(second.code)).statusCode).toBe(401);
+    expect((await pair(fresh)).statusCode).toBe(200);
+  });
+
+  it('turns a studio away without a runner, and tells it where a code comes from', async () => {
+    const { app } = await setup();
+    const res = await app.inject({ method: 'POST', url: '/api/agent/pairing' });
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({ error: expect.stringMatching(/holo pair/), reason: 'no-runner' });
+  });
+
   it('locks pairing for an hour after 20 wrong codes in an hour (429)', async () => {
-    const { app, runner } = await setup();
+    const { app, key, runner } = await setup();
     const keyed = runner();
     const pair = (code: string) =>
       app.inject({ method: 'POST', url: '/api/agent/pair', payload: { code, name: 'Desk' } });
@@ -98,6 +137,11 @@ describe('the agent, before any device is allowed', () => {
       for (let i = 0; i < 5; i++) expect((await pair(wrong)).statusCode).toBe(401);
     }
     expect((await app.inject({ method: 'POST', url: '/api/agent/pairing' })).statusCode).toBe(429);
+    // holo pair too, key or not
+    expect(
+      (await app.inject({ method: 'POST', url: '/api/agent/pairing', headers: { 'x-holo-runner-key': key } }))
+        .statusCode,
+    ).toBe(429);
     expect((await pair('123456')).statusCode).toBe(429);
 
     vi.useFakeTimers({ toFake: ['Date'] });
@@ -119,7 +163,11 @@ describe('allowed devices', () => {
       enabled: true,
       allowed: false,
       pairing: false,
-      runner: { connected: true, keyed: true },
+      // the runner's computer is named only to an allowed device
+      runner: { connected: true, keyed: true, state: 'ready' },
+    });
+    expect((await app.inject({ method: 'GET', url: '/api/agent', headers: auth(desk) })).json()).toMatchObject({
+      runner: { connected: true, keyed: true, state: 'ready', host: 'runner' },
     });
     const pairWith = (code: string, name = 'Phone') =>
       app.inject({ method: 'POST', url: '/api/agent/pair', payload: { code, name } });

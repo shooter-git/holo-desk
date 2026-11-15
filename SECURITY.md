@@ -33,11 +33,15 @@ keeps it to the open song:
 - **The runner key.** The server makes `runner.key` in its data folder (32 random bytes, mode 0600) the
   first time it starts. The runner reads it there (or from `HOLO_RUNNER_KEY`) and says it when it
   connects; the server compares it in constant time. The agent's jobs, and the pairing code, go only to
-  a runner that said it. Renders work with or without it.
-- **Devices.** The first device pairs with a 6-digit code that only the runner prints, on the host. It
-  works once, for 10 minutes and 5 tries, and 20 wrong codes in an hour lock pairing for an hour. A
-  device that has lost its way back in (its site data cleared, the only allowed device lost) can pair
-  with a new code the same way, whenever a keyed runner is connected, and the allowed devices see it in
+  a runner that said it. `holo pair` reads it the same way and sends it (`X-Holo-Runner-Key`) to be
+  given a code; any other key is refused. Renders work with or without it.
+- **Devices.** The first device pairs with a 6-digit code that only the host prints: `holo pair` run
+  there, or a keyed runner. It works once, for 10 minutes and 5 tries, and 20 wrong codes in an hour
+  lock pairing for an hour. `holo pair` also prints links that fill the code in, with the code in the
+  URL's fragment, which no server sees; the studio removes it from the address as soon as it reads it,
+  and pairing still takes a press of **Pair**. Being on the same machine never counts as proof: a tailnet's
+  proxy reaches HO[LO] from this computer too. A device that has lost its way back in (its site data
+  cleared, the only allowed device lost) can pair with a new code the same way, and the allowed devices see it in
   their list at once; since that way stays open, once a device is allowed 10 wrong codes in a day lock
   pairing for a day. A later device asks to join, and a device already allowed approves or denies it.
   Each device holds a token of 32 random bytes; the server keeps only its sha256, compared in constant

@@ -78,7 +78,8 @@ describe('runners and the runner key', () => {
     old.say({ type: 'render-done', id: render.id });
     expect(render.state).toBe('done');
 
-    expect(live.runners()).toEqual({ connected: true, keyed: false });
+    // a current runner (it runs the agent's jobs) that didn't say the key: it couldn't read it
+    expect(live.runners()).toEqual({ connected: true, keyed: false, state: 'no-key', host: null });
     expect(live.agentRunners()).toEqual([]);
     // the server says why, once
     runner('another old runner');
@@ -89,7 +90,7 @@ describe('runners and the runner key', () => {
     const { live, lines, runner } = setup();
     runner('old runner');
     runner('keyed runner', KEY);
-    expect(live.runners()).toEqual({ connected: true, keyed: true });
+    expect(live.runners()).toEqual({ connected: true, keyed: true, state: 'ready', host: null });
     expect(names(live.keyedRunners())).toEqual(['keyed runner']);
     expect(names(live.agentRunners())).toEqual(['keyed runner']);
     expect(lines).toHaveLength(1);
@@ -99,11 +100,12 @@ describe('runners and the runner key', () => {
     const wrong = setup();
     wrong.runner('stale runner', 'cd'.repeat(32));
     expect(wrong.live.keyedRunners()).toEqual([]);
+    expect(wrong.live.runners().state).toBe('wrong-key');
     expect(wrong.lines[0]).toMatch(/wrong key/);
 
     const keyless = setup(null);
     keyless.runner('runner', KEY);
-    expect(keyless.live.runners()).toEqual({ connected: true, keyed: false });
+    expect(keyless.live.runners()).toMatchObject({ connected: true, keyed: false });
     expect(keyless.live.agentRunners()).toEqual([]);
   });
 
@@ -112,7 +114,7 @@ describe('runners and the runner key', () => {
     const keyed = runner('keyed runner', KEY);
     expect(live.runners().keyed).toBe(true);
     keyed.close();
-    expect(live.runners()).toEqual({ connected: false, keyed: false });
+    expect(live.runners()).toEqual({ connected: false, keyed: false, state: 'none', host: null });
 
     // one with the key that doesn't run the agent's jobs: keyed, but no agent runner
     connect({ role: 'runner', name: 'bare runner', key: KEY, caps: { render: true } });
@@ -120,12 +122,32 @@ describe('runners and the runner key', () => {
     expect(live.agentRunners()).toEqual([]);
   });
 
+  it('says how the runners stand: one from before keys is old, and the keyed one counts', () => {
+    const { live, runner } = setup();
+    runner('runner on old-box', undefined, { render: true });
+    expect(live.runners()).toEqual({ connected: true, keyed: false, state: 'old', host: 'old-box' });
+    runner('runner on desk-2.local', KEY);
+    expect(live.runners()).toEqual({ connected: true, keyed: true, state: 'ready', host: 'desk-2.local' });
+    // a name that isn't a host's names none
+    const other = setup();
+    other.runner('runner on <script>', KEY);
+    expect(other.live.runners().host).toBeNull();
+  });
+
+  it('knows its runner key, and nothing else', () => {
+    const { live } = setup();
+    expect(live.isRunnerKey(KEY)).toBe(true);
+    for (const v of ['cd'.repeat(32), '', undefined, null, 42, [KEY], 'x'.repeat(300)])
+      expect(live.isRunnerKey(v)).toBe(false);
+    expect(setup(null).live.isRunnerKey(KEY)).toBe(false);
+  });
+
   it('forgets the key when a connection says hello again as something else', () => {
     const { live, connect } = setup();
     const ws = connect({ role: 'runner', name: 'runner', caps, key: KEY });
     expect(live.runners().keyed).toBe(true);
     ws.say({ type: 'hello', role: 'remote', name: 'phone' });
-    expect(live.runners()).toEqual({ connected: false, keyed: false });
+    expect(live.runners()).toEqual({ connected: false, keyed: false, state: 'none', host: null });
   });
 
   it('ignores what an older runner says of Scan’s old AI buttons', () => {

@@ -1,6 +1,7 @@
 /**
- * Who may use the agent: the devices allowed to. The first is allowed with a 6-digit code the runner
- * prints on this computer (so whoever types it can see the computer's screen); later ones ask, and a
+ * Who may use the agent: the devices allowed to. The first is allowed with a 6-digit code only this
+ * computer prints (the runner, or `holo pair`, both with the runner key; so whoever types it can use
+ * the computer); later ones ask, and a
  * device already allowed approves them. The code stays a way in whenever a keyed runner is connected,
  * so a device that has lost its token (its site data cleared, the only allowed one lost) pairs again
  * the same way, and the allowed devices see it in their list at once. Each holds a token (32 random
@@ -123,8 +124,15 @@ export class Auth {
     return `Too many wrong codes: try again ${this.lockedUntil - this.now() > HOUR ? 'tomorrow' : 'in an hour'}`;
   }
 
-  /** A new code (the one before stops working), for the runner to print. */
-  startPairing(): { code: string; expires: number } {
+  /**
+   * A code, for the runner or `holo pair` to print. `fresh`: a new one (the one before stops working);
+   * otherwise one that still works is kept, so a studio turning the agent on doesn't undo the code
+   * `holo pair` just printed (its tries carry on).
+   */
+  startPairing(fresh = true): { code: string; expires: number } {
+    const live = this.code;
+    if (!fresh && live && this.now() <= live.expires && live.tries < CODE_TRIES)
+      return { code: live.code, expires: live.expires };
     const code = String(randomInt(0, 1_000_000)).padStart(6, '0');
     const expires = this.now() + CODE_LIFE;
     this.code = { code, expires, tries: 0 };

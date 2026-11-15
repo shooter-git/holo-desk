@@ -51,7 +51,31 @@ export interface AgentInfo {
   enabled: boolean;
   allowed: boolean;
   pairing: boolean;
-  runner: { connected: boolean; keyed: boolean };
+  /**
+   * The runners: `ready` (one with the key), `old` (from before keys), `no-key` (one that can't read
+   * it), `wrong-key` (another HO[LO]'s), `none`. `host` is the runner's computer, told only to an allowed device.
+   */
+  runner: { connected: boolean; keyed: boolean; state?: RunnerState; host?: string };
+}
+
+export type RunnerState = 'none' | 'ready' | 'old' | 'no-key' | 'wrong-key';
+
+/**
+ * Why the agent has no runner to run on, said to an allowed device: none connected, or the one that is
+ * from before keys, can't read the key, or has another HO[LO]'s. Nothing when one is ready. (A host
+ * from before `state` says only connected or not: one connected without the key is taken as old.)
+ */
+export function runnerProblem(runner: AgentInfo['runner'] | undefined): string | null {
+  if (!runner || runner.keyed) return null;
+  const it = `The runner${runner.host ? ` on ${runner.host}` : ''}`;
+  const state = runner.state ?? (runner.connected ? 'old' : 'none');
+  if (state === 'old')
+    return `${it} is from an older HO[LO] than this studio, so the agent can’t use it: bring its checkout up to this version and restart it.`;
+  if (state === 'no-key')
+    return `${it} can’t read HO[LO]’s runner key: run it from the checkout whose data folder HO[LO] uses (or give it HOLO_RUNNER_KEY).`;
+  if (state === 'wrong-key')
+    return `${it} has another HO[LO]’s runner key: point its HOLO_DATA_DIR at this HO[LO]’s data folder.`;
+  return 'No runner is connected: start it on the computer HO[LO] runs on (pnpm runner; on Linux, pnpm run runner-service on keeps it running). It finds Claude Code, Codex and Cursor.';
 }
 
 export type JobState = 'waiting' | 'running' | 'awaiting' | 'done' | 'failed' | 'cancelled';
@@ -683,13 +707,23 @@ export async function loadDevices(): Promise<void> {
   agent.dispatch({ type: 'devices', devices: await call<DeviceList>('GET', '/api/agent/devices') });
 }
 
-/** Pairing: the runner prints a code on the host (for the first device, or one with no allowed device at hand). */
-export async function startPairing(): Promise<number> {
-  return (await call<{ expires: number }>('POST', '/api/agent/pairing')).expires;
+/**
+ * Pairing: a keyed runner prints a code on the host (for the first device, or one with no allowed
+ * device at hand); one that still works is kept unless `fresh`. Without a runner, `holo pair` on the host
+ * prints one: false then (409 `no-runner`), and the code is asked for all the same.
+ */
+export async function startPairing(fresh = false): Promise<boolean> {
+  try {
+    await call<{ expires: number }>('POST', '/api/agent/pairing', fresh ? { fresh: true } : {});
+    return true;
+  } catch (err) {
+    if (err instanceof AgentError && err.reason === 'no-runner') return false;
+    throw err;
+  }
 }
 
 /**
- * Pair with the runner's code (any device, any time: the first, or one with no allowed device at hand):
+ * Pair with a code from the host (any device, any time: the first, or one with no allowed device at hand):
  * this device is allowed, and the agent turns on. It resolves only once the host says so.
  */
 export async function pair(code: string, name: string): Promise<void> {

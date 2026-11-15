@@ -3291,7 +3291,7 @@ html[data-layout="phone-landscape"] .bar .field input {
   min-width: 0;
 }
 
-/* "No allowed device at hand?": the quiet second way, the runner's code */
+/* "No allowed device at hand?": the quiet second way, a code from the host */
 .agent-alt {
   gap: 2px;
   flex-wrap: wrap;

@@ -16,6 +16,7 @@
     "@holo/engine": "workspace:*",
     "@holo/music": "workspace:*",
     "@holo/score": "workspace:*",
-    "@holo/session": "workspace:*"
+    "@holo/session": "workspace:*",
+    "qrcode-generator": "2.0.4"
   }
 }

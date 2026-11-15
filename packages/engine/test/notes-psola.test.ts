@@ -1366,6 +1366,54 @@ describe('a line’s note pasted', () => {
     expect(pitchAlong(q, phrases, 1.08, 1.3, (s) => s + 2.2).worst).toBeLessThan(3);
     expect(rmsOf(q, 1.38, 1.47)).toBeLessThan(rmsOf(phrases, 1.38, 1.47) * 1e-3);
   });
+
+  it('moved whole from later in the take than the note after it, moved +2 or not: its sound’s pitch to within 3 cents all through, the note after it as recorded', () => {
+    const tuned = (notes: AudioNotes, i: number) =>
+      line(notes.n.map((n, k) => (k === i ? { ...n, to: (n.p as number) + 2 } : n)));
+    for (const up of [0, 2]) {
+      // in a line: from where it starts (straight onto its sound's marks), or where its shift is all there
+      const inLine = up ? tuned(pastedPhrase, 1) : pastedPhrase;
+      const p = edited([phrases], inLine).out[0] as Float32Array;
+      const [from, to] = up ? [0.96, 1.44] : [0.93, 1.47];
+      const sung = pitchAlong(p, phrases, from, to, sourceOf(inLine), 100 * up);
+      expect(sung.steady, `in a line, +${up}`).toBeLessThan(3);
+      expect(Math.abs(sung.mean), `in a line, +${up}`).toBeLessThan(1);
+      // (and straight back onto the recording's marks where it ends: no drift onto them in the next note)
+      if (!up) expect(pitchAlong(p, phrases, 1.51, 2, (s) => s).steady).toBeLessThan(3);
+      // after a rest: the third note's sound in the second's place
+      const apart = wideNotes({ p: 59, s: 3.7, ...(up ? { to: 61 } : {}) });
+      const o = edited([wide], apart).out[0] as Float32Array;
+      const there = pitchAlong(o, wide, 2.03, 2.47, sourceOf(apart), 100 * up);
+      expect(there.steady, `after a rest, +${up}`).toBeLessThan(3);
+      expect(Math.abs(there.mean), `after a rest, +${up}`).toBeLessThan(1);
+    }
+  }, 60_000);
+
+  it('renders a note pasted from far away in about the time of one pasted from near by', () => {
+    // a long take: the two phrases again and again; a note near its end pasted from 2.2 s later, or 20.8 s earlier
+    const take = new Float32Array(Math.round(6 * 4.6 * SR));
+    for (let k = 0; k < 6; k++) take.set(phrases, Math.round(k * 4.6 * SR));
+    const at = 23;
+    const pastedFrom = (s: number) =>
+      line([
+        { t: at + 0.3, d: 0.6, p: 57 },
+        { t: at + 0.9, d: 0.6, p: 61, s },
+        { t: at + 1.5, d: 0.6, p: 59 },
+      ]);
+    const time = (notes: AudioNotes): number => {
+      const jobs = regionPatches(clip(notes), SR);
+      let best = Number.POSITIVE_INFINITY;
+      for (let r = 0; r < 3; r++) {
+        const t0 = performance.now();
+        for (const job of jobs) renderNotePatch([take], SR, job.spec);
+        best = Math.min(best, performance.now() - t0);
+      }
+      return best;
+    };
+    const near = time(pastedFrom(at + 3.1));
+    const far = time(pastedFrom(3.1));
+    expect(far).toBeLessThan(3 * near);
+  }, 60_000);
 });
 
 describe('a song with a line’s notes edited, rendered', () => {

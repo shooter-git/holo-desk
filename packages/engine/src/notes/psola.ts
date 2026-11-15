@@ -66,8 +66,11 @@
  *   (over up to 64 periods), by what its room allows where it hasn't, the change coming in and going
  *   over the first and last quarter of them so that neighbouring periods differ by much less. So a
  *   patch, which reaches past its edits, starts and ends as the recording does; a breath between moved
- *   notes is copied as it is; a pasted note starts from the recording's marks and settles onto its own
- *   sound's, then back.
+ *   notes is copied as it is. Where the sound read jumps (into or out of a pasted note) no periods are
+ *   followed across: the marks lock straight onto the other side's, from the first played half a
+ *   period past the mark before (one just before the jump too, so the jump lands on that sound's own
+ *   periods). The sound changes there anyway; marks drifting onto it would bend its pitch for a few
+ *   hundred ms.
  * - **Level edits** (curve.ts `noteGain`), last, at the time of the notes each frame plays.
  *
  * Every channel is moved by the same marks and levels, so a stereo image stays where it was.
@@ -106,6 +109,8 @@ const LEVEL_MAX = 2;
 const SAME_MOVE = 1e-6;
 /** A piece of the warp this close to a slope of 1 moves the sound rather than stretching it. */
 const SLOPE_EPS = 1e-9;
+/** Where the place read moves on by more than this (frames) from one piece to the next, the sound read jumps. */
+const JUMP = 0.5;
 
 /** The patch of a line: the frames `a` to `b` of `base` with its notes' edits, rendered. */
 export function renderLinePatch(base: readonly Float32Array[], sr: number, spec: PatchSpec): Float32Array[] {
@@ -189,10 +194,14 @@ interface Way {
   rest: boolean[];
   /** Whether a piece plays a pasted note: its sound comes from elsewhere, so where it stops reading isn't where the piece after it starts. */
   pasted: boolean[];
+  /** Whether any does. */
+  pastes: boolean;
   scale: number;
   src(y: number): number;
   /** Where piece p reads frame y (as it would past its own frames too). */
   srcIn(p: number, y: number): number;
+  /** Whether the sound read jumps from somewhere to elsewhere after frame y0, up to y1 (into or out of a pasted note). */
+  jumps(y0: number, y1: number): boolean;
   noteTimes(from: number, into: Float64Array): void;
   /** The piece a frame is in. */
   pieceAt(y: number): number;
@@ -226,6 +235,7 @@ function wayOf(notes: readonly AudioNote[], scale: number, a: number, b: number,
     xk: [],
     rest: [],
     pasted: [],
+    pastes: false,
     scale,
     src(y) {
       return this.srcIn(this.pieceAt(y), y);
@@ -235,6 +245,15 @@ function wayOf(notes: readonly AudioNote[], scale: number, a: number, b: number,
       if (kind === IDENTITY) return y;
       if (kind === MOVED) return y - (this.d[p] as number);
       return (this.s0[p] as number) + (y - (this.y0[p] as number)) * (this.k[p] as number);
+    },
+    jumps(y0, y1) {
+      if (!this.pastes) return false;
+      for (let p = this.pieceAt(y0) + 1; p < this.y0.length && (this.y0[p] as number) <= y1; p++) {
+        const y = this.y0[p] as number;
+        if ((this.pasted[p] || this.pasted[p - 1]) && Math.abs(this.srcIn(p, y) - this.srcIn(p - 1, y)) > JUMP)
+          return true;
+      }
+      return false;
     },
     noteTimes(from, into) {
       let p = this.pieceAt(from);
@@ -341,6 +360,7 @@ function wayOf(notes: readonly AudioNote[], scale: number, a: number, b: number,
     }
   }
   piece(b, IDENTITY, 0, 0, 0, 1, 0, 0);
+  way.pastes = way.pasted.includes(true);
   return way;
 }
 
@@ -405,10 +425,10 @@ function windowsOf(
     if (way.kind[p] === IDENTITY) continue;
     const y0 = way.y0[p] as number;
     const y1 = way.y0[p + 1] as number;
-    // (a pasted note stretched is heard to where its own piece stops reading it, not only to where the
-    // next piece starts: its grains are found period by period all through its sound)
+    // (a pasted note's sound is heard to where its own piece stops reading it, not to where the next
+    // piece starts: that's elsewhere in the recording)
     const s0 = way.src(y0);
-    const s1 = way.pasted[p] && way.kind[p] === STRETCHED ? way.srcIn(p, y1) : way.src(y1);
+    const s1 = way.pasted[p] ? way.srcIn(p, y1) : way.src(y1);
     const lo = Math.floor(Math.min(s0, s1));
     const hi = Math.ceil(Math.max(s0, s1));
     const from = Math.max(c0, lo - reach);
@@ -954,6 +974,31 @@ function synthesisPlan(heard: Analysis, way: Way, lay: Layout, end: number, grid
       D = d0;
       return s0;
     }
+    if (j > 0 && !Number.isNaN(d0) && way.jumps(tau[j - 1] as number, x0)) {
+      // where the sound read jumps (into or out of a pasted note), straight onto the marks of the sound
+      // now read, in place of mark j (the sound changes there anyway; marks drifting onto it would bend
+      // its pitch for a few hundred ms): from its first played half a period past the mark before, each
+      // where it plays (one just before the jump too, so the jump lands on that sound's own periods),
+      // locked from the first past it
+      const before = tau[j - 1] as number;
+      const half = periodFrom(x0) / 2;
+      const far = x0 + 4 * half;
+      let m = interval(before + half - d0);
+      while (m < K && (t[m] as number) + d0 < before + half) m++;
+      let r = m;
+      while (
+        r < K &&
+        (t[r] as number) + d0 < far &&
+        lay.lockable((t[r] as number) + d0, (t[r] as number) + d0 + 1) !== d0
+      )
+        r++;
+      const o = (t[r] as number) + d0;
+      if (r < K && r - m <= 1 && o < far && o < end && marks.voiced[m] && marks.voiced[r] && lay.still(before, o + 1)) {
+        pop();
+        if (r > m) push((t[m] as number) + d0, m, t[m] as number, d0);
+        return lockOn(r, d0);
+      }
+    }
     const steps: number[] = [];
     let x = x0;
     let reached = -1; // the first step where the marks can lock
@@ -1009,8 +1054,9 @@ function synthesisPlan(heard: Analysis, way: Way, lay: Layout, end: number, grid
         break;
       }
       const next = x + periodFrom(x);
-      // (a period's room left after it, for the mark it locks onto)
-      if (next > last || 2 * next - x >= end || !lay.still(x, 2 * next - x + 1)) break;
+      // (a period's room left after it, for the mark it locks onto; and no periods to follow across a jump
+      // in the sound read: the marks lock straight onto the other side's there)
+      if (next > last || 2 * next - x >= end || !lay.still(x, 2 * next - x + 1) || way.jumps(x, next)) break;
       steps.push(next);
       if (reached < 0 && !Number.isNaN(lay.moveAt(next))) reached = steps.length - 1;
       x = next;

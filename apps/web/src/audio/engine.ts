@@ -69,6 +69,7 @@ import { companion, STUDIO_ENGINE } from './companion.ts';
 import { engineRate } from './engine-rate.ts';
 import { audioFiles } from './files.ts';
 import ImpulseWorker from './impulse.worker.ts?worker';
+import { OnceAFrame } from './once-a-frame.ts';
 import { instrumentManifest, sampleFile } from './pack-files.ts';
 import processorUrl from './worklet/processor.ts?worker&url';
 
@@ -166,8 +167,8 @@ export class AudioEngine {
   private synced: Project | null = null;
   /** A gesture's sync left planned parts for its end. */
   private partsDeferred = false;
-  private livePending: Project | null = null;
-  private liveFrame = 0;
+  /** A gesture's changes on their way to the audio thread (see syncSoon). */
+  private readonly following = new OnceAFrame<Project>((p) => this.syncNow(p, true));
   segments: TempoSegment[] = [{ frame: 0, tick: 0, framesPerTick: 25 }];
   /** The song as written: what the studio shows and edits. */
   private project: Project | null = null;
@@ -465,24 +466,18 @@ export class AudioEngine {
   /** Bring the audio thread up to date with the session: only what changed is sent. */
   sync(project: Project): void {
     // (a full pass covers whatever a gesture still had waiting)
-    this.livePending = null;
+    this.following.drop();
     this.syncNow(project, false);
   }
 
   /**
    * A gesture's change (a fader, a knob, the tempo being dragged): the audio thread follows once a
-   * frame, with the slow work (planning parts) left for the gesture's end.
+   * frame, with the slow work (planning parts) left for the gesture's end. Where no frames are
+   * drawn, the studio's tab hidden while a remote moves its faders, it follows at once.
    */
   syncSoon(project: Project): void {
     this.project = project;
-    this.livePending = project;
-    if (this.liveFrame) return;
-    this.liveFrame = nextFrame(() => {
-      this.liveFrame = 0;
-      const p = this.livePending;
-      this.livePending = null;
-      if (p) this.syncNow(p, true);
-    });
+    this.following.ask(project);
   }
 
   /**
@@ -1308,12 +1303,6 @@ function sharedEvents(events: Float64Array): Float64Array {
   const s = new Float64Array(new SharedArrayBuffer(events.byteLength));
   s.set(events);
   return s;
-}
-
-/** Before the next frame is drawn (a timer where there are no frames). */
-function nextFrame(fn: () => void): number {
-  if (typeof requestAnimationFrame === 'function') return requestAnimationFrame(fn);
-  return setTimeout(fn, 16) as unknown as number;
 }
 
 /** A sequence without its notes (its controllers stay). */

@@ -16,6 +16,7 @@ COPY packages/score/package.json packages/score/
 COPY packages/engine/package.json packages/engine/
 COPY packages/music/package.json packages/music/
 COPY packages/cli/package.json packages/cli/
+COPY packages/agent/package.json packages/agent/
 RUN pnpm install --frozen-lockfile
 COPY tsconfig.base.json tsconfig.node.json ./
 COPY packages ./packages
@@ -31,6 +32,7 @@ COPY packages/score/package.json packages/score/
 COPY packages/engine/package.json packages/engine/
 COPY packages/music/package.json packages/music/
 COPY packages/cli/package.json packages/cli/
+COPY packages/agent/package.json packages/agent/
 RUN pnpm install --frozen-lockfile --prod --filter @holo/server... --filter @holo/cli...
 
 FROM base
@@ -42,6 +44,7 @@ COPY --from=deps /app/packages/engine/node_modules ./packages/engine/node_module
 COPY --from=deps /app/packages/music/node_modules ./packages/music/node_modules
 COPY --from=deps /app/packages/cli/node_modules ./packages/cli/node_modules
 COPY --from=deps /app/packages/score/node_modules ./packages/score/node_modules
+COPY --from=deps /app/packages/agent/node_modules ./packages/agent/node_modules
 COPY package.json pnpm-workspace.yaml ./
 COPY apps/server ./apps/server
 COPY packages ./packages

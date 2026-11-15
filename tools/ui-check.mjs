@@ -245,6 +245,8 @@ const touch = { hasTouch: true, isMobile: true };
 const SCREENS = [
   { name: 'desktop', viewport: { width: 1440, height: 900 } },
   { name: 'small desktop', viewport: { width: 1180, height: 700 } },
+  // (narrower than a desktop, with a mouse: the tablet's layout under the mouse's smaller controls)
+  { name: 'narrow window', viewport: { width: 1024, height: 700 } },
   { name: 'tablet', viewport: { width: 1024, height: 768 }, ...touch },
   { name: 'phone', viewport: { width: 390, height: 844 }, ...touch },
   { name: 'small phone', viewport: { width: 320, height: 568 }, ...touch },

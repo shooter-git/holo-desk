@@ -42,6 +42,9 @@ cp .env.example .env
 pnpm run update             # pull ghcr.io/shooter-git/holo-desk:stable and start it (or: pnpm run update main)
 pnpm run autoupdate on      # then it keeps itself up to date (Linux: a systemd timer, as you)
 pnpm run runner-service on  # and the runner, for creations' renders and the agent (Linux: a service, as you)
+# on a server nobody stays logged into, once: the timer and the runner keep running after you log out,
+# and start at boot (without it, systemd stops them at logout and waits for your next login)
+sudo loginctl enable-linger "$USER"
 ```
 
 Install sample packs from the studio's Library (**More packs → Install**; browse them at

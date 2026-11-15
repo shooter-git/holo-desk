@@ -21,7 +21,7 @@
 // a checkout on main along (once; after that it's on no branch and follows).
 import { execFileSync, spawnSync } from 'node:child_process';
 import { accessSync, constants, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { homedir } from 'node:os';
+import { homedir, userInfo } from 'node:os';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 
 const root = resolve(import.meta.dirname, '..');
@@ -191,6 +191,27 @@ const quoted = (p) => `"${p.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(
 const dir = (p) => p.replace(/%/g, '%%');
 const systemctl = (...a) => spawnSync('systemctl', ['--user', ...a], { stdio: 'inherit' }).status === 0;
 
+/** Whether systemd keeps your user services (the timer, the runner) going without a login: null when it can't tell. */
+function lingering() {
+  const user = userInfo().username;
+  const r = spawnSync('loginctl', ['show-user', user, '--property=Linger', '--value'], { encoding: 'utf8' });
+  const v = r.status === 0 ? r.stdout.trim() : '';
+  return { user, linger: v === 'yes' ? true : v === 'no' ? false : null };
+}
+
+/**
+ * What turning on `what` (the timer, the runner) says about logging out and rebooting. Without linger,
+ * systemd stops your user services when your last session ends (an SSH session too) and starts them
+ * again only at your next login, so a server nobody stays logged into needs it.
+ */
+export function lingerNote(what, { linger, user }) {
+  if (linger === true) return `Linger is on, so ${what} keeps running after you log out and starts at boot.`;
+  return (
+    `${linger === false ? 'Linger is off, so' : 'Without linger,'} ${what} stops when you log out and waits for your next` +
+    ` login after a reboot. To keep it running on its own (a server nobody stays logged into), once: sudo loginctl enable-linger ${user}`
+  );
+}
+
 function autoupdate(what) {
   if (process.platform !== 'linux')
     throw new Error('Automatic updates use a systemd timer (Linux): elsewhere, run `pnpm run update` now and then');
@@ -209,7 +230,7 @@ function autoupdate(what) {
     const { values } = readEnv();
     console.log(
       `On: every 15 minutes, following ${values.HOLO_IMAGE?.startsWith(REPO) ? values.HOLO_IMAGE : `${REPO}:${values.HOLO_CHANNEL ?? 'stable'} once you run \`pnpm run update\``}.` +
-        '\nTo keep it running while you are logged out: loginctl enable-linger',
+        `\n${lingerNote('the timer', lingering())}`,
     );
   } else if (what === 'off') {
     systemctl('disable', '--now', 'holo-update.timer');
@@ -280,11 +301,12 @@ function runnerService(what) {
     if (!systemctl('daemon-reload') || !systemctl('enable', RUNNER_UNIT) || !systemctl('restart', RUNNER_UNIT))
       throw new Error('systemctl --user could not start the runner');
     console.log(
-      'On: the runner runs as you, now and whenever you log in, and starts again after each update.' +
+      'On: the runner runs as you, now, and starts again after each update.' +
         (pnpm ? '' : '\n(pnpm isn’t on your PATH: after an update its packages wait for `pnpm install`.)') +
         '\nIt finds a harness (Claude Code, Codex, Cursor) on the PATH you have now: install one later in a new' +
         ' folder, and run `pnpm run runner-service on` again.' +
-        '\nIts log: journalctl --user -u holo-runner. To keep it running while you are logged out: loginctl enable-linger',
+        '\nIts log: journalctl --user -u holo-runner' +
+        `\n${lingerNote('the runner', lingering())}`,
     );
   } else if (what === 'off') {
     systemctl('disable', '--now', RUNNER_UNIT);

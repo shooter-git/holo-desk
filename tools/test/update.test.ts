@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 // @ts-expect-error: a plain script, without types
-import { followCheckout, runnerPath, runnerUnit } from '../update.mjs';
+import { followCheckout, lingerNote, runnerPath, runnerUnit } from '../update.mjs';
 
 const made: string[] = [];
 afterEach(() => {
@@ -139,5 +139,22 @@ describe('the runner as a service', () => {
     expect(unit).toContain('WantedBy=default.target\n');
     // without pnpm: no install step
     expect(runnerUnit('/srv/holo', '/opt/node/bin/node', '/usr/bin', null)).not.toContain('ExecStartPre');
+  });
+});
+
+describe('lingerNote', () => {
+  it('says the service carries on by itself when linger is on', () => {
+    const note = lingerNote('the runner', { linger: true, user: 'ana' });
+    expect(note).toBe('Linger is on, so the runner keeps running after you log out and starts at boot.');
+    expect(note).not.toContain('loginctl');
+  });
+
+  it('gives the command to turn it on when linger is off, or unknown', () => {
+    const off = lingerNote('the timer', { linger: false, user: 'ana' });
+    expect(off).toMatch(/^Linger is off, so the timer stops when you log out/);
+    expect(off).toContain('sudo loginctl enable-linger ana');
+    const unknown = lingerNote('the runner', { linger: null, user: 'ana' });
+    expect(unknown).toMatch(/^Without linger, the runner stops when you log out/);
+    expect(unknown).toContain('sudo loginctl enable-linger ana');
   });
 });

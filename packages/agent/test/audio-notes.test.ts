@@ -131,6 +131,8 @@ const BEFORE: Record<string, { action: string; [k: string]: unknown }> = {
   // (note 7 is sung on G4, and its beat is on the grid)
   'correct-pitch': { action: 'shift', notes: '7', cents: 30 },
   'quantize-time': { action: 'move', notes: '7', seconds: 0.05 },
+  // (note 2's edits, copied onto note 7)
+  'copy-settings': { action: 'vibrato', notes: '2', keep: 0 },
 };
 /** The notes an edit works on there, when not note 7 alone: levelling one note against itself changes nothing. */
 const CHOSEN: Record<string, string> = { level: '6-8' };
@@ -451,6 +453,123 @@ describe('audio_notes, made from the note edits', () => {
     api.project.tracks[1]?.regions.push({ ...structuredClone(take), id: 'rgn_take2', name: 'Take 2', start: 12 * BAR });
     expect(await refused(api, 'audio_notes', { action: 'show' })).toMatch(/^Vocal has 2 recordings: say which/);
     expect((await call(api, 'audio_notes', { action: 'show', region: 'Take 2' })).text).toContain('[rgn_take2]');
+  });
+});
+
+/** The song with a second region of the take ("Again": bars 12–15, 12 s into it) and one of another recording ("Other"). */
+function twoTakes(o: FakeJobApiOptions = {}): FakeJobApi {
+  const api = setup(o);
+  const take = takeOf(api);
+  const vocal = api.project.tracks[1] as Track;
+  vocal.regions.push({ ...structuredClone(take), id: 'rgn_again', name: 'Again', start: 11 * BAR });
+  (vocal.regions[1]?.audio as { offset: number }).offset = 12;
+  api.project.files?.push({ id: 'aud_other', name: 'Other.wav', seconds: 20, rate: 48000, channels: 1 });
+  vocal.regions.push({
+    ...structuredClone(take),
+    id: 'rgn_other',
+    name: 'Other',
+    start: 20 * BAR,
+    audio: { ...(take.audio as NonNullable<Region['audio']>), file: 'aud_other' },
+  });
+  return api;
+}
+const regionNotesOf = (api: FakeJobApi, id: string) =>
+  api.project.tracks[1]?.regions.find((r) => r.id === id)?.audio?.notes as AudioNotes | undefined;
+
+describe('audio_notes: a note’s sound or edits copied, and edits linked across a recording’s regions', () => {
+  it('pastes a note’s sound onto others by its number: its place and pitch as found, one batch', async () => {
+    const api = setup();
+    // note 6 (E4 26 cents sharp, 12.5 s) takes the sound of note 4 (A4, 10.5 s): the same length
+    const r = await call(api, 'audio_notes', { action: 'paste', track: 'Vocal', notes: '6', from: 4 });
+    expect(r.text.split('\n')[0]).toBe(
+      '"Take": paste note 6, from note 4: 1 note pasted; its notes are kept in the song from now on, as found, with this edit.',
+    );
+    expect(r.text).toContain('[pasted]');
+    // (with its consonant's length)
+    expect(keptNotes(api).n[5]).toEqual({ t: 12.5, d: 0.6, p: 69, u: 0.03, s: 10.5 });
+    expect(api.batches).toHaveLength(1);
+    expect(await refused(api, 'audio_notes', { action: 'paste', track: 'Vocal', notes: '6', from: 40 })).toBe(
+      'There are 13 notes: "from" 40 isn\'t one',
+    );
+    expect(await refused(api, 'audio_notes', { action: 'paste', track: 'Vocal', notes: '6' })).toMatch(/^Say "from": /);
+    expect(
+      await refused(api, 'audio_notes', {
+        action: 'shift',
+        track: 'Vocal',
+        notes: '6',
+        semitones: 1,
+        from_region: 'Take',
+      }),
+    ).toMatch(/^"from_region" is for paste and copy-settings/);
+  });
+
+  it('copies a note’s edits onto others, the pitch move from each note’s own semitone', async () => {
+    const api = setup();
+    await call(api, 'audio_notes', { action: 'correct-pitch', track: 'Vocal', notes: '6', drift: 50 });
+    await call(api, 'audio_notes', { action: 'gain', track: 'Vocal', notes: '6', db: -4 });
+    const r = await call(api, 'audio_notes', { action: 'copy-settings', track: 'Vocal', notes: '10', from: 6 });
+    expect(r.text.split('\n')[0]).toBe(
+      '"Take": copy-settings note 10, from note 6: 1 note tuned, 1 drift changed, 1 level changed.',
+    );
+    // E4 26 cents sharp, tuned onto E4: note 10 (E4 26 cents sharp too) is tuned onto its own E4
+    expect(keptNotes(api).n[9]).toEqual({ t: 16.5, d: 0.6, p: 64.26, to: 64, dr: 0.5, g: -4 });
+  });
+
+  it('pastes from another region of the same recording, and refuses another recording’s', async () => {
+    const api = twoTakes();
+    // Again's note 3 is the take's note at 11.5 s (G4: Again keeps the two before it too)
+    const r = await call(api, 'audio_notes', {
+      action: 'paste',
+      region: 'Take',
+      notes: '6',
+      from: 3,
+      from_region: 'Again',
+    });
+    expect(r.text.split('\n')[0]).toMatch(/^"Take": paste note 6, from note 3 of "Again": 1 note pasted/);
+    expect(regionNotesOf(api, 'rgn_take')?.n[5]).toEqual({ t: 12.5, d: 0.6, p: 67, s: 11.5 });
+    expect(regionNotesOf(api, 'rgn_again')).toBeUndefined();
+    expect(
+      await refused(api, 'audio_notes', { action: 'paste', region: 'Take', notes: '6', from: 1, from_region: 'Other' }),
+    ).toBe(
+      '"Other" plays Other.wav, and "Take" plays Take 3.wav: notes are copied within one recording (between recordings comes in a later version)',
+    );
+  });
+
+  it('makes an edit in every region playing the recording too (linked), on the same notes, in one batch', async () => {
+    const api = twoTakes();
+    // note 6 of Take is the take's note at 12.5 s; Again plays it too (12 s to 20 s), Other is another recording
+    const r = await call(api, 'audio_notes', {
+      action: 'shift',
+      region: 'Take',
+      notes: '6',
+      semitones: 2,
+      linked: true,
+    });
+    const lines = r.text.split('\n');
+    expect(lines[0]).toBe(
+      '"Take": shift note 6, 2 semitones, linked: 2 regions: 1 note tuned; its notes are kept in the song from now on, as found, with this edit.',
+    );
+    expect(lines.at(-1)).toBe(
+      'Linked: also made in "Again" [rgn_again] on Vocal, bars 12–15 (1 note tuned; its notes kept in the song from now on).',
+    );
+    expect(api.batches).toHaveLength(1);
+    expect(api.batches[0]?.ops.map((o) => (o.op === 'updateRegion' ? o.region : o.op))).toEqual([
+      'rgn_take',
+      'rgn_again',
+    ]);
+    const again = regionNotesOf(api, 'rgn_again') as AudioNotes;
+    expect(again.n.filter((n) => n.to !== undefined)).toEqual([{ t: 12.5, d: 0.6, p: 64.26, to: 66.26 }]);
+    expect(regionNotesOf(api, 'rgn_other')).toBeUndefined();
+    // the song reads back the same, to the bit
+    expect(parseProject(structuredClone(api.project))).toEqual(api.project);
+    // a note Again doesn't play (10.5 s): only Take
+    const one = await call(api, 'audio_notes', { action: 'mute', region: 'Take', notes: '4', linked: true });
+    expect(one.text.split('\n').at(-1)).toBe(
+      'Linked: no other region playing this recording plays those notes, so only this one changed.',
+    );
+    expect(await refused(api, 'audio_notes', { action: 'show', region: 'Take', linked: true })).toBe(
+      '"linked" is for an edit: show isn\'t one',
+    );
   });
 });
 

@@ -65,6 +65,10 @@ export interface AppState {
   /** The Notes view's tool, and where a pitch dragged in it lands. */
   noteTool: NoteTool;
   pitchSnap: PitchSnap;
+  /** The Notes view's Link: an edit of a region's notes is made in every region playing its recording too. */
+  linkRegions: boolean;
+  /** Hear a note in the Notes view as it's pressed, and again as a drag changes it. */
+  hearNotes: boolean;
   /** The Score shows every track (a full score), not just the selected one. */
   scoreAll: boolean;
   /** The Score's size, as a percentage. */
@@ -202,6 +206,8 @@ const initial: AppState = {
   audioMode: 'wave',
   noteTool: 'pointer',
   pitchSnap: 'semitone',
+  linkRegions: false,
+  hearNotes: true,
   scoreAll: false,
   scoreZoom: 45,
   scoreWrite: false,
@@ -268,6 +274,8 @@ const REMEMBER: (keyof AppState)[] = [
   'audioMode',
   'noteTool',
   'pitchSnap',
+  'linkRegions',
+  'hearNotes',
   'scoreAll',
   'scoreZoom',
   'editorHeight',

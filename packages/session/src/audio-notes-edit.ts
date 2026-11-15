@@ -541,6 +541,137 @@ export function resetNotes(
   return out;
 }
 
+/**
+ * Pasted notes given back their own pitch and unvoiced start as found (`found`: the recording's notes
+ * as detection found them), once their paste is put back: a paste brings its sound's pitch with it
+ * (`p`), and that isn't the note's own. A note found in none of them keeps what it has.
+ */
+export function unpasteNotes(
+  was: AudioNotes,
+  now: AudioNotes,
+  indices: readonly number[],
+  found: readonly AudioNote[],
+): AudioNotes {
+  const back = noteIndices(was, indices).filter((i) => {
+    const n = was.n[i] as AudioNote;
+    return n.s !== undefined && n.s !== n.t && (now.n[i]?.s ?? now.n[i]?.t) === now.n[i]?.t;
+  });
+  if (!back.length || now.n.length !== was.n.length) return now;
+  return change(now, back, (n) => {
+    const own = found.find((f) => f.t === n.t) ?? found.find((f) => f.t <= n.t && n.t < endOf(f));
+    if (!own) return n;
+    const out: AudioNote = { ...n, p: own.p };
+    if (own.u !== undefined && own.u > 0) out.u = Math.min(own.u, n.d);
+    else delete out.u;
+    if (own.p === null) delete out.to;
+    return out;
+  });
+}
+
+// ---- pasting a note's sound, or its edits ----
+
+/** A note's sound as another plays it when it's pasted: where it is in the recording, its length, and its pitch and unvoiced start as found. */
+export interface NoteSound {
+  /** Where it starts, seconds of the recording. */
+  at: number;
+  d: number;
+  p: number | null;
+  u?: number;
+}
+
+/** A note's own sound: where it's found, or where the sound it plays comes from when it's pasted itself. */
+export function soundOf(n: AudioNote): NoteSound {
+  return { at: n.s ?? n.t, d: n.d, p: n.p, ...(n.u ? { u: n.u } : {}) };
+}
+
+/** A note's pitch move as the distance from the semitone nearest its pitch as found (none when it isn't moved). */
+export function pitchMoveOffset(n: Pick<AudioNote, 'p' | 'to'>): number | undefined {
+  return n.p === null || n.to === undefined ? undefined : n.to - Math.round(n.p);
+}
+
+/** A note playing a sound pasted for `len` seconds: that sound's start, pitch and unvoiced start, its pitch move carried onto the new pitch. */
+function pasted(n: AudioNote, sound: NoteSound, len: number): AudioNote {
+  const out: AudioNote = { ...n, s: roundTime(sound.at), p: sound.p };
+  const u = Math.min(sound.u ?? 0, len);
+  if (u > 0) out.u = u;
+  else delete out.u;
+  const move = pitchMoveOffset(n);
+  if (move === undefined || sound.p === null) delete out.to;
+  else out.to = roundPitch(clamp(Math.round(sound.p) + move, 0, 127));
+  return out;
+}
+
+/** One note playing a sound pasted (see `pasteNotes`). */
+function pasteOne(notes: AudioNotes, i: number, sound: NoteSound): AudioNotes {
+  const n = notes.n[i] as AudioNote;
+  if (n.d <= sound.d + 1e-9) return change(notes, [i], () => pasted(n, sound, n.d));
+  // longer than the sound: its first part plays all of it, and the rest is muted
+  const head = roundTime(Math.min(sound.d, n.d - MIN_NOTE_S));
+  if (head < MIN_NOTE_S - 1e-9) return notes;
+  const cut = splitNote(notes, i, n.t + head);
+  if (cut === notes) return notes;
+  // (not stretched over the note by the warp: the renderer doesn't yet play a pasted sound stretched)
+  return editNotes(
+    change(cut, [i], (h) => pasted(h, sound, head)),
+    [i + 1],
+    { m: true },
+  );
+}
+
+/**
+ * Notes playing another note's sound (`source`, from the same recording) in their place, as `s` keeps
+ * it: from where that sound starts, with its pitch as found (`p`) and its unvoiced start (`u`), as the
+ * renderer reads a pasted note. A note's other edits stay, and apply to the sound pasted: its pitch
+ * move, kept as a distance from the semitone nearest its pitch as found, is made from the new pitch's
+ * (a note tuned to its semitone plays the sound tuned to its own). What's read never runs past the
+ * sound's end into the next note's: a note no longer than the sound plays its start, for the note's
+ * length (its end left off); a longer note is cut where the sound runs out, its first part playing all
+ * of it and the rest muted (the note's own sound would go on under it otherwise), 10 ms at least, so a
+ * note just longer than the sound reads a little less of it. A line's notes only, as time edits are.
+ */
+export function pasteNotes(notes: AudioNotes, indices: readonly number[], source: AudioNote): AudioNotes {
+  if (notes.mode !== 'mono') return notes;
+  const sound = soundOf(source);
+  let out = notes;
+  for (const i of noteIndices(notes, indices).reverse()) out = pasteOne(out, i, sound);
+  return out;
+}
+
+/**
+ * The edits `copySettings` copies, by the field each is kept in: the pitch move (as a distance from the
+ * nearest semitone), drift, vibrato, glide, formant, level, mute and attack; never where a note starts
+ * or ends (`ts`, `te`), nor the sound it plays (`s`: `pasteNotes`).
+ */
+export const COPIED_SETTINGS: readonly NoteEditField[] = ['to', 'dr', 'mo', 'tr', 'fo', 'g', 'm', 'at'];
+
+/**
+ * Notes given another note's edits (`source`): each of COPIED_SETTINGS as that note has it, and put
+ * back where it has none. The pitch move goes as a distance from each note's nearest semitone, not as
+ * a pitch, so a source tuned onto its semitone tunes each note onto its own (and one moved up a fifth
+ * moves each up a fifth from its own). From a note with no pitch only its level, mute and attack come
+ * (it has none of the rest), and a note with no pitch takes only those. A chord's notes take no glide
+ * or attack; an attack goes as far as the warp lets it.
+ */
+export function copySettings(notes: AudioNotes, indices: readonly number[], source: AudioNote): AudioNotes {
+  const pitched = source.p !== null;
+  const move = pitchMoveOffset(source);
+  let out = editEachNote(notes, indices, (n) => {
+    const patch: NotePatch = { g: source.g ?? null, m: source.m ?? null };
+    if (pitched) {
+      Object.assign(patch, {
+        dr: source.dr ?? null,
+        mo: source.mo ?? null,
+        tr: source.tr ?? null,
+        fo: source.fo ?? null,
+      });
+      if (n.p !== null) patch.to = move === undefined ? null : roundPitch(clamp(Math.round(n.p) + move, 0, 127));
+    }
+    return patch;
+  });
+  if (notes.mode === 'mono') out = setAttack(out, indices, source.at ?? 1);
+  return out;
+}
+
 // ---- choosing notes ----
 
 /** What choosing notes by words needs to know, when the words need it. */
@@ -838,9 +969,28 @@ export function noteChanges(was: AudioNotes | undefined, now: AudioNotes | undef
     if (x !== n && !sameNote(x, n) && compareNote(x, n, out.counts)) out.now.push(n);
   }
   let removed = [...pool.values()].flat();
+  // a sound pasted (or its paste put back), which brings its pitch as found with it: the same note
+  const pastedOf = (n: AudioNote) => n.s !== undefined && n.s !== n.t;
+  const unmatched: AudioNote[] = [];
+  for (const n of added) {
+    const i = removed.findIndex((x) => x.t === n.t && x.d === n.d && (pastedOf(x) || pastedOf(n)));
+    if (i < 0) {
+      unmatched.push(n);
+      continue;
+    }
+    const x = removed[i] as AudioNote;
+    removed = removed.filter((_, j) => j !== i);
+    // (its pitch move, carried onto the new pitch as a paste carries it, isn't a tuning of its own)
+    const move = pitchMoveOffset(x);
+    const carried: AudioNote = { ...x, p: n.p };
+    if (move !== undefined && n.p !== null) carried.to = roundPitch(Math.round(n.p) + move);
+    else delete carried.to;
+    compareNote(carried, n, out.counts);
+    out.now.push(n);
+  }
   // an octave put right: the same note, its pitch as found an octave or more away
   const fresh: AudioNote[] = [];
-  for (const n of added) {
+  for (const n of unmatched) {
     const i = removed.findIndex(
       (x) => x.t === n.t && x.d === n.d && x.p !== null && n.p !== null && Math.abs(n.p - x.p) % 12 < 1e-6,
     );
@@ -870,8 +1020,21 @@ export function noteChanges(was: AudioNotes | undefined, now: AudioNotes | undef
       return [Math.min(...gs.map((n) => n.t)), Math.max(...gs.map(endOf))].join();
     };
     const c = out.counts;
+    const first = group.find((g) => !g.old)?.n;
+    const old = group.find((g) => g.old)?.n;
     if (!olds) c.added = (c.added ?? 0) + news;
     else if (!news) c.removed = (c.removed ?? 0) + olds;
+    else if (
+      olds === 1 &&
+      news === 2 &&
+      first &&
+      old &&
+      first.t === old.t &&
+      pastedOf(first) &&
+      first.s !== (old.s ?? old.t)
+    )
+      // a sound shorter than the note pasted: its first part plays it, the rest is muted
+      c.pasted = (c.pasted ?? 0) + 1;
     else if (olds === 1 && news > 1) c.split = (c.split ?? 0) + 1;
     else if (news === 1 && olds > 1) c.joined = (c.joined ?? 0) + olds;
     else if (olds === news && olds > 1 && span(true) === span(false)) c.boundary = (c.boundary ?? 0) + olds - 1;

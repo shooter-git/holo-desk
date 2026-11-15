@@ -107,13 +107,17 @@ export const NOTE_MENU_EDITS: readonly string[] = [
   'reset',
   'remove',
   'add',
+  'paste',
+  'copy-settings',
 ];
 
-/** The note edits the keys make while the Notes view has the keyboard. */
+/** The note edits the keys make while the Notes view has the keyboard (Ctrl is ⌘ on a Mac). */
 export const NOTE_KEY_EDITS: Readonly<Record<string, readonly string[]>> = {
   '↑ / ↓': ['shift'],
   M: ['mute', 'unmute'],
   Delete: ['reset'],
+  'Ctrl V': ['paste'],
+  'Ctrl Shift V': ['copy-settings'],
 };
 
 /** What beside the edits (NOTE_EXTRAS) the studio offers, and where: "Notes to MIDI track" in the menu on the space between notes and the bar's More menu. */

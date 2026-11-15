@@ -117,8 +117,13 @@ an edit's flags and ranges): `shift [--semitones N] [--cents N] [--snap free|sem
 `formant --semitones N`, `gain --db N`, `mute`, `unmute`, `move --seconds N`,
 `resize [--edge start|end] --seconds N`, `attack --length %`, `split [--at S]`, `join`,
 `boundary --seconds N`, `octave --direction up|down`, `add --start S --length S [--pitch P]`, `remove`,
-`reset [--what all|pitch|drift|vibrato|transition|formant|gain|mute|time]` (100% is as sung). The
-macros, on many notes at once: `correct-pitch [--centre %] [--drift %] [--snap semitone|scale]
+`reset [--what all|pitch|drift|vibrato|transition|formant|gain|mute|time]` (100% is as sung),
+`paste --from N [--from-region R]` (the notes play note N's sound in their place, with its pitch as
+found: their other edits stay, a pitch move carried from the nearest semitone; a note longer than the
+sound plays all of it, then is muted; within one recording only, `--from-region` naming another region
+of it), `copy-settings --from N [--from-region R]` (the notes take note N's drift, vibrato, glide,
+formant, level, mute and attack, and its pitch move as a distance from each note's own nearest
+semitone; never its timing or sound). The macros, on many notes at once: `correct-pitch [--centre %] [--drift %] [--snap semitone|scale]
 [--tolerance CENTS]` (each centre that share of the way to its nearest semitone or note of the key,
 that share of its drift taken out, notes within the tolerance left alone; 100% twice is the same as
 once), `quantize-time [--amount %] [--grid 1/16]` (each note's beat, after its consonant, toward the
@@ -127,8 +132,11 @@ toward their mean, or the target, dB of full scale; it reads each note's level f
 `midi` adds a MIDI track named after the audio track ("Vocal notes"), just below it, playing the notes
 as they play: each where its beat plays, at the nearest semitone, velocities from their levels
 (breaths and muted notes left out). Time edits (move, resize, attack, join, boundary, transition,
-quantize-time) are for a line's notes. Each edit is one undo step; the first keeps the notes found in
-the song. `--wait SECONDS` waits here while notes are being found.
+quantize-time) are for a line's notes, and so is paste. Each edit is one undo step; the first keeps the
+notes found in the song. `--linked` on any edit makes it in every other region playing the same
+recording too, on the same notes (found at the same place, where each region plays them; a region with
+none kept yet gets those found, with the edit), all in the one undo step; the answer's last line says
+which regions changed. `--wait SECONDS` waits here while notes are being found.
 
 ## Measuring (holo measure WHAT …)
 

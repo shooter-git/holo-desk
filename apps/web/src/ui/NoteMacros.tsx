@@ -18,8 +18,10 @@ import {
   type AudioClip,
   type NoteEdit,
   type NoteEditContext,
+  type NoteEditStep,
   type AudioNotes as NoteList,
   noteEdit,
+  type Op,
 } from '@holo/session';
 import { useEffect, useRef, useState } from 'react';
 import { beginGesture, cancelGesture, endGesture, gestureChange } from '../app/actions.ts';
@@ -48,6 +50,8 @@ export interface MacroSession {
   selected: boolean;
   /** The song and the region, for the key's scale and the grid. */
   ctx: NoteEditContext;
+  /** The operations that make the region's notes a macro's result (and, with Link on, the same edit in the regions linked). */
+  opsFor?: (next: NoteList, step: NoteEditStep) => Op[];
 }
 
 /** Why a macro can't be used on these notes now, or null. */
@@ -197,14 +201,17 @@ export function NoteMacros({
       beginGesture(m.name);
       previewing.current = m.name;
     }
-    gestureChange([
-      {
-        op: 'updateRegion',
-        track: session.track,
-        region: session.region,
-        patch: { audio: { ...session.clip, notes: next } },
-      },
-    ]);
+    const args = macroArgs(vals);
+    gestureChange(
+      session.opsFor?.(next, { name: m.edit, indices: session.indices, args }) ?? [
+        {
+          op: 'updateRegion',
+          track: session.track,
+          region: session.region,
+          patch: { audio: { ...session.clip, notes: next } },
+        },
+      ],
+    );
   };
 
   // what's open previews as it opens (the first macro at its settings), and is put back if the dialog goes unapplied

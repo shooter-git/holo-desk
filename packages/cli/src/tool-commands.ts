@@ -233,6 +233,10 @@ function toolHelp(t: Tool, middleC: MiddleC): string {
 const NOTES_SELECT = 'all, selected, note numbers (1-12,15), "bars 9-13" or "pitch E4"';
 const NOTES_REGION =
   '--track T, --region R: the recording, a region by id, name or "selected" on an audio track (when left out: the only audio track\'s only recording)';
+const NOTES_LINKED =
+  '--linked: the same edit in every other region playing this recording too, on the same notes where each plays them (one undo step)';
+const NOTES_FROM_REGION =
+  "--from-region R: the region --from is numbered in, when it isn't this one (another region of the same recording)";
 
 /** What `holo notes midi` does, in a line and in full. */
 const MIDI_SUMMARY = 'Add a MIDI track playing the notes as they play, velocities from their levels.';
@@ -258,7 +262,9 @@ export function notesHelp(action: string | undefined): string {
     if (edit.selection)
       lines.push(`  --notes SELECT (required): which notes: ${NOTES_SELECT}; or the words after ${edit.name}`);
     for (const a of edit.args) lines.push(`  --${a.name} ${flagValue(a)}: ${noteArgText(a)}`);
+    if (edit.source) lines.push(`  ${NOTES_FROM_REGION}`);
     lines.push(`  ${NOTES_REGION}`);
+    lines.push(`  ${NOTES_LINKED}`);
     return lines.join('\n');
   }
   if (action === 'show')
@@ -291,6 +297,7 @@ export function notesHelp(action: string | undefined): string {
   lines.push(
     'holo notes ACTION --help shows its flags. Every edit is one undo step; the recording itself never changes.',
   );
+  lines.push(`Every edit also takes ${NOTES_LINKED}.`);
   return lines.join('\n');
 }
 

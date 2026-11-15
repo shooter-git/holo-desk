@@ -291,3 +291,168 @@ describe('the patch renderer', () => {
     expect(w.workers[0]?.got.filter((m) => m.type === 'render')).toHaveLength(1);
   });
 });
+
+describe('a dragged note’s patches', () => {
+  // the pitch move of the second region dragged on, a semitone at a time: each state its own patch
+  const states = [63, 64, 65, 66].map((to) => regionPatches(regionOf(song(to), 'rgn_b').audio as AudioClip, SR)[0]);
+  const [s63, s64, s65, s66] = states as [PatchJob, PatchJob, PatchJob, PatchJob];
+  const p = song();
+  const jobs = plan(p, fresh()).render;
+  const renders = (w: ReturnType<typeof pool>, i = 0) =>
+    w.workers[i]?.got.flatMap((m) => (m.type === 'render' ? [m.key] : [])) ?? [];
+
+  it('come before anything the song wants', () => {
+    const w = pool();
+    const r = new PatchRenderer({ workers: 1, budget: 1e6, shared: true, make: w.make });
+    r.hold('aud_take', [new Float32Array(SR * 8)]);
+    r.want(jobs);
+    expect(w.rendering(0)).toBe(jobs[0]?.key);
+    r.preview('rgn_b', [s63]);
+    // (the worker is busy: the drag's patch is next, ahead of the song's)
+    w.answer(0);
+    expect(w.rendering(0)).toBe(s63.key);
+    w.answer(0);
+    expect(w.rendering(0)).toBe(jobs[1]?.key);
+    expect(r.stats.previews).toBe(1);
+  });
+
+  it('render one at a time for a region, only the latest wanted after it', () => {
+    const w = pool();
+    const r = new PatchRenderer({ workers: 2, budget: 1e6, shared: true, make: w.make });
+    const done: string[] = [];
+    r.onRendered((k) => done.push(k));
+    r.hold('aud_take', [new Float32Array(SR * 8)]);
+    r.preview('rgn_b', [s63]);
+    expect(w.rendering(0)).toBe(s63.key);
+    // the drag goes on while it renders: the second worker stays free, and only the latest waits
+    r.preview('rgn_b', [s64]);
+    r.preview('rgn_b', [s65]);
+    expect(w.rendering(1)).toBeNull();
+    w.answer(0);
+    expect(done).toEqual([s63.key]);
+    expect(w.rendering(0)).toBe(s65.key);
+    w.answer(0);
+    expect(done).toEqual([s63.key, s65.key]);
+    // (the state passed over never rendered)
+    expect([...renders(w, 0), ...renders(w, 1)]).toEqual([s63.key, s65.key]);
+    // and one already rendered is wanted at once, with nothing to render
+    r.preview('rgn_b', [s63]);
+    expect(w.rendering(1)).toBeNull();
+    expect(renders(w, 0)).toHaveLength(2);
+  });
+
+  it('render side by side for two regions, and not twice when the song wants one too', () => {
+    const w = pool();
+    const r = new PatchRenderer({ workers: 3, budget: 1e6, shared: true, make: w.make });
+    r.hold('aud_take', [new Float32Array(SR * 8)]);
+    r.preview('rgn_a', [s63]);
+    r.preview('rgn_b', [s64]);
+    expect([w.rendering(0), w.rendering(1)]).toEqual([s63.key, s64.key]);
+    // the drag let go: the song wants where it landed, already rendering
+    r.want([s64, s66]);
+    expect(w.rendering(2)).toBe(s66.key);
+    w.answer(1);
+    w.answer(2);
+    expect(r.pending).toBe(0);
+    expect([...renders(w, 0), ...renders(w, 1), ...renders(w, 2)].sort()).toEqual([s63.key, s64.key, s66.key].sort());
+  });
+
+  it('are dropped when the drag is cancelled, one rendering kept', () => {
+    const w = pool();
+    const r = new PatchRenderer({ workers: 1, budget: 1e6, shared: true, make: w.make });
+    r.hold('aud_take', [new Float32Array(SR * 8)]);
+    r.preview('rgn_b', [s63]);
+    r.preview('rgn_b', [s64]);
+    r.preview('rgn_b', []);
+    w.answer(0);
+    expect(r.has(s63.key)).toBe(true);
+    expect(w.rendering(0)).toBe(s63.key);
+    expect(renders(w)).toEqual([s63.key]);
+  });
+});
+
+describe('patches kept on the device, as the renderer uses them', () => {
+  const p = song();
+  const jobs = plan(p, fresh()).render;
+  const [j1, j2] = jobs as [PatchJob, PatchJob];
+
+  /** A device that has `kept`, ready when `open` is called. */
+  function device(kept: Record<string, Float32Array[]>) {
+    let open: () => void = () => undefined;
+    const put: string[] = [];
+    const store = {
+      loaded: false,
+      ready: new Promise<void>((resolve) => {
+        open = () => {
+          store.loaded = true;
+          resolve();
+        };
+      }),
+      has: (k: string) => k in kept,
+      get: async (k: string) => kept[k] ?? null,
+      put: (k: string) => {
+        put.push(k);
+      },
+    };
+    return { store, open: () => open(), put };
+  }
+
+  it('reads back what the device has instead of rendering it, and keeps what it renders', async () => {
+    const w = pool();
+    const d = device({ [j1.key]: [new Float32Array(10)] });
+    const r = new PatchRenderer({ workers: 1, budget: 1e6, shared: false, make: w.make, store: d.store });
+    const done: string[] = [];
+    r.onRendered((k) => done.push(k));
+    r.hold('aud_take', [new Float32Array(SR * 8)]);
+    r.want([j1, j2]);
+    // nothing before the device's store has opened
+    expect(w.rendering(0)).toBeNull();
+    d.open();
+    await d.store.ready;
+    await Promise.resolve();
+    // j1 from the device (counted as rendered, no worker), j2 rendered
+    expect(w.rendering(0)).toBe(j2.key);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(done).toEqual([j1.key]);
+    expect(r.has(j1.key)).toBe(true);
+    expect(r.pending).toBe(1);
+    w.answer(0);
+    expect(d.put).toEqual([j2.key]);
+    expect(r.stats).toEqual({ rendered: 1, fromDevice: 1, previews: 0 });
+    expect(w.workers[0]?.got.filter((m) => m.type === 'render')).toHaveLength(1);
+  });
+
+  it('keeps a drag’s patch on the device only once the song plays it, and nothing twice', async () => {
+    const w = pool();
+    const d = device({ [j1.key]: [new Float32Array(10)] });
+    const r = new PatchRenderer({ workers: 1, budget: 1e6, shared: false, make: w.make, store: d.store });
+    d.open();
+    await d.store.ready;
+    r.hold('aud_take', [new Float32Array(SR * 8)]);
+    // two states of a drag, rendered: neither kept
+    r.preview('rgn_b', [j2]);
+    w.answer(0);
+    expect(r.has(j2.key)).toBe(true);
+    expect(d.put).toEqual([]);
+    // let go on the second: the song plays it (and j1, read from the device: not written back)
+    r.want([j1]);
+    await new Promise((r) => setTimeout(r, 0));
+    r.keep([j1.key, j2.key]);
+    r.keep([j1.key, j2.key]);
+    expect(d.put).toEqual([j2.key]);
+  });
+
+  it('renders one the device has lost after all', async () => {
+    const w = pool();
+    const d = device({});
+    d.store.has = () => true;
+    const r = new PatchRenderer({ workers: 1, budget: 1e6, shared: false, make: w.make, store: d.store });
+    r.hold('aud_take', [new Float32Array(SR * 8)]);
+    d.open();
+    await d.store.ready;
+    r.want([j1]);
+    d.store.has = () => false;
+    await new Promise((r) => setTimeout(r, 0));
+    expect(w.rendering(0)).toBe(j1.key);
+  });
+});

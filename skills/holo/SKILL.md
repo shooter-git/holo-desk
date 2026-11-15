@@ -163,6 +163,9 @@ holo notes correct-pitch --notes all --centre 90 --drift 40   # the macros: tune
 holo notes quantize-time --notes "bars 9-12" --amount 60      #   --snap scale), beats toward the grid
 holo notes level --notes all --amount 70                      #   (--grid 1/16), levels toward their mean
 holo notes midi --track Vocal                      # a MIDI track playing the notes ("Vocal notes")
+holo notes paste 7 --from 3                        # note 7 plays note 3's sound (copy-settings: its edits;
+holo notes shift 5 --semitones 2 --linked          #   --from-region: another region's); --linked: every region
+                                                   #   playing the recording gets the edit too
 holo timeline insert --at 17 --bars 4              # whole bars across every track: insert, copy (--from 9
 holo timeline copy --from 9 --to 17 --at 33        #   --to 17 --at 33); delete and move need --confirm
 holo measure take --track Vocal --from 17 --to 25  # a take's pitch (cents against the key or --against a
@@ -196,6 +199,9 @@ song with it, one undo step. The recording itself never changes. Be gentle with 
 vibrato left alone) rather than snapping every note exactly, and never quantize it fully
 (`quantize-time --amount` well under 100); then check it with `holo measure take`, which measures what
 plays, edits in. `holo notes midi` writes the notes as a MIDI track, to double or score them.
+`holo notes paste` replaces a note's sound with another's of the same recording (a better take of a
+word), `copy-settings` gives notes another's edits, and `--linked` makes an edit in every region
+playing the recording (a chorus copied, a take split), all in one undo step.
 
 Anything else the studio's agent does, by its tool's name: `holo tool` lists them, `holo tool fx --help`
 shows a tool's fields, and `holo tool fx --action move --target Keys --plugin eq --index 1` runs it

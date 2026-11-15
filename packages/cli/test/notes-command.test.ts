@@ -1,7 +1,8 @@
 /**
  * `holo notes` as the terminal runs it: its flags read as the agent's audio_notes fields (`toolArgs`),
  * then the agent's own tool (`runTool`), against a studio that answers as HO[LO] would (the agent's
- * fake job API): a macro, and `midi`, from flags. Synthetic notes only.
+ * fake job API): a macro, `midi`, a note's sound or edits copied and an edit linked across regions,
+ * from flags. Synthetic notes only.
  */
 import { type FakeJobApi, fakeJobApi, newMemory, type Tool, toolNamed } from '@holo/agent';
 import {
@@ -74,6 +75,8 @@ async function holoNotes(api: TerminalApi, action: string, flags: Record<string,
 }
 
 const keptNotes = (api: FakeJobApi) => api.project.tracks[0]?.regions[0]?.audio?.notes as AudioNotes;
+const notesOf = (api: FakeJobApi, id: string) =>
+  api.project.tracks[0]?.regions.find((r) => r.id === id)?.audio?.notes as AudioNotes | undefined;
 
 describe('holo notes: the macros and midi from the terminal', () => {
   it('runs correct-pitch from flags, as the agent does, one batch', async () => {
@@ -125,5 +128,43 @@ describe('holo notes: the macros and midi from the terminal', () => {
     await expect(holoNotes(api, 'midi', { track: 'Vocal' }, 'all')).rejects.toThrow(
       'midi writes all the notes the region plays: leave --notes out',
     );
+  });
+});
+
+describe('holo notes: paste, copy-settings and --linked from the terminal', () => {
+  it('pastes a note’s sound (--from), copies its edits, and says its refusals in flags', async () => {
+    const api = terminal();
+    const r = await holoNotes(api, 'paste', { from: '3', track: 'Vocal' }, '5');
+    expect(r.text.split('\n')[0]).toBe(
+      '"Take": paste note 5, from note 3: 1 note pasted; its notes are kept in the song from now on, as found, with this edit.',
+    );
+    expect(keptNotes(api).n[4]).toEqual({ t: 2.25, d: 0.4, p: 62.2, s: 1.25 });
+    await holoNotes(api, 'gain', { db: '-5', track: 'Vocal' }, '1');
+    await holoNotes(api, 'copy-settings', { from: '1', track: 'Vocal' }, '2-3');
+    expect(
+      keptNotes(api)
+        .n.slice(0, 3)
+        .map((n) => n.g),
+    ).toEqual([-5, -5, -5]);
+    await expect(holoNotes(api, 'paste', { track: 'Vocal' }, '5')).rejects.toThrow(/^Say --from: /);
+    await expect(holoNotes(api, 'paste', { from: '1', 'from-region': 'Nope', track: 'Vocal' }, '5')).rejects.toThrow(
+      /No recording "Nope"/,
+    );
+  });
+
+  it('makes an edit in every region playing the recording too (--linked), one batch', async () => {
+    const api = terminal();
+    const vocal = api.project.tracks[0] as Track;
+    const take = vocal.regions[0] as Region;
+    vocal.regions.push({ ...structuredClone(take), id: 'rgn_again', name: 'Again', start: 6 * BAR });
+    const r = await holoNotes(api, 'shift', { semitones: '1', track: 'Vocal', region: 'Take', linked: 'on' }, '2');
+    expect(r.text.split('\n').at(-1)).toBe(
+      'Linked: also made in "Again" [rgn_again] on Vocal, bars 7–10 (1 note tuned; its notes kept in the song from now on).',
+    );
+    expect(api.batches).toHaveLength(1);
+    expect(notesOf(api, 'rgn_again')?.n[1]).toEqual({ t: 0.75, d: 0.4, p: 60.7, to: 61.7 });
+    // (--linked alone, as a switch)
+    const flags = toolArgs(tool, new Map<string, string | true>([['linked', true]]), how, ['wait']);
+    expect(flags).toEqual({ linked: true });
   });
 });

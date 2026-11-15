@@ -290,6 +290,8 @@ describe('the studio offers every note edit', () => {
       octave: ['menu'],
       add: ['menu'],
       remove: ['menu'],
+      paste: ['menu', 'Ctrl V key'],
+      'copy-settings': ['menu', 'Ctrl Shift V key'],
       'correct-pitch': ['Macros dialog'],
       'quantize-time': ['Macros dialog'],
       level: ['Macros dialog'],

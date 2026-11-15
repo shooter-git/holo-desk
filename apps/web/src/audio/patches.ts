@@ -8,7 +8,12 @@
  *   next, in the order it reaches them, then the rest. A patch no longer wanted (its note edited
  *   again) is dropped from the queue; one already rendering finishes, and is kept.
  * - **Kept.** Rendered patches are kept by the memory they take, the least lately used let go first,
- *   so an undo or a redo finds its sound at once.
+ *   so an undo or a redo finds its sound at once; and those the song plays on the device too
+ *   (patch-store.ts), read back before one is rendered again, so a song opened again plays its edits
+ *   at once.
+ * - **A note being dragged** (the Notes view, hearing it as it goes): the patches of the state the drag
+ *   has got to come before anything else, one rendering at a time for each region and only the latest
+ *   wanted after it, those passed over never rendered.
  * - **Recordings.** Each worker holds the recordings it renders from: the engines' own copy in shared
  *   memory (nothing is copied), else one worker holds a copy of each recording that has edits.
  */
@@ -20,6 +25,7 @@ import {
   songPatches,
   type TempoSegment,
   tickToFrame,
+  toShared,
 } from '@holo/engine';
 import type { AudioClip, Project } from '@holo/session';
 
@@ -140,6 +146,11 @@ export class PatchCache {
     return this.kept.has(key);
   }
 
+  /** A patch's channels, as they are (its place among the least lately used unchanged). */
+  peek(key: string): Float32Array[] | undefined {
+    return this.kept.get(key);
+  }
+
   /** A patch's channels (it's used: the last to go). */
   get(key: string): Float32Array[] | undefined {
     const c = this.kept.get(key);
@@ -174,6 +185,16 @@ export class PatchCache {
 
 // ---- rendering them ----
 
+/** What the renderer asks of the patches kept on the device (patch-store.ts). */
+export interface PatchStoreLike {
+  /** Whether it has opened: until then nothing is rendered, in case it has it. */
+  readonly loaded: boolean;
+  readonly ready: Promise<void>;
+  has(key: string): boolean;
+  get(key: string): Promise<Float32Array[] | null>;
+  put(key: string, channels: readonly Float32Array[]): void;
+}
+
 export interface PatchRendererOptions {
   /** How many workers render at once (one without shared memory: it holds the recordings' only copies). */
   workers: number;
@@ -182,6 +203,8 @@ export interface PatchRendererOptions {
   /** Whether the recordings given are in shared memory (every worker reads the one copy), and patches come back there. */
   shared: boolean;
   make: () => PatchWorker;
+  /** Patches kept on the device: read back before one is rendered, and each rendered one kept there. */
+  store?: PatchStoreLike | null;
 }
 
 /** Patches rendered on a few workers, the most wanted first, and kept (planPatches says what's wanted). */
@@ -202,6 +225,17 @@ export class PatchRenderer {
   private readonly errorListeners = new Set<(message: string) => void>();
   /** How long the last patches took to render, ms (the newest last). */
   readonly times: number[] = [];
+  /** Patches rendered, read back from the device, and rendered for a drag (of those rendered). */
+  readonly stats = { rendered: 0, fromDevice: 0, previews: 0 };
+  /**
+   * A note being dragged, by region (or whatever groups them): the patches the latest state it has
+   * got to wants, not yet begun, and the one being rendered for it.
+   */
+  private readonly previews = new Map<string, PatchJob[]>();
+  private readonly previewing = new Map<string, string>();
+  private waitingStore = false;
+  /** Patches the device has (read from it, or given to it). */
+  private readonly onDevice = new Set<string>();
 
   constructor(opts: PatchRendererOptions) {
     this.opts = opts;
@@ -260,6 +294,34 @@ export class PatchRenderer {
     this.pump();
   }
 
+  /**
+   * A note being dragged (`group`: its region): the patches of the state it has got to, rendered before
+   * anything else. One renders at a time for each group, and only the latest wanted after it: those it
+   * replaces, not yet begun, never are (one rendering finishes, and is kept). None: the drag is over.
+   */
+  preview(group: string, jobs: readonly PatchJob[]): void {
+    const todo = jobs.filter((j) => !this.cache.has(j.key) && !this.failed.has(j.key) && this.holds(recordingOf(j)));
+    if (todo.length) this.previews.set(group, todo);
+    else this.previews.delete(group);
+    this.pump();
+  }
+
+  /**
+   * The patches the song plays (`keys`): those rendered and not yet on the device are kept there, a
+   * drag's once the song plays where it landed (the states it passed through aren't kept).
+   */
+  keep(keys: Iterable<string>): void {
+    const store = this.opts.store;
+    if (!store) return;
+    for (const key of keys) {
+      if (this.onDevice.has(key)) continue;
+      const channels = this.cache.peek(key);
+      if (!channels) continue;
+      this.onDevice.add(key);
+      store.put(key, channels);
+    }
+  }
+
   /** How many of the patches wanted are still to come (queued or rendering). */
   get pending(): number {
     let n = 0;
@@ -280,6 +342,7 @@ export class PatchRenderer {
     for (const key of [...this.recordings]) this.release(key);
     this.queue = [];
     this.wanted.clear();
+    this.previews.clear();
   }
 
   close(): void {
@@ -289,6 +352,8 @@ export class PatchRenderer {
     this.running.clear();
     this.queue = [];
     this.wanted.clear();
+    this.previews.clear();
+    this.previewing.clear();
   }
 
   /** The workers, started the first time a recording is given. */
@@ -310,14 +375,41 @@ export class PatchRenderer {
     }
   }
 
+  /**
+   * What's wanted, under way: those the device keeps read back (no worker needed), then each free worker
+   * given a dragged note's patch if one is waiting, else the most wanted of the rest. Nothing is
+   * rendered before the device's store has opened.
+   */
   private pump(): void {
+    const store = this.opts.store;
+    if (store && !store.loaded) {
+      if (!this.waitingStore) {
+        this.waitingStore = true;
+        void store.ready.then(() => {
+          this.waitingStore = false;
+          this.pump();
+        });
+      }
+      return;
+    }
+    if (store) {
+      for (const jobs of this.previews.values())
+        for (const j of jobs) if (store.has(j.key) && !this.running.has(j.key)) this.read(j, store);
+      this.queue = this.queue.filter((j) => {
+        if (!store.has(j.key)) return true;
+        if (!this.running.has(j.key)) this.read(j, store);
+        return false;
+      });
+    }
     for (const w of this.workers) {
       if (w.job) continue;
-      const job = this.queue.shift();
+      const preview = this.takePreview();
+      const job = preview ?? this.takeQueued();
       if (!job) return;
       const id = ++this.nextId;
       w.job = { id, key: job.key };
       this.running.add(job.key);
+      if (preview) this.stats.previews++;
       w.worker.postMessage({
         type: 'render',
         id,
@@ -330,17 +422,74 @@ export class PatchRenderer {
     }
   }
 
+  /** Whether a patch needs nothing doing (rendered, rendering, or not to be had). */
+  private settled(key: string): boolean {
+    return this.cache.has(key) || this.running.has(key) || this.failed.has(key);
+  }
+
+  /** A dragged note's patch to render next: of a group with none rendering, its first still to come. */
+  private takePreview(): PatchJob | null {
+    for (const [group, jobs] of this.previews) {
+      const flying = this.previewing.get(group);
+      if (flying && this.running.has(flying)) continue;
+      // (one rendering already, for the song or another group, is this group's under way)
+      const under = jobs.find((j) => this.running.has(j.key));
+      if (under) {
+        this.previewing.set(group, under.key);
+        continue;
+      }
+      let job = jobs.shift();
+      while (job && this.settled(job.key)) job = jobs.shift();
+      if (!jobs.length) this.previews.delete(group);
+      if (!job) continue;
+      this.previewing.set(group, job.key);
+      return job;
+    }
+    return null;
+  }
+
+  private takeQueued(): PatchJob | null {
+    let job = this.queue.shift();
+    while (job && this.settled(job.key)) job = this.queue.shift();
+    return job ?? null;
+  }
+
+  /** A patch the device keeps, read back (rendered after all if it can't be). */
+  private read(job: PatchJob, store: PatchStoreLike): void {
+    this.running.add(job.key);
+    void store.get(job.key).then((channels) => {
+      this.running.delete(job.key);
+      if (channels) {
+        this.cache.set(job.key, this.opts.shared ? channels.map(toShared) : channels);
+        this.onDevice.add(job.key);
+        this.stats.fromDevice++;
+        this.dropPreviewing(job.key);
+        for (const fn of this.listeners) fn(job.key);
+      } else if (this.wanted.has(job.key) && this.holds(recordingOf(job))) this.queue.unshift(job);
+      else this.dropPreviewing(job.key);
+      this.pump();
+    });
+  }
+
+  private dropPreviewing(key: string): void {
+    for (const [group, k] of this.previewing) if (k === key) this.previewing.delete(group);
+  }
+
   private done(slot: (typeof this.workers)[number], reply: FromPatchWorker): void {
     if (slot.job?.id !== reply.id) return;
     slot.job = null;
     this.running.delete(reply.key);
+    this.dropPreviewing(reply.key);
     if ('error' in reply) {
       this.failed.add(reply.key);
       for (const fn of this.errorListeners) fn(`A note edit couldn’t be rendered: ${reply.error}`);
     } else {
       this.cache.set(reply.key, reply.channels);
+      this.stats.rendered++;
       this.times.push(reply.ms);
       if (this.times.length > 32) this.times.shift();
+      // (kept on the device when the song plays it; a drag's, once it lands there: keep)
+      if (this.wanted.has(reply.key)) this.keep([reply.key]);
       for (const fn of this.listeners) fn(reply.key);
     }
     this.pump();

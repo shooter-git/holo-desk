@@ -476,14 +476,14 @@ export function NumberBox({
     else setText(String(value));
   };
   return (
-    <label className="hstack" style={{ gap: 4 }} title={label}>
+    <label className="hstack number-box" title={label}>
       <span className="label">{label}</span>
       <input
         className="input mono"
         inputMode="decimal"
         aria-label={label}
         value={text}
-        style={{ width, height: 24 }}
+        style={{ width }}
         onChange={(e) => setText(e.target.value)}
         onBlur={done}
         onKeyDown={(e) => {
@@ -521,7 +521,8 @@ export function AudioEditorBar() {
             <Knob
               def={GAIN}
               value={clip.gain}
-              size={26}
+              // (finger-sized where there's no mouse)
+              size={layout === 'desktop' ? 26 : 32}
               compact
               label="Region gain"
               color={track.color}

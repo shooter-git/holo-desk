@@ -173,10 +173,15 @@ confirm (it says what runs, and where). One you install yourself in a terminal s
 again**, or, if it went somewhere the runner doesn't look, once you run `pnpm run runner-service on`
 again.
 
-The first device pairs with a 6-digit code the runner prints; the code works once, for 10 minutes. A
-later device asks to join, and a device already allowed approves it in its own Settings › Agent, where
-any device can also be removed, at once. A device that has lost its way back in (its site data
-cleared, or the only allowed device lost) pairs with a new code from the runner, the same way. The
+The first device pairs with a 6-digit code from the host: run `pnpm holo pair` there. It prints the
+code, a link that opens Settings › Agent with the code filled in for each way your setup opens HO[LO]
+to other devices (`pnpm tailnet on`, `pnpm lan on`), and a QR code a phone can scan. The code works once,
+for 10 minutes. (A running runner prints one too when a studio turns the agent on.) A later device asks
+to join, and a device already allowed approves it in its own Settings › Agent, where any device can
+also be removed, at once. A device that has lost its way back in (its site data cleared, or the only
+allowed device lost) pairs with a new code, the same way. If the runner can't serve the agent (none is
+connected, or it's from an older HO[LO] than the studio, or reads another data folder), Settings › Agent
+says which and what to do. The
 harness, its model and effort, its install, its sign-in and its updates are there too. An install or
 an update runs only when you click it and confirm, and it's the same harness your terminal uses. The
 models and efforts are the harness's own, as it lists them on the host, and they're looked at again

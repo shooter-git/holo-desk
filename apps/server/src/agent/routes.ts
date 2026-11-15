@@ -58,6 +58,7 @@ export interface AgentOptions {
 
 const NOT_ALLOWED = 'This device isn’t allowed to use the agent';
 const OFF = 'The agent is off: turn it on in Settings › Agent';
+const GET_A_CODE = 'Get a code on the computer HO[LO] runs on: pnpm holo pair';
 /** MusicXML is passed on whole (as text) up to this size; past it, only what was measured. */
 const MAX_XML_DATA = 1024 * 1024;
 
@@ -237,25 +238,37 @@ export function agentRoutes(app: FastifyInstance, o: AgentOptions): { jobs: Jobs
 
   // ---- open ----
 
-  app.get('/api/agent', async (req) => ({
-    enabled: agentStore.settings().enabled,
-    allowed: auth.device(req.headers.authorization) !== null,
-    // no device is allowed yet (a code works either way, while a keyed runner is connected)
-    pairing: auth.unpaired(),
-    runner: live.runners(),
-  }));
+  app.get('/api/agent', async (req) => {
+    const allowed = auth.device(req.headers.authorization) !== null;
+    const { host, ...runner } = live.runners();
+    return {
+      enabled: agentStore.settings().enabled,
+      allowed,
+      // no device is allowed yet (a code works either way: from `holo pair`, or a keyed runner)
+      pairing: auth.unpaired(),
+      // the runner's computer is named only to an allowed device
+      runner: allowed && host ? { ...runner, host } : runner,
+    };
+  });
 
   app.post(
     '/api/agent/pairing',
-    open(async (_req, reply) => {
+    open(async (req, reply) => {
       if (auth.locked()) return reply.code(429).send({ error: auth.lockedText() });
       // with devices allowed or not: the code is the way back in for a device that lost its token
+      const key = req.headers['x-holo-runner-key'];
+      if (key !== undefined) {
+        // `holo pair` on this computer, with the runner key: the code is its answer, a new one each time
+        if (!live.isRunnerKey(key))
+          return reply.code(403).send({
+            error: 'That isn’t this HO[LO]’s runner key: run holo pair from the checkout whose data folder HO[LO] uses',
+          });
+        return auth.startPairing();
+      }
       const runners = live.keyedRunners();
-      if (!runners.length)
-        return reply
-          .code(409)
-          .send({ error: 'Start the runner on this computer (pnpm runner): it shows the code', reason: 'no-runner' });
-      const { code, expires } = auth.startPairing();
+      if (!runners.length) return reply.code(409).send({ error: GET_A_CODE, reason: 'no-runner' });
+      // the studio: a code that still works is kept (`holo pair` may have just printed it), unless it asks for a new one
+      const { code, expires } = auth.startPairing(body(req).fresh === true);
       for (const r of runners) live.sendTo(r, { type: 'pairing-code', code, expires });
       return { expires };
     }),

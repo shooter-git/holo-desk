@@ -15,7 +15,16 @@ import { AFTER, BEFORE, type Block, type Go, LIMITS as VIEW_LIMITS, type View, v
 import { SCAN_ID, type Scan } from '@holo/score';
 import { applyOps, barToTick, type MiddleC, type Op, type Project, parseProject } from '@holo/session';
 import type { Store } from '../db.ts';
-import { type AgentHooks, type Answer, GONE, type Live, type LiveClient, NO_ANSWER, type PlayedNote } from '../live.ts';
+import {
+  type AgentHooks,
+  type Answer,
+  GONE,
+  type Live,
+  type LiveClient,
+  NO_ANSWER,
+  type PlayedNote,
+  type RunnerState,
+} from '../live.ts';
 import { hashToken, newToken, sameHash } from './auth.ts';
 import {
   type AttachmentInfo,
@@ -253,6 +262,21 @@ const LIVE: ReadonlySet<JobState> = new Set(['waiting', 'running']);
 const isLive = (job: AgentJob) => LIVE.has(job.view.state);
 const HARNESS_NAMES: Record<HarnessId, string> = { claude: 'Claude Code', codex: 'Codex', cursor: 'Cursor' };
 
+/**
+ * Why no runner takes the agent's jobs, said to an allowed device: none connected, or the one that is
+ * from before keys, can't read the key, or has another HO[LO]'s.
+ */
+export function noRunnerText({ state, host }: { state: RunnerState; host: string | null }): string {
+  const it = `The runner${host ? ` on ${host}` : ''}`;
+  if (state === 'old')
+    return `${it} is from an older HO[LO] than this one: bring its checkout up to this version and restart it`;
+  if (state === 'no-key')
+    return `${it} can’t read HO[LO]’s runner key: run it from the checkout whose data folder HO[LO] uses (or give it HOLO_RUNNER_KEY)`;
+  if (state === 'wrong-key')
+    return `${it} has another HO[LO]’s runner key: point its HOLO_DATA_DIR at this HO[LO]’s data folder`;
+  return 'No runner is connected: start it on the computer HO[LO] runs on (pnpm runner; on Linux, pnpm run runner-service on keeps it running)';
+}
+
 export class Jobs implements AgentHooks {
   private readonly o: JobsOptions;
   private readonly limits: Limits;
@@ -343,12 +367,7 @@ export class Jobs implements AgentHooks {
 
   /** The harness a request runs with, and its runner; or why there's none. */
   private pick(wanted: HarnessId | null): { harness: HarnessId; runner: LiveClient } {
-    if (!this.o.live.agentRunners().length)
-      throw new Refusal(
-        409,
-        'The agent runs through the runner on this computer: start it with pnpm runner',
-        'no-runner',
-      );
+    if (!this.o.live.agentRunners().length) throw new Refusal(409, noRunnerText(this.o.live.runners()), 'no-runner');
     // none chosen: the first that can be sealed, else the first found (whose refusal then says why)
     const sealed = HARNESSES.filter((id) => this.runnerFor(id)?.info.sealed);
     const ids = wanted ? [wanted] : sealed.length ? sealed : HARNESSES.filter((id) => this.runnerFor(id));
@@ -383,7 +402,7 @@ export class Jobs implements AgentHooks {
   relay(action: 'refresh' | 'login' | 'login-code' | 'update' | 'install', harness?: HarnessId, code?: string): void {
     if (action === 'refresh') {
       const runners = this.o.live.agentRunners();
-      if (!runners.length) throw new Refusal(409, 'Start the runner on this computer: pnpm runner', 'no-runner');
+      if (!runners.length) throw new Refusal(409, noRunnerText(this.o.live.runners()), 'no-runner');
       for (const r of runners) {
         this.looked.set(r, Date.now());
         this.o.live.sendTo(r, { type: 'agent-refresh' });
@@ -392,8 +411,7 @@ export class Jobs implements AgentHooks {
     }
     if (!harness) throw new Refusal(400, 'Which harness?');
     if (action === 'install') {
-      if (!this.o.live.agentRunners().length)
-        throw new Refusal(409, 'Start the runner on this computer: pnpm runner', 'no-runner');
+      if (!this.o.live.agentRunners().length) throw new Refusal(409, noRunnerText(this.o.live.runners()), 'no-runner');
       // only one that isn't there: HO[LO] never reinstalls over one (Update is for that)
       if (this.runnerFor(harness)) throw new Refusal(409, `${HARNESS_NAMES[harness]} is installed already`);
       if ([...this.jobs.values()].some((j) => j.harness === harness && isLive(j)))

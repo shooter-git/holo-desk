@@ -37,3 +37,26 @@ jobs:
         run: pnpm build
       - name: Build the Docker image
         run: docker build -f deploy/Dockerfile -t holo-desk:ci .
+
+  # The studio in a browser at a desktop's, a tablet's and a phone's size: nothing cut off, covered or
+  # out of line (tools/ui-check.mjs). On its own so the checks above aren't kept waiting for a browser.
+  layout:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Build the studio
+        run: pnpm build
+      - name: A browser to look at it in (Playwright, kept out of the repo's own dependencies)
+        run: |
+          npm install --no-save --no-audit --no-fund --prefix "$RUNNER_TEMP/playwright" playwright@1.56.1
+          "$RUNNER_TEMP/playwright/node_modules/.bin/playwright" install --with-deps chromium
+      - name: The layout, desktop to phone
+        run: pnpm ui:check
+        env:
+          PLAYWRIGHT: ${{ runner.temp }}/playwright/node_modules/playwright/index.mjs

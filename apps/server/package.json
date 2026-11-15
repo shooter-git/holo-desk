@@ -13,6 +13,7 @@
     "@fastify/compress": "9.3.0",
     "@fastify/static": "10.1.10",
     "@fastify/websocket": "11.3.6",
+    "@holo/agent": "workspace:*",
     "@holo/engine": "workspace:*",
     "@holo/music": "workspace:*",
     "@holo/score": "workspace:*",

@@ -99,7 +99,12 @@ export const TOOL_PARITY: Readonly<Record<string, Parity>> = {
     conversation:
       "writes a brief for the user's own coding agent when a request is for HO[LO]'s code, holo-packs or a creation; a terminal is that agent",
   },
+  version: {
+    conversation:
+      "keeps the song as it is now under a name for the buttons of a reply in the studio's bar (play it, keep it); a terminal has no reply to put buttons in",
+  },
   finish: {
-    conversation: "ends a request's turn with the undo step's label and the reply under the bar; a command has no turn",
+    conversation:
+      "ends a request's turn with the undo step's label, the reply under the bar and what it shows under it; a command has no turn",
   },
 };

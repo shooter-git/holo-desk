@@ -6,6 +6,7 @@
 import { readFileSync } from 'node:fs';
 import type { Scan, ScanSystem, SystemState } from '@holo/score';
 import { type AudioFile, applyOps, describeProject, type Op, type Project, type SampleMic } from '@holo/session';
+import type { Block, Go } from './view.ts';
 
 /** What the requester's studio shows: the playhead, the selection, the cycle and the view. */
 export interface StudioState {
@@ -23,6 +24,12 @@ export interface StudioState {
   /** Who the song is by, its album and its creation, in words (the library keeps them beside the song). */
   about?: string[];
   [key: string]: unknown;
+}
+
+/** One of the studio's commands, as its bar lists it: "metronome", "Metronome". */
+export interface StudioCommand {
+  id: string;
+  title: string;
 }
 
 /** A note the user played on a MIDI device (or sang, through pitch tracking). */
@@ -410,8 +417,15 @@ export interface JobApi {
   permission(body: { kind: PermissionKind; detail: string; pack?: string }): Promise<{ ok: boolean }>;
   /** POST …/handoff: a brief (≤ 4000 characters) for the user's own harness. */
   handoff(brief: string): Promise<{ ok: boolean }>;
-  /** POST …/finish: the undo step's label (≤ 80) and the reply under the bar (≤ 600). */
-  finish(label: string, reply: string): Promise<{ ok: boolean }>;
+  /**
+   * POST …/finish: the undo step's label (≤ 80), the reply under the bar (≤ 600), and what it shows
+   * under it (`view`, resolved: view.ts) and where the studio goes as it arrives (`go`).
+   */
+  finish(label: string, reply: string, view?: Block[], go?: Go): Promise<{ ok: boolean }>;
+  /** POST …/version: the song as it is now kept as a version with this name, for the reply's view; its revision. */
+  version(name: string): Promise<{ ok: boolean; revision: number }>;
+  /** GET …/commands: the commands the requester's studio can run now (the bar's), by id, with their titles. */
+  commands(): Promise<{ commands: StudioCommand[] }>;
 
   // ---- measure ----
   /** POST …/measure: waits up to 40 s; not done, the same body again joins it (or GET …/measure/:task). */
@@ -515,7 +529,10 @@ export function httpJobApi(base: string, job: string, tokenFile: string): JobApi
     progress: (line) => json('POST', '/progress', { line: line.slice(0, 200) }),
     permission: (body) => json('POST', '/permission', body),
     handoff: (brief) => json('POST', '/handoff', { brief }),
-    finish: (label, reply) => json('POST', '/finish', { label, reply }),
+    finish: (label, reply, view, go) =>
+      json('POST', '/finish', { label, reply, ...(view ? { view } : {}), ...(go ? { go } : {}) }),
+    version: (name) => json('POST', '/version', { name }),
+    commands: () => json('GET', '/commands'),
 
     // ---- measure ----
     measure: (body) => json('POST', '/measure', body, MEASURE_TIMEOUT_MS),
@@ -555,7 +572,19 @@ export interface FakeJobApiOptions {
   // ---- details ----
   /** Who the song is by and its album at first; `refuse`: the 400 a creation's song gets. */
   details?: Partial<SongDetails> & { refuse?: string };
+
+  // ---- the reply's view ----
+  /** The commands the studio offers (a few of the bar's when left out). */
+  commands?: StudioCommand[];
 }
+
+/** A few of the bar's commands, what the fake studio offers unless a test says otherwise. */
+export const FAKE_COMMANDS: StudioCommand[] = [
+  { id: 'play', title: 'Play' },
+  { id: 'metronome', title: 'Metronome' },
+  { id: 'mixer', title: 'Mixer' },
+  { id: 'undo', title: 'Undo' },
+];
 
 /** Every call the fake took, in order. */
 export interface FakeCall {
@@ -671,9 +700,17 @@ export function fakeJobApi(project: Project, options: FakeJobApiOptions = {}): F
       log('handoff', brief);
       return { ok: true };
     },
-    async finish(label, reply) {
-      log('finish', label, reply);
+    async finish(label, reply, view, go) {
+      log('finish', label, reply, ...(view || go ? [view, go] : []));
       return { ok: true };
+    },
+    async version(name) {
+      log('version', name);
+      return { ok: true, revision: fake.project.revision };
+    },
+    async commands() {
+      log('commands');
+      return { commands: options.commands ?? FAKE_COMMANDS };
     },
 
     // ---- measure ----

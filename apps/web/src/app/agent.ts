@@ -6,6 +6,7 @@
  * The device's token is kept apart from the view this device remembers (`holo:view`), in a key of its
  * own, and goes only to HO[LO]'s host: as the bearer of the agent's routes, and in each live hello.
  */
+import type { Go, View } from '@holo/agent/view';
 import { useSyncExternalStore } from 'react';
 import type { Ready } from './attach.ts';
 import { type Command, selectionSpan } from './commands.ts';
@@ -78,6 +79,9 @@ export interface JobView {
   permission?: Permission;
   brief?: string;
   briefWarnings?: { line: number; kind: BriefWarning }[];
+  /** What the reply shows under it, and where the studio goes as it arrives (on the device that asked). */
+  view?: View;
+  go?: Go;
   error?: string;
   started: number;
   finished?: number;
@@ -94,6 +98,7 @@ export interface Turn {
   permission?: Permission;
   brief?: string;
   briefWarnings?: { line: number; kind: BriefWarning }[];
+  view?: View;
   error?: string;
 }
 
@@ -250,11 +255,24 @@ export function reduce(a: AgentState, e: AgentEvent): AgentState {
   }
 }
 
-/** What the studio does when the host says how one of its jobs goes: whether it runs, and its step's final name. */
-export function statusEffects(a: AgentState, job: JobView): { running: boolean; label?: string } | null {
+/**
+ * What the studio does when the host says how one of its jobs goes: whether it runs, its step's final
+ * name, and (as the reply arrives: `was` was the job still running) where it goes, when the reply
+ * brings a go.
+ */
+export function statusEffects(
+  a: AgentState,
+  job: JobView,
+  was?: JobView,
+): { running: boolean; label?: string; go?: Go } | null {
   if (job.device !== a.me) return null;
   const running = isLive(job.state);
-  return !running && job.label ? { running, label: job.label } : { running };
+  const arrived = job.state === 'done' && !!job.go && !!was && isLive(was.state);
+  return {
+    running,
+    ...(!running && job.label ? { label: job.label } : {}),
+    ...(arrived && job.go ? { go: job.go } : {}),
+  };
 }
 
 /** The last exchange on a song, as the bar shows it under its field. */
@@ -273,6 +291,8 @@ export interface Exchange {
   /** Asked for here: only this device answers a permission. */
   mine: boolean;
   listening: boolean;
+  /** What the reply shows under it, once it's done. */
+  view: View | null;
 }
 
 /** Why a job ended without a reply, as said under the request. */
@@ -291,7 +311,7 @@ export function exchange(a: AgentState, project: string | null): Exchange | null
   if (!project || !isOn(a)) return null;
   type Seen = { at: number; make: () => Exchange };
   const seen: Seen[] = [];
-  const base = { permission: null, brief: null, flagged: new Map(), mine: false, listening: false };
+  const base = { permission: null, brief: null, flagged: new Map(), mine: false, listening: false, view: null };
   if (a.sending?.project === project) {
     const s = a.sending;
     seen.push({
@@ -321,6 +341,7 @@ export function exchange(a: AgentState, project: string | null): Exchange | null
         flagged: new Map((j.briefWarnings ?? []).map((w) => [w.line, w.kind])),
         mine: j.device === a.me,
         listening: a.listening === j.id,
+        view: isLive(j.state) ? null : (j.view ?? null),
       }),
     });
   }
@@ -340,6 +361,7 @@ export function exchange(a: AgentState, project: string | null): Exchange | null
         flagged: new Map((last.briefWarnings ?? []).map((w) => [w.line, w.kind])),
         // (the host answers a permission only from the device that asked)
         mine: true,
+        view: isLive(last.state) ? null : (last.view ?? null),
       }),
     });
   }
@@ -919,8 +941,9 @@ export function agentMessage(msg: Record<string, unknown>): { handled: boolean; 
     case 'agent-status': {
       const job = msg.job as JobView | undefined;
       if (!job || typeof job.id !== 'string' || !isOn(state)) return { handled: true };
+      const was = state.jobs[job.id];
       agent.dispatch({ type: 'status', job, barOpen: studio.get().bar });
-      const fx = statusEffects(state, job);
+      const fx = statusEffects(state, job, was);
       return { handled: true, ...(fx ? { effects: { job: job.id, ...fx } } : {}) };
     }
     case 'agent-listen':
@@ -954,8 +977,8 @@ export function agentMessage(msg: Record<string, unknown>): { handled: boolean; 
   return { handled: false };
 }
 
-/** What the studio does about one of its jobs: whether it runs, and its step's final name. */
-export type JobEffect = { job: string; running: boolean; label?: string };
+/** What the studio does about one of its jobs: whether it runs, its step's final name, where it goes. */
+export type JobEffect = { job: string; running: boolean; label?: string; go?: Go };
 
 /** How many runners the host's last list of who's connected had (null: none seen since the channel opened). */
 let runnersKnown: number | null = null;
@@ -1013,6 +1036,7 @@ function asEnded(j: JobView, turn: Turn | undefined): JobView | null {
     ...(turn?.reply ? { reply: turn.reply } : {}),
     ...(turn?.label ? { label: turn.label } : {}),
     ...(turn?.brief ? { brief: turn.brief, briefWarnings: turn.briefWarnings ?? [] } : {}),
+    ...(turn?.view ? { view: turn.view } : {}),
     ...(turn?.error ? { error: turn.error } : {}),
     finished: Date.now(),
   };

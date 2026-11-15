@@ -13,32 +13,7 @@
  */
 import { AudioLines, FileMusic, FileText, Image as ImageIcon, Music, Search, X } from 'lucide-react';
 import { type ClipboardEvent, type DragEvent, type KeyboardEvent, useEffect, useId, useRef, useState } from 'react';
-import {
-  addTrack,
-  bounceSong,
-  deleteSelection,
-  locate,
-  moveBars,
-  playheadTick,
-  quantizeSelection,
-  redo,
-  renderForAgent,
-  repeatRegions,
-  saveNow,
-  selectAll,
-  selectTrack,
-  sendToCreation,
-  splitAtPlayhead,
-  stop,
-  toggleCycle,
-  toggleFullscreen,
-  toggleMetronome,
-  togglePlay,
-  toggleRecord,
-  transposeSelection,
-  undo,
-  updateChannel,
-} from '../app/actions.ts';
+import { bounceSong, playheadTick, renderForAgent, sendToCreation } from '../app/actions.ts';
 import {
   agent,
   agentCommands,
@@ -71,39 +46,13 @@ import {
   record,
   redraw,
 } from '../app/attach.ts';
-import { type Actions, barRows, type Command, type Extra } from '../app/commands.ts';
-import { toggleTyping } from '../app/keys.ts';
+import { ACTIONS } from '../app/bar-actions.ts';
+import { barRows, type Command, type Extra } from '../app/commands.ts';
 import { isPhone, useLayout } from '../app/layout.ts';
 import { closeBar, openBar, store, useApp } from '../app/store.ts';
 import { installs, useInstalls } from '../audio/installs.ts';
+import { AgentView } from './AgentView.tsx';
 import { closeMenu } from './menu.tsx';
-
-/** What the bar's commands do: the same actions the keys and buttons use. */
-const ACTIONS: Actions = {
-  set: (patch) => store.set(patch),
-  togglePlay: () => void togglePlay(),
-  toggleRecord: () => void toggleRecord(),
-  toggleCycle,
-  toggleMetronome,
-  stop,
-  locate,
-  moveBars,
-  toggleFullscreen,
-  toggleTyping,
-  undo,
-  redo,
-  deleteSelection,
-  selectAll,
-  quantizeSelection,
-  splitAtPlayhead,
-  repeatRegions,
-  transposeSelection,
-  selectTrack,
-  setChannel: (track, patch, label) => updateChannel(track, patch, label),
-  newTrack: () => void addTrack({ type: 'synth', preset: 'Soft Keys' }),
-  save: () => void saveNow(),
-  bounce: () => void bounceSong(true),
-};
 
 /** How far down, and how quickly, a finger goes for a swipe that opens the bar (less is a tap or a slip). */
 const SWIPE_PX = 36;
@@ -368,8 +317,11 @@ function CopyBrief({ text }: { text: string }) {
   );
 }
 
-/** The song's last exchange under the field: the request, then the work going on or the reply, then its button. */
-function Talk({ ex, project }: { ex: Exchange; project: string }) {
+/**
+ * The song's last exchange under the field: the request, then the work going on or the reply, what
+ * the reply shows under it, then its button.
+ */
+function Talk({ ex, project, busy }: { ex: Exchange; project: string; busy: boolean }) {
   const job = ex.job;
   const buttons = [
     ex.permission && job && ex.mine && (
@@ -400,6 +352,7 @@ function Talk({ ex, project }: { ex: Exchange; project: string }) {
       ) : (
         ex.reply && <div className="reply">{ex.reply}</div>
       )}
+      {!ex.working && ex.view && ex.job && <AgentView view={ex.view} job={ex.job} busy={busy} />}
       {ex.brief && <Brief text={ex.brief} flagged={ex.flagged} />}
       {buttons.length > 0 && <div className="btns">{buttons}</div>}
     </div>
@@ -447,12 +400,13 @@ function BarPanel() {
   // with nothing typed, the song's last exchange stands in for the list
   const talking = on && ex !== null && !typed;
   const context = () => requestContext(app, playhead, phone);
+  const busy = Object.values(a.jobs).some((j) => j.project === project && isLive(j.state));
   const agentRows = agentCommands(
     {
       on,
       project,
       scan: app.scanView?.id ?? null,
-      busy: Object.values(a.jobs).some((j) => j.project === project && isLive(j.state)),
+      busy,
     },
     {
       scan: (task, scan) => project && void askScan(task, scan, project, context()),
@@ -646,7 +600,7 @@ function BarPanel() {
             {note}
           </div>
         )}
-        {talking && ex && project && <Talk ex={ex} project={project} />}
+        {talking && ex && project && <Talk ex={ex} project={project} busy={busy} />}
         <div ref={list} className="list" role="listbox" id={`${id}-list`} aria-label="Commands">
           {rows.map((c, i) => (
             <div

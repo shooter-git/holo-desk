@@ -787,6 +787,16 @@ a.btn {
   max-width: 100%;
 }
 
+/* Under a finger the mark and the song's name are pressed over the bar's whole height, not only
+   their line of text (16 to 19 px): the padding is taken back by the margin, so nothing moves. */
+@media (pointer: coarse) {
+  .brand .mark,
+  .brand .title.bare {
+    padding-block: 13px;
+    margin-block: -13px;
+  }
+}
+
 /* the control bar gives way on narrower screens: the least-used parts go first, in this order, and
    the Songs button stands in for the title once that is gone (phones have their own bar). Each step
    comes where the right side would no longer fit beside the center (which grows at each step above) */
@@ -1248,6 +1258,27 @@ a.btn {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+/* a number with its name and its unit (the Audio Editor's fades and stretch): the name stays on
+   one line, and the field is finger-sized where there's no mouse */
+.number-box {
+  flex: none;
+  gap: 4px;
+}
+
+.number-box .label {
+  white-space: nowrap;
+}
+
+.number-box .input {
+  height: 24px;
+}
+
+@media (pointer: coarse) {
+  .number-box .input {
+    height: 32px;
+  }
 }
 
 .pane-bar .grow {
@@ -2366,7 +2397,9 @@ button.list-item {
   width: min(860px, 100%);
 }
 
-.dialog:focus {
+.dialog:focus,
+.print-window:focus,
+.scan-window:focus {
   outline: none;
 }
 
@@ -2409,6 +2442,24 @@ button.list-item {
 .dialog footer .new-song {
   flex: 0 1 auto;
   min-width: 0;
+}
+
+/* On an upright phone the Songs dialog's actions wrap: each line is filled edge to edge (they left
+   ragged ends, pushed to the right), and a new song has a line of its own. */
+[data-layout="phone-portrait"] .dialog.songs footer > .btn {
+  flex: 1 1 auto;
+}
+
+[data-layout="phone-portrait"] .dialog.songs footer > .grow {
+  display: none;
+}
+
+[data-layout="phone-portrait"] .dialog.songs footer .new-song {
+  flex: 1 1 100%;
+}
+
+[data-layout="phone-portrait"] .dialog.songs footer .new-song .input {
+  max-width: none;
 }
 
 /* Settings keeps one size from tab to tab, so the tabs stay where they are as the pages change */
@@ -3718,7 +3769,16 @@ html[data-layout="phone-landscape"] .bar .field input {
 }
 
 .rail-tools .mark {
+  position: relative;
   height: 24px;
+}
+
+/* (pressed over a finger's height: the rail has no room to spare for a taller button, so what's
+   pressed reaches up to the button above and down to the rail's foot) */
+.rail-tools .mark::before {
+  content: "";
+  position: absolute;
+  inset: -2px 0 -6px;
 }
 
 .rail-tools .mark .wordmark {

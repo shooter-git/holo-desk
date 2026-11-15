@@ -7,10 +7,11 @@
 import { notate, type ScoreDoc, toMEI } from '@holo/score';
 import type { Project, ScoreSettings } from '@holo/session';
 import { Printer, X } from 'lucide-react';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { apply } from '../app/actions.ts';
 import { store, useApp } from '../app/store.ts';
+import { useFocusInside } from '../ui/focus-inside.ts';
 import { renderScore } from './verovio.ts';
 
 type Page = NonNullable<ScoreSettings['page']>;
@@ -133,6 +134,9 @@ export default function PrintWindow() {
     };
   }, [project, setup, what, parts]);
 
+  const box = useRef<HTMLDivElement>(null);
+  useFocusInside(box);
+
   // Escape closes, as the other windows do
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -152,7 +156,7 @@ export default function PrintWindow() {
   const total = sheets.reduce((n, s) => n + s.pages.length, 0);
 
   return createPortal(
-    <div className="print-window" role="dialog" aria-label="Print">
+    <div ref={box} className="print-window" role="dialog" aria-modal="true" aria-label="Print" tabIndex={-1}>
       <style>{`@page { size: ${pw}mm ${ph}mm; margin: 0; }`}</style>
       <header className="scan-bar">
         <span className="title">Print</span>

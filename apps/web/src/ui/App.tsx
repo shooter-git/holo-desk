@@ -468,8 +468,9 @@ export function App() {
   const inspector = useApp((s) => s.inspector);
   const library = useApp((s) => s.library);
   const typing = useApp((s) => s.typing);
-  // a dialog up: the studio behind it is inert (no focus, no clicks, nothing for a screen reader)
-  const inert = useApp((s) => s.dialog !== null);
+  // a dialog up, or a window over the whole studio (Print, Scan): the studio behind it is inert (no
+  // focus, no clicks, nothing for a screen reader)
+  const inert = useApp((s) => s.dialog !== null || s.printView !== null || s.scanView !== null);
   const workspace = useRef<HTMLDivElement>(null);
   const overlays = layout === 'tablet';
 

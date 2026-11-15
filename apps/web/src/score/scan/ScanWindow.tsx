@@ -6,18 +6,21 @@
  */
 import { notate, type Scan, type ScanSystem, toMEI } from '@holo/score';
 import { Check, Play, X } from 'lucide-react';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { apply, locate, saveSoon, togglePlay } from '../../app/actions.ts';
 import { store, toast, useApp } from '../../app/store.ts';
+import { useFocusInside } from '../../ui/focus-inside.ts';
 import { renderEach } from '../verovio.ts';
 import { compareEngines, getScan, omrStatus, readWithEngines, setSystem } from './client.ts';
 import { NewScan } from './NewScan.tsx';
 
 export default function ScanWindow() {
   const view = useApp((s) => s.scanView);
+  const box = useRef<HTMLDivElement>(null);
+  useFocusInside(box);
   if (!view) return null;
   return (
-    <div className="scan-window" role="dialog" aria-label="Scan sheet music">
+    <div ref={box} className="scan-window" role="dialog" aria-modal="true" aria-label="Scan sheet music" tabIndex={-1}>
       {view.id ? <Review id={view.id} /> : <StudioScan />}
     </div>
   );
@@ -74,6 +77,16 @@ function Review({ id }: { id: string }) {
     check();
     const t = window.setInterval(check, 15_000);
     return () => window.clearInterval(t);
+  }, []);
+
+  // Escape closes the review, as the other windows do: everything in it is kept as it's made. (A
+  // new scan keeps the key from closing it: its pages and their corners would be lost.)
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && store.get().dialog === null) close();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
   }, []);
 
   const systems = useMemo(() => scan?.pages.flatMap((p) => p.systems.map((s) => ({ page: p.n, s }))) ?? [], [scan]);

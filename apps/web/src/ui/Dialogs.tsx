@@ -26,6 +26,7 @@ import { engine } from '../audio/engine.ts';
 import { midi } from '../audio/midi.ts';
 import { AgentSettings } from './AgentSettings.tsx';
 import { Wordmark } from './controls.tsx';
+import { useFocusInside } from './focus-inside.ts';
 import { useFrame } from './frame.ts';
 import { MetronomeSettings } from './Metronome.tsx';
 import { SongGroups } from './Songs.tsx';
@@ -52,14 +53,7 @@ function Dialog({
   className?: string;
 }) {
   const box = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    // the keyboard moves into the dialog while it's up, and back to where it was when it closes
-    const was = document.activeElement;
-    box.current?.focus({ preventScroll: true });
-    return () => {
-      if (was instanceof HTMLElement && was.isConnected) was.focus({ preventScroll: true });
-    };
-  }, []);
+  useFocusInside(box);
   return (
     <div className="scrim" onPointerDown={(e) => e.target === e.currentTarget && store.set({ dialog: null })}>
       <div
@@ -122,6 +116,7 @@ function ProjectsDialog() {
     <Dialog
       title="Songs"
       wide
+      className="songs"
       footer={
         <>
           <input

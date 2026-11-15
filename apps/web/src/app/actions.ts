@@ -63,6 +63,7 @@ import { audioFiles } from '../audio/files.ts';
 import { midi } from '../audio/midi.ts';
 import { instrumentManifest } from '../audio/pack-files.ts';
 import { library } from '../audio/samples.ts';
+import { songKeys } from '../audio/song-samples.ts';
 import { takes as keptTakes, type TakePlan, uploadTake } from '../audio/takes.ts';
 import { holdDuringDrags } from '../ui/gesture.ts';
 import { NOTE_EFFECTS, playsHits } from '../ui/pads.ts';
@@ -846,11 +847,16 @@ export function setShareDevice(on: boolean): void {
 export function loadInstruments(project: Project): void {
   if (!engine.ctx) return;
   const selected = store.get().selectedTrack;
+  // on a phone or tablet, each instrument's samples for the keys the song plays (more come as more
+  // are played): a big song's instruments whole are more than its browser allows a page
+  const keys = isTouch() ? songKeys(project) : null;
+  const keysOf = (pack: string, name: string) => keys?.get(`${pack}/${name}`) ?? undefined;
   for (const t of project.tracks) {
     const first = t.id === selected || t.armed;
     for (const i of [t.instrument, ...t.articulations.map((a) => a.instrument)]) {
       // a Performance instrument's live notes play on its pack's plain sampler
-      if (i.type === 'sampler' || i.type === 'performance') void library.ensure(i.pack, i.name, first ? 0 : 1);
+      if (i.type === 'sampler' || i.type === 'performance')
+        void library.ensure(i.pack, i.name, first ? 0 : 1, keysOf(i.pack, i.name));
     }
   }
   // the kits plugins play (a Drum Replacer's)

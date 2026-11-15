@@ -17,6 +17,7 @@ import { type Instrument, type PackSound, type ParamDef, type SampleMic, sampler
 import { engine } from './engine.ts';
 import { Turns } from './files.ts';
 import { channelData, channelPcm, instrumentManifest, packFileData, pcm16, pcmChannel } from './pack-files.ts';
+import { zonesForKeys } from './song-samples.ts';
 
 /**
  * Sample files the decoder works on at once, the whole library over. Each leaves its decoded file
@@ -62,18 +63,38 @@ export type LoadState =
   | { state: 'ready' }
   | { state: 'error'; message: string };
 
+/**
+ * An instrument loaded in part (a song's samples first, on a phone): the zones that have come, by
+ * their place in the instrument, and the rate they were loaded at.
+ */
+interface Part {
+  rate: number;
+  zones: Map<number, SampleZone>;
+  spec: Omit<SamplerSpec, 'zones'>;
+  /** Zones that came while the song played, not yet handed over (that would cut what rings). */
+  waiting: boolean;
+}
+
 export class SampleLibrary {
   packs: PackSummary[] = [];
   readonly states = new Map<string, LoadState>();
   private loading = new Map<string, Promise<void>>();
   private listeners = new Set<() => void>();
+  /** Instruments loaded in part, and the keys asked of each (null: the whole of it). */
+  private parts = new Map<string, Part>();
+  private asked = new Map<string, Set<number> | null>();
 
   constructor() {
     engine.onRestart((keys) => {
       for (const key of keys) {
         this.loading.delete(key);
+        // (samples are at the rate they came at: at another, the song's are loaded again)
+        const part = this.parts.get(key);
+        if (part && part.rate !== engine.sampleRate) this.parts.delete(key);
+        const asked = this.asked.get(key);
+        this.asked.delete(key);
         const [pack, ...rest] = key.split('/');
-        void this.ensure(pack ?? '', rest.join('/'));
+        void this.ensure(pack ?? '', rest.join('/'), 1, asked ?? undefined);
       }
     });
     // let go by the engine (no track plays them): loaded again when one does
@@ -81,6 +102,8 @@ export class SampleLibrary {
       for (const key of keys) {
         this.states.delete(key);
         this.loading.delete(key);
+        this.parts.delete(key);
+        this.asked.delete(key);
       }
       this.emit();
     });
@@ -129,20 +152,29 @@ export class SampleLibrary {
   /**
    * Load an instrument into the audio thread unless it's there already (or on its way). Files are
    * fetched a few at a time the library over, the lowest `priority` first (0: the track about to be
-   * played).
+   * played). With `keys`, only the samples that play them (each key's own and those beside it):
+   * more come as more keys are asked for, and a key not loaded plays the nearest samples there are.
    */
-  ensure(pack: string, name: string, priority = 1): Promise<void> {
+  ensure(pack: string, name: string, priority = 1, keys?: ReadonlySet<number>): Promise<void> {
     const key = `${pack}/${name}`;
-    if (engine.hasSampler(key)) return Promise.resolve();
-    let p = this.loading.get(key);
-    if (!p) {
-      p = this.load(pack, name, priority).catch((err: unknown) => {
+    const asked = this.asked.get(key);
+    // nothing new asked of what's there or on its way
+    if (asked === null || (asked && keys && [...keys].every((k) => asked.has(k))))
+      return this.loading.get(key) ?? Promise.resolve();
+    if (asked === undefined && !keys && engine.hasSampler(key) && !this.parts.has(key)) return Promise.resolve();
+    this.asked.set(key, keys ? new Set([...(asked ?? []), ...keys]) : null);
+    // (one load at a time for an instrument: a later ask waits for the one before)
+    const before = this.loading.get(key) ?? Promise.resolve();
+    const p: Promise<void> = before
+      .then(() => this.load(pack, name, priority))
+      .catch((err: unknown) => {
         this.states.set(key, { state: 'error', message: err instanceof Error ? err.message : String(err) });
-        this.loading.delete(key);
         this.emit();
+      })
+      .finally(() => {
+        if (this.loading.get(key) === p) this.loading.delete(key);
       });
-      this.loading.set(key, p);
-    }
+    this.loading.set(key, p);
     return p;
   }
 
@@ -150,21 +182,65 @@ export class SampleLibrary {
     const key = `${pack}/${name}`;
     const ctx = engine.ctx;
     if (!ctx) throw new Error('Start the audio first');
-    const spec = await this.build(
-      pack,
-      name,
-      ctx,
-      (done, total) => {
-        this.states.set(key, { state: 'loading', done, total });
-        this.emitSoon();
-      },
-      priority,
-    );
+    const asked = this.asked.get(key);
+    if (asked === undefined) return;
+    let part = this.parts.get(key);
+    if (part && part.rate !== ctx.sampleRate) {
+      this.parts.delete(key);
+      part = undefined;
+    }
+    // (there whole already: nothing to come)
+    if (asked === null && !part && engine.hasSampler(key)) return;
+    // the zones still to come: those of the keys asked for (all of them, for the whole instrument)
+    const manifest = await instrumentManifest(pack, name);
+    const want = asked === null ? manifest.zones.map((_, i) => i) : [...zonesForKeys(manifest.zones, asked)];
+    const only = want.filter((i) => !part?.zones.has(i));
+    if (!only.length) return;
+    const had = part?.zones.size ?? 0;
+    const progress = (done: number, total: number) => {
+      this.states.set(key, { state: 'loading', done: had + done, total: had + total });
+      this.emitSoon();
+    };
+    const { indices, zones, ...rest } = await this.build(pack, name, ctx, progress, priority, only);
+    // what came joins what had (if any), in the instrument's order
+    let all = zones;
+    if (part || asked !== null) {
+      const p = part ?? { rate: ctx.sampleRate, zones: new Map<number, SampleZone>(), spec: rest, waiting: false };
+      for (const [i, at] of indices.entries()) p.zones.set(at, zones[i] as SampleZone);
+      all = [...p.zones.keys()].sort((x, y) => x - y).map((i) => p.zones.get(i) as SampleZone);
+      if (asked === null) this.parts.delete(key);
+      else this.parts.set(key, p);
+      // (handing an instrument over again starts it afresh: while the song plays, what rings would stop)
+      if (asked !== null && engine.hasSampler(key) && engine.playing) {
+        this.handOverLater(key);
+        return;
+      }
+    }
     // (the audio thread's rate changed while they came: they're on their way again, at the new one)
-    if (!engine.addSampler(spec, ctx.sampleRate)) return;
+    if (!engine.addSampler({ ...rest, zones: all }, ctx.sampleRate)) return;
     this.states.set(key, { state: 'ready' });
-    this.loading.delete(key);
     this.emit();
+  }
+
+  /** A part's new zones handed over once the song stops. */
+  private handOverLater(key: string): void {
+    const part = this.parts.get(key);
+    if (!part || part.waiting) return;
+    part.waiting = true;
+    const look = () => {
+      const p = this.parts.get(key);
+      if (p !== part) return;
+      if (engine.playing) {
+        setTimeout(look, 500);
+        return;
+      }
+      part.waiting = false;
+      if (part.rate !== engine.sampleRate) return;
+      const zones = [...part.zones.keys()].sort((a, b) => a - b).map((i) => part.zones.get(i) as SampleZone);
+      if (engine.addSampler({ ...part.spec, zones }, part.rate)) this.states.set(key, { state: 'ready' });
+      this.emit();
+    };
+    setTimeout(look, 500);
   }
 
   /**
@@ -177,10 +253,13 @@ export class SampleLibrary {
     ctx: BaseAudioContext,
     progress?: (done: number, total: number) => void,
     priority = 1,
-  ): Promise<SamplerSpec> {
+    only?: readonly number[],
+  ): Promise<SamplerSpec & { indices: number[] }> {
     const key = `${pack}/${name}`;
     const manifest = await instrumentManifest(pack, name);
-    const total = manifest.zones.length;
+    // (`only`: those zones, by their place in the instrument; the spec lists them in that order)
+    const indices = only ? [...only].sort((a, b) => a - b) : manifest.zones.map((_, i) => i);
+    const total = indices.length;
     let done = 0;
     progress?.(done, total);
     const zones: SampleZone[] = new Array(total);
@@ -231,7 +310,7 @@ export class SampleLibrary {
     const worker = async () => {
       while (next < total) {
         const index = next++;
-        const z = manifest.zones[index] as ZoneManifest;
+        const z = manifest.zones[indices[index] as number] as ZoneManifest;
         const { left, right, k } = await load(z);
         const start = Math.max(0, Math.round(z.start * k));
         zones[index] = {
@@ -256,6 +335,7 @@ export class SampleLibrary {
     return {
       key,
       zones,
+      indices,
       release: manifest.release,
       oneShot: manifest.oneShot,
       pitched: manifest.pitched !== false,

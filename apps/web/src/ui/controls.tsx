@@ -9,9 +9,13 @@ import {
   useId,
   useMemo,
   useRef,
+  useState,
 } from 'react';
 import { engine } from '../audio/engine.ts';
 import { prepare, useFrame } from './frame.ts';
+import { entryText, parseParam } from './param-entry.ts';
+import { pastSlop, upDownOnly } from './slop.ts';
+import { sideways, WheelSteps } from './wheel-steps.ts';
 
 // ---- the fader law: about 0 dB at 84% of the travel, +6 dB at the top ----
 
@@ -86,16 +90,23 @@ function useBurst(onBegin?: () => void, onEnd?: () => void, idle = 300) {
   );
 }
 
-/** React's onWheel is passive, so the page would scroll under the control: listen ourselves. */
-function useWheel(ref: RefObject<HTMLElement | null>, onWheel: (e: WheelEvent) => void): void {
-  const latest = useRef(onWheel);
-  latest.current = onWheel;
+/**
+ * The wheel over a control, in steps: a mouse's notch, or as much of a trackpad's swipe (see
+ * WheelSteps). React's onWheel is passive, so the page would scroll under the control: listen
+ * ourselves. A wheel turned sideways is left alone, to scroll what the control sits in.
+ */
+function useWheel(ref: RefObject<HTMLElement | null>, onSteps: (steps: number, e: WheelEvent) => void): void {
+  const latest = useRef(onSteps);
+  latest.current = onSteps;
   useEffect(() => {
     const el = ref.current;
     if (!el) return;
+    const count = new WheelSteps();
     const on = (e: WheelEvent) => {
+      if (sideways(e)) return;
       e.preventDefault();
-      latest.current(e);
+      const steps = count.take(e, e.timeStamp);
+      if (steps) latest.current(steps, e);
     };
     el.addEventListener('wheel', on, { passive: false });
     return () => el.removeEventListener('wheel', on);
@@ -163,13 +174,27 @@ export function Knob({
   const zero = bipolar ? a0 + toUnit(def, 0) * 270 : a0;
   const name = label ?? def.name;
   const text = formatParam(def, value);
+  // The value, typed: a click on it (or Enter on the knob) puts a field in its place. Enter or
+  // leaving the field sets what was typed, as one step; Escape leaves the knob as it was.
+  const [typing, setTyping] = useState(false);
+  const canceled = useRef(false);
+  const enter = (typed: string) => {
+    setTyping(false);
+    const v = canceled.current ? null : parseParam(def, typed);
+    canceled.current = false;
+    if (v === null || v === value) return;
+    burst.flush();
+    onBegin?.();
+    onChange(v);
+    onEnd?.();
+  };
   // one step: the parameter's own, or a hundredth of the travel
   const continuous = !def.step || def.scale === 'log';
   const stepUnit = continuous ? 0.01 : (def.step as number) / (def.max - def.min);
   const nudge = (steps: number) => onChange(fromUnit(def, clamp01(u + steps * stepUnit)));
-  useWheel(root, (e) => {
+  useWheel(root, (steps, e) => {
     const fine = e.shiftKey && continuous ? 0.25 : 1;
-    burst.tick(() => nudge(-Math.sign(e.deltaY) * (continuous ? 2 : 1) * fine));
+    burst.tick(() => nudge(-steps * (continuous ? 2 : 1) * fine));
   });
   const lit = Math.abs(a - zero) > 0.5 ? (a > zero ? arc(zero, a) : arc(a, zero)) : null;
   return (
@@ -183,16 +208,22 @@ export function Knob({
       aria-valuemax={def.max}
       aria-valuenow={value}
       aria-valuetext={text}
-      title={`${name}: ${text} (double-click resets, Shift for fine)`}
+      title={`${name}: ${text} (double-click resets, Shift for fine${compact ? '' : ', click the value to type one'})`}
       onPointerDown={(e) => {
         if (e.button !== 0) return;
         burst.flush();
         unit.current = toUnit(def, value);
+        // under a finger in the mixer's strips a knob answers to up and down alone: a sideways swipe
+        // is the browser's, and scrolls the strips (slop.ts)
+        const upDown = upDownOnly(e);
+        const rise = pastSlop();
         startDrag(e, {
           onStart: onBegin,
           onMove: (dx, dy, ev) => {
+            const by = upDown ? -rise(dy) : dx - dy;
+            if (by === 0) return;
             const speed = ev.shiftKey ? 0.0015 : 0.006;
-            unit.current = clamp01(unit.current + (dx - dy) * speed);
+            unit.current = clamp01(unit.current + by * speed);
             let v = fromUnit(def, unit.current);
             if (detent !== undefined && Math.abs(v - def.default) <= detent) v = def.default;
             onChange(v);
@@ -207,6 +238,12 @@ export function Knob({
         onEnd?.();
       }}
       onKeyDown={(e) => {
+        if (e.key === 'Enter' && !compact && !typing) {
+          e.preventDefault();
+          e.stopPropagation();
+          setTyping(true);
+          return;
+        }
         const k = keyStep(e, continuous);
         if (k === null) return;
         e.preventDefault();
@@ -243,7 +280,42 @@ export function Knob({
           strokeLinecap="round"
         />
       </svg>
-      {!compact && <span className="knob-value">{text}</span>}
+      {!compact &&
+        (typing ? (
+          <input
+            className="input knob-entry"
+            // biome-ignore lint/a11y/noAutofocus: the field appears because the value was clicked
+            autoFocus
+            defaultValue={entryText(def, value)}
+            inputMode={def.options || def.unit === 'LR' ? 'text' : 'decimal'}
+            aria-label={`${name}: type a value`}
+            onFocus={(e) => e.currentTarget.select()}
+            // (the field is in the knob: a press, a double-click or a key in it isn't the knob's)
+            onPointerDown={(e) => e.stopPropagation()}
+            onDoubleClick={(e) => e.stopPropagation()}
+            onKeyDown={(e) => {
+              e.stopPropagation();
+              if (e.key === 'Escape') canceled.current = true;
+              if (e.key === 'Enter' || e.key === 'Escape') {
+                e.preventDefault();
+                e.currentTarget.blur();
+                root.current?.focus({ preventScroll: true });
+              }
+            }}
+            onBlur={(e) => enter(e.currentTarget.value)}
+          />
+        ) : (
+          // (the knob takes the keyboard, and Enter on it opens the field: this is its readout)
+          <span
+            className="knob-value"
+            title="Click to type a value"
+            onPointerDown={(e) => e.stopPropagation()}
+            onDoubleClick={(e) => e.stopPropagation()}
+            onClick={() => setTyping(true)}
+          >
+            {text}
+          </span>
+        ))}
       {!compact && <span className="knob-label">{name}</span>}
     </div>
   );
@@ -304,7 +376,7 @@ export function Meter({ id, width = 14, height }: { id: string; width?: number; 
   const canvas = useRef<HTMLCanvasElement>(null);
   const hold = useRef({ l: 0, r: 0, t: 0 });
   // what the last frame drew, to the half pixel: a quiet meter is not repainted
-  const drawn = useRef({ w: 0, h: 0, l: -1, r: -1, hl: -1, hr: -1, over: -1 });
+  const drawn = useRef({ w: 0, h: 0, dpr: 0, l: -1, r: -1, hl: -1, hr: -1, over: -1 });
   const grad = useRef<{ h: number; fill: CanvasGradient } | null>(null);
   const seen = useRef(true);
   const last = useRef(0);
@@ -320,8 +392,6 @@ export function Meter({ id, width = 14, height }: { id: string; width?: number; 
   useFrame((now) => {
     if (!seen.current || now - last.current < METER_EVERY) return;
     last.current = now;
-    const ctx = prepare(canvas.current, width, height);
-    if (!ctx) return;
     const [l, r] = engine.meter(id);
     const h = hold.current;
     if (l > h.l || r > h.r || now - h.t > 1500) {
@@ -332,13 +402,29 @@ export function Meter({ id, width = 14, height }: { id: string; width?: number; 
     const px = (g: number) => Math.round(meterPos(g) * height * 2) / 2;
     const pl = px(l);
     const pr = px(r);
+    // a level on a meter keeps the screen's pace, song or no song (a part played live, a tail still
+    // showing): that is what this frame returns
+    const lit = pl > 0 || pr > 0;
     const phl = px(h.l);
     const phr = px(h.r);
     const over = (h.l > 1 ? 1 : 0) + (h.r > 1 ? 2 : 0);
     const d = drawn.current;
-    if (d.w === width && d.h === height && d.l === pl && d.r === pr && d.hl === phl && d.hr === phr && d.over === over)
-      return;
-    drawn.current = { w: width, h: height, l: pl, r: pr, hl: phl, hr: phr, over };
+    const dpr = window.devicePixelRatio || 1;
+    if (
+      d.w === width &&
+      d.h === height &&
+      d.dpr === dpr &&
+      d.l === pl &&
+      d.r === pr &&
+      d.hl === phl &&
+      d.hr === phr &&
+      d.over === over
+    )
+      return lit;
+    // (the canvas is only touched once there is something new to draw on it)
+    const ctx = prepare(canvas.current, width, height, true);
+    if (!ctx) return lit;
+    drawn.current = { w: width, h: height, dpr, l: pl, r: pr, hl: phl, hr: phr, over };
     ctx.clearRect(0, 0, width, height);
     ctx.fillStyle = '#07090b';
     ctx.fillRect(0, 0, width, height);
@@ -371,6 +457,7 @@ export function Meter({ id, width = 14, height }: { id: string; width?: number; 
       const y = height - ((db - METER_MIN) / (6 - METER_MIN)) * height;
       ctx.fillRect(0, y, width, 1);
     }
+    return lit;
   });
   return <canvas ref={canvas} className="meter-canvas" style={{ width, height }} />;
 }
@@ -395,7 +482,7 @@ export function Fader({ db, onChange, onBegin, onEnd, height, label = 'Volume' }
   const p = useRef(pos);
   const burst = useBurst(onBegin, onEnd);
   const step = (by: number) => onChange(Math.max(-144, Math.min(6, Math.round((db + by) * 10) / 10)));
-  useWheel(root, (e) => burst.tick(() => step(-Math.sign(e.deltaY) * (e.shiftKey ? 0.1 : 1))));
+  useWheel(root, (steps, e) => burst.tick(() => step(-steps * (e.shiftKey ? 0.1 : 1))));
   return (
     <div
       ref={root}
@@ -414,10 +501,15 @@ export function Fader({ db, onChange, onBegin, onEnd, height, label = 'Volume' }
         if (e.button !== 0) return;
         burst.flush();
         p.current = dbToFader(db);
+        // (in a row of strips a finger's sideways swipe scrolls them, from a fader too: slop.ts)
+        const upDown = upDownOnly(e);
+        const rise = pastSlop();
         startDrag(e, {
           onStart: onBegin,
           onMove: (_dx, dy, ev) => {
-            p.current = Math.max(0, Math.min(1, p.current - dy / travel / (ev.shiftKey ? 6 : 1)));
+            const by = upDown ? rise(dy) : dy;
+            if (by === 0) return;
+            p.current = Math.max(0, Math.min(1, p.current - by / travel / (ev.shiftKey ? 6 : 1)));
             const v = faderToDb(p.current);
             onChange(v > -0.25 && v < 0.25 ? 0 : Math.round(v * 10) / 10);
           },
@@ -449,7 +541,8 @@ export function Fader({ db, onChange, onBegin, onEnd, height, label = 'Volume' }
           style={{ top: 13 + (1 - dbToFader(d)) * travel - 0.5 }}
         />
       ))}
-      <div className="fader-cap" style={{ top: (1 - pos) * travel + 3 }}>
+      {/* (moved by a transform: a fader dragged lays nothing out) */}
+      <div className="fader-cap" style={{ transform: `translateY(${(1 - pos) * travel + 3}px)` }}>
         <div className="fader-cap-line" />
       </div>
     </div>

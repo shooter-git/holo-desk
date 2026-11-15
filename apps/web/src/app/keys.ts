@@ -176,6 +176,16 @@ export function setKeyScope(fn: KeyScope | null): void {
   scope = fn;
 }
 
+/**
+ * A window is up over the whole studio (Print, Scan): the studio can't be seen, so its keys wait as
+ * they do under a dialog, wherever the keyboard is (on nothing at all, after a click on the window's
+ * background).
+ */
+function covered(): boolean {
+  const s = store.get();
+  return s.printView !== null || s.scanView !== null;
+}
+
 function selectedTrackId(): string | null {
   return store.get().selectedTrack;
 }
@@ -201,7 +211,7 @@ function onKeyDown(e: KeyboardEvent): void {
     if (e.key === 'Escape') closeBar();
     return;
   }
-  if (spaceIsTransport(e, !!store.get().dialog)) {
+  if (spaceIsTransport(e, !!store.get().dialog || covered())) {
     // the browser's own Space (pressing the focused button, ticking a box, opening a list) is held back,
     // and a held Space plays or stops once
     e.preventDefault();
@@ -212,12 +222,14 @@ function onKeyDown(e: KeyboardEvent): void {
   const s = store.get();
   const ctrl = e.ctrlKey || e.metaKey;
   const key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
-  // a menu or dialog is up: only Escape, ? (the key commands, so it toggles off) and undo/redo reach the
-  // studio behind it; Delete would delete, Enter would cancel the button being pressed
-  if (inPopup(e.target) || s.dialog) {
+  const over = covered();
+  // a menu, a dialog or a window over the studio is up: only Escape, ? (the key commands, so it toggles
+  // off) and undo/redo reach the studio behind it; Delete would delete, Enter would cancel the button
+  // being pressed
+  if (inPopup(e.target) || s.dialog || over) {
     if (key !== 'Escape' && key !== '?' && !(ctrl && (key === 'z' || key === 'y'))) return;
   } else if (key === 'Enter' && keyboardFocusedButton(e.target)) return;
-  if (scope && !inPopup(e.target) && !s.dialog && scope(e)) {
+  if (scope && !inPopup(e.target) && !s.dialog && !over && scope(e)) {
     e.preventDefault();
     return;
   }
@@ -262,9 +274,10 @@ function onKeyDown(e: KeyboardEvent): void {
   else if (key === '?') store.set({ dialog: s.dialog === 'shortcuts' ? null : 'shortcuts' });
   else if (key === 'q') quantizeSelection();
   else if (key === 'Delete' || key === 'Backspace') deleteSelection();
-  else if (key === 'Escape')
-    store.set({ selectedNotes: [], selectedRegions: [], dialog: null, plugin: null, stage: null });
-  else if (key === 'm' || key === 's') {
+  else if (key === 'Escape') {
+    // (a window over the studio closes itself: what's selected behind it stays selected)
+    if (!over) store.set({ selectedNotes: [], selectedRegions: [], dialog: null, plugin: null, stage: null });
+  } else if (key === 'm' || key === 's') {
     const id = selectedTrackId();
     const t = s.project?.tracks.find((x) => x.id === id);
     if (t)
@@ -288,7 +301,7 @@ function onKeyDown(e: KeyboardEvent): void {
 
 function onKeyUp(e: KeyboardEvent): void {
   // a button or a box acts as Space comes up: it was the transport's, so they don't
-  if (spaceIsTransport(e, !!store.get().dialog)) {
+  if (spaceIsTransport(e, !!store.get().dialog || covered())) {
     e.preventDefault();
     return;
   }

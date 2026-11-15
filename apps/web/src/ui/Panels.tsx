@@ -34,6 +34,7 @@ import { NumberBox } from './AudioEditor.tsx';
 import { Strip } from './Mixer.tsx';
 import { Palettes } from './Palettes.tsx';
 import { type Field, rank, WEIGHT, words } from './search.ts';
+import { stripRows } from './strips.ts';
 import { instrumentLabel } from './Tracks.tsx';
 import { setStretch } from './wave.ts';
 
@@ -377,7 +378,7 @@ export function Inspector({ overlay = false }: { overlay?: boolean }) {
       )}
       {track && (
         // the track's strip and the one it plays into, side by side (as Logic's inspector shows them)
-        <div className="inspector-strips">
+        <div className="inspector-strips" ref={stripRows}>
           <Strip
             id={track.id}
             kind="track"

@@ -65,7 +65,7 @@ import {
   updateChannel,
   updateTrack,
 } from '../app/actions.ts';
-import { isPhone, isTouch, useLayout } from '../app/layout.ts';
+import { isPhone, isTouch, layoutNow, useLayout } from '../app/layout.ts';
 import { type AppState, store, useApp } from '../app/store.ts';
 import { engine } from '../audio/engine.ts';
 import { audioFiles } from '../audio/files.ts';
@@ -80,7 +80,7 @@ import {
   pointAt,
   targetOf,
 } from './automation.ts';
-import { alpha, prepare, roundRect, useFrame, useSize } from './frame.ts';
+import { alpha, movePlayhead, prepare, roundRect, useFrame, useSize } from './frame.ts';
 import {
   capture,
   edgeScroll,
@@ -94,7 +94,7 @@ import {
 import { type MenuEntry, openMenu, openMenuAt } from './menu.tsx';
 import { pressToReorder, type ReorderList } from './reorder.ts';
 import { rulerHold } from './ruler.ts';
-import { DOUBLE_TAP_MS, gridStep, TouchPan, Viewport, WHEEL_ZOOM, ZOOM } from './view.ts';
+import { DOUBLE_TAP_MS, gridStep, revealBy, TouchPan, Viewport, WHEEL_ZOOM, ZOOM } from './view.ts';
 import { drawClipWave, drawFades, fadeTo, trimEnd, trimStart } from './wave.ts';
 
 export const tracksView = new Viewport(store.get().zoom);
@@ -193,12 +193,11 @@ function LaneSelect({ track }: { track: Track }) {
   const targets = automationTargets(project, track.channel);
   const lane = findLane(track.channel, param);
   return (
-    <div className="hstack" style={{ gap: 4 }} onPointerDown={(e) => e.stopPropagation()}>
+    <div className="hstack lane-select" onPointerDown={(e) => e.stopPropagation()}>
       <select
         className="select"
         value={param}
         aria-label={`Automation shown for ${track.name}`}
-        style={{ height: 22, fontSize: 10.5, padding: '0 18px 0 4px', minWidth: 0, flex: 1 }}
         onChange={(e) => store.set((s) => ({ autoParam: { ...s.autoParam, [track.id]: e.target.value } }))}
       >
         {targets.map((t) => (
@@ -218,6 +217,7 @@ function LaneSelect({ track }: { track: Track }) {
               ? 'Read: the automation plays (click to turn it off)'
               : 'Off: the automation is kept but not played'
           }
+          aria-pressed={lane.mode === 'read'}
           onClick={() =>
             apply(
               [
@@ -247,8 +247,14 @@ const LIST_TAIL = 60;
  * buttons (4 + 32), with room above and below so a row's buttons don't meet the next track's name.
  */
 const TOUCH_ROW = 78;
+/**
+ * And on a phone held sideways, where height is what's short: the buttons sit beside the name (the
+ * header is wider for them), so a row is as tall as its buttons and half again as many tracks show.
+ */
+const TOUCH_ROW_SIDEWAYS = 52;
 /** A track's height as drawn: rows are taller under a finger. */
-const rowHeight = (h: number) => (isTouch() ? Math.max(TOUCH_ROW, h) : h);
+const rowHeight = (h: number) =>
+  isTouch() ? Math.max(layoutNow() === 'phone-landscape' ? TOUCH_ROW_SIDEWAYS : TOUCH_ROW, h) : h;
 /** The track list with every track in it. */
 const listHeight = (tracks: number, row: number) => tracks * row + LIST_TAIL;
 /** The track list on screen (there's one tracks area at a time), for spareTrackRoom. */
@@ -394,7 +400,10 @@ const TrackRow = memo(function TrackRow({ track, top, height, selected, phone, m
           />
         ) : (
           <>
-            <div className="name">{track.name}</div>
+            {/* (a long name is cut short here: the whole of it is its tip) */}
+            <div className="name" title={track.name}>
+              {track.name}
+            </div>
             {!compact && !automationView && show.trackSub && (
               <div className="sub">
                 {track.kind === 'audio' ? inputLabel(track) : instrumentLabel(track.instrument)}
@@ -418,6 +427,7 @@ const TrackRow = memo(function TrackRow({ track, top, height, selected, phone, m
             type="button"
             className={`chip mute${track.channel.mute ? ' on' : ''}`}
             title="Mute (M)"
+            aria-pressed={track.channel.mute}
             onClick={() => updateChannel(track.id, { mute: !track.channel.mute }, 'Mute')}
           >
             M
@@ -426,6 +436,7 @@ const TrackRow = memo(function TrackRow({ track, top, height, selected, phone, m
             type="button"
             className={`chip solo${track.channel.solo ? ' on' : ''}`}
             title="Solo (S)"
+            aria-pressed={track.channel.solo}
             onClick={() => updateChannel(track.id, { solo: !track.channel.solo }, 'Solo')}
           >
             S
@@ -438,6 +449,7 @@ const TrackRow = memo(function TrackRow({ track, top, height, selected, phone, m
                 ? 'Record-arm: the input is recorded here'
                 : 'Record-arm: live MIDI is recorded here'
             }
+            aria-pressed={track.armed}
             onClick={() => updateTrack(track.id, { armed: !track.armed }, 'Arm')}
           >
             R
@@ -447,6 +459,7 @@ const TrackRow = memo(function TrackRow({ track, top, height, selected, phone, m
               type="button"
               className={`chip mon${track.audioInput?.monitor ? ' on' : ''}`}
               title="Input monitoring: hear the input through the track (wear headphones)"
+              aria-pressed={!!track.audioInput?.monitor}
               onClick={() =>
                 updateTrack(
                   track.id,
@@ -712,7 +725,10 @@ function drawRegion(
     for (const n of r.notes) {
       if (n.t >= r.length) continue;
       const nx = x + n.t * pxPerTick;
+      // (a long region zoomed in holds far more notes than the canvas shows: those off it aren't drawn)
+      if (nx > canvasWidth) continue;
       const nw = Math.max(1.5, Math.min(n.d, r.length - n.t) * pxPerTick - 0.5);
+      if (nx + nw < 0) continue;
       const ny = top + (1 - (n.p - lo + 0.5) / span) * avail;
       ctx.fillRect(nx, ny - 1, nw, Math.max(1.5, Math.min(3, avail / span)));
     }
@@ -906,10 +922,14 @@ export function TracksArea() {
   const gesture = useRef<Gesture | null>(null);
   /** The menu a long press opens for what's under the finger, set as each gesture starts. */
   const menuAt = useRef<((ev: PointerEvent) => void) | null>(null);
+  /** What the next gesture does if it turns out to be a tap (a finger's second tap on a region), set as it starts. */
+  const tapAt = useRef<(() => void) | null>(null);
   const pinch = useRef(new Pinch());
   const lastTap = useRef(0);
   const zoomTimer = useRef(0);
-  const lastOverlay = useRef({ x: -1, w: 0, h: 0, rec: false, dpr: 0 });
+  const playhead = useRef<HTMLDivElement>(null);
+  /** The overlay holds a take's notes from the last frame (it's cleared once the take ends). */
+  const takesDrawn = useRef(false);
   const lastDpr = useRef(screenDpr());
   const lastTick = useRef(Number.NaN);
 
@@ -1015,7 +1035,7 @@ export function TracksArea() {
     if (dirty.current) {
       dirty.current = false;
       const cycle = cyclePreview.current ?? p.cycle;
-      const ctx = prepare(canvas.current, size.w, size.h);
+      const ctx = prepare(canvas.current, size.w, size.h, true);
       if (ctx)
         drawTimeline(ctx, {
           project: p,
@@ -1029,29 +1049,22 @@ export function TracksArea() {
           drag: drag.current,
           automation: s.automationView ? { params: s.autoParam, preview: lanePreview.current } : null,
         });
-      const rctx = prepare(rulerCanvas.current, rulerSize.w, rulerSize.h);
+      const rctx = prepare(rulerCanvas.current, rulerSize.w, rulerSize.h, true);
       if (rctx) drawRuler(rctx, p, cycle, s.show.markers, rulerSize.w, rulerSize.h);
     }
-    // the playhead, on its own layer, redrawn only when it has moved a pixel
-    const x = Math.round(tracksView.tickToX(Math.max(0, tick))) + 0.5;
-    const rec = s.recording;
-    const last = lastOverlay.current;
+    // what's being recorded is drawn on a layer over the timeline, each frame while there is any
+    // (and once more as it ends, to clear it): nothing is drawn there the rest of the time
     const recording = liveTakes().size > 0;
-    if (recording || x !== last.x || size.w !== last.w || size.h !== last.h || rec !== last.rec || dpr !== last.dpr) {
-      lastOverlay.current = { x, w: size.w, h: size.h, rec, dpr };
+    if (recording || takesDrawn.current) {
+      takesDrawn.current = recording;
       const octx = prepare(overlay.current, size.w, size.h);
       if (octx) {
         octx.clearRect(0, 0, size.w, size.h);
         if (recording) drawLiveTakes(octx, p, trackHeight);
-        if (x >= 0 && x <= size.w) {
-          // a soft band under the line stands in for a glow, without a blur pass per frame
-          octx.fillStyle = rec ? 'rgba(255,79,94,0.25)' : 'rgba(255,255,255,0.25)';
-          octx.fillRect(x - 2, 0, 3, size.h);
-          octx.fillStyle = rec ? '#ff4f5e' : '#ffffff';
-          octx.fillRect(x - 0.5, 0, 1.5, size.h);
-        }
       }
     }
+    // the playhead is an element of its own, moved only when it has gone a pixel
+    movePlayhead(playhead.current, Math.round(tracksView.tickToX(Math.max(0, tick))), size.w, s.recording);
   });
 
   const onWheel = (e: WheelEvent, dx: number, dy: number) => {
@@ -1152,6 +1165,8 @@ export function TracksArea() {
   const start = (e: ReactPointerEvent, o: GestureOptions) => {
     gesture.current?.abort();
     const menu = menuAt.current;
+    const tap = tapAt.current;
+    tapAt.current = null;
     const clear = () => {
       drag.current = null;
       lanePreview.current = null;
@@ -1164,6 +1179,7 @@ export function TracksArea() {
       onUp: (ev, gg) => {
         gesture.current = null;
         o.onUp?.(ev, gg);
+        if (!gg.moved) tap?.();
       },
       onAbort: () => {
         gesture.current = null;
@@ -1211,12 +1227,13 @@ export function TracksArea() {
     }
     selectTrack(h.track.id);
     if (!h.region) {
-      if (tool === 'pencil' || doubleTap) {
+      if (tool === 'pencil' || (doubleTap && !touch)) {
         createRegionAt(h.track.id, tracksView.xToTick(x));
         return;
       }
       store.set({ selectedRegions: [] });
-      if (touch) panDrag(e);
+      // (a finger's second tap makes the region once it lifts: a swipe straight after a tap scrolls)
+      if (touch) panDrag(e, doubleTap ? () => createRegionAt(h.track.id, tracksView.xToTick(x)) : undefined);
       else marqueeDrag(e, x, y);
       return;
     }
@@ -1226,7 +1243,25 @@ export function TracksArea() {
       return;
     }
     if (doubleTap) {
-      openInEditor(h.track.id, region.id);
+      // a mouse's second press opens the region. A finger's second tap opens it once it lifts: a tap
+      // that selects a region and a drag straight after it move the region
+      if (!touch) {
+        openInEditor(h.track.id, region.id);
+        return;
+      }
+      if (selectedRegions.has(region.id)) tapAt.current = () => openInEditor(h.track.id, region.id);
+    }
+    // A finger on a region that isn't selected scrolls the view, as it does on the lane beside it:
+    // a tap selects the region, and a selected region is the one a finger moves, trims and fades.
+    // On a phone the timeline is mostly regions, and a scroll that happened to begin on one carried
+    // it off to another bar or another track.
+    if (touch && !selectedRegions.has(region.id)) {
+      const select = () => store.set({ selectedRegions: [region.id] });
+      menuAt.current = (ev) => {
+        select();
+        regionMenu(ev.clientX, ev.clientY, region, h.track);
+      };
+      panDrag(e, select);
       return;
     }
     let selection = selectedRegionsList;
@@ -1281,12 +1316,20 @@ export function TracksArea() {
       menu(e.clientX, e.clientY);
       return;
     }
+    const touch = e.pointerType === 'touch';
     if (hit >= 0 && doubleTap) {
-      commit(
-        points.filter((_, i) => i !== hit),
-        'Delete Point',
-      );
-      return;
+      const remove = () =>
+        commit(
+          points.filter((_, i) => i !== hit),
+          'Delete Point',
+        );
+      // a mouse's second press deletes the point. A finger's second tap does once it lifts: a tap on
+      // a point and a drag straight after it move the point
+      if (!touch) {
+        remove();
+        return;
+      }
+      tapAt.current = remove;
     }
     const grid = DIVISIONS[store.get().grid] ?? 240;
     let working = points;
@@ -1296,6 +1339,15 @@ export function TracksArea() {
       at = working.findIndex((p) => p[0] > tick);
       if (at < 0) at = working.length;
       working = [...working.slice(0, at), [tick, fromY(y)], ...working.slice(at)];
+    }
+    // A finger on a lane, away from its points, scrolls the view, as it does with the lanes hidden:
+    // a tap puts a point there, and a point is what a finger drags. With the lanes showing, a scroll
+    // over the tracks used to leave a point wherever it began.
+    if (touch && hit < 0) {
+      const added = working;
+      menuAt.current = (ev) => menu(ev.clientX, ev.clientY);
+      panDrag(e, () => commit(added, 'Add Automation Point'));
+      return;
     }
     const show = (px: number, py: number, v: number) => {
       const tip = laneTip.current;
@@ -1323,22 +1375,30 @@ export function TracksArea() {
         show(px, py, v);
         redraw();
       },
-      onUp: () => {
+      onUp: (_ev, g) => {
         if (laneTip.current) laneTip.current.style.display = 'none';
         lanePreview.current = null;
         redraw();
+        // (a point pressed and let go where it was hasn't moved: that is no step to undo)
+        if (hit >= 0 && !g.moved) return;
         commit(working, hit >= 0 ? 'Move Automation Point' : 'Add Automation Point');
       },
     });
   };
 
   /** A finger scrolling the timeline, as a phone scrolls a page (TouchPan): a flick carries on after it lifts. */
-  const panDrag = (e: ReactPointerEvent) => {
+  const panDrag = (e: ReactPointerEvent, onTap?: () => void) => {
     const pan = new TouchPan(tracksView, 'xy', () => maxScrollY(project), e);
     start(e, {
-      threshold: 0,
+      // over a region the finger may also rest for its menu: a wobble isn't a move (the gesture's own threshold)
+      threshold: onTap ? undefined : 0,
       onMove: (ev) => pan.move(ev),
-      onUp: (ev) => pan.end(ev.timeStamp),
+      onUp: (ev) => {
+        pan.end(ev.timeStamp);
+        // (a scroll isn't the first tap of a double tap: a second swipe soon after makes no region)
+        if (pan.panned) lastTap.current = 0;
+        else onTap?.();
+      },
     });
   };
 
@@ -1534,6 +1594,8 @@ export function TracksArea() {
   // ruler: top half sets or moves the cycle, bottom half moves the playhead (on a phone, a finger
   // moves the playhead anywhere but at the cycle's edges: rulerHold)
   const onRulerDown = (e: ReactPointerEvent<HTMLDivElement>) => {
+    // the ruler has no menu: a right-click (or a wheel's click) does nothing here, as on the editors' rulers
+    if (e.button !== 0 || isMenuPress(e)) return;
     const rect = e.currentTarget.getBoundingClientRect();
     const x = e.clientX - rect.left;
     const y = e.clientY - rect.top;
@@ -1592,7 +1654,8 @@ export function TracksArea() {
     persistZoom();
   };
 
-  const headerWidth = phone ? 176 : layout === 'tablet' ? 210 : 230;
+  // (sideways, a phone's header holds the name and the buttons side by side)
+  const headerWidth = layout === 'phone-landscape' ? 244 : phone ? 176 : layout === 'tablet' ? 210 : 230;
   const listMax = maxScrollY(project);
 
   return (
@@ -1650,6 +1713,7 @@ export function TracksArea() {
         className="ruler"
         ref={rulerBox}
         onPointerDown={onRulerDown}
+        onContextMenu={(e) => e.preventDefault()}
         title="Top: drag to set the cycle. Bottom: click to move the playhead"
       >
         <canvas ref={rulerCanvas} />
@@ -1659,6 +1723,18 @@ export function TracksArea() {
         ref={(el) => {
           listBox.current = el;
           shownList = el;
+        }}
+        // the headers move with the view, never by the browser's own scrolling: a header the keyboard
+        // reaches below the fold is brought into view by the view, so its lane comes with it
+        onFocus={(e) => {
+          const row = (e.target as HTMLElement).closest<HTMLElement>('.track-row');
+          if (!row || !(e.target as HTMLElement).matches(':focus-visible')) return;
+          const by = revealBy(row.offsetTop, row.offsetHeight, tracksView.y, e.currentTarget.clientHeight);
+          if (by) tracksView.scrollBy(0, by, listMax);
+        }}
+        onScroll={(e) => {
+          // (a browser that scrolled the box anyway, to show what took the keyboard: put it back)
+          if (e.currentTarget.scrollTop) e.currentTarget.scrollTop = 0;
         }}
       >
         <div className="track-list-inner" ref={listInner}>
@@ -1743,6 +1819,7 @@ export function TracksArea() {
       >
         <canvas ref={canvas} />
         <canvas ref={overlay} style={{ pointerEvents: 'none' }} />
+        <div ref={playhead} className="playhead" />
         <div ref={laneTip} className="lane-tip" />
         {project.tracks.every((t) => t.regions.length === 0) && (
           <div className="empty-hint">

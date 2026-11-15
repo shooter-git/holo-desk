@@ -3,7 +3,8 @@
  * named by note, a drum kit's folder (a folder for each piece, its microphones in folders of their own
  * or named in its files), or a ZIP of any of them. The result is a HO[LO] pack of your own, its id
  * starting with mine-: the files hard-linked (else copied) under the data folder, and a holo-pack.json
- * describing every sample's key, velocity, pitch, level, loop and microphone.
+ * describing every sample's key, velocity, pitch, level, loop and microphone, and what sets it off (a key
+ * struck or let go, the sustain pedal going down or coming up).
  */
 import {
   closeSync,
@@ -25,6 +26,7 @@ import { basename, dirname, extname, join, normalize, relative, resolve, sep } f
 import { inflateRawSync } from 'node:zlib';
 import { type DecodedInput, decodeInput, loudness, onset, peakDb, spreadLayers } from '@holo/music';
 import { MIC_OFF, type SampleMic } from '@holo/session';
+import { type ExsGroup, type ExsSample, readExs } from './exs.ts';
 import type { Pack, PackInstrument, Zone } from './packs.ts';
 
 const AUDIO = new Set(['.wav', '.flac', '.ogg', '.mp3']);
@@ -213,14 +215,19 @@ function parseSfzText(file: string): { header: string; ops: Opcodes }[] {
   return out;
 }
 
-/** Every region with the headers above it applied, and the control header's settings (labels, defaults). */
-function sfzRegions(file: string): { regions: Opcodes[]; control: Opcodes } {
+/**
+ * Every region with the headers above it applied, the control header's settings (labels, defaults), and
+ * each region's group: the header block it's under (each <global>, <master> or <group> starts one).
+ */
+function sfzRegions(file: string): { regions: Opcodes[]; control: Opcodes; groupOf: number[] } {
   const blocks = parseSfzText(file);
   let control: Opcodes = {};
   let global: Opcodes = {};
   let master: Opcodes = {};
   let group: Opcodes = {};
+  let block = 0;
   const regions: Opcodes[] = [];
+  const groupOf: number[] = [];
   for (const b of blocks) {
     switch (b.header) {
       case 'control':
@@ -230,20 +237,24 @@ function sfzRegions(file: string): { regions: Opcodes[]; control: Opcodes } {
         global = b.ops;
         master = {};
         group = {};
+        block++;
         break;
       case 'master':
         master = b.ops;
         group = {};
+        block++;
         break;
       case 'group':
         group = b.ops;
+        block++;
         break;
       case 'region':
         regions.push({ ...control, ...global, ...master, ...group, ...b.ops });
+        groupOf.push(block);
         break;
     }
   }
-  return { regions, control };
+  return { regions, control, groupOf };
 }
 
 const num = (v: string | undefined, d: number) => (v === undefined || Number.isNaN(Number(v)) ? d : Number(v));
@@ -276,14 +287,48 @@ function ccDefault(ops: Opcodes, control: Opcodes, cc: number): number | null {
   return null;
 }
 
+/** What sets a region off: a key struck or let go, or the sustain pedal going down or coming up. */
+type RegionTrigger = 'attack' | 'release' | 'pedalDown' | 'pedalUp';
+
+const ON_CC = /^on_(lo|hi)(hd)?cc(\d+)$/;
+
+/**
+ * What sets a region off, or null for what HO[LO] doesn't play (a legato or first-note region, or one a
+ * controller other than the sustain pedal sets off). A region the pedal's controller (CC 64) sets off
+ * as it moves into a range (on_locc64, on_hicc64) is the pedal's own sound: going down into its upper
+ * half, coming up into its lower half.
+ */
+function regionTrigger(ops: Opcodes): RegionTrigger | null {
+  const on = Object.keys(ops).filter((k) => ON_CC.test(k));
+  if (on.length) {
+    let lo = 0;
+    let hi = 1;
+    for (const k of on) {
+      const [, side, hd, cc] = ON_CC.exec(k) as RegExpExecArray;
+      if (cc !== '64') return null;
+      const v = hd ? num(ops[k], 0) : num(ops[k], 0) / 127;
+      if (side === 'lo') lo = v;
+      else hi = v;
+    }
+    if (lo >= 0.5 - 1e-9) return 'pedalDown';
+    if (hi < 0.5 - 1e-9) return 'pedalUp';
+    return null;
+  }
+  const t = ops.trigger ?? 'attack';
+  if (t === 'attack') return 'attack';
+  if (t === 'release' || t === 'release_key') return 'release';
+  return null;
+}
+
 /**
  * Whether a region plays with the controllers where they start, and the key switch its SFZ starts on: a
  * hi-hat's pedal positions, say, are regions on one key that each need the pedal's controller in a
  * range. A microphone's own fader (a controller setting its level) doesn't count: its microphone is
- * there at whatever level.
+ * there at whatever level. A region a controller sets off as it moves (on_locc) plays only then (the
+ * pedal's own sounds are read by regionTrigger, and checked here without those opcodes).
  */
 function playsAtStart(ops: Opcodes, control: Opcodes, faders: Map<number, unknown>): boolean {
-  if (Object.keys(ops).some((k) => /^on_(lo|hi)(hd)?cc\d+$/.test(k))) return false;
+  if (Object.keys(ops).some((k) => ON_CC.test(k))) return false;
   const sw = noteNumber(ops.sw_default ?? control.sw_default ?? '');
   if (sw !== null) {
     const last = ops.sw_last !== undefined ? noteNumber(ops.sw_last) : null;
@@ -303,12 +348,72 @@ function playsAtStart(ops: Opcodes, control: Opcodes, faders: Map<number, unknow
   return true;
 }
 
+/**
+ * Release samples a player sounds together (a damper's thud and a key's knock, both on the key let go)
+ * as parts of their own: the engine sounds one of each part, its zone nearest the key let go, and a
+ * part's tied zones take turns. A family of release samples (an SFZ group, an EXS group) stays in one
+ * part, so a part covers the keys its families do; families that overlap (one microphone, the same
+ * round robin, keys and velocities in common) can't share one.
+ */
+export function numberReleaseParts(zones: Zone[], familyOf: (zone: Zone, index: number) => number | string): void {
+  const families = new Map<string, Zone[]>();
+  zones.forEach((z, i) => {
+    if (z.trigger !== 'release') return;
+    const k = String(familyOf(z, i));
+    families.set(k, [...(families.get(k) ?? []), z]);
+  });
+  const clash = (a: Zone, b: Zone) =>
+    (a.mic ?? '') === (b.mic ?? '') &&
+    a.rr === b.rr &&
+    a.lo <= b.hi &&
+    b.lo <= a.hi &&
+    a.lovel <= b.hivel &&
+    b.lovel <= a.hivel;
+  const parts: Zone[][] = [];
+  for (const family of families.values()) {
+    let p = parts.findIndex((part) => !family.some((z) => part.some((o) => clash(z, o))));
+    if (p < 0) {
+      p = parts.length;
+      parts.push([]);
+    }
+    (parts[p] as Zone[]).push(...family);
+    for (const z of family) {
+      if (p) z.part = p;
+      else delete z.part;
+    }
+  }
+}
+
+/**
+ * The key a piano's dampers stop below, from its samples: where its release samples (its dampers
+ * falling) cover its lowest keys but stop short of its highest, the keys above them have no dampers and
+ * ring on when let go, as a grand's top strings do (and no damper sound plays for them).
+ */
+export function undampedFrom(zones: readonly Zone[]): number | undefined {
+  let lo = 127;
+  let hi = 0;
+  let relLo = 127;
+  let relHi = -1;
+  for (const z of zones) {
+    if (!z.trigger) {
+      lo = Math.min(lo, z.lo);
+      hi = Math.max(hi, z.hi);
+    } else if (z.trigger === 'release') {
+      relLo = Math.min(relLo, z.lo);
+      relHi = Math.max(relHi, z.hi);
+    }
+  }
+  return relHi >= 0 && relLo <= lo && relHi < hi ? relHi + 1 : undefined;
+}
+
 /** An SFZ instrument as a HO[LO] instrument; its samples are listed so they can be copied. */
 export function instrumentFromSfz(file: string): { inst: PackInstrument; files: string[] } {
-  const { regions, control } = sfzRegions(file);
+  const { regions, control, groupOf } = sfzRegions(file);
   interface Found {
     zone: Zone;
     ops: Opcodes;
+    /** The SFZ group it's under (a family of release samples stays in one part). */
+    family: number;
     faders: Map<number, { db: boolean; depth: number }>;
     take: [number, number];
     group: number;
@@ -320,56 +425,75 @@ export function instrumentFromSfz(file: string): { inst: PackInstrument; files: 
   let attack = 0.002;
   let oneShot = false;
   let pitched = true;
-  for (const ops of regions) {
-    if ((ops.trigger ?? 'attack') !== 'attack' || !ops.sample) continue;
+  for (const [index, ops] of regions.entries()) {
+    const trigger = regionTrigger(ops);
+    if (!trigger || !ops.sample) continue;
     const faders = levelCcs(ops);
-    if (!playsAtStart(ops, control, faders)) continue;
+    const pedal = trigger === 'pedalDown' || trigger === 'pedalUp';
+    const atStart = pedal ? Object.fromEntries(Object.entries(ops).filter(([k]) => !ON_CC.test(k))) : ops;
+    if (!playsAtStart(atStart, control, faders)) continue;
     const samplePath = normalize(
       join(dirname(file), (ops.default_path ?? '').replace(/\\/g, '/'), ops.sample.replace(/\\/g, '/')),
     );
     if (!existsSync(samplePath) || !AUDIO.has(extname(samplePath).toLowerCase())) continue;
     files.add(samplePath);
     const key = ops.key !== undefined ? noteNumber(ops.key) : null;
-    const lo = noteNumber(ops.lokey ?? '') ?? key ?? 0;
-    const hi = noteNumber(ops.hikey ?? '') ?? key ?? 127;
+    // the pedal's own sound is on no key: it plays whatever is held
+    const lo = pedal ? 0 : (noteNumber(ops.lokey ?? '') ?? key ?? 0);
+    const hi = pedal ? 127 : (noteNumber(ops.hikey ?? '') ?? key ?? 127);
     const center = noteNumber(ops.pitch_keycenter ?? '') ?? key ?? (lo === hi ? lo : 60);
-    if (ops.pitch_keytrack === '0') pitched = false;
+    const untracked = ops.pitch_keytrack === '0';
     const info = audioInfo(samplePath);
     const loopMode = ops.loop_mode ?? ops.loopmode;
-    if (loopMode === 'one_shot') oneShot = true;
-    release = Math.max(release, num(ops.ampeg_release, 0));
-    attack = Math.max(attack, Math.min(0.05, num(ops.ampeg_attack, 0)));
+    if (trigger === 'attack') {
+      // how the instrument plays is its struck notes': a key's release noise doesn't make it a drum
+      if (untracked) pitched = false;
+      if (loopMode === 'one_shot') oneShot = true;
+      release = Math.max(release, num(ops.ampeg_release, 0));
+      attack = Math.max(attack, Math.min(0.05, num(ops.ampeg_attack, 0)));
+    }
     const looped = loopMode === 'loop_continuous' || loopMode === 'loop_sustain';
     const pan = clamp(num(ops.pan, 0) / 100, -1, 1);
-    found.push({
-      zone: {
-        file: samplePath,
-        root: center - num(ops.transpose, 0) - num(ops.tune, 0) / 100,
-        lo,
-        hi,
-        lovel: num(ops.lovel, 1),
-        hivel: num(ops.hivel, 127),
-        gain: num(ops.volume, 0),
-        start: num(ops.offset, 0),
-        end: num(ops.end, info.frames),
-        loopStart: looped ? num(ops.loop_start ?? ops.loopstart, 0) : 0,
-        loopEnd: looped ? num(ops.loop_end ?? ops.loopend, 0) : 0,
-        rate: info.rate,
-        rr: 1,
-        ...(pan ? { pan } : {}),
-      },
+    const zone: Zone = {
+      file: samplePath,
+      root: center - num(ops.transpose, 0) - num(ops.tune, 0) / 100,
+      lo,
+      hi,
+      lovel: num(ops.lovel, 1),
+      hivel: num(ops.hivel, 127),
+      gain: num(ops.volume, 0),
+      start: num(ops.offset, 0),
+      end: num(ops.end, info.frames),
+      loopStart: looped ? num(ops.loop_start ?? ops.loopstart, 0) : 0,
+      loopEnd: looped ? num(ops.loop_end ?? ops.loopend, 0) : 0,
+      rate: info.rate,
+      rr: 1,
+      ...(trigger !== 'attack' ? { trigger } : {}),
+      // a release sample quietens the longer its note was held (dB a second)
+      ...(trigger === 'release' && ops.rt_decay !== undefined ? { decay: num(ops.rt_decay, 0) } : {}),
+      ...(pan ? { pan } : {}),
+    };
+    const base = {
       ops,
+      family: groupOf[index] ?? 0,
       faders,
       // its turn: seq_position, then where it sits in the random range (lorand/hirand)
-      take: [num(ops.seq_position, 1), num(ops.lorand, 0)],
+      take: [num(ops.seq_position, 1), num(ops.lorand, 0)] as [number, number],
       group: Math.trunc(num(ops.group, 0)),
       offBy: Math.trunc(num(ops.off_by, 0)),
-    });
+    };
+    // a release noise that doesn't follow the key (a key coming back up): each key plays it as it is
+    if (trigger === 'release' && untracked && lo !== hi) {
+      for (let k = lo; k <= hi; k++) found.push({ ...base, zone: { ...zone, root: k, lo: k, hi: k } });
+    } else found.push({ ...base, zone });
   }
 
   // microphones: a region whose level controllers set is one microphone's, each set of controllers
   // one microphone (a controller on every region is the instrument's own volume, not a microphone)
-  const common = [...(found[0]?.faders.keys() ?? [])].filter((cc) => found.every((f) => f.faders.has(cc)));
+  // (read from the struck notes: a pedal's own sound in a block of its own needn't have the volume's)
+  const struck = found.filter((f) => !f.zone.trigger);
+  const basis = struck.length ? struck : found;
+  const common = [...(basis[0]?.faders.keys() ?? [])].filter((cc) => basis.every((f) => f.faders.has(cc)));
   const micKey = (f: Found) =>
     [...f.faders.keys()]
       .filter((cc) => !common.includes(cc))
@@ -407,8 +531,9 @@ export function instrumentFromSfz(file: string): { inst: PackInstrument; files: 
   }
 
   // round robins: on each key and velocity range, every distinct turn (seq_position, lorand) in order,
-  // numbered alike on every microphone so a hit's microphones play the same take
-  const slot = (z: Zone) => `${z.lo}:${z.hi}:${z.lovel}:${z.hivel}`;
+  // numbered alike on every microphone so a hit's microphones play the same take (a key's release and
+  // pedal samples take turns among their own)
+  const slot = (z: Zone) => `${z.trigger ?? ''}:${z.lo}:${z.hi}:${z.lovel}:${z.hivel}`;
   const turns = new Map<string, [number, number][]>();
   for (const f of found) {
     const list = turns.get(slot(f.zone)) ?? [];
@@ -459,6 +584,8 @@ export function instrumentFromSfz(file: string): { inst: PackInstrument; files: 
   }
 
   const zones = found.map((f) => f.zone);
+  numberReleaseParts(zones, (_, i) => (found[i] as Found).family);
+  const undamped = pitched && !oneShot ? undampedFrom(zones) : undefined;
   const name = basename(file, extname(file));
   return {
     inst: {
@@ -469,13 +596,187 @@ export function instrumentFromSfz(file: string): { inst: PackInstrument; files: 
       release: Math.min(8, release || 0.3),
       attack,
       oneShot,
-      velocityRange: zones.some((z) => z.lovel > 1) ? 12 : 20,
+      velocityRange: zones.some((z) => !z.trigger && z.lovel > 1) ? 12 : 20,
+      ...(undamped !== undefined ? { undamped } : {}),
       ...(mics.length ? { mics } : {}),
       zones,
     },
     files: [...files],
   };
 }
+
+// ---- EXS (Logic's sampler instruments) ----
+
+/**
+ * Finds an EXS instrument's samples where they are now. Each sample names the folder it was in on the
+ * machine the instrument was made on (".../Logic/Sampler Instruments/Piano/samples/layer01"): the
+ * folder's last parts are looked for beside the instrument and in the folders above it, the most of
+ * them first ("Piano/samples/layer01", then "samples/layer01", then "layer01"), then the instrument's
+ * own folder. Each old folder is found once.
+ */
+function exsSampleFinder(exsFile: string): (s: ExsSample) => string | null {
+  const own = dirname(resolve(exsFile));
+  const ancestors: string[] = [];
+  for (let d = own; ; d = dirname(d)) {
+    ancestors.push(d);
+    if (dirname(d) === d) break;
+  }
+  const found = new Map<string, string>();
+  return (s) => {
+    // an old Mac's path is "Macintosh HD:Users:…"; Windows' "C:\Samples\…"
+    const path = /[\\/]/.test(s.folder) ? s.folder.replace(/\\/g, '/') : s.folder.replace(/:/g, '/');
+    const parts = path.split('/').filter((p) => p && p !== '.' && !/^[a-z]:$/i.test(p));
+    const key = parts.join('/');
+    const known = found.get(key);
+    if (known && existsSync(join(known, s.file))) return join(known, s.file);
+    for (let n = parts.length; n >= 1; n--) {
+      const tail = parts.slice(parts.length - n);
+      for (const a of ancestors) {
+        const p = join(a, ...tail, s.file);
+        if (existsSync(p)) {
+          found.set(key, dirname(p));
+          return p;
+        }
+      }
+    }
+    const beside = join(own, s.file);
+    return existsSync(beside) ? beside : null;
+  };
+}
+
+/** What players start a controller at, 0 to 127 (volume, pan and expression have their MIDI defaults). */
+const CC_REST: Record<number, number> = { 7: 100, 10: 64, 11: 127 };
+
+/**
+ * Whether a group plays with the controls where they start: one a controller chooses plays if the
+ * controller's starting value is in its range (a piano's notes for the sustain pedal up, not down).
+ * Groups a key switch, an articulation or anything else chooses all play.
+ */
+function exsGroupPlays(g: ExsGroup | undefined): boolean {
+  if (g?.select.type !== 3) return true;
+  const at = CC_REST[g.select.number] ?? 0;
+  return at >= g.select.lo && at <= g.select.hi;
+}
+
+/**
+ * An EXS instrument as a HO[LO] instrument: its zones as the controls start them (groups a controller
+ * chooses, as it starts), their keys, velocities, tuning, level and loop, its release-triggered groups'
+ * zones as release samples, and its exclusive groups as choke groups. A zone that doesn't follow the key
+ * plays as recorded on each of its keys. Zones whose sample can't be found, isn't WAV, FLAC, OGG or MP3,
+ * or plays backwards are left out (and counted in `skipped`).
+ */
+export function instrumentFromExs(file: string): {
+  inst: PackInstrument;
+  files: string[];
+  /** Every sample it names that was found, played where its controls start or not. */
+  referenced: string[];
+  skipped: { missing: number; format: number; reverse: number };
+} {
+  const program = readExs(file);
+  const find = exsSampleFinder(file);
+  const where = new Map<number, string | null>();
+  const skipped = { missing: 0, format: 0, reverse: 0 };
+  const files = new Set<string>();
+  const referenced = new Set<string>();
+  const zones: Zone[] = [];
+  const familyOf: number[] = [];
+  let struck = 0;
+  let oneShots = 0;
+  let untracked = 0;
+  for (const z of program.zones) {
+    const g = z.group >= 0 ? program.groups[z.group] : undefined;
+    const sample = program.samples[z.sample];
+    if (!sample) continue;
+    if (!where.has(z.sample)) where.set(z.sample, find(sample));
+    const path = where.get(z.sample);
+    if (path) referenced.add(path);
+    if (!exsGroupPlays(g)) continue;
+    if (z.reverse) {
+      skipped.reverse++;
+      continue;
+    }
+    if (!path) {
+      skipped.missing++;
+      continue;
+    }
+    if (!AUDIO.has(extname(path).toLowerCase())) {
+      skipped.format++;
+      continue;
+    }
+    const velLo = Math.max(1, z.velocityOn ? z.velLo : 1, g ? g.velLo : 1);
+    const velHi = Math.min(127, z.velocityOn ? z.velHi : 127, g ? g.velHi || 127 : 127);
+    if (velHi < velLo) continue;
+    files.add(path);
+    const info = audioInfo(path);
+    const release = g?.release === true;
+    if (!release) {
+      struck++;
+      if (z.oneShot) oneShots++;
+      if (!z.pitch) untracked++;
+    }
+    const lo = Math.min(z.keyLo, z.keyHi);
+    const hi = Math.max(z.keyLo, z.keyHi);
+    const end = z.end > z.start && z.end <= info.frames ? z.end : info.frames;
+    const pan = clamp((z.pan + (g?.pan ?? 0)) / 64, -1, 1);
+    const zone: Zone = {
+      file: path,
+      root: z.key - z.coarse - z.fine / 100,
+      lo,
+      hi,
+      lovel: velLo,
+      hivel: velHi,
+      gain: z.volume + (g?.volume ?? 0),
+      start: Math.min(z.start, Math.max(0, end - 1)),
+      end,
+      loopStart: z.loopOn && z.loopEnd > z.loopStart ? z.loopStart : 0,
+      loopEnd: z.loopOn && z.loopEnd > z.loopStart ? Math.min(z.loopEnd, end) : 0,
+      rate: info.rate,
+      rr: 1,
+      ...(release ? { trigger: 'release' as const } : {}),
+      ...(g?.exclusive ? { group: g.exclusive, offBy: g.exclusive } : {}),
+      ...(pan ? { pan } : {}),
+    };
+    // a zone that doesn't follow the key: each of its keys plays it as recorded
+    const spread = z.pitch ? [zone] : range(lo, hi).map((k) => ({ ...zone, root: k, lo: k, hi: k }));
+    for (const s of spread) {
+      zones.push(s);
+      familyOf.push(z.group);
+    }
+  }
+  // round robins: zones on the same keys and velocities take turns, numbered in their order
+  const turns = new Map<string, number>();
+  for (const z of zones) {
+    const slot = `${z.trigger ?? ''}:${z.lo}:${z.hi}:${z.lovel}:${z.hivel}`;
+    const n = (turns.get(slot) ?? 0) + 1;
+    turns.set(slot, n);
+    z.rr = n;
+  }
+  numberReleaseParts(zones, (_, i) => familyOf[i] ?? -1);
+  const name = basename(file, extname(file));
+  // a drum kit plays its hits through as recorded (every zone one-shot, none following the key)
+  const kit = struck > 0 && oneShots === struck && untracked === struck;
+  const oneShot = struck > 0 && oneShots === struck;
+  const undamped = !kit && !oneShot ? undampedFrom(zones) : undefined;
+  return {
+    inst: {
+      name: slug(name),
+      title: name.replace(/[_-]+/g, ' ').trim(),
+      category: 'Imported',
+      pitched: !kit,
+      release: 0.3,
+      attack: 0.002,
+      oneShot,
+      velocityRange: zones.some((z) => !z.trigger && z.lovel > 1) ? 12 : 20,
+      ...(undamped !== undefined ? { undamped } : {}),
+      zones,
+    },
+    files: [...files],
+    referenced: [...referenced],
+    skipped,
+  };
+}
+
+const range = (lo: number, hi: number) => Array.from({ length: hi - lo + 1 }, (_, i) => lo + i);
 
 // ---- the words in sample names ----
 
@@ -1529,18 +1830,27 @@ function placeSample(src: string, dest: string): void {
 export function importFolder(
   source: string,
   packsDir: string,
-  opts: { id?: string; name?: string; license?: string; log?: (line: string) => void },
+  opts: { id?: string; name?: string; license?: string; trim?: boolean | TrimOptions; log?: (line: string) => void },
 ): Pack {
   const name = opts.name ?? basename(source).replace(/\.(zip)$/i, '');
-  const base = privateId(opts.id ?? name);
-  let id = base;
-  for (let n = 2; existsSync(join(packsDir, id)); n++) id = `${base}-${n}`;
   const all = walk(source);
-  const sfz = all.filter((f) => extname(f).toLowerCase() === '.sfz');
+  const programs = all.filter((f) => PROGRAMS.has(extname(f).toLowerCase()));
   const instruments: PackInstrument[] = [];
   const used = new Set<string>();
-  for (const f of sfz) {
-    const { inst, files } = instrumentFromSfz(f);
+  for (const f of programs) {
+    let made: { inst: PackInstrument; files: string[]; referenced?: string[] };
+    try {
+      made = instrumentFromProgram(f, opts.log);
+    } catch (err) {
+      // a file named .exs that isn't one doesn't stop the rest
+      if (extname(f).toLowerCase() !== '.exs') throw err;
+      opts.log?.(`${basename(f)}: ${err instanceof Error ? err.message : String(err)}`);
+      continue;
+    }
+    const { inst, files, referenced } = made;
+    // samples a program names but doesn't play where its controls start (a piano's notes for the
+    // pedal held down) are its own, not loose samples of an instrument of their own
+    for (const x of referenced ?? files) used.add(x);
     if (!inst.zones.length) continue;
     for (const x of files) used.add(x);
     instruments.push(inst);
@@ -1562,7 +1872,256 @@ export function importFolder(
   }
   for (const [dir, files] of byDir)
     instruments.push(instrumentFromFolder(dir, files, opts.log ? { log: opts.log } : {}));
-  if (!instruments.length) throw new Error('No SFZ instruments or audio files (WAV, FLAC, OGG) were found');
+  if (!instruments.length) throw new Error('No SFZ or EXS instruments or audio files (WAV, FLAC, OGG) were found');
+  if (opts.trim) trimAll(instruments, opts.trim === true ? {} : opts.trim, opts.log);
+  return writeOwnPack(instruments, source, packsDir, { ...opts, name }, basename(source));
+}
+
+/** Sampler programs: each maps its samples to keys and velocities. */
+const PROGRAMS = new Set(['.sfz', '.exs']);
+
+/** An SFZ or EXS program as an instrument (an EXS's samples it couldn't use are logged). */
+function instrumentFromProgram(
+  file: string,
+  log?: (line: string) => void,
+): { inst: PackInstrument; files: string[]; referenced?: string[] } {
+  if (extname(file).toLowerCase() !== '.exs') return instrumentFromSfz(file);
+  const { inst, files, referenced, skipped } = instrumentFromExs(file);
+  const left = [
+    skipped.missing ? `${skipped.missing} whose sample wasn't found` : '',
+    skipped.format ? `${skipped.format} whose sample isn't WAV, FLAC, OGG or MP3` : '',
+    skipped.reverse ? `${skipped.reverse} played backwards` : '',
+  ].filter(Boolean);
+  const n = inst.zones.length;
+  log?.(`${basename(file)}: ${n} zone${n === 1 ? '' : 's'}${left.length ? `, left out ${left.join(', ')}` : ''}`);
+  return { inst, files, referenced };
+}
+
+/** The deepest folder that holds every one of these paths. */
+function commonFolder(paths: readonly string[]): string {
+  let common = dirname(resolve(paths[0] as string));
+  for (const p of paths) {
+    const r = resolve(p);
+    while (r !== common && !r.startsWith(common + sep)) {
+      const up = dirname(common);
+      if (up === common) break;
+      common = up;
+    }
+  }
+  return common;
+}
+
+/**
+ * Make a pack from SFZ or EXS programs, exactly the ones given (a library's folders often hold many
+ * more): each is an instrument, or with `mics` all of them one instrument, each program a microphone
+ * (see micsFromPrograms; `mics` may name them). Its id starts with mine-. Files are hard-linked (else
+ * copied) into `packsDir/<id>/samples`, with their paths below the folder they all share.
+ */
+export function importPrograms(
+  programs: readonly string[],
+  packsDir: string,
+  opts: {
+    id?: string;
+    name?: string;
+    license?: string;
+    mics?: boolean | readonly string[];
+    trim?: boolean | TrimOptions;
+    log?: (line: string) => void;
+  },
+): Pack {
+  if (!programs.length) throw new Error('Give the .sfz or .exs instruments to import');
+  const made = programs.map((f) => instrumentFromProgram(resolve(f), opts.log));
+  const playable = made.filter((m) => m.inst.zones.length);
+  if (!playable.length) throw new Error('None of these instruments has a sample HO[LO] can play');
+  const first = programs[0] as string;
+  const name = opts.name ?? basename(first, extname(first));
+  const source = commonFolder([...programs, ...made.flatMap((m) => m.files)]);
+  let instruments = playable.map((m) => m.inst);
+  if (opts.mics) {
+    if (playable.length < programs.length) throw new Error('Every microphone needs samples HO[LO] can play');
+    const names = Array.isArray(opts.mics) ? opts.mics : micNames(programs);
+    instruments = [micsFromPrograms(instruments, names)];
+  }
+  if (opts.trim) trimAll(instruments, opts.trim === true ? {} : opts.trim, opts.log);
+  return writeOwnPack(instruments, source, packsDir, { ...opts, name }, basename(first));
+}
+
+/** Trim each instrument (see trimInstrument), saying how much smaller each became. */
+function trimAll(instruments: PackInstrument[], opts: TrimOptions, log?: (line: string) => void): void {
+  for (const inst of instruments) {
+    const { before, after } = trimInstrument(inst, opts);
+    log?.(`${inst.title}: ${after} MB decoded at 48 kHz, trimmed from ${before} MB`);
+  }
+}
+
+/**
+ * What tells programs apart, as microphones' names: the first folder (or file name) where their paths
+ * differ, less the words all of them have ("P1 player perspective", "P3 room perspective": "P1
+ * player", "P3 room").
+ */
+export function micNames(programs: readonly string[]): string[] {
+  const segs = programs.map((f) => {
+    const parts = resolve(f).split(sep);
+    parts[parts.length - 1] = basename(f, extname(f));
+    return parts;
+  });
+  const shortest = Math.min(...segs.map((x) => x.length));
+  let at = 0;
+  while (at < shortest - 1 && segs.every((x) => x[at] === segs[0]?.[at])) at++;
+  const raw = segs.map((x) => x[at] as string);
+  const ws = raw.map((r) => words(r));
+  const shared = new Set(
+    (ws[0] ?? []).map((w) => w.toLowerCase()).filter((w) => ws.every((x) => x.some((y) => y.toLowerCase() === w))),
+  );
+  return ws.map((x, i) => x.filter((w) => !shared.has(w.toLowerCase())).join(' ') || (raw[i] as string));
+}
+
+/**
+ * Programs that play the same notes from different microphones (a piano's player, close and room
+ * perspectives, each its own instrument in its library) as one instrument: each program a microphone,
+ * every microphone's zone for a note sounding together, each at its own level in the instrument's
+ * window. The first starts at full level and the others off, so it first sounds as the first did.
+ * Each microphone's zones keep their own keys and velocity layers (one may have more than another).
+ */
+export function micsFromPrograms(instruments: readonly PackInstrument[], names: readonly string[]): PackInstrument {
+  if (instruments.length < 2) throw new Error('Give two programs or more to make microphones of');
+  if (names.length !== instruments.length)
+    throw new Error(`Give a name for each of the ${instruments.length} microphones`);
+  const own = instruments.find((i) => i.mics?.length);
+  if (own) throw new Error(`${own.title} has microphones of its own: import it alone`);
+  const mics: SampleMic[] = [];
+  names.forEach((n, i) => {
+    const base = slug(n) || `mic-${i + 1}`;
+    let id = base;
+    for (let k = 2; mics.some((m) => m.id === id); k++) id = `${base}-${k}`;
+    mics.push({ id, name: n, ...(i ? { level: MIC_OFF } : {}) });
+  });
+  const first = instruments[0] as PackInstrument;
+  // its name: the words every program's has ("Steinway P1 16", "Steinway P2 16": "Steinway 16")
+  const ws = instruments.map((i) => words(i.title));
+  const common = (ws[0] ?? []).filter((w) => ws.every((x) => x.some((y) => y.toLowerCase() === w.toLowerCase())));
+  const title = common.join(' ') || first.title;
+  const undamped = instruments.map((i) => i.undamped).filter((u): u is number => u !== undefined);
+  return {
+    name: slug(title),
+    title,
+    category: first.category,
+    pitched: instruments.some((i) => i.pitched !== false),
+    release: Math.max(...instruments.map((i) => i.release)),
+    attack: Math.max(...instruments.map((i) => i.attack)),
+    oneShot: instruments.every((i) => i.oneShot),
+    velocityRange: first.velocityRange,
+    // a key any microphone heard a damper on is damped
+    ...(undamped.length ? { undamped: Math.max(...undamped) } : {}),
+    mics,
+    zones: instruments.flatMap((inst, i) => inst.zones.map((z) => ({ ...z, mic: (mics[i] as SampleMic).id }))),
+  };
+}
+
+/** How an import keeps notes shorter than their files: see trimInstrument. */
+export interface TrimOptions {
+  /** dB of full scale, as the note plays (its file's level with its zone's gain), it's kept down to. */
+  floor?: number;
+  /** Seconds a note is kept at most. */
+  cap?: number;
+  /** Seconds it fades out over before its new end. */
+  fade?: number;
+}
+
+/** The pinned pianos' rule: a note kept until it falls to -58 dB, 20 s at most, faded over its last 1.5 s. */
+export const TRIM_DEFAULTS: Required<TrimOptions> = { floor: -58, cap: 20, fade: 1.5 };
+
+/** Megabytes a stretch of a file takes decoded at 48 kHz, as a device holds it (32-bit floats). */
+const decodedMb = (frames: number, rate: number, channels: number) => (frames / rate) * 48000 * channels * 4 * 1e-6;
+
+/**
+ * Keep an instrument's notes shorter than their files, so a big library fits in a device's memory (a
+ * studio holds every sample it plays). Only the map changes: each zone's end, and a fade the studio
+ * makes as it loads the sample. The files are never rewritten, so importing again without trimming
+ * brings every note back whole.
+ *
+ * A struck note is kept until, as it plays (its file's level with its zone's gain, at full velocity),
+ * it has fallen to `floor` dB, and half a second more, `cap` seconds at most, fading over its last
+ * `fade` seconds. A release or pedal sample (short already) loses only what's below -80 dB. A note that
+ * wouldn't get shorter keeps its end and gets no fade. Returns the instrument's decoded size before and
+ * after, in megabytes at 48 kHz.
+ */
+export function trimInstrument(inst: PackInstrument, opts: TrimOptions = {}): { before: number; after: number } {
+  const o = { ...TRIM_DEFAULTS, ...opts };
+  const byFile = new Map<string, Zone[]>();
+  for (const z of inst.zones) byFile.set(z.file, [...(byFile.get(z.file) ?? []), z]);
+  let before = 0;
+  let after = 0;
+  for (const [file, zones] of byFile) {
+    const { rate, channels } = decodeInput(new Uint8Array(readFileSync(file)));
+    const length = channels[0]?.length ?? 0;
+    const block = Math.max(1, Math.round(0.05 * rate));
+    /** A stretch's level in dB (its loudest channel's mean square). */
+    const level = (from: number, to: number) => {
+      let best = 0;
+      for (const ch of channels) {
+        let sum = 0;
+        for (let i = from; i < to; i++) sum += (ch[i] as number) ** 2;
+        best = Math.max(best, sum / Math.max(1, to - from));
+      }
+      return 10 * Math.log10(best + 1e-20);
+    };
+    // each distinct stretch of the file once (its zones on several keys share one decode and one cut)
+    const cuts = new Map<string, { end: number; fadeOut?: number }>();
+    for (const z of zones) {
+      const start = Math.max(0, Math.min(z.start, length));
+      const end = Math.min(length, z.end > start ? z.end : length);
+      const struck = !z.trigger;
+      const key = `${start}|${end}|${struck ? 's' : 't'}`;
+      let cut = cuts.get(key);
+      if (!cut) {
+        // what the file must fall below for the note, as it plays, to be under the floor
+        const loudest = Math.max(...zones.filter((x) => !x.trigger === struck).map((x) => x.gain));
+        const below = (struck ? o.floor : -80) - loudest;
+        let last = -1;
+        for (let b = Math.ceil((end - start) / block) - 1; b >= 0; b--) {
+          if (level(start + b * block, Math.min(end, start + (b + 1) * block)) > below) {
+            last = b;
+            break;
+          }
+        }
+        const margin = Math.round((struck ? 0.5 : 0.05) * rate);
+        let keep = Math.max(Math.round((struck ? 1 : 0.1) * rate), (last + 1) * block + margin);
+        if (struck) keep = Math.min(keep, Math.round(o.cap * rate));
+        const newEnd = Math.min(end, start + keep);
+        cut =
+          newEnd < end - Math.round(0.05 * rate)
+            ? {
+                end: newEnd,
+                fadeOut: Math.min(Math.round((struck ? o.fade : 0.05) * rate), Math.round((newEnd - start) * 0.4)),
+              }
+            : { end };
+        cuts.set(key, cut);
+        before += decodedMb(end - start, rate, channels.length);
+        after += decodedMb(cut.end - start, rate, channels.length);
+      }
+      z.end = cut.end;
+      if (cut.fadeOut) z.fadeOut = cut.fadeOut;
+    }
+  }
+  return { before: Math.round(before), after: Math.round(after) };
+}
+
+/**
+ * Instruments put into a new pack of your own: unique names, every sample hard-linked (else copied)
+ * into its samples folder at its path below `source`, and its holo-pack.json written.
+ */
+function writeOwnPack(
+  instruments: PackInstrument[],
+  source: string,
+  packsDir: string,
+  opts: { id?: string; name: string; license?: string },
+  from: string,
+): Pack {
+  const name = opts.name;
+  const base = privateId(opts.id ?? name);
+  let id = base;
+  for (let n = 2; existsSync(join(packsDir, id)); n++) id = `${base}-${n}`;
   // unique names, and the files put into the pack with paths relative to its samples folder
   const names = new Set<string>();
   const target = join(packsDir, id, 'samples');
@@ -1574,7 +2133,7 @@ export function importFolder(
     inst.name = n;
     for (const z of inst.zones) {
       let rel = relative(source, z.file).split(sep).join('/');
-      // a sample an SFZ found outside the folder goes in a folder of its own, never above the pack
+      // a sample a program found outside the folder goes in a folder of its own, never above the pack
       if (rel.startsWith('../') || rel === '..' || /^([a-z]:)?\//i.test(rel)) {
         rel = outside.get(z.file) ?? `outside/${outside.size + 1}-${basename(z.file)}`;
         outside.set(z.file, rel);
@@ -1588,8 +2147,8 @@ export function importFolder(
     id,
     name,
     license: opts.license ?? 'Imported (check its own license)',
-    credit: `Imported from ${basename(source)}.`,
-    source: { kind: 'imported', from: basename(source) },
+    credit: `Imported from ${from}.`,
+    source: { kind: 'imported', from },
     root: 'samples',
     instruments,
   };

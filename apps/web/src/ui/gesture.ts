@@ -183,8 +183,26 @@ export class Pinch {
   down(e: ReactPointerEvent): boolean {
     if (e.pointerType !== 'touch') return false;
     this.pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    this.untilGone(e.pointerId);
     if (this.pts.size >= 2) this.active = true;
     return this.active;
+  }
+  /**
+   * A finger's lift is also heard at the window, after the canvas has had its turn. The canvas
+   * doesn't always hear it: a finger held still opens a menu over the canvas, the gesture lets the
+   * pointer go, and the lift can land on the menu. A finger still counted as down would make every
+   * touch after it the second finger of a pinch, and no tap or drag would get through again.
+   */
+  private untilGone(id: number): void {
+    if (typeof window === 'undefined') return;
+    const gone = (ev: PointerEvent) => {
+      if (ev.pointerId !== id) return;
+      window.removeEventListener('pointerup', gone);
+      window.removeEventListener('pointercancel', gone);
+      if (this.pts.delete(id) && this.pts.size === 0) this.active = false;
+    };
+    window.addEventListener('pointerup', gone);
+    window.addEventListener('pointercancel', gone);
   }
   /**
    * A finger moved: the zoom factor and the point between the fingers, while two are down, and how far

@@ -1,20 +1,23 @@
 /** The studio's frame: the desktop layout, the tablet's, and the phone's (portrait and landscape). */
 import { Library as LibraryIcon, Music2, Piano, Rows3, Settings, SlidersVertical } from 'lucide-react';
-import { lazy, Suspense, useEffect, useRef } from 'react';
+import { lazy, type ReactNode, Suspense, useEffect, useRef, useState } from 'react';
 import { ensureAudio, resolveConflict } from '../app/actions.ts';
 import { clampEditorHeight, fitEditorHeight, isPhone, type Layout, useLayout } from '../app/layout.ts';
 import { otherStudioToDrive } from '../app/live.ts';
 import { type MobileTab, openSettings, store, useApp, useShow } from '../app/store.ts';
+import { useVersion } from '../app/version.ts';
 import { AudioEditor, AudioEditorBar } from './AudioEditor.tsx';
 import { Bar } from './Bar.tsx';
 import { BarButton, ControlBar, Lcd, SaveDot, TransportButtons } from './ControlBar.tsx';
 import { Wordmark } from './controls.tsx';
 import { Dialogs } from './Dialogs.tsx';
+import { keepAwake, wake } from './frame.ts';
 import { Mixer, PluginWindow, StageWindow, SynthWindow } from './Mixer.tsx';
 import { MenuHost } from './menu.tsx';
 import { Inspector, LibraryPanel } from './Panels.tsx';
 import { PianoRoll, PianoRollBar } from './PianoRoll.tsx';
 import { PlayPad } from './PlayPad.tsx';
+import { useScrollCue } from './scroll-cue.ts';
 import { spareTrackRoom, TracksArea } from './Tracks.tsx';
 import { UndoRedo } from './UndoRedo.tsx';
 import { DOUBLE_TAP_MS } from './view.ts';
@@ -132,6 +135,20 @@ function NoteViewSwitch() {
   );
 }
 
+/**
+ * An editor's bar. Where it's wider than its pane (a phone held upright) it scrolls sideways, and
+ * the edge that has more fades: the bar has no scrollbar to say so.
+ */
+function PaneBar({ children }: { children: ReactNode }) {
+  const bar = useRef<HTMLDivElement>(null);
+  useScrollCue(bar, 'x');
+  return (
+    <div className="pane-bar" ref={bar}>
+      {children}
+    </div>
+  );
+}
+
 function EditorPane() {
   const editor = useApp((s) => s.editor);
   const height = clampEditorHeight(useApp((s) => s.editorHeight));
@@ -182,7 +199,7 @@ function EditorPane() {
           el.addEventListener('lostpointercapture', up);
         }}
       />
-      <div className="pane-bar">
+      <PaneBar>
         {editor === 'piano' ? (
           audio ? (
             <AudioBar />
@@ -203,7 +220,7 @@ function EditorPane() {
         )}
         {/* how the notes (or the recording) are shown; the Piano Roll and the Mixer themselves are opened at the top right */}
         {editor === 'piano' && (audio ? <AudioModeSwitch /> : <NoteViewSwitch />)}
-      </div>
+      </PaneBar>
       {editor === 'piano' ? (
         audio ? (
           <AudioView />
@@ -291,9 +308,27 @@ function BounceStatus() {
   );
 }
 
+/** How long the audio may take to start before the start screen says it's still waiting. */
+const START_SLOW_MS = 4000;
+
 function StartAudio() {
   const ready = useApp((s) => s.audioReady);
   const other = useApp((s) => otherStudioToDrive(s.peers));
+  const version = useVersion();
+  // A browser with no sound output to use may never answer (it neither starts the audio nor
+  // refuses): the screen says so instead of sitting there as if the button hadn't been pressed.
+  const [waiting, setWaiting] = useState(false);
+  const slow = useRef(0);
+  useEffect(() => () => window.clearTimeout(slow.current), []);
+  const start = () => {
+    window.clearTimeout(slow.current);
+    setWaiting(false);
+    slow.current = window.setTimeout(() => setWaiting(true), START_SLOW_MS);
+    void ensureAudio().finally(() => {
+      window.clearTimeout(slow.current);
+      setWaiting(false);
+    });
+  };
   if (ready) return null;
   return (
     <div className="start-audio">
@@ -304,10 +339,16 @@ function StartAudio() {
         </h1>
         <p className="start-what">A studio for writing, recording and mixing music</p>
         <p className="start-tag">Headphones On [Lights Out]</p>
-        <button type="button" className="btn primary large" onClick={() => void ensureAudio()}>
+        <button type="button" className="btn primary large" onClick={start}>
           Start the studio
         </button>
-        <p className="start-note">Starts the audio and asks to use your MIDI devices.</p>
+        {waiting ? (
+          <p className="start-note waiting" role="status">
+            The audio hasn’t started yet. Check that this device has a sound output the browser can use.
+          </p>
+        ) : (
+          <p className="start-note">Starts the audio and asks to use your MIDI devices.</p>
+        )}
         {other && (
           <div className="start-remote">
             <p>
@@ -319,6 +360,7 @@ function StartAudio() {
             </a>
           </div>
         )}
+        <p className="start-version">{version ? `Version ${version}` : ''}</p>
       </div>
     </div>
   );
@@ -361,7 +403,7 @@ function PhoneView() {
   if (tab === 'editor') {
     return (
       <div className="phone-view editor">
-        <div className="pane-bar">
+        <PaneBar>
           {audio ? (
             <AudioBar />
           ) : score ? (
@@ -372,7 +414,7 @@ function PhoneView() {
             <PianoRollBar />
           )}
           {audio ? <AudioModeSwitch /> : <NoteViewSwitch />}
-        </div>
+        </PaneBar>
         {audio ? (
           <AudioView />
         ) : score ? (
@@ -503,14 +545,27 @@ export function App() {
   const inspector = useApp((s) => s.inspector);
   const library = useApp((s) => s.library);
   const typing = useApp((s) => s.typing);
-  // a dialog up: the studio behind it is inert (no focus, no clicks, nothing for a screen reader)
-  const inert = useApp((s) => s.dialog !== null);
+  // a dialog up, or a window over the whole studio (Print, Scan): the studio behind it is inert (no
+  // focus, no clicks, nothing for a screen reader)
+  const inert = useApp((s) => s.dialog !== null || s.printView !== null || s.scanView !== null);
   const workspace = useRef<HTMLDivElement>(null);
   const overlays = layout === 'tablet';
 
   useEffect(() => {
     document.documentElement.dataset.layout = layout;
   }, [layout]);
+
+  // The screen is drawn at its own pace while a song plays or records, and for a moment after
+  // anything changes in the studio (an edit from here, from the agent or from a remote); left
+  // alone and stopped, the frame loop rests (frame.ts).
+  useEffect(() => {
+    const playing = keepAwake(() => store.get().playing || store.get().recording);
+    const changed = store.subscribe(wake);
+    return () => {
+      playing();
+      changed();
+    };
+  }, []);
 
   // on a tablet the Inspector is an overlay: it doesn't start open over the tracks, however it was left
   // biome-ignore lint/correctness/useExhaustiveDependencies: once, at launch

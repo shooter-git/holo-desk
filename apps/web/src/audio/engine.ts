@@ -75,6 +75,7 @@ import { companion, STUDIO_ENGINE } from './companion.ts';
 import { engineRate } from './engine-rate.ts';
 import { audioFiles } from './files.ts';
 import ImpulseWorker from './impulse.worker.ts?worker';
+import { OnceAFrame } from './once-a-frame.ts';
 import { instrumentManifest, sampleFile } from './pack-files.ts';
 import { PatchStore } from './patch-store.ts';
 import { PatchRenderer, type PatchWorker, planPatches, recordingOf } from './patches.ts';
@@ -184,8 +185,8 @@ export class AudioEngine {
   private synced: Project | null = null;
   /** A gesture's sync left planned parts for its end. */
   private partsDeferred = false;
-  private livePending: Project | null = null;
-  private liveFrame = 0;
+  /** A gesture's changes on their way to the audio thread (see syncSoon). */
+  private readonly following = new OnceAFrame<Project>((p) => this.syncNow(p, true));
   segments: TempoSegment[] = [{ frame: 0, tick: 0, framesPerTick: 25 }];
   /** The song as written: what the studio shows and edits. */
   private project: Project | null = null;
@@ -537,24 +538,18 @@ export class AudioEngine {
   /** Bring the audio thread up to date with the session: only what changed is sent. */
   sync(project: Project): void {
     // (a full pass covers whatever a gesture still had waiting)
-    this.livePending = null;
+    this.following.drop();
     this.syncNow(project, false);
   }
 
   /**
    * A gesture's change (a fader, a knob, the tempo being dragged): the audio thread follows once a
-   * frame, with the slow work (planning parts) left for the gesture's end.
+   * frame, with the slow work (planning parts) left for the gesture's end. Where no frames are
+   * drawn, the studio's tab hidden while a remote moves its faders, it follows at once.
    */
   syncSoon(project: Project): void {
     this.project = project;
-    this.livePending = project;
-    if (this.liveFrame) return;
-    this.liveFrame = nextFrame(() => {
-      this.liveFrame = 0;
-      const p = this.livePending;
-      this.livePending = null;
-      if (p) this.syncNow(p, true);
-    });
+    this.following.ask(project);
   }
 
   /**
@@ -1654,10 +1649,17 @@ export class AudioEngine {
 
   /** Peak left, peak right (0..1+) and gain reduction (dB) of a track, bus or "master". */
   meter(id: string): [number, number, number] {
+    return this.meterInto(id, [0, 0, 0]);
+  }
+
+  /** A channel's meter read into an array of the caller's (what reads every channel many times a second makes none). */
+  meterInto(id: string, out: [number, number, number]): [number, number, number] {
     const num = id === 'master' ? 0 : this.nums.get(id);
-    if (num === undefined) return [0, 0, 0];
-    const at = num * METER_FLOATS;
-    return [this.meters[at] ?? 0, this.meters[at + 1] ?? 0, this.meters[at + 2] ?? 0];
+    const at = num === undefined ? -1 : num * METER_FLOATS;
+    out[0] = at < 0 ? 0 : (this.meters[at] ?? 0);
+    out[1] = at < 0 ? 0 : (this.meters[at + 1] ?? 0);
+    out[2] = at < 0 ? 0 : (this.meters[at + 2] ?? 0);
+    return out;
   }
 
   /** A plugin window opened: meter that plugin's own gain reduction (not the whole channel's). */
@@ -1720,12 +1722,6 @@ function sharedEvents(events: Float64Array): Float64Array {
   const s = new Float64Array(new SharedArrayBuffer(events.byteLength));
   s.set(events);
   return s;
-}
-
-/** Before the next frame is drawn (a timer where there are no frames). */
-function nextFrame(fn: () => void): number {
-  if (typeof requestAnimationFrame === 'function') return requestAnimationFrame(fn);
-  return setTimeout(fn, 16) as unknown as number;
 }
 
 /** A sequence without its notes (its controllers stay). */

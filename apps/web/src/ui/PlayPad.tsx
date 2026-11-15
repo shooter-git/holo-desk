@@ -4,7 +4,7 @@
  * the same way.
  */
 import { type Instrument, type MiddleC, noteName } from '@holo/session';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { ensureAudio } from '../app/actions.ts';
 import { sendMidi } from '../app/live.ts';
 import { toast, useApp } from '../app/store.ts';
@@ -75,8 +75,11 @@ export function PlayPad({
   };
   const box = useRef<HTMLDivElement>(null);
   const size = useSize(box);
-  const [lit, setLit] = useState<Set<number>>(new Set());
   const touches = useRef(new Map<number, number>());
+  // The keys and pads held down light up by a class put on them here, not by drawing the pad again:
+  // a note played is a touch, and every touch used to render the whole keyboard while it was played.
+  const pad = useRef<HTMLDivElement>(null);
+  const lit = useRef(new Set<number>());
 
   // the pads follow the instrument their notes reach (its map says what each key plays)
   const ownInstrument = useApp((s) => padTrack(s.project, s.selectedTrack, PORT, PAD_CHANNEL)?.instrument ?? null);
@@ -130,10 +133,27 @@ export function PlayPad({
 
   const velocityFor = (y: number) => Math.round(40 + 87 * Math.min(1, Math.max(0, 1 - y / size.h)) ** 0.8);
 
-  const update = () => setLit(new Set(touches.current.values()));
+  const light = (n: number, on: boolean) => {
+    for (const el of pad.current?.querySelectorAll(`[data-note="${n}"]`) ?? []) {
+      if (el.classList.contains('pad')) {
+        el.classList.toggle('hit', on);
+        el.setAttribute('aria-pressed', String(on));
+      } else el.classList.toggle('lit', on);
+    }
+  };
+  const update = () => {
+    const held = new Set(touches.current.values());
+    for (const n of lit.current) if (!held.has(n)) light(n, false);
+    for (const n of held) if (!lit.current.has(n)) light(n, true);
+    lit.current = held;
+  };
+  // (a render may have made the keys anew, another octave or the pads: what's held is lit on them)
+  useLayoutEffect(() => {
+    for (const n of lit.current) light(n, true);
+  });
 
   return (
-    <div className="playpad">
+    <div className="playpad" ref={pad} style={{ ['--pad-color' as string]: color }}>
       <div className="pane-bar">
         <div className="seg">
           {/* short names: on a phone the bar holds these, where the notes go, and the octave */}
@@ -210,9 +230,9 @@ export function PlayPad({
               key={n}
               type="button"
               aria-label={name}
-              aria-pressed={lit.has(n)}
-              className={`pad${lit.has(n) ? ' hit' : ''}`}
-              style={{ ['--pad-color' as string]: color }}
+              aria-pressed={false}
+              className="pad"
+              data-note={n}
               onKeyDown={(e) => {
                 // a pad from a keyboard: held down for as long as the key is
                 if ((e.key !== ' ' && e.key !== 'Enter') || e.repeat) return;
@@ -298,27 +318,9 @@ export function PlayPad({
               type="button"
               tabIndex={-1}
               aria-label={noteName(n, middleC)}
-              style={{
-                all: 'unset',
-                position: 'absolute',
-                left: i * keyW,
-                top: 0,
-                width: keyW - 2,
-                bottom: 0,
-                borderRadius: '0 0 8px 8px',
-                background: lit.has(n)
-                  ? `linear-gradient(180deg, #fff, ${color})`
-                  : 'linear-gradient(180deg, #e6e9ee, #fbfcfd 85%, #d6dae0)',
-                boxShadow: 'inset 0 -4px 0 rgba(0,0,0,0.12), 0 2px 3px rgba(0,0,0,0.5)',
-                display: 'flex',
-                alignItems: 'flex-end',
-                justifyContent: 'center',
-                paddingBottom: 8,
-                color: '#5b636f',
-                fontSize: 11,
-                fontWeight: 600,
-                pointerEvents: 'none',
-              }}
+              className="key white"
+              data-note={n}
+              style={{ left: i * keyW, width: keyW - 2 }}
             >
               {n % 12 === 0 ? noteName(n, middleC) : ''}
             </button>
@@ -330,18 +332,9 @@ export function PlayPad({
                 type="button"
                 tabIndex={-1}
                 aria-label={noteName(n + 1, middleC)}
-                style={{
-                  all: 'unset',
-                  position: 'absolute',
-                  left: (i + 1) * keyW - keyW * 0.3,
-                  top: 0,
-                  width: keyW * 0.6,
-                  height: '60%',
-                  borderRadius: '0 0 6px 6px',
-                  background: lit.has(n + 1) ? color : 'linear-gradient(180deg, #1a1d22, #33383f 90%, #1a1d22)',
-                  boxShadow: '0 3px 6px rgba(0,0,0,0.6), inset 0 -3px 0 rgba(255,255,255,0.06)',
-                  pointerEvents: 'none',
-                }}
+                className="key black"
+                data-note={n + 1}
+                style={{ left: (i + 1) * keyW - keyW * 0.3, width: keyW * 0.6 }}
               />
             ) : null,
           )}

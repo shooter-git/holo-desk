@@ -1,5 +1,25 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { flickSpeed, panAxis, TouchPan, Viewport } from '../src/ui/view.ts';
+import { flickSpeed, panAxis, revealBy, TouchPan, Viewport } from '../src/ui/view.ts';
+
+describe('bringing a row into view', () => {
+  it('leaves a row that shows where it is', () => {
+    expect(revealBy(100, 56, 80, 400)).toBe(0);
+    expect(revealBy(80, 56, 80, 400)).toBe(0);
+    expect(revealBy(424, 56, 80, 400)).toBe(0);
+  });
+
+  it('scrolls down just far enough for a row under the fold', () => {
+    expect(revealBy(450, 56, 80, 400)).toBe(26);
+  });
+
+  it('scrolls up to a row above the view', () => {
+    expect(revealBy(56, 56, 80, 400)).toBe(-24);
+  });
+
+  it('brings a row taller than the view to its top', () => {
+    expect(revealBy(300, 500, 80, 400)).toBe(220);
+  });
+});
 
 const at = (clientX: number, clientY: number, timeStamp: number) => ({ clientX, clientY, timeStamp });
 
@@ -119,6 +139,18 @@ describe('a finger dragging the view', () => {
     runFrames(148, 10);
     expect(view.y).toBe(caught);
     expect(view.stopFling()).toBe(false);
+  });
+
+  it('tells a tap from a scroll: the view moves only once the finger is past the slop', () => {
+    const view = new Viewport(100);
+    const tap = new TouchPan(view, 'xy', () => 10000, at(100, 300, 0));
+    tap.move(at(102, 303, 20));
+    expect(tap.panned).toBe(false);
+    expect(view.y).toBe(0);
+    const scroll = new TouchPan(view, 'xy', () => 10000, at(100, 300, 0));
+    scroll.move(at(100, 280, 20));
+    expect(scroll.panned).toBe(true);
+    expect(view.y).toBeGreaterThan(0);
   });
 
   it("doesn't coast when the finger stopped before it lifted", () => {

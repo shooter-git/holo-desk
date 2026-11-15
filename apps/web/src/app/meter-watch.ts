@@ -30,14 +30,76 @@ export interface MetersReport {
   channels: MeterReport[];
 }
 
+/**
+ * A channel's readings in the seconds kept: a ring of [time, left, right, gain reduction], four
+ * numbers a reading in one array made once, so a reading taken twenty times a second for every
+ * channel leaves nothing behind to be collected while the song plays.
+ */
+class Recent {
+  private data: Float64Array;
+  private head = 0;
+  private count = 0;
+
+  constructor(capacity: number) {
+    this.data = new Float64Array(Math.max(4, capacity) * 4);
+  }
+
+  private get capacity(): number {
+    return this.data.length / 4;
+  }
+
+  /** Add a reading, letting go of those from before `oldest`. */
+  push(at: number, l: number, r: number, g: number, oldest: number): void {
+    while (this.count && (this.data[this.head * 4] as number) < oldest) {
+      this.head = (this.head + 1) % this.capacity;
+      this.count--;
+    }
+    if (this.count === this.capacity) this.grow();
+    const i = ((this.head + this.count) % this.capacity) * 4;
+    this.data[i] = at;
+    this.data[i + 1] = l;
+    this.data[i + 2] = r;
+    this.data[i + 3] = g;
+    this.count++;
+  }
+
+  /** (readings came faster than the room was made for: twice the room, in order from the oldest) */
+  private grow(): void {
+    const next = new Float64Array(this.data.length * 2);
+    for (let n = 0; n < this.count; n++) {
+      const i = ((this.head + n) % this.capacity) * 4;
+      next.set(this.data.subarray(i, i + 4), n * 4);
+    }
+    this.data = next;
+    this.head = 0;
+  }
+
+  /** The loudest left and right and the deepest gain reduction of the readings from `since` on. */
+  loudest(since: number): [number, number, number] {
+    let l = 0;
+    let r = 0;
+    let g = 0;
+    for (let n = 0; n < this.count; n++) {
+      const i = ((this.head + n) % this.capacity) * 4;
+      if ((this.data[i] as number) < since) continue;
+      l = Math.max(l, this.data[i + 1] as number);
+      r = Math.max(r, this.data[i + 2] as number);
+      g = Math.min(g, this.data[i + 3] as number);
+    }
+    return [l, r, g];
+  }
+}
+
 interface Held {
-  /** [time, left, right, gain reduction] of each reading in the seconds kept. */
-  recent: [number, number, number, number][];
+  recent: Recent;
   maxL: number;
   maxR: number;
   grMax: number;
   clipped: boolean;
 }
+
+/** How often the meters are expected to be read (ms): the room a channel's readings are given at first. */
+const EXPECTED_EVERY_MS = 50;
 
 const db = (v: number): number | null => (v > 1e-6 ? Math.round(20 * Math.log10(v) * 10) / 10 : null);
 const gr = (v: number): number | null => (v < -0.05 ? Math.round(v * 10) / 10 : null);
@@ -97,15 +159,15 @@ export class MeterWatch {
   sample(ids: readonly string[], read: (id: string) => MeterReading, now: number): void {
     if (!this.playing) return;
     for (const id of ids) {
+      // (read at once: the reader may hand every channel the same array)
       const [l, r, g] = read(id);
       let h = this.held.get(id);
       if (!h) {
-        h = { recent: [], maxL: 0, maxR: 0, grMax: 0, clipped: false };
+        const room = Math.ceil(this.keepMs / EXPECTED_EVERY_MS) + 16;
+        h = { recent: new Recent(room), maxL: 0, maxR: 0, grMax: 0, clipped: false };
         this.held.set(id, h);
       }
-      h.recent.push([now, l, r, g]);
-      while (h.recent.length && (h.recent[0] as [number, number, number, number])[0] < now - this.keepMs)
-        h.recent.shift();
+      h.recent.push(now, l, r, g, now - this.keepMs);
       h.maxL = Math.max(h.maxL, l);
       h.maxR = Math.max(h.maxR, r);
       h.grMax = Math.min(h.grMax, g);
@@ -125,15 +187,7 @@ export class MeterWatch {
     for (const id of ['master', ...order.filter((x) => x !== 'master')]) {
       const h = this.held.get(id);
       if (!h || (h.maxL <= 1e-6 && h.maxR <= 1e-6 && h.grMax >= -0.05)) continue;
-      let l = 0;
-      let r = 0;
-      let g = 0;
-      for (const [at, a, b, c] of h.recent) {
-        if (at < end - window) continue;
-        l = Math.max(l, a);
-        r = Math.max(r, b);
-        g = Math.min(g, c);
-      }
+      const [l, r, g] = h.recent.loudest(end - window);
       channels.push({
         id,
         peak: [db(l), db(r)],

@@ -277,6 +277,69 @@ describe('the sampler, played', () => {
     expect(level(s, Math.round(SR * 0.6))).toBeCloseTo(0.5, 2);
   });
 
+  it("drops a note's damper when it's let go though its sample has already ended", () => {
+    const short = (level: number, seconds: number, extra: Partial<SampleZone> = {}) => ({
+      ...tone(level, extra),
+      left: new Float32Array(Math.round(SR * seconds)).fill(level),
+    });
+    const spec = base([short(0.5, 0.1), short(0.2, 0.2, { trigger: 'release' })], {
+      release: 0.005,
+      releaseDecay: 6,
+      undamped: 90,
+    });
+    // held half a second, past its tenth of a second of sample: let go, its release sample plays,
+    // 3 dB down for the half second it was held, as a note still sounding would
+    const s = new Sampler(SR, spec);
+    s.noteOn(60, 127);
+    expect(level(s, SR / 2)).toBe(0);
+    s.noteOff(60);
+    expect(level(s, Math.round(SR * 0.1))).toBeCloseTo(0.2 / 10 ** (3 / 20), 3);
+    // on the pedal: let go, nothing until the pedal comes up, then once
+    const p = new Sampler(SR, spec);
+    p.cc(64, 127);
+    p.noteOn(60, 127);
+    level(p, SR / 2);
+    p.noteOff(60);
+    expect(level(p, 64)).toBe(0);
+    p.cc(64, 0);
+    expect(level(p, Math.round(SR * 0.1))).toBeCloseTo(0.2 / 10 ** ((6 * (SR / 2 + 64)) / SR / 20), 3);
+    level(p, SR / 2);
+    p.noteOff(60);
+    expect(level(p, 64)).toBe(0);
+    // struck again on the pedal: when the pedal comes up one damper falls, the newer note's
+    const r = new Sampler(SR, spec);
+    r.cc(64, 127);
+    r.noteOn(60, 127);
+    level(r, SR / 2);
+    r.noteOff(60);
+    r.noteOn(60, 127);
+    level(r, SR / 2);
+    r.noteOff(60);
+    r.cc(64, 0);
+    expect(level(r, Math.round(SR * 0.1))).toBeCloseTo(0.2 / 10 ** (3 / 20), 3);
+    // a key still held when the pedal comes up keeps its damper up
+    const k = new Sampler(SR, spec);
+    k.cc(64, 127);
+    k.noteOn(60, 127);
+    level(k, SR / 2);
+    k.cc(64, 0);
+    expect(level(k, 64)).toBe(0);
+    k.noteOff(60);
+    expect(level(k, Math.round(SR * 0.1))).toBeGreaterThan(0.1);
+    // a top string has no damper to drop; a hard stop forgets the note
+    const u = new Sampler(SR, spec);
+    u.noteOn(96, 127);
+    level(u, SR / 2);
+    u.noteOff(96);
+    expect(level(u, 64)).toBe(0);
+    const h = new Sampler(SR, spec);
+    h.noteOn(60, 127);
+    level(h, SR / 2);
+    h.allNotesOff(true);
+    h.noteOff(60);
+    expect(level(h, 64)).toBe(0);
+  });
+
   it('plays one release sample of each part, each by its own decay', () => {
     const short = (level: number, extra: Partial<SampleZone>) => ({
       ...tone(level, extra),

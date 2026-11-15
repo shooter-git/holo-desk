@@ -14,7 +14,6 @@ import {
   type Project,
   quantize,
   type Region,
-  type Track,
   ticksPerBar,
   ticksPerBeat,
   tickToBarBeat,
@@ -34,7 +33,7 @@ import { isPhone, useLayout } from '../app/layout.ts';
 import { store, useApp } from '../app/store.ts';
 import { engine } from '../audio/engine.ts';
 import { midi } from '../audio/midi.ts';
-import { alpha, prepare, roundRect, useFrame, useMedia, useSize, velocityColor } from './frame.ts';
+import { alpha, movePlayhead, prepare, roundRect, useFrame, useMedia, useSize, velocityColor } from './frame.ts';
 import {
   capture,
   edgeScroll,
@@ -80,7 +79,6 @@ function velColor(v: number): string {
 interface NoteRef {
   note: Note;
   region: Region;
-  track: Track;
 }
 
 interface Preview {
@@ -127,7 +125,6 @@ export function PianoRoll() {
   const laneBox = useRef<HTMLDivElement>(null);
   const keysCanvas = useRef<HTMLCanvasElement>(null);
   const notesCanvas = useRef<HTMLCanvasElement>(null);
-  const overlay = useRef<HTMLCanvasElement>(null);
   const rulerCanvas = useRef<HTMLCanvasElement>(null);
   const laneCanvas = useRef<HTMLCanvasElement>(null);
   const rulerBox = useRef<HTMLDivElement>(null);
@@ -152,33 +149,41 @@ export function PianoRoll() {
   const lastLanePress = useRef(0);
   const gesture = useRef<Gesture | null>(null);
   const menuAt = useRef<((ev: PointerEvent) => void) | null>(null);
+  /** What the next gesture does if it turns out to be a tap (a finger's second tap on a note), set as it starts. */
+  const tapAt = useRef<(() => void) | null>(null);
   const pinch = useRef(new Pinch());
   const zoomTimer = useRef(0);
-  const lastOverlay = useRef({ x: -1, w: 0, h: 0, rec: false, dpr: 0 });
+  const playhead = useRef<HTMLDivElement>(null);
   const lastDpr = useRef(screenDpr());
   const lastTick = useRef(Number.NaN);
 
   const gridTicks = DIVISIONS[grid] ?? PPQ / 4;
   const total = 128 * keyHeight;
 
-  // the notes on screen: every region of the selected track, in order of where they start
+  // The notes on screen: every region of the selected track, in order of where they start. They
+  // are the track's regions and nothing else of it: a fader moved on the track's strip gives a new
+  // track with the same regions, and the notes aren't gone through again for it.
+  const regions = track?.regions;
   const refs = useMemo<NoteRef[]>(() => {
-    if (!track) return [];
-    const out = track.regions.flatMap((region) => region.notes.map((note) => ({ note, region, track })));
+    if (!regions) return [];
+    const out = regions.flatMap((region) => region.notes.map((note) => ({ note, region })));
     return out.sort((a, b) => startOf(a) - startOf(b));
-  }, [track]);
+  }, [regions]);
   // the longest note: how far left of the view a note may start and still reach into it
   const longest = useMemo(() => refs.reduce((m, r) => Math.max(m, r.note.d), 0), [refs]);
-  const regions = track?.regions;
   const lanePts = useMemo(() => (regions && lane !== 'velocity' ? lanePoints(regions, lane) : []), [regions, lane]);
 
-  // everything the surfaces read: a change to any of it redraws them all
+  // Everything the surfaces read: a change to any of it redraws them all. Of the song that is its
+  // meter, and the track's regions and color, not the song itself: every fader, knob and mute
+  // anywhere is a new song, and none of them is drawn here.
   // biome-ignore lint/correctness/useExhaustiveDependencies: the list is what drawing reads, not what the effect touches
   useEffect(() => {
     dirty.current = true;
   }, [
-    project,
-    track,
+    project?.meter,
+    regions,
+    track?.id,
+    track?.color,
     selectedRegionIds,
     selected,
     keyHeight,
@@ -234,7 +239,7 @@ export function PianoRoll() {
   // ---- drawing ----
 
   const drawKeyboard = () => {
-    const kctx = prepare(keysCanvas.current, keysWidth, size.h);
+    const kctx = prepare(keysCanvas.current, keysWidth, size.h, true);
     if (!kctx) return;
     drawKeys(kctx, {
       width: keysWidth,
@@ -270,8 +275,11 @@ export function PianoRoll() {
     const bar = ticksPerBar(m);
     const pv = preview.current;
 
-    const ctx = prepare(notesCanvas.current, w, h);
+    const ctx = prepare(notesCanvas.current, w, h, true);
     if (ctx) {
+      // (the keys' rows cover the canvas; under them, all of it is filled, as an opaque canvas must be)
+      ctx.fillStyle = '#121418';
+      ctx.fillRect(0, 0, w, h);
       drawLanes(ctx, w, h, keyHeight, yOf);
       // regions: lighter where the track has one, the selected ones a touch more
       for (const r of track?.regions ?? []) {
@@ -363,7 +371,7 @@ export function PianoRoll() {
     }
 
     // ruler
-    const rctx = prepare(rulerCanvas.current, rulerSize.w, rulerSize.h);
+    const rctx = prepare(rulerCanvas.current, rulerSize.w, rulerSize.h, true);
     if (rctx) {
       rctx.fillStyle = '#1b1e23';
       rctx.fillRect(0, 0, rulerSize.w, rulerSize.h);
@@ -391,7 +399,7 @@ export function PianoRoll() {
     const v = rollView;
     const bar = ticksPerBar(p.meter[0] ?? { tick: 0, num: 4, den: 4 });
     const pv = preview.current;
-    const lctx = prepare(laneCanvas.current, laneSize.w, laneSize.h);
+    const lctx = prepare(laneCanvas.current, laneSize.w, laneSize.h, true);
     if (!lctx || !track) return;
     const lw = laneSize.w;
     const lh = laneSize.h;
@@ -511,21 +519,8 @@ export function PianoRoll() {
         drawLane(p);
       }
     }
-    // the playhead, on its own layer, redrawn only when it has moved a pixel
-    const x = Math.round(rollView.tickToX(Math.max(0, tick))) + 0.5;
-    const rec = s.recording;
-    const last = lastOverlay.current;
-    if (x !== last.x || size.w !== last.w || size.h !== last.h || rec !== last.rec || dpr !== last.dpr) {
-      lastOverlay.current = { x, w: size.w, h: size.h, rec, dpr };
-      const octx = prepare(overlay.current, size.w, size.h);
-      if (octx) {
-        octx.clearRect(0, 0, size.w, size.h);
-        if (x >= 0 && x <= size.w) {
-          octx.fillStyle = rec ? '#ff4f5e' : '#ffffff';
-          octx.fillRect(x - 0.5, 0, 1.5, size.h);
-        }
-      }
-    }
+    // the playhead is an element of its own, moved only when it has gone a pixel
+    movePlayhead(playhead.current, Math.round(rollView.tickToX(Math.max(0, tick))), size.w, s.recording);
   });
 
   const onWheel = (e: WheelEvent, dx: number, dy: number) => {
@@ -576,11 +571,14 @@ export function PianoRoll() {
   const start = (e: ReactPointerEvent, o: GestureOptions) => {
     gesture.current?.abort();
     const menu = menuAt.current;
+    const tap = tapAt.current;
+    tapAt.current = null;
     const g = capture(e, {
       ...o,
       onUp: (ev, gg) => {
         gesture.current = null;
         o.onUp?.(ev, gg);
+        if (!gg.moved) tap?.();
       },
       onAbort: () => {
         gesture.current = null;
@@ -630,12 +628,18 @@ export function PianoRoll() {
   };
 
   /** A finger scrolling the roll, as a phone scrolls a page (TouchPan): a flick carries on after it lifts. */
-  const panDrag = (e: ReactPointerEvent) => {
+  const panDrag = (e: ReactPointerEvent, onTap?: () => void) => {
     const pan = new TouchPan(rollView, 'xy', () => maxY, e);
     start(e, {
-      threshold: 0,
+      // over a note the finger may also rest for its menu: a wobble isn't a move (the gesture's own threshold)
+      threshold: onTap ? undefined : 0,
       onMove: (ev) => pan.move(ev),
-      onUp: (ev) => pan.end(ev.timeStamp),
+      onUp: (ev) => {
+        pan.end(ev.timeStamp);
+        // (a scroll isn't the first tap of a double tap: a second swipe soon after draws no note)
+        if (pan.panned) lastTap.current = 0;
+        else onTap?.();
+      },
     });
   };
 
@@ -662,8 +666,25 @@ export function PianoRoll() {
     }
     if (h) {
       const { ref } = h;
-      if (tool === 'eraser' || (doubleTap && touch)) {
+      if (tool === 'eraser') {
         deleteNotes(selected.has(ref.note) ? [...selected] : [ref.note]);
+        return;
+      }
+      // a finger's second tap on a note deletes it (and the notes selected with it) once it lifts:
+      // a tap that selects a note and a drag straight after it move the note
+      if (doubleTap && touch && selected.has(ref.note)) tapAt.current = () => deleteNotes([...selected]);
+      // A finger on a note that isn't selected scrolls the roll, as it does beside the note: a tap
+      // selects it (and plays it), and a selected note is the one a finger moves and stretches. A
+      // scroll that happened to begin on a note used to drag it to another pitch or beat.
+      if (touch && !selected.has(ref.note)) {
+        const select = () => {
+          store.set({ selectedNotes: [ref.note] });
+          audition(ref.note.p, ref.note.v);
+          lastVelocity.current = ref.note.v;
+          lastLength.current = ref.note.d;
+        };
+        menuAt.current = (ev) => noteMenu(ev.clientX, ev.clientY, ref.note);
+        panDrag(e, select);
         return;
       }
       let sel = selectedNotes;
@@ -1072,7 +1093,7 @@ export function PianoRoll() {
         onContextMenu={(e) => e.preventDefault()}
       >
         <canvas ref={notesCanvas} />
-        <canvas ref={overlay} style={{ pointerEvents: 'none' }} />
+        <div ref={playhead} className="playhead" />
       </div>
       <div
         className="splitter"

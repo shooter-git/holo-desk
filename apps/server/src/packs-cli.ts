@@ -10,10 +10,22 @@
  *                                (hard-linked when it can); each file is checked against the pack's checksums.
  *                                A palette (ready-made sounds, no audio of its own) brings the packs it requires
  *   import PATH [--name N] [--id ID] [--license L]
- *                                your own pack: an .sfz, a folder (of SFZ, of samples named by note, or a drum
- *                                kit: a folder for each piece, its microphones in folders of their own or named
- *                                in its files), or a .zip. Its id starts with mine-, so installing HO[LO]'s packs
- *                                never touches it; its samples are hard-linked into the data folder when they can be
+ *                                your own pack: an .sfz, a folder (of SFZ or EXS instruments, of samples named
+ *                                by note, or a drum kit: a folder for each piece, its microphones in folders of
+ *                                their own or named in its files), or a .zip. Its id starts with mine-, so
+ *                                installing HO[LO]'s packs never touches it; its samples are hard-linked into the
+ *                                data folder when they can be
+ *   import A.exs [B.exs…] [--name N] [--id ID] [--license L]
+ *                                Logic's sampler instruments (EXS), exactly those: each an instrument, its
+ *                                samples found where they are now
+ *   import … --trim [--trim-floor DB] [--trim-cap S] [--trim-fade S]
+ *                                keep notes shorter than their files, so a big library fits in a device's memory:
+ *                                each kept until it falls to -58 dB as it plays (20 s at most), faded over its
+ *                                last 1.5 s; only the map changes, never the files
+ *   import A B… --mics [--mic-names "Close,Room"]
+ *                                SFZ or EXS programs that play the same notes from different microphones (a
+ *                                piano's player, close and room perspectives) as one instrument, each program
+ *                                a microphone with its own level (the first at full, the others off)
  *   import-bfd FOLDER [--name N] BFD, your own copy, from its folder: an inventory of what's there goes to
  *                                the data folder (bfd-inventory.txt). Plain WAV or FLAC files in a folder for each
  *                                piece are imported as a multi-microphone kit (mine-bfd-…); BFD's own sample
@@ -30,7 +42,7 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, 
 import { basename, dirname, join, resolve } from 'node:path';
 import { formatLock, LOCK_FILE, lockAt, PackMaps, readLock } from '@holo/music';
 import { loadConfig } from './config.ts';
-import { extractZip, importBfd, importFolder, PRIVATE_AUDIO_NOTE } from './pack-import.ts';
+import { extractZip, importBfd, importFolder, importPrograms, PRIVATE_AUDIO_NOTE } from './pack-import.ts';
 import {
   availablePacks,
   packFiles as files,
@@ -139,8 +151,45 @@ async function main(): Promise<void> {
     const name = flag('name');
     const id = flag('id');
     const license = flag('license');
+    const micNames = flag('mic-names');
+    const trimFloor = flag('trim-floor');
+    const trimCap = flag('trim-cap');
+    const trimFade = flag('trim-fade');
+    const trimmed = rest.includes('--trim') || [trimFloor, trimCap, trimFade].some((v) => v !== undefined);
+    if (rest.includes('--trim')) rest.splice(rest.indexOf('--trim'), 1);
+    const trim = trimmed
+      ? {
+          ...(trimFloor !== undefined ? { floor: Number(trimFloor) } : {}),
+          ...(trimCap !== undefined ? { cap: Number(trimCap) } : {}),
+          ...(trimFade !== undefined ? { fade: Number(trimFade) } : {}),
+        }
+      : undefined;
+    if (trim && Object.values(trim).some((v) => !Number.isFinite(v)))
+      throw new Error('--trim-floor, --trim-cap and --trim-fade take numbers');
+    const mics = rest.includes('--mics') || micNames !== undefined;
+    if (rest.includes('--mics')) rest.splice(rest.indexOf('--mics'), 1);
     const path = rest[0];
-    if (!path || !existsSync(path)) throw new Error('Give the .sfz, folder or .zip to import');
+    if (!path || !existsSync(path)) throw new Error('Give the .sfz, .exs, folder or .zip to import');
+    if (path.toLowerCase().endsWith('.exs') || mics) {
+      // programs: exactly the ones named (a library's folders hold many), their samples where they are
+      const missing = rest.find((p) => !existsSync(p));
+      if (missing) throw new Error(`${missing} isn't there`);
+      const pack = importPrograms(
+        rest.map((p) => resolve(p)),
+        packsDir,
+        {
+          name: name ?? basename(path).replace(/\.(exs|sfz)$/i, ''),
+          ...(id ? { id } : {}),
+          ...(license ? { license } : {}),
+          ...(mics ? { mics: micNames ? micNames.split(',').map((n) => n.trim()) : true } : {}),
+          ...(trim ? { trim } : {}),
+          log: (line) => console.log(`  ${line}`),
+        },
+      );
+      imported(pack);
+      await rescan();
+      return;
+    }
     let source = resolve(path);
     let temp: string | null = null;
     if (source.toLowerCase().endsWith('.zip')) {
@@ -156,6 +205,7 @@ async function main(): Promise<void> {
         name: name ?? basename(path).replace(/\.(zip|sfz)$/i, ''),
         ...(id ? { id } : {}),
         ...(license ? { license } : {}),
+        ...(trim ? { trim } : {}),
         log: (line) => console.log(`  ${line}`),
       });
       imported(pack);

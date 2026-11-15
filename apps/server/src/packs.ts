@@ -46,6 +46,8 @@ export interface PackInstrument {
   polyphony?: number;
   notePolyphony?: number;
   offTime?: number;
+  /** Keys from this one up have no dampers: letting them go doesn't stop them (a piano's top strings). */
+  undamped?: number;
   zones: Zone[];
   /** A kit's pads, every piece once, in rows of four: the key each plays and what sounds there. */
   pads?: { key: number; name: string }[];

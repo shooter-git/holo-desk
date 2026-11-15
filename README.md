@@ -214,6 +214,8 @@ pnpm packs install vsco2 vcsl          # by name, or all
 pnpm packs install --from ~/samples    # from files you already have (hard-linked)
 pnpm packs import ~/Downloads/MyPiano.zip --name "My Piano"
 pnpm packs import ~/Samples/MyKit --name "My Kit"   # a kit: a folder for each piece, any microphones
+pnpm packs import ~/Library/Piano/Grand.exs        # Logic's sampler instruments (EXS), just those named
+pnpm packs import "P1 Player/Grand.exs" "P3 Room/Grand.exs" --mics   # one instrument, a level for each
 pnpm packs import-bfd ~/BFD --name "BFD"           # your own BFD: its inventory, then a kit if it can
 pnpm packs remove rock-kit             # to make room: its samples go
 ```
@@ -267,7 +269,30 @@ overheads, rooms), turned while it plays. Every kit also has **Tune** and **Deca
 kept in the song, and `holo kit Drums mic:room=-6 decay=70` sets them from the command line.
 
 You can also import your own from the studio: **Library → Import a sample pack (.zip)**. SFZ
-instruments come in with their mapping. Folders of samples named by note (C4, F#3, `_v2`, `_rr1`…)
+instruments come in with their mapping, their release samples (`trigger=release`: a piano's dampers
+falling, quieter the longer a note was held where `rt_decay` says so) and the sustain pedal's own
+sounds (regions `on_locc64` sets off). Logic's sampler instruments (EXS) come in the same way: their
+zones, the groups they play as the controls start (a piano's notes for the pedal up, not down), their
+release-triggered groups as release samples, and their samples found where they are now, from the
+folders the instrument names. `pnpm packs import` on one or more `.exs` files imports exactly those
+(a library's folders often hold dozens); a folder or ZIP brings in every one in it. Their samples need
+to be WAV, FLAC, OGG or MP3 (AIFF and CAF aren't read yet), and their envelopes and filters aren't
+read. Where an instrument's release samples stop short of its top keys, as a grand's dampers do, the
+keys above them ring on when let go.
+
+A library that records the same notes from several places, each its own instrument (a piano's
+player, close and room perspectives), can come in as one instrument with `--mics`: each program a
+microphone, all of them sounding together, each with a level in the instrument's window (the first
+at full, the others off until you turn them up). They're named by what tells their folders or files
+apart, or by `--mic-names "Player,Close,Room"`. Every microphone's samples load, whatever its level:
+a studio holds every sample it plays in memory, so mind the size of a big library.
+
+`--trim` keeps a big library's notes shorter than their files, so it fits: each is kept until, as it
+plays, it has fallen to −58 dB (and half a second more, 20 s at most), fading over its last 1.5 s, as
+the pinned pianos are. Only the pack's map changes (where each note ends, faded as it loads): the
+files are never rewritten, so importing again without `--trim` brings every note back whole.
+`--trim-floor`, `--trim-cap` and `--trim-fade` change the rule, and the command says how much memory
+each instrument takes before and after. Folders of samples named by note (C4, F#3, `_v2`, `_rr1`…)
 become instruments, and a folder of one-shot hits becomes a drum kit on the General MIDI keys.
 
 A kit's folder with a folder for each piece (Kick, Snare, Hi-Hat Closed, Hi-Hat Open, Tom 1, Crash,
@@ -304,6 +329,7 @@ list.
 pnpm dev        # the server (:47800) and the studio with hot reload (:47810)
 pnpm engine     # HO[LO] Engine from the repository (after `pnpm engine:build`)
 pnpm test       # unit tests
+pnpm ui:check   # the layout in a browser, desktop to phone (after pnpm build; needs Playwright)
 pnpm typecheck
 pnpm lint       # Biome
 ```

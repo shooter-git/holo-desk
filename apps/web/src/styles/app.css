@@ -58,7 +58,8 @@
   --z-dialog: 100;
   --z-bar: 150;
   --z-popover: 200;
-  --z-toast: 300;
+  /* (over the start screen too: "Audio couldn’t start" has to be read there) */
+  --z-toast: 450;
   --z-start: 400;
   color-scheme: dark;
   accent-color: var(--accent);
@@ -606,17 +607,26 @@ a.btn {
   font-size: 13px;
 }
 
+/* The position and the time are written many times a second while a song plays. Each is a box of
+   a set size that keeps its layout to itself, so a new digit lays out those few letters and nothing
+   around them (its glow still shows past the box: it isn't clipped). */
+.lcd .value.pos,
+.lcd .value.time {
+  height: 1em;
+  contain: size layout;
+}
+
 .lcd .value.pos {
-  min-width: 11ch;
+  width: 11ch;
   text-align: right;
 }
 
 .lcd.compact .value.pos {
-  min-width: 7ch;
+  width: 7ch;
 }
 
 .lcd .value.time {
-  min-width: 7ch;
+  width: 7ch;
 }
 
 .lcd .value.tempo {
@@ -778,6 +788,16 @@ a.btn {
   max-width: 100%;
 }
 
+/* Under a finger the mark and the song's name are pressed over the bar's whole height, not only
+   their line of text (16 to 19 px): the padding is taken back by the margin, so nothing moves. */
+@media (pointer: coarse) {
+  .brand .mark,
+  .brand .title.bare {
+    padding-block: 13px;
+    margin-block: -13px;
+  }
+}
+
 /* the control bar gives way on narrower screens: the least-used parts go first, in this order, and
    the Songs button stands in for the title once that is gone (phones have their own bar). Each step
    comes where the right side would no longer fit beside the center (which grows at each step above) */
@@ -867,6 +887,18 @@ a.btn {
     display: none;
   }
 }
+/* a tablet held upright: the name is HO[LO] alone, View is in Settings (as on a phone), and the
+   display's cells sit closer, so the display doesn't run under the buttons beside it */
+@media (max-width: 860px) and (pointer: coarse) {
+  .app:not(.phone) .control-bar .wordmark .desk,
+  .app:not(.phone) .control-bar .cb-view {
+    display: none;
+  }
+  .app:not(.phone) .control-bar .lcd > div,
+  .app:not(.phone) .control-bar .lcd > .cell {
+    padding: 0 8px;
+  }
+}
 
 /* ---------- tracks area ---------- */
 
@@ -888,7 +920,23 @@ a.btn {
   background: var(--bg-2);
 }
 
-/* the headers scroll as one block, moved by the viewport rather than a render per pixel */
+/* (the tools keep their width: squeezed, the last of them was cut off at its edge) */
+.tracks-toolbar .tool-seg {
+  flex: none;
+}
+
+/* A window narrower than a desktop's, with a mouse, has the tablet's narrower headers and the
+   mouse's tools above them: they sit a little closer there, so all of them fit. */
+@media not (pointer: coarse) {
+  [data-layout="tablet"] .tracks-toolbar {
+    gap: 2px;
+    padding: 0 4px;
+  }
+}
+
+/* the headers scroll as one block, moved by the viewport rather than a render per pixel: the box
+   itself never scrolls (clip, where the browser has it: a box that only hides its overflow still
+   scrolls to show what takes the keyboard, and the headers would leave their lanes) */
 .track-list {
   position: relative;
   overflow: hidden;
@@ -896,6 +944,12 @@ a.btn {
   background: var(--bg-2);
   touch-action: none;
   contain: layout paint;
+}
+
+@supports (overflow: clip) {
+  .track-list {
+    overflow: clip;
+  }
 }
 
 .track-list-inner {
@@ -1004,6 +1058,55 @@ a.btn {
   }
 }
 
+/* a phone held sideways has the width and not the height: the buttons sit beside the name, on one line */
+.app.phone-landscape .track-row,
+.app.phone-landscape .track-row.no-icon {
+  grid-template-columns: 5px minmax(0, 1fr) auto;
+  grid-template-rows: auto;
+}
+
+.app.phone-landscape .track-row .swatch {
+  grid-row: auto;
+}
+
+.app.phone-landscape .track-row .chips,
+.app.phone-landscape .track-row.no-icon .chips {
+  grid-column: auto;
+  flex-wrap: nowrap;
+}
+
+/* An automation lane's picker in a track's header: the setting the lane shows, and Read or Off
+   beside it. In the buttons' row (touch screens) it takes that row's width and no more, so the
+   button stays in the header however long the setting's name is. */
+.lane-select {
+  gap: 4px;
+  min-width: 0;
+}
+
+.lane-select .select {
+  flex: 1 1 0;
+  min-width: 0;
+  height: 22px;
+  padding: 0 18px 0 4px;
+  font-size: 10.5px;
+}
+
+.track-row .chips .lane-select {
+  flex: 1 1 0;
+}
+
+.app.phone-landscape .track-row .chips .lane-select {
+  flex: none;
+  width: 132px;
+}
+
+@media (pointer: coarse) {
+  .lane-select .select {
+    height: 32px;
+    font-size: 16px;
+  }
+}
+
 .timeline {
   position: relative;
   min-width: 0;
@@ -1017,6 +1120,39 @@ a.btn {
   position: absolute;
   inset: 0;
   display: block;
+}
+
+/* The playhead, over a pane's canvases: a line as tall as the pane, with a soft band around it
+   standing in for a glow. It is moved by a transform (movePlayhead), on a layer of its own, so a
+   song playing lays nothing out and paints nothing here. Red while recording. */
+.playhead {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 3px;
+  background: rgb(255 255 255 / 0.25);
+  pointer-events: none;
+  visibility: hidden;
+  will-change: transform;
+}
+
+.playhead::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 1px;
+  width: 1.5px;
+  background: #fff;
+}
+
+.playhead.rec {
+  background: rgb(var(--rec-rgb) / 0.25);
+}
+
+.playhead.rec::after {
+  background: var(--rec);
 }
 
 .ruler {
@@ -1109,6 +1245,23 @@ a.btn {
   scrollbar-width: none;
 }
 
+/* wider than its pane (a phone held upright), the bar scrolls sideways: the edge that has more
+   fades (data-before and data-after are kept by useScrollCue) */
+.pane-bar[data-after] {
+  -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 32px), transparent);
+  mask-image: linear-gradient(to right, #000 calc(100% - 32px), transparent);
+}
+
+.pane-bar[data-before] {
+  -webkit-mask-image: linear-gradient(to right, transparent, #000 32px);
+  mask-image: linear-gradient(to right, transparent, #000 32px);
+}
+
+.pane-bar[data-before][data-after] {
+  -webkit-mask-image: linear-gradient(to right, transparent, #000 32px, #000 calc(100% - 32px), transparent);
+  mask-image: linear-gradient(to right, transparent, #000 32px, #000 calc(100% - 32px), transparent);
+}
+
 .pane-bar > .seg,
 .pane-bar > .select,
 .pane-bar > .btn {
@@ -1120,6 +1273,27 @@ a.btn {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+/* a number with its name and its unit (the Audio Editor's fades and stretch): the name stays on
+   one line, and the field is finger-sized where there's no mouse */
+.number-box {
+  flex: none;
+  gap: 4px;
+}
+
+.number-box .label {
+  white-space: nowrap;
+}
+
+.number-box .input {
+  height: 24px;
+}
+
+@media (pointer: coarse) {
+  .number-box .input {
+    height: 32px;
+  }
 }
 
 .pane-bar .grow {
@@ -1190,6 +1364,14 @@ a.btn {
     height: 32px;
     font-size: 16px;
   }
+}
+
+/* (a phone's keys are narrow: the lane's short name has the picker's whole width, without the arrow) */
+.app.phone .roll .lane-label .select {
+  padding: 0 2px;
+  background-image: none;
+  text-align: center;
+  text-align-last: center;
 }
 
 /* ---------- audio editor ---------- */
@@ -1269,6 +1451,26 @@ a.btn {
 
 /* ---------- mixer ---------- */
 
+/* A row of strips: the mixer, and the Inspector's two. The fader keeps a share of the row's height
+   (--strips-h, which the row measures: see strips.ts) whatever a strip holds, so it always has room
+   to travel; the slots above it take what's left, and scroll where a strip has more than fit. */
+.mixer,
+.inspector-strips {
+  /* under this height a strip can't be shown whole: see [data-short] */
+  --strips-short: 360px;
+  /* a strip's foot without its fader: the level, the buttons and the name, and a sliver of the pan above */
+  --strip-foot: 96px;
+  --fader-min: clamp(110px, calc(var(--strips-h, 420px) * 0.34), 280px);
+}
+
+@media (pointer: coarse) {
+  .mixer,
+  .inspector-strips {
+    --strips-short: 410px;
+    --strip-foot: 118px;
+  }
+}
+
 .mixer {
   display: flex;
   min-height: 0;
@@ -1277,7 +1479,6 @@ a.btn {
   background: var(--bg-1);
 }
 
-/* a short editor pane: the slots keep a few rows, the fader its travel, and the strip scrolls for the rest */
 .strip {
   display: flex;
   flex-direction: column;
@@ -1288,13 +1489,13 @@ a.btn {
   border-right: 1px solid var(--line);
   background: linear-gradient(180deg, #1e2227, #191c21);
   box-shadow: inset 1px 0 0 var(--hi);
-  overflow-y: auto;
-  scrollbar-width: none;
 }
 
+/* (under a finger a strip is wide enough for its slots' names beside their finger-sized buttons,
+   and for the longest of its headings) */
 @media (pointer: coarse) {
   .strip {
-    width: 96px;
+    width: 104px;
   }
 }
 
@@ -1310,14 +1511,35 @@ a.btn {
   background: linear-gradient(180deg, #252019, #1c1915);
 }
 
+/* the slots: they scroll where there are more than fit, and the edge that has more fades (the box
+   has no scrollbar to say so; data-above and data-below are kept by useScrollCue) */
 .strip-top {
   display: flex;
   flex-direction: column;
   gap: 4px;
   flex: 0 1 auto;
-  min-height: 120px;
+  min-height: 60px;
+  /* (up and down only: a box that could be scrolled sideways, even by the pixel or two its slots
+     overhang on a touch screen, keeps a sideways swipe that starts on a slot for itself, and the
+     strips don't move) */
+  overflow-x: hidden;
   overflow-y: auto;
   scrollbar-width: none;
+}
+
+.strip-top[data-below] {
+  -webkit-mask-image: linear-gradient(#000 calc(100% - 22px), transparent);
+  mask-image: linear-gradient(#000 calc(100% - 22px), transparent);
+}
+
+.strip-top[data-above] {
+  -webkit-mask-image: linear-gradient(transparent, #000 22px);
+  mask-image: linear-gradient(transparent, #000 22px);
+}
+
+.strip-top[data-above][data-below] {
+  -webkit-mask-image: linear-gradient(transparent, #000 22px, #000 calc(100% - 22px), transparent);
+  mask-image: linear-gradient(transparent, #000 22px, #000 calc(100% - 22px), transparent);
 }
 
 .strip-fader {
@@ -1325,7 +1547,80 @@ a.btn {
   justify-content: center;
   gap: 6px;
   flex: 1 1 0;
-  min-height: 72px;
+  min-height: var(--fader-min);
+  overflow: hidden;
+}
+
+/* The strips share the row's lines, so every strip's pan, level, fader, buttons and name sit side
+   by side, and a fader's place says the same on each: the slots' line is as tall as the fullest
+   strip's slots (as far as the faders' share lets it be), the faders' takes the rest. */
+@supports (grid-template-rows: subgrid) {
+  .mixer,
+  .inspector-strips {
+    display: grid;
+    grid-auto-flow: column;
+    grid-auto-columns: max-content;
+    /* (the name's row is max-content: a name clips what's too long for it, and for what clips an
+       auto row may be given less than its height. WebKit gives it 8 px of its 23, and a row with
+       nothing to spare did the same everywhere) */
+    grid-template-rows: minmax(60px, auto) auto auto auto minmax(var(--fader-min), 1fr) auto max-content;
+    row-gap: 4px;
+    overflow-y: auto;
+    scrollbar-width: none;
+  }
+
+  .strip {
+    display: grid;
+    /* (one column as wide as the strip, whatever a long name or slot would like) */
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: subgrid;
+    grid-row: 1 / -1;
+  }
+
+  .strip-top {
+    grid-row: 1;
+    min-height: 0;
+  }
+
+  .strip-output {
+    grid-row: 2;
+  }
+
+  .strip-pan {
+    grid-row: 3;
+  }
+
+  .strip .db-readout {
+    grid-row: 4;
+  }
+
+  .strip-fader {
+    grid-row: 5;
+    min-height: 0;
+  }
+
+  .strip-chips {
+    grid-row: 6;
+  }
+
+  .strip-name {
+    grid-row: 7;
+  }
+
+  /* Too short for a strip whole (a phone on its side, an editor pane dragged small): the row is two
+     screens. Its foot, the fader with the level, the buttons and the name, fills one, and the row
+     opens on it; the slots, the output and the pan are above, a scroll away, the pan's edge showing.
+     The slots are all laid out there (nothing scrolls inside what scrolls). */
+  .mixer[data-short],
+  .inspector-strips[data-short] {
+    --fader-min: max(96px, calc(var(--strips-h) - var(--strip-foot)));
+    /* (the slots' row is max-content too: they are all laid out, with nothing scrolling inside) */
+    grid-template-rows: max-content auto auto auto minmax(var(--fader-min), 1fr) auto max-content;
+  }
+
+  [data-short] .strip-top {
+    overflow: visible;
+  }
 }
 
 .strip .section {
@@ -1361,6 +1656,16 @@ a.btn {
 /* a slot that is dragged (a send's level, the stage's distance) keeps the finger from scrolling */
 .slot.drag {
   touch-action: none;
+}
+
+/* In a row of strips, what a finger drags answers to up and down alone, and a sideways swipe is
+   left to the browser: it scrolls the strips from wherever it starts, a pan knob, a fader or a send
+   included, and leaves them as they were (slop.ts reads this). */
+.strip .knob,
+.strip .fader,
+.strip .slot.drag,
+.mini-strip .fader {
+  touch-action: pan-x;
 }
 
 .slot:hover {
@@ -1405,9 +1710,32 @@ a.btn {
 }
 
 @media (pointer: coarse) {
+  /* The knobs' button is narrow to look at and finger-sized to press (its ::before reaches over the
+     slot's edge and a little of the name), so the name beside it has room for its longest words. */
   .slot-edit {
-    width: 30px;
+    position: relative;
+    width: 18px;
     height: 28px;
+  }
+  .slot-edit::before {
+    content: "";
+    position: absolute;
+    inset: -3px -6px -3px -10px;
+  }
+  .slot.instrument {
+    gap: 2px;
+  }
+  /* The instrument's name has the slot's two lines there: on one line beside the button it showed
+     four letters ("Tone…" for Tonewheel Jazz). */
+  .slot.instrument .grow {
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+    font-size: 11px;
+    line-height: 13px;
+    white-space: normal;
+    overflow-wrap: break-word;
   }
 }
 
@@ -1442,8 +1770,13 @@ a.btn {
   opacity: 0.4;
 }
 
+/* (a narrower arrow than a select's elsewhere: "Stereo Out" fits beside it) */
 .strip-output {
   height: 22px;
+  padding: 0 15px 0 5px;
+  background-position:
+    right 4px center,
+    0 0;
   font-size: 10.5px;
 }
 
@@ -1485,6 +1818,9 @@ a.btn {
 }
 
 .strip-name {
+  /* (it keeps its height in a row too short for everything: a name squeezed to a sliver can't be read) */
+  flex: none;
+  min-height: max-content;
   padding: 4px 2px;
   border-radius: var(--radius-s);
   font-weight: 600;
@@ -1580,6 +1916,7 @@ a.btn {
 
 .fader-cap {
   position: absolute;
+  top: 0;
   left: 3px;
   width: 24px;
   height: 20px;
@@ -1837,10 +2174,17 @@ button.list-item {
 .inspector-strips {
   display: flex;
   justify-content: center;
-  gap: 2px;
+  column-gap: 2px;
   padding: 8px;
   flex: 1 1 auto;
-  min-height: 320px;
+  /* (never a short row: the panel scrolls instead) */
+  min-height: calc(var(--strips-short) + 20px);
+}
+
+@supports (grid-template-rows: subgrid) {
+  .inspector-strips {
+    display: grid;
+  }
 }
 
 /* the Library */
@@ -2108,7 +2452,9 @@ button.list-item {
   width: min(860px, 100%);
 }
 
-.dialog:focus {
+.dialog:focus,
+.print-window:focus,
+.scan-window:focus {
   outline: none;
 }
 
@@ -2151,6 +2497,24 @@ button.list-item {
 .dialog footer .new-song {
   flex: 0 1 auto;
   min-width: 0;
+}
+
+/* On an upright phone the Songs dialog's actions wrap: each line is filled edge to edge (they left
+   ragged ends, pushed to the right), and a new song has a line of its own. */
+[data-layout="phone-portrait"] .dialog.songs footer > .btn {
+  flex: 1 1 auto;
+}
+
+[data-layout="phone-portrait"] .dialog.songs footer > .grow {
+  display: none;
+}
+
+[data-layout="phone-portrait"] .dialog.songs footer .new-song {
+  flex: 1 1 100%;
+}
+
+[data-layout="phone-portrait"] .dialog.songs footer .new-song .input {
+  max-width: none;
 }
 
 /* Settings keeps one size from tab to tab, so the tabs stay where they are as the pages change */
@@ -2315,7 +2679,10 @@ button.list-item {
   }
 }
 
-/* a menu keeps clear of a phone's notch, and the press that closes one goes no further */
+/* a menu keeps clear of a phone's notch, and the press that closes one goes no further. Its
+   background is solid, as the bar's, a toast's and the Score's palette are: what lies under them
+   is a canvas that changes with every frame of a song, and a blurred glass over that is worked out
+   again each time */
 .menu {
   position: fixed;
   z-index: var(--z-popover);
@@ -2327,8 +2694,7 @@ button.list-item {
   padding: 5px;
   border: 1px solid var(--line-2);
   border-radius: 9px;
-  background: rgba(32, 36, 43, 0.97);
-  backdrop-filter: blur(12px);
+  background: rgb(32 36 43);
   box-shadow: var(--shadow);
   animation: rise 0.12s ease-out;
 }
@@ -2436,8 +2802,7 @@ button.list-item {
   overflow: hidden;
   border: 1px solid var(--line-2);
   border-radius: 9px;
-  background: rgba(32, 36, 43, 0.97);
-  backdrop-filter: blur(12px);
+  background: rgb(32 36 43);
   box-shadow: var(--shadow);
   animation: rise 0.12s ease-out;
 }
@@ -3033,7 +3398,9 @@ html[data-layout="phone-landscape"] .bar .field input {
   padding: 14px;
 }
 
+/* (it keeps its height in a window too short for everything: the body scrolls, the graph isn't squeezed) */
 .plugin-window .display {
+  flex: none;
   margin: 12px 14px 0;
   border: 1px solid #000;
   border-radius: 8px;
@@ -3161,15 +3528,110 @@ html[data-layout="phone-landscape"] .bar .field input {
   white-space: nowrap;
 }
 
+/* the value is the knob's readout, and a click on it puts a field in its place to type one: the
+   two are the same height, so the knobs around don't move when it opens */
 .knob .knob-value {
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 3px;
   color: var(--lcd-text);
-  font: 500 10.5px var(--mono);
+  font: 500 10.5px / 16px var(--mono);
   white-space: nowrap;
+  cursor: text;
+}
+
+.knob .knob-value:hover {
+  background: rgb(255 255 255 / 0.07);
+}
+
+.knob .knob-entry {
+  width: 64px;
+  height: 16px;
+  padding: 0 2px;
+  border-radius: 3px;
+  color: var(--lcd-text);
+  font: 500 10.5px / 14px var(--mono);
+  text-align: center;
+}
+
+@media (pointer: coarse) {
+  .knob .knob-value {
+    height: 24px;
+    line-height: 24px;
+  }
+  .knob .knob-entry {
+    width: 76px;
+    height: 24px;
+    font-size: 16px;
+  }
 }
 
 .knob.choice {
   cursor: default;
   justify-content: center;
+  min-width: 0;
+}
+
+/* a setting that is one of several names: a button that opens a menu of them */
+.btn.choice-menu {
+  max-width: 100%;
+  gap: 4px;
+  padding: 0 6px 0 9px;
+}
+
+.face .knob.choice.wide {
+  grid-column: span 2;
+}
+
+.btn.choice-menu .grow {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Channel EQ's bands: a column each, low to high, with frequency, gain and Q on the same lines
+   across them (four columns across on a phone) */
+.eq-bands {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 10px 6px;
+  padding: 12px 12px 0;
+}
+
+@media (max-width: 700px) {
+  .eq-bands {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+
+.eq-band {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.eq-band > .label {
+  white-space: nowrap;
+}
+
+/* (a cut's switch stands where the other bands have their gain, as tall as a knob with its value,
+   so the names under them stay on one line) */
+.eq-band .knob.choice {
+  justify-content: flex-start;
+}
+
+.eq-band .knob.choice .btn {
+  height: 30px;
+  margin-bottom: 20px;
+}
+
+@media (pointer: coarse) {
+  .eq-band .knob.choice .btn {
+    margin-bottom: 28px;
+  }
 }
 
 /* the gain-reduction meter: a display, so its bar may glow */
@@ -3201,9 +3663,11 @@ html[data-layout="phone-landscape"] .bar .field input {
   direction: rtl;
 }
 
+/* (as wide as its track, scaled from the right: see GainReduction) */
 .gr-bar {
   height: 100%;
-  width: 0;
+  transform: scaleX(0);
+  transform-origin: right;
   background: linear-gradient(90deg, var(--rec), var(--cycle));
   box-shadow: 0 0 8px rgb(var(--cycle-rgb) / 0.5);
 }
@@ -3261,6 +3725,41 @@ html[data-layout="phone-landscape"] .bar .field input {
   height: 38px;
   flex: 1;
   min-width: 0;
+}
+
+/* the narrowest phones (under 360 px): the buttons and the display's cells sit closer, so the time
+   signature stays on the screen */
+@media (max-width: 359px) {
+  .phone-portrait .phone-transport {
+    gap: 4px;
+    padding: 6px;
+  }
+  .phone-portrait .phone-transport .transport {
+    gap: 3px;
+  }
+  .phone-portrait .phone-transport .transport .btn {
+    width: 35px;
+  }
+  .phone-portrait .phone-transport .lcd > div,
+  .phone-portrait .phone-transport .lcd > .cell {
+    padding: 0 6px;
+  }
+}
+
+@media (max-width: 339px) {
+  .phone-portrait .phone-transport {
+    padding: 6px 4px;
+  }
+  .phone-portrait .phone-transport .transport {
+    gap: 2px;
+  }
+  .phone-portrait .phone-transport .transport .btn {
+    width: 32px;
+  }
+  .phone-portrait .phone-transport .lcd > div,
+  .phone-portrait .phone-transport .lcd > .cell {
+    padding: 0 3px;
+  }
 }
 
 /* the compact display's cells sit closer, so the time signature keeps its place on a narrow phone */
@@ -3418,7 +3917,16 @@ html[data-layout="phone-landscape"] .bar .field input {
 }
 
 .rail-tools .mark {
+  position: relative;
   height: 24px;
+}
+
+/* (pressed over a finger's height: the rail has no room to spare for a taller button, so what's
+   pressed reaches up to the button above and down to the rail's foot) */
+.rail-tools .mark::before {
+  content: "";
+  position: absolute;
+  inset: -2px 0 -6px;
 }
 
 .rail-tools .mark .wordmark {
@@ -3489,6 +3997,48 @@ html[data-layout="phone-landscape"] .bar .field input {
   touch-action: none;
 }
 
+/* The keys are drawn, and named for a screen reader; the keyboard itself takes the touches. A key
+   held down is lit by its class (PlayPad puts it on): nothing is rendered again for a note played. */
+.keyboard .key {
+  all: unset;
+  position: absolute;
+  top: 0;
+  pointer-events: none;
+}
+
+.keyboard .key.white {
+  bottom: 0;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  padding-bottom: 8px;
+  border-radius: 0 0 8px 8px;
+  background: linear-gradient(180deg, #e6e9ee, #fbfcfd 85%, #d6dae0);
+  box-shadow:
+    inset 0 -4px 0 rgba(0, 0, 0, 0.12),
+    0 2px 3px rgba(0, 0, 0, 0.5);
+  color: #5b636f;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.keyboard .key.white.lit {
+  background: linear-gradient(180deg, #fff, var(--pad-color, var(--accent)));
+}
+
+.keyboard .key.black {
+  height: 60%;
+  border-radius: 0 0 6px 6px;
+  background: linear-gradient(180deg, #1a1d22, #33383f 90%, #1a1d22);
+  box-shadow:
+    0 3px 6px rgba(0, 0, 0, 0.6),
+    inset 0 -3px 0 rgba(255, 255, 255, 0.06);
+}
+
+.keyboard .key.black.lit {
+  background: var(--pad-color, var(--accent));
+}
+
 /* ---------- toasts and banners ---------- */
 
 .toasts {
@@ -3535,8 +4085,7 @@ html[data-layout="phone-landscape"] .toasts {
   padding: 8px 14px;
   border: 1px solid var(--line-2);
   border-radius: var(--radius-pill);
-  background: rgba(30, 34, 41, 0.96);
-  backdrop-filter: blur(10px);
+  background: rgb(30 34 41);
   box-shadow: var(--shadow);
   animation: rise 0.18s ease-out;
 }
@@ -3652,6 +4201,20 @@ html[data-layout="phone-landscape"] .toasts {
 
 .start-audio .start-note {
   font-size: 11px;
+}
+
+.start-audio .start-note.waiting {
+  color: var(--cycle);
+  text-wrap: balance;
+}
+
+/* (its line is kept while the host is still to say, so the card doesn't grow under the button) */
+.start-audio .start-version {
+  min-height: 14px;
+  color: var(--text-3);
+  font-size: 10.5px;
+  line-height: 14px;
+  font-variant-numeric: tabular-nums;
 }
 
 /* another studio is open: the way to drive it from this phone instead */
@@ -3918,8 +4481,11 @@ html[data-layout="phone-landscape"] .toasts {
   overscroll-behavior: contain;
 }
 
+/* (one row, however many views there are) */
 .remote-tabs {
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: none;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(0, 1fr);
   padding-bottom: var(--safe-bottom);
   background: linear-gradient(180deg, #1f2328, #1a1d21);
 }
@@ -4045,10 +4611,17 @@ html[data-layout="phone-landscape"] .toasts {
   background: linear-gradient(90deg, #2fbf71, #8be04e 70%, var(--cycle) 88%, var(--rec));
 }
 
+/* (the cover over the scale, drawn back from the left as far as the level reaches: scaled, so a
+   level that moves lays nothing out) */
 .level > div {
   position: absolute;
   inset: 0;
   background: var(--bg-0);
+  transform-origin: right;
+}
+
+.level.vertical > div {
+  transform-origin: top;
 }
 
 .level.hot {
@@ -4580,11 +5153,12 @@ html[data-layout^="phone"] .view-item kbd {
   overflow: hidden;
 }
 
+/* (as wide as its track and scaled to the load: a new reading is a transform, with nothing laid out) */
 .dsp-meter .dsp-bar {
   position: absolute;
-  inset: 0 auto 0 0;
-  width: 0;
-  border-radius: 3px;
+  inset: 0;
+  transform: scaleX(0);
+  transform-origin: left;
 }
 
 .dsp-meter .dsp-value {
@@ -4803,8 +5377,7 @@ html[data-layout^="phone"] .view-item kbd {
   align-items: center;
   padding: 6px 10px;
   border-bottom: 1px solid var(--line);
-  background: color-mix(in srgb, var(--bg-2) 94%, transparent);
-  backdrop-filter: blur(6px);
+  background: var(--bg-2);
 }
 
 .score-palette .glyph {
@@ -4896,14 +5469,27 @@ footer.scan-bar {
   overflow: hidden;
 }
 
+/* In the middle where there's room. Where there isn't (a small phone's remote, its display and
+   transport above this) it starts at the top and scrolls: centred, it was cut off at both ends,
+   the second button under the tabs. (The margins centre it, and give way when it's too tall.) */
 .scan-start {
-  display: grid;
-  place-content: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
   gap: 18px;
   height: 100%;
   padding: 24px;
+  overflow-y: auto;
   text-align: center;
   color: var(--text-2);
+}
+
+.scan-start > :first-child {
+  margin-top: auto;
+}
+
+.scan-start > :last-child {
+  margin-bottom: auto;
 }
 
 .scan-actions,
@@ -5152,13 +5738,17 @@ footer.scan-bar {
   inset: 0;
   z-index: 60;
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   grid-template-rows: auto minmax(0, 1fr);
   background: var(--bg-1);
   padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
 }
 
+/* (a part with a long name doesn't make the picker, and the page under it, wider than a phone) */
 .print-window .scan-bar .input {
   width: auto;
+  min-width: 0;
+  max-width: 100%;
 }
 
 .print-sheets {

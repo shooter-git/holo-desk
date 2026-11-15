@@ -46,6 +46,7 @@ import {
   command,
   levels,
   optimistic,
+  remote,
   STALE_MS,
   type StudioState,
   type StudioTrack,
@@ -53,7 +54,7 @@ import {
   useRemote,
 } from '../app/remote.ts';
 import { dbToFader, Fader, faderToDb, formatDb, Wordmark } from './controls.tsx';
-import { useFrame } from './frame.ts';
+import { keepAwake, useFrame, wake } from './frame.ts';
 import { PlayPad } from './PlayPad.tsx';
 
 type Tab = 'tracks' | 'mixer' | 'play' | 'markers' | 'scan';
@@ -126,6 +127,9 @@ export function Remote() {
   // out of touch: the host is unreachable, or the studio has gone quiet while it should be talking
   const lost = connection !== 'online' || stale !== null;
   useWakeLock();
+  // the screen's pace while the studio plays, and for a moment after anything it says
+  useEffect(() => keepAwake(() => activeStudio()?.state.playing === true), []);
+  useEffect(() => remote.subscribe(wake), []);
   useEffect(() => {
     document.title = 'HO[LO] Remote';
     // a keyboard on the remote: Space plays and stops, R records
@@ -392,6 +396,7 @@ function LevelBar({ id, vertical = false }: { id: string; vertical?: boolean }) 
   // the dark cover over the bar's scale: it is drawn back as far as the level reaches
   const cover = useRef<HTMLDivElement>(null);
   const shown = useRef(0);
+  const drawn = useRef(-1);
   const lastFrame = useRef(0);
   useFrame((now) => {
     const [l = 0, r = 0] = levels.get(id) ?? [];
@@ -403,7 +408,13 @@ function LevelBar({ id, vertical = false }: { id: string; vertical?: boolean }) 
     shown.current = v;
     const db = v > 1e-5 ? 20 * Math.log10(v) : -90;
     const f = Math.max(0, Math.min(1, (db + 60) / 66));
-    if (cover.current) cover.current.style[vertical ? 'bottom' : 'left'] = `${f * 100}%`;
+    // (a level still showing keeps the screen's pace)
+    if (f > 0) wake();
+    // written only when it has moved a five-hundredth of the bar, and as a scale: nothing is laid out
+    const at = Math.round(f * 500) / 500;
+    if (at === drawn.current) return;
+    drawn.current = at;
+    if (cover.current) cover.current.style.transform = `scale${vertical ? 'Y' : 'X'}(${1 - at})`;
     bar.current?.classList.toggle('hot', db > -1);
   });
   return (
@@ -421,13 +432,31 @@ function toggle(track: StudioTrack, what: 'mute' | 'solo' | 'armed') {
 function TrackChips({ track }: { track: StudioTrack }) {
   return (
     <div className="chips" onClick={(e) => e.stopPropagation()}>
-      <button type="button" className={`chip mute${track.mute ? ' on' : ''}`} onClick={() => toggle(track, 'mute')}>
+      <button
+        type="button"
+        className={`chip mute${track.mute ? ' on' : ''}`}
+        aria-label={`Mute ${track.name}`}
+        aria-pressed={track.mute}
+        onClick={() => toggle(track, 'mute')}
+      >
         M
       </button>
-      <button type="button" className={`chip solo${track.solo ? ' on' : ''}`} onClick={() => toggle(track, 'solo')}>
+      <button
+        type="button"
+        className={`chip solo${track.solo ? ' on' : ''}`}
+        aria-label={`Solo ${track.name}`}
+        aria-pressed={track.solo}
+        onClick={() => toggle(track, 'solo')}
+      >
         S
       </button>
-      <button type="button" className={`chip rec${track.armed ? ' on' : ''}`} onClick={() => toggle(track, 'armed')}>
+      <button
+        type="button"
+        className={`chip rec${track.armed ? ' on' : ''}`}
+        aria-label={`Record-arm ${track.name}`}
+        aria-pressed={track.armed}
+        onClick={() => toggle(track, 'armed')}
+      >
         R
       </button>
     </div>

@@ -30,7 +30,7 @@ import { store, useApp } from '../app/store.ts';
 import { engine } from '../audio/engine.ts';
 import { audioFiles } from '../audio/files.ts';
 import { Knob } from './controls.tsx';
-import { alpha, prepare, useFrame, useSize } from './frame.ts';
+import { alpha, movePlayhead, prepare, useFrame, useSize } from './frame.ts';
 import { capture, edgeScroll, type Gesture, Pinch, screenDpr, useWheel } from './gesture.ts';
 import { drawRuler } from './ruler.ts';
 import { chooseAudioFiles, inputLabel } from './Tracks.tsx';
@@ -86,7 +86,6 @@ export function AudioEditor() {
   const box = useRef<HTMLDivElement>(null);
   const rulerBox = useRef<HTMLDivElement>(null);
   const canvas = useRef<HTMLCanvasElement>(null);
-  const overlay = useRef<HTMLCanvasElement>(null);
   const rulerCanvas = useRef<HTMLCanvasElement>(null);
   const size = useSize(box);
   const rulerSize = useSize(rulerBox);
@@ -95,14 +94,16 @@ export function AudioEditor() {
   const [, bump] = useState(0);
   const gesture = useRef<Gesture | null>(null);
   const pinch = useRef(new Pinch());
-  const lastOverlay = useRef({ x: -1, w: 0, h: 0, rec: false, dpr: 0 });
+  const playhead = useRef<HTMLDivElement>(null);
   const lastDpr = useRef(screenDpr());
 
-  // everything the picture reads: a change to any of it redraws
+  // Everything the picture reads: a change to any of it redraws. Of the song that is its tempo,
+  // meter and recordings, and the track's color, not the song itself: every fader, knob and mute
+  // anywhere is a new song, and none of them is drawn here.
   // biome-ignore lint/correctness/useExhaustiveDependencies: the list is what drawing reads, not what the effect touches
   useEffect(() => {
     dirty.current = true;
-  }, [project, track, region, size, rulerSize]);
+  }, [project?.id, project?.tempo, project?.meter, project?.files, track?.color, region, size, rulerSize]);
   useEffect(() => audioView.subscribe(() => (dirty.current = true)), []);
   useEffect(() => audioFiles.subscribe(() => (dirty.current = true)), []);
   useEffect(() => () => gesture.current?.abort(), []);
@@ -132,26 +133,18 @@ export function AudioEditor() {
     }
     if (dirty.current) {
       dirty.current = false;
-      const ctx = prepare(canvas.current, size.w, size.h);
+      const ctx = prepare(canvas.current, size.w, size.h, true);
       if (ctx) draw(ctx, p, track, region, preview.current, size.w, size.h);
-      const rctx = prepare(rulerCanvas.current, rulerSize.w, rulerSize.h);
+      const rctx = prepare(rulerCanvas.current, rulerSize.w, rulerSize.h, true);
       if (rctx) drawRuler(rctx, p, audioView, rulerSize.w, rulerSize.h);
     }
-    // the playhead, on its own layer, redrawn only when it has moved a pixel
-    const x = Math.round(audioView.tickToX(Math.max(0, engine.positionTick()))) + 0.5;
-    const rec = store.get().recording;
-    const last = lastOverlay.current;
-    if (x !== last.x || size.w !== last.w || size.h !== last.h || rec !== last.rec || dpr !== last.dpr) {
-      lastOverlay.current = { x, w: size.w, h: size.h, rec, dpr };
-      const octx = prepare(overlay.current, size.w, size.h);
-      if (octx) {
-        octx.clearRect(0, 0, size.w, size.h);
-        if (x >= 0 && x <= size.w) {
-          octx.fillStyle = rec ? '#ff4f5e' : '#ffffff';
-          octx.fillRect(x - 0.5, 0, 1.5, size.h);
-        }
-      }
-    }
+    // the playhead is an element of its own, moved only when it has gone a pixel
+    movePlayhead(
+      playhead.current,
+      Math.round(audioView.tickToX(Math.max(0, engine.positionTick()))),
+      size.w,
+      store.get().recording,
+    );
   });
 
   const onWheel = (e: WheelEvent, dx: number, dy: number) => {
@@ -320,7 +313,7 @@ export function AudioEditor() {
         onPointerCancel={(e) => pinch.current.up(e)}
       >
         <canvas ref={canvas} />
-        <canvas ref={overlay} style={{ pointerEvents: 'none' }} />
+        <div ref={playhead} className="playhead" />
       </div>
     </div>
   );
@@ -471,14 +464,14 @@ export function NumberBox({
     else setText(String(value));
   };
   return (
-    <label className="hstack" style={{ gap: 4 }} title={label}>
+    <label className="hstack number-box" title={label}>
       <span className="label">{label}</span>
       <input
         className="input mono"
         inputMode="decimal"
         aria-label={label}
         value={text}
-        style={{ width, height: 24 }}
+        style={{ width }}
         onChange={(e) => setText(e.target.value)}
         onBlur={done}
         onKeyDown={(e) => {
@@ -516,7 +509,8 @@ export function AudioEditorBar() {
             <Knob
               def={GAIN}
               value={clip.gain}
-              size={26}
+              // (finger-sized where there's no mouse)
+              size={layout === 'desktop' ? 26 : 32}
               compact
               label="Region gain"
               color={track.color}

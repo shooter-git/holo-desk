@@ -1,7 +1,7 @@
 {
   "name": "holo-desk",
   "private": true,
-  "version": "0.8.4",
+  "version": "0.8.5",
   "description": "HO[LO] Desk: Headphones On [Lights Out]. A studio in the browser for writing, playing and mixing music, with live MIDI and an AI collaborator.",
   "license": "MIT",
   "repository": {
@@ -24,6 +24,7 @@
     "lint": "biome check .",
     "format": "biome check --write .",
     "check:secrets": "node tools/scan-secrets.mjs --all",
+    "ui:check": "node --disable-warning=ExperimentalWarning tools/ui-check.mjs",
     "tailnet": "node --env-file-if-exists=.env tools/tailnet.mjs",
     "packs": "node --env-file-if-exists=.env --disable-warning=ExperimentalWarning apps/server/src/packs-cli.ts",
     "holo": "node --env-file-if-exists=.env --disable-warning=ExperimentalWarning packages/cli/src/main.ts",

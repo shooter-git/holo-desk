@@ -21,11 +21,13 @@ import { api, type Creation, type ProjectRow } from '../app/api.ts';
 import { KEY_COMMANDS } from '../app/keys.ts';
 import { device, renameDevice } from '../app/live.ts';
 import { type SettingsTab, store, toast, useApp } from '../app/store.ts';
+import { useVersion } from '../app/version.ts';
 import { companion, STUDIO_ENGINE } from '../audio/companion.ts';
 import { engine } from '../audio/engine.ts';
 import { midi } from '../audio/midi.ts';
 import { AgentSettings } from './AgentSettings.tsx';
 import { Wordmark } from './controls.tsx';
+import { useFocusInside } from './focus-inside.ts';
 import { useFrame } from './frame.ts';
 import { MetronomeSettings } from './Metronome.tsx';
 import { SongGroups } from './Songs.tsx';
@@ -56,14 +58,7 @@ export function Dialog({
   onClose?: () => void;
 }) {
   const box = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    // the keyboard moves into the dialog while it's up, and back to where it was when it closes
-    const was = document.activeElement;
-    box.current?.focus({ preventScroll: true });
-    return () => {
-      if (was instanceof HTMLElement && was.isConnected) was.focus({ preventScroll: true });
-    };
-  }, []);
+  useFocusInside(box);
   return (
     <div className="scrim" onPointerDown={(e) => e.target === e.currentTarget && onClose()}>
       <div
@@ -121,6 +116,7 @@ function ProjectsDialog() {
     <Dialog
       title="Songs"
       wide
+      className="songs"
       footer={
         <>
           <input
@@ -1126,13 +1122,7 @@ function RemoteDialog() {
 
 /** About HO[LO] Desk: what it is, its version and license, and where it lives. */
 function AboutDialog() {
-  const [version, setVersion] = useState<string | null>(null);
-  useEffect(() => {
-    void fetch('/api/health')
-      .then((r) => r.json() as Promise<{ version?: string }>)
-      .then((h) => setVersion(h.version ?? null))
-      .catch(() => undefined);
-  }, []);
+  const version = useVersion();
   return (
     <Dialog title="About">
       <div className="about">

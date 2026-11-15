@@ -1,5 +1,5 @@
 /** The control bar: views, the transport, the display (position, time, tempo, signature, key) and status. */
-import { formatBarBeat, KEYS, type MeterPoint, performed, tickToSeconds } from '@holo/session';
+import { formatBarBeat, KEYS, type MeterPoint, type Project, performed, tickToSeconds } from '@holo/session';
 import {
   Circle,
   FastForward,
@@ -43,7 +43,7 @@ import { openBar, openSettings, store, useApp, useShow } from '../app/store.ts';
 import { engine } from '../audio/engine.ts';
 import { midi } from '../audio/midi.ts';
 import { startDrag, TAP, Wordmark } from './controls.tsx';
-import { useFrame, useMedia } from './frame.ts';
+import { useFrame, useMedia, wake } from './frame.ts';
 import { keyShort } from './key-short.ts';
 import { MetronomeButton } from './Metronome.tsx';
 import { openMenuAt } from './menu.tsx';
@@ -54,6 +54,9 @@ import { ViewMenu } from './ViewMenu.tsx';
 
 /** Where the bar is too narrow for the full display: the position shortens and the time goes (the CSS hides the rest). */
 const NARROW_BAR = '(max-width: 900px), (max-width: 1100px) and (pointer: coarse)';
+/** The least time between two readings of the position display, and of the DSP load (ms). */
+const LCD_EVERY = 1000 / 30 - 2;
+const DSP_EVERY = 100;
 
 /** "9 1 1 7" as "  9 1 1   7": every digit keeps its place while the song plays. */
 function padPosition(text: string): string {
@@ -107,17 +110,30 @@ export function Lcd({ compact = false, keyCell = !compact }: { compact?: boolean
     },
     [],
   );
-  useFrame(() => {
+  // What the display last showed. It is read thirty times a second at most (a tick's digits are a
+  // blur any faster), and nothing is worked out or written for a position, a song and a display
+  // that are as they were: stopped, the display costs a comparison a frame.
+  const shown = useRef({ at: 0, tick: Number.NaN, played: Number.NaN, project: null as Project | null, asTime: false });
+  // (a render may have put a new cell on the screen: the next frame fills it)
+  useEffect(() => {
+    shown.current.tick = Number.NaN;
+  });
+  useFrame((now) => {
     const p = store.get().project;
     if (!p) return;
+    const was = shown.current;
+    if (now - was.at < LCD_EVERY) return;
     const tick = engine.positionTick();
+    const playedAt = engine.playedPosition();
+    const timeShown = compact && store.get().positionTime;
+    if (tick === was.tick && playedAt === was.played && p === was.project && timeShown === was.asTime) return;
+    shown.current = { at: now, tick, played: playedAt, project: p, asTime: timeShown };
     // (the time it's been playing: where the song repeats, the second time through is later)
-    const played = () => formatTime(tickToSeconds(performed(p).tempo, Math.max(0, engine.playedPosition())));
+    const played = () => formatTime(tickToSeconds(performed(p).tempo, Math.max(0, playedAt)));
     if (pos.current) {
-      const text =
-        compact && store.get().positionTime
-          ? played()
-          : padPosition(tick < 0 ? `-${formatBarBeat(p.meter, 0)}` : formatBarBeat(p.meter, tick, !compact));
+      const text = timeShown
+        ? played()
+        : padPosition(tick < 0 ? `-${formatBarBeat(p.meter, 0)}` : formatBarBeat(p.meter, tick, !compact));
       if (pos.current.textContent !== text) pos.current.textContent = text;
     }
     if (time.current) {
@@ -317,12 +333,15 @@ export function Lcd({ compact = false, keyCell = !compact }: { compact?: boolean
               ...KEYS.map((k) => ({
                 label: `${k} major`,
                 checked: project.key === `${k} major`,
+                // (the list is longer than most windows: it opens on the song's key)
+                focus: project.key === `${k} major`,
                 onSelect: () => apply([{ op: 'setProject', patch: { key: `${k} major` } }], 'Key'),
               })),
               { heading: 'Minor' },
               ...KEYS.map((k) => ({
                 label: `${k} minor`,
                 checked: project.key === `${k} minor`,
+                focus: project.key === `${k} minor`,
                 onSelect: () => apply([{ op: 'setProject', patch: { key: `${k} minor` } }], 'Key'),
               })),
             ])
@@ -432,10 +451,19 @@ export function SaveDot() {
 
 function MidiLight() {
   const dot = useRef<HTMLSpanElement>(null);
+  // the newest activity the light has shown, and until when it stays lit for it
+  const seen = useRef(0);
+  const lit = useRef(0);
   useFrame((now) => {
     let last = 0;
     for (const t of midi.lastActivity.values()) last = Math.max(last, t);
-    const on = now - last < 90;
+    if (last > seen.current) {
+      seen.current = last;
+      // (the frame loop may have been at rest when it came: the flash is still its 90 ms on the screen)
+      lit.current = Math.max(last, now - 10) + 90;
+      wake();
+    }
+    const on = now < lit.current;
     const cls = `status-dot ${on ? 'flash' : store.get().midiStatus === 'on' ? 'ok' : ''}`;
     if (dot.current && dot.current.className !== cls) dot.current.className = cls;
   });
@@ -472,11 +500,15 @@ function DspMeter() {
   const seen = useRef({ overloads: 0, at: 0 });
   // what the meter last showed: only a change is written, so a steady load costs the page no layout
   const last = useRef({ width: -1, color: '', pct: -1 });
+  const readAt = useRef(0);
   const hover = useRef(false);
   const describe = () => {
     if (box.current) box.current.title = `DSP load: ${dspSummary(engine.dsp())}. Settings › Audio`;
   };
   useFrame((now) => {
+    // (ten readings a second: a load read every frame is a number nobody can follow)
+    if (now - readAt.current < DSP_EVERY) return;
+    readAt.current = now;
     const d = engine.dsp();
     // rendering ahead: the song keeps up while the busiest worker does (and the audio thread)
     const busiest = Math.max(0, ...(d.ahead?.loads ?? []));
@@ -491,7 +523,8 @@ function DspMeter() {
     const color = loadColor(shown, hot);
     const pct = Math.round(load * 100);
     const l = last.current;
-    if (bar.current && width !== l.width) bar.current.style.width = `${width}%`;
+    // (the bar is as wide as its track, scaled: a new load is a transform, with nothing laid out)
+    if (bar.current && width !== l.width) bar.current.style.transform = `scaleX(${width / 100})`;
     if (bar.current && color !== l.color) bar.current.style.background = color;
     if (text.current && pct !== l.pct) {
       text.current.textContent = `${pct}%`;

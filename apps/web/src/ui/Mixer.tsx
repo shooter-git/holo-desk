@@ -25,8 +25,17 @@ import {
   samplerKnobValue,
   type Track,
 } from '@holo/session';
-import { Headphones, Power, RotateCcw, SlidersHorizontal, X } from 'lucide-react';
-import { memo, type ReactNode, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react';
+import { ChevronDown, Headphones, Power, RotateCcw, SlidersHorizontal, X } from 'lucide-react';
+import {
+  memo,
+  type ReactNode,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from 'react';
 import {
   addBusWithSend,
   addPlugin,
@@ -50,6 +59,9 @@ import { prepare, useFrame, useSize } from './frame.ts';
 import { isMenuPress } from './gesture.ts';
 import { openMenu, openMenuAt } from './menu.tsx';
 import { pressToReorder, useNoScrollWhileDragging } from './reorder.ts';
+import { useScrollCue } from './scroll-cue.ts';
+import { pastSlop, upDownOnly } from './slop.ts';
+import { slotName, stripRows } from './strips.ts';
 import { inputLabel, instrumentLabel, instrumentMenu } from './Tracks.tsx';
 
 function pluginsOf(kind: 'audio' | 'midi'): PluginDef[] {
@@ -109,7 +121,7 @@ function PluginSlot({ target, plugin }: { target: string; plugin: Plugin }) {
       >
         <Power size={10} />
       </button>
-      <span className="grow">{def?.name ?? plugin.type}</span>
+      <span className="grow">{slotName(plugin.type, def?.name ?? plugin.type)}</span>
     </div>
   );
 }
@@ -156,9 +168,12 @@ export const Strip = memo(function Strip({ id, kind, name, color, channel, track
     () => library.packs,
   );
   const set = (patch: Partial<Channel>) => gestureChange([{ op: 'updateChannel', target: id, patch }]);
-  // the fader takes whatever height is left; the slots above scroll when the strip is short
+  // the fader has the height its row gives it (the same on every strip: see strips.ts); the slots
+  // above scroll where there are more than fit, and fade at the edge that has more
   const faderBox = useRef<HTMLDivElement>(null);
   const faderHeight = Math.max(56, useSize(faderBox).h - 2);
+  const slots = useRef<HTMLDivElement>(null);
+  useScrollCue(slots);
   // a tap on the strip selects its track; a scroll, a fader drag or a right-click doesn't
   const press = useRef<{ x: number; y: number } | null>(null);
   // in the mixer, a track strip's name is its handle: drag it (a finger holds it first) to move the track
@@ -177,7 +192,7 @@ export const Strip = memo(function Strip({ id, kind, name, color, channel, track
       }}
       aria-label={`${name} channel strip`}
     >
-      <div className="strip-top">
+      <div className="strip-top" ref={slots}>
         {track?.kind === 'audio' && show.stripInstrument && (
           <div className="section">
             <span className="label">Input</span>
@@ -265,10 +280,15 @@ export const Strip = memo(function Strip({ id, kind, name, color, channel, track
                     if (e.button !== 0) return;
                     e.stopPropagation();
                     let level = s.level;
+                    // (a finger's sideways swipe scrolls the strips: the level follows it up and down, slop.ts)
+                    const upDown = upDownOnly(e);
+                    const rise = pastSlop();
                     beginGesture('Send Level');
                     startDrag(e, {
                       onMove: (dx, dy) => {
-                        level = Math.max(-60, Math.min(6, level + (dx - dy) * 0.25));
+                        const by = upDown ? -rise(dy) : dx - dy;
+                        if (by === 0) return;
+                        level = Math.max(-60, Math.min(6, level + by * 0.25));
                         gestureChange([
                           {
                             op: 'updateChannel',
@@ -338,74 +358,79 @@ export const Strip = memo(function Strip({ id, kind, name, color, channel, track
             </div>
           </div>
         )}
+        {/* (the stage is a slot like the others: it scrolls with them where the strip is short) */}
+        {kind !== 'master' && show.stripStage && (
+          <div className="section">
+            <span className="label">Stage</span>
+            {channel.stage ? (
+              <div
+                className="slot send drag"
+                title="Stage: drag to move it nearer or further back, click for its seats, right-click for more"
+                onPointerDown={(e) => {
+                  if (e.button !== 0) return;
+                  e.stopPropagation();
+                  const stage = channel.stage as Stage;
+                  let d = stage.distance;
+                  // a tap opens the seats; the distance only moves once the finger has clearly dragged
+                  let tx = 0;
+                  let ty = 0;
+                  let moved = false;
+                  // (a finger's sideways swipe scrolls the strips: the distance follows it up and down, slop.ts)
+                  const upDown = upDownOnly(e);
+                  const rise = pastSlop();
+                  beginGesture('Distance');
+                  startDrag(e, {
+                    onMove: (dx, dy) => {
+                      tx += dx;
+                      ty += dy;
+                      const by = upDown ? -rise(dy) : dx - dy;
+                      if (upDown ? by === 0 : !moved && Math.hypot(tx, ty) < TAP) return;
+                      moved = true;
+                      d = Math.max(0, Math.min(1, d + by * 0.004));
+                      gestureChange([
+                        {
+                          op: 'updateChannel',
+                          target: id,
+                          patch: { stage: { ...stage, distance: Math.round(d * 1000) / 1000 } },
+                        },
+                      ]);
+                    },
+                    onEnd: (canceled) => {
+                      endGesture();
+                      // a scroll that began on the slot is canceled by the browser: not a tap
+                      if (!moved && !canceled) store.set({ stage: id });
+                    },
+                  });
+                }}
+                onContextMenu={(e) => {
+                  e.preventDefault();
+                  openMenu(e.clientX, e.clientY, [
+                    { label: 'Seats…', onSelect: () => store.set({ stage: id }) },
+                    {
+                      label: 'Take it off the stage',
+                      onSelect: () => updateChannel(id, { stage: null }, 'Remove Stage'),
+                    },
+                  ]);
+                }}
+              >
+                <span className="grow">Distance</span>
+                <span className="mono">{Math.round(channel.stage.distance * 100)}%</span>
+              </div>
+            ) : (
+              <div
+                className="slot empty"
+                title="Put it on a stage: a near and a far seat, each with its own rooms, and a distance between them"
+                onClick={() => {
+                  updateChannel(id, { stage: newStage() }, 'Stage');
+                  store.set({ stage: id });
+                }}
+              >
+                +
+              </div>
+            )}
+          </div>
+        )}
       </div>
-      {kind !== 'master' && show.stripStage && (
-        <div className="section">
-          <span className="label">Stage</span>
-          {channel.stage ? (
-            <div
-              className="slot send drag"
-              title="Stage: drag to move it nearer or further back, click for its seats, right-click for more"
-              onPointerDown={(e) => {
-                if (e.button !== 0) return;
-                e.stopPropagation();
-                const stage = channel.stage as Stage;
-                let d = stage.distance;
-                // a tap opens the seats; the distance only moves once the finger has clearly dragged
-                let tx = 0;
-                let ty = 0;
-                let moved = false;
-                beginGesture('Distance');
-                startDrag(e, {
-                  onMove: (dx, dy) => {
-                    tx += dx;
-                    ty += dy;
-                    if (!moved && Math.hypot(tx, ty) < TAP) return;
-                    moved = true;
-                    d = Math.max(0, Math.min(1, d + (dx - dy) * 0.004));
-                    gestureChange([
-                      {
-                        op: 'updateChannel',
-                        target: id,
-                        patch: { stage: { ...stage, distance: Math.round(d * 1000) / 1000 } },
-                      },
-                    ]);
-                  },
-                  onEnd: (canceled) => {
-                    endGesture();
-                    // a scroll that began on the slot is canceled by the browser: not a tap
-                    if (!moved && !canceled) store.set({ stage: id });
-                  },
-                });
-              }}
-              onContextMenu={(e) => {
-                e.preventDefault();
-                openMenu(e.clientX, e.clientY, [
-                  { label: 'Seats…', onSelect: () => store.set({ stage: id }) },
-                  {
-                    label: 'Take it off the stage',
-                    onSelect: () => updateChannel(id, { stage: null }, 'Remove Stage'),
-                  },
-                ]);
-              }}
-            >
-              <span className="grow">Distance</span>
-              <span className="mono">{Math.round(channel.stage.distance * 100)}%</span>
-            </div>
-          ) : (
-            <div
-              className="slot empty"
-              title="Put it on a stage: a near and a far seat, each with its own rooms, and a distance between them"
-              onClick={() => {
-                updateChannel(id, { stage: newStage() }, 'Stage');
-                store.set({ stage: id });
-              }}
-            >
-              +
-            </div>
-          )}
-        </div>
-      )}
       {kind !== 'master' && show.stripOutput && (
         <select
           className="select strip-output"
@@ -450,6 +475,9 @@ export const Strip = memo(function Strip({ id, kind, name, color, channel, track
             <button
               type="button"
               className={`chip mute${channel.mute ? ' on' : ''}`}
+              title="Mute"
+              aria-label={`Mute ${name}`}
+              aria-pressed={channel.mute}
               onClick={() => updateChannel(id, { mute: !channel.mute }, 'Mute')}
             >
               M
@@ -458,6 +486,9 @@ export const Strip = memo(function Strip({ id, kind, name, color, channel, track
               <button
                 type="button"
                 className={`chip solo${channel.solo ? ' on' : ''}`}
+                title="Solo"
+                aria-label={`Solo ${name}`}
+                aria-pressed={channel.solo}
                 onClick={() => updateChannel(id, { solo: !channel.solo }, 'Solo')}
               >
                 S
@@ -469,6 +500,9 @@ export const Strip = memo(function Strip({ id, kind, name, color, channel, track
           <button
             type="button"
             className={`chip rec${track.armed ? ' on' : ''}`}
+            title="Record-arm"
+            aria-label={`Record-arm ${name}`}
+            aria-pressed={track.armed}
             onClick={() => updateTrack(id, { armed: !track.armed }, 'Arm')}
           >
             R
@@ -511,8 +545,8 @@ export const Strip = memo(function Strip({ id, kind, name, color, channel, track
   );
 });
 
-/** The editor pane's height the mixer wants at least: its slots, a fader and the name, all in view. */
-const MIXER_PANE = 420;
+/** The editor pane's height the mixer wants at least: a few of its slots, a fader with room to travel, and the name, all in view. */
+const MIXER_PANE = 480;
 
 export function Mixer() {
   // the slices are stable while something else changes, so an edit redraws one strip, not the row
@@ -528,7 +562,7 @@ export function Mixer() {
   }, [phone]);
   if (!tracks || !buses || !master) return null;
   return (
-    <div className="mixer">
+    <div className="mixer" ref={stripRows}>
       {tracks.map((t) => (
         <Strip
           key={t.id}
@@ -640,6 +674,9 @@ const EQ_H = 150;
 const eqX = (f: number, width: number) => (Math.log(f / 20) / Math.log(1000)) * width;
 const eqY = (db: number) => EQ_H / 2 - (db / 24) * (EQ_H / 2 - 8);
 
+/** The frequencies an EQ's curve is drawn through, 20 Hz to 20 kHz, even in octaves. */
+const EQ_FREQS = new Float64Array(220).map((_, i) => 20 * 1000 ** (i / 219));
+
 /** Where a Parametric EQ's band handles sit on its curve (a cut's, notch's or band pass's on the 0 dB line). */
 function peqHandles(type: string, params: Record<string, number>, width: number) {
   const out: { band: number; x: number; y: number; on: boolean }[] = [];
@@ -667,11 +704,10 @@ function EqDisplay({
   const ref = useRef<HTMLCanvasElement>(null);
   const h = EQ_H;
   useLayoutEffect(() => {
-    const ctx = prepare(ref.current, width, h);
+    const ctx = prepare(ref.current, width, h, true);
     if (!ctx) return;
-    const n = 220;
-    const freqs = new Float64Array(n).map((_, i) => 20 * 1000 ** (i / (n - 1)));
-    const resp = curveOf(type, params, freqs, engine.sampleRate);
+    const n = EQ_FREQS.length;
+    const resp = curveOf(type, params, EQ_FREQS, engine.sampleRate);
     const x = (f: number) => eqX(f, width);
     const y = eqY;
     ctx.fillStyle = '#07090b';
@@ -709,12 +745,18 @@ function EqDisplay({
       if (i === 0) ctx.moveTo(px, py);
       else ctx.lineTo(px, py);
     });
+    // a wider, fainter stroke under the curve is its glow: a blur would be worked out again for
+    // every move of a knob or a band
+    ctx.lineJoin = 'round';
+    ctx.strokeStyle = 'rgba(166,236,255,0.16)';
+    ctx.lineWidth = 9;
+    ctx.stroke();
+    ctx.strokeStyle = 'rgba(166,236,255,0.22)';
+    ctx.lineWidth = 5;
+    ctx.stroke();
     ctx.strokeStyle = '#a6ecff';
     ctx.lineWidth = 2;
-    ctx.shadowColor = 'rgba(166,236,255,0.6)';
-    ctx.shadowBlur = 8;
     ctx.stroke();
-    ctx.shadowBlur = 0;
     ctx.lineTo(width, h / 2);
     ctx.lineTo(0, h / 2);
     ctx.fillStyle = g;
@@ -774,15 +816,194 @@ function EqDisplay({
 }
 
 /** Parametric EQ's eight bands, side by side: each one's type, and its frequency, gain and Q. */
+interface SettingProps {
+  def: ParamDef;
+  value: number;
+  onBegin: () => void;
+  onEnd: () => void;
+  onChange: (v: number) => void;
+  color?: string;
+  size?: number;
+  label?: string;
+}
+
+/**
+ * One of a window's settings. A number is a knob. A setting that is one of a few names is a button:
+ * with two or three it goes round them, with more it opens a menu of them, since a knob swept
+ * through names shows one at a time and none of the others.
+ */
+function Setting({ def, value, onBegin, onEnd, onChange, color, size, label }: SettingProps) {
+  const options = def.options;
+  if (!options)
+    return (
+      <Knob
+        def={def}
+        value={value}
+        onBegin={onBegin}
+        onEnd={onEnd}
+        onChange={onChange}
+        color={color}
+        size={size}
+        label={label}
+      />
+    );
+  const at = Math.round(value);
+  const set = (v: number) => {
+    if (v === at) return;
+    onBegin();
+    onChange(v);
+    onEnd();
+  };
+  const few = options.length <= 3;
+  // (names too long for a knob's width, an organ's drawbars, have two)
+  const wide = !few && options.some((o) => o.length > 8);
+  return (
+    <div className={`knob choice${wide ? ' wide' : ''}`}>
+      <button
+        type="button"
+        className={`btn${few ? (value >= 0.5 ? ' on' : '') : ' choice-menu'}`}
+        aria-haspopup={few ? undefined : 'menu'}
+        aria-label={`${def.name}: ${options[at] ?? at}`}
+        onClick={(e) =>
+          few
+            ? set((at + 1) % options.length)
+            : openMenuAt(
+                e.currentTarget,
+                options.map((name, i) => ({ label: name, checked: i === at, focus: i === at, onSelect: () => set(i) })),
+              )
+        }
+      >
+        <span className="grow">{options[at] ?? at}</span>
+        {!few && <ChevronDown size={12} aria-hidden="true" />}
+      </button>
+      <span className="knob-label">{label ?? def.name}</span>
+    </div>
+  );
+}
+
+interface PluginSettingProps {
+  /** The channel the plugin is on, the plugin, and its name (for the undo step's). */
+  target: string;
+  plugin: string;
+  of: string;
+  def: ParamDef;
+  value: number;
+  color?: string;
+  size?: number;
+  label?: string;
+}
+
+/**
+ * One of a plugin's settings, told what it is and not handed functions made for it: so it is drawn
+ * again only when its own value changes. A knob dragged in a window of twenty-four (the Parametric
+ * EQ's) used to draw all twenty-four on every move of the pointer.
+ */
+const PluginSetting = memo(function PluginSetting({
+  target,
+  plugin,
+  of,
+  def,
+  value,
+  color,
+  size,
+  label,
+}: PluginSettingProps) {
+  const begin = useCallback(() => beginGesture(`${of}: ${def.name}`), [of, def.name]);
+  const change = useCallback(
+    (v: number) =>
+      gestureChange([{ op: 'updatePlugin', target, plugin, patch: { params: { [def.id]: v } } } satisfies Op]),
+    [target, plugin, def.id],
+  );
+  return (
+    <Setting
+      def={def}
+      value={value}
+      onBegin={begin}
+      onEnd={endGesture}
+      onChange={change}
+      color={color}
+      size={size}
+      label={label}
+    />
+  );
+});
+
+/** Channel EQ's bands, low to high: each one's switch, frequency, gain and Q, as it has them. */
+const EQ_BANDS: { name: string; on?: string; f: string; g?: string; q?: string }[] = [
+  { name: 'Low Cut', on: 'hpOn', f: 'hpFreq' },
+  { name: 'Low Shelf', f: 'lsFreq', g: 'lsGain' },
+  { name: 'Low Mid', f: 'b1Freq', g: 'b1Gain', q: 'b1Q' },
+  { name: 'Mid', f: 'b2Freq', g: 'b2Gain', q: 'b2Q' },
+  { name: 'High Mid', f: 'b3Freq', g: 'b3Gain', q: 'b3Q' },
+  { name: 'High Shelf', f: 'hsFreq', g: 'hsGain' },
+  { name: 'High Cut', on: 'lpOn', f: 'lpFreq' },
+];
+/** The settings the bands show (the rest of Channel EQ's, its output, is a knob under them). */
+const EQ_BANDED = new Set(EQ_BANDS.flatMap((b) => [b.on, b.f, b.g, b.q]).filter((x): x is string => !!x));
+
+/**
+ * Channel EQ, a band to a column as its curve reads, low to high: frequency, then gain, then Q on
+ * the same lines across the bands, and a cut's switch where the others have their gain.
+ */
+function EqBands({
+  def,
+  params,
+  target,
+  plugin,
+}: {
+  def: PluginDef;
+  params: Record<string, number>;
+  target: string;
+  plugin: string;
+}) {
+  const param = (id?: string) => (id ? def.params.find((p) => p.id === id) : undefined);
+  const setting = (p: ParamDef, label: string, dim = false) => (
+    <div key={p.id} className={`peq-knob${dim ? ' dim' : ''}`}>
+      <PluginSetting
+        target={target}
+        plugin={plugin}
+        of={def.name}
+        def={p}
+        value={paramValue(def.type, params, p.id)}
+        size={30}
+        label={label}
+      />
+    </div>
+  );
+  return (
+    <div className="eq-bands">
+      {EQ_BANDS.map((b) => {
+        const on = param(b.on);
+        const off = !!on && paramValue('eq', params, on.id) < 0.5;
+        const f = param(b.f);
+        const g = param(b.g);
+        const q = param(b.q);
+        return (
+          <div key={b.name} className="eq-band">
+            <span className="label">{b.name}</span>
+            {f && setting(f, 'Freq', off)}
+            {/* (its button says On or Off: it needs no name under it) */}
+            {on && setting(on, '')}
+            {g && setting(g, 'Gain')}
+            {q && setting(q, 'Q')}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 function PeqBands({
   def,
   params,
-  change,
+  target,
+  plugin,
   set,
 }: {
   def: PluginDef;
   params: Record<string, number>;
-  change: (param: string, value: number) => void;
+  target: string;
+  plugin: string;
   set: (param: string, value: number, label: string) => void;
 }) {
   const param = (id: string) => def.params.find((p) => p.id === id);
@@ -815,14 +1036,14 @@ function PeqBands({
               const dim = !on || (k === 'g' && !PEQ_GAINED.has(kind));
               return (
                 <div key={k} className={`peq-knob${dim ? ' dim' : ''}`}>
-                  <Knob
+                  <PluginSetting
+                    target={target}
+                    plugin={plugin}
+                    of={def.name}
                     def={p}
                     value={paramValue('peq', params, p.id)}
                     size={30}
                     label={k === 'f' ? 'Freq' : k === 'g' ? 'Gain' : 'Q'}
-                    onBegin={() => beginGesture(`Parametric EQ: ${p.name}`)}
-                    onEnd={endGesture}
-                    onChange={(v) => change(p.id, v)}
                     color={PEQ_COLORS[i]}
                   />
                 </div>
@@ -846,7 +1067,8 @@ function GainReduction({ target, plugin }: { target: string; plugin: string }) {
     const gr = Math.round(engine.pluginGr(target) * 10) / 10;
     if (gr === shown.current) return;
     shown.current = gr;
-    if (bar.current) bar.current.style.width = `${Math.min(100, (-gr / 30) * 100)}%`;
+    // (as wide as its track and scaled to the reduction: nothing is laid out for a new reading)
+    if (bar.current) bar.current.style.transform = `scaleX(${Math.min(1, -gr / 30)})`;
     if (text.current) text.current.textContent = `${gr.toFixed(1)} dB`;
   });
   return (
@@ -908,6 +1130,14 @@ function Floating({
     x: Math.max(8, window.innerWidth / 2 - width / 2),
     y: Math.max(60, window.innerHeight / 2 - 220),
   }));
+  // it opens whole: a window taller than the room under where it would open moves up to fit
+  useLayoutEffect(() => {
+    const h = win.current?.offsetHeight ?? 0;
+    setPos((p) => {
+      const y = Math.max(8, Math.min(p.y, window.innerHeight - h - 8));
+      return y === p.y ? p : { ...p, y };
+    });
+  }, []);
   useEffect(() => {
     const before = document.activeElement;
     win.current?.focus({ preventScroll: true });
@@ -984,9 +1214,7 @@ export function PluginWindow() {
   const def = plugin ? pluginDef(plugin.type) : undefined;
   if (!owner || !plugin || !def) return null;
   // Parametric EQ's eight bands want more room than a row of knobs
-  const width = phone ? vp.w : plugin.type === 'peq' ? 600 : 460;
-  const change = (param: string, value: number) =>
-    gestureChange([{ op: 'updatePlugin', target, plugin: id, patch: { params: { [param]: value } } } satisfies Op]);
+  const width = phone ? vp.w : plugin.type === 'peq' ? 600 : plugin.type === 'eq' ? 540 : 460;
   const close = () => store.set({ plugin: null });
   return (
     <Floating
@@ -1040,11 +1268,13 @@ export function PluginWindow() {
           />
         </div>
       )}
+      {plugin.type === 'eq' && <EqBands def={def} params={plugin.params} target={target} plugin={id} />}
       {plugin.type === 'peq' && (
         <PeqBands
           def={def}
           params={plugin.params}
-          change={change}
+          target={target}
+          plugin={id}
           set={(param, value, label) =>
             apply([{ op: 'updatePlugin', target, plugin: id, patch: { params: { [param]: value } } }], label)
           }
@@ -1061,6 +1291,8 @@ export function PluginWindow() {
       <div className="face">
         {def.params
           .filter((p) => plugin.type !== 'peq' || p.id === 'output')
+          // (Channel EQ's bands have their settings, above)
+          .filter((p) => plugin.type !== 'eq' || !EQ_BANDED.has(p.id))
           .filter(
             (p) =>
               (plugin.type !== 'space' && plugin.type !== 'shimmer') || spaceKnob(plugin.type, p.id, plugin.params),
@@ -1069,47 +1301,17 @@ export function PluginWindow() {
           .filter(() => plugin.type !== 'wow' || !plugin.settings?.curve)
           // (a Drum Replacer's piece has its own menu, by its kit)
           .filter((p) => plugin.type !== 'replacer' || p.id !== 'piece')
-          .map((p) =>
-            p.options && p.options.length <= 3 ? (
-              <div key={p.id} className="knob choice">
-                <button
-                  type="button"
-                  className={`btn${paramValue(def.type, plugin.params, p.id) >= 0.5 ? ' on' : ''}`}
-                  onClick={() =>
-                    apply(
-                      [
-                        {
-                          op: 'updatePlugin',
-                          target,
-                          plugin: id,
-                          patch: {
-                            params: {
-                              [p.id]:
-                                (Math.round(paramValue(def.type, plugin.params, p.id)) + 1) % (p.options?.length ?? 2),
-                            },
-                          },
-                        },
-                      ],
-                      p.name,
-                    )
-                  }
-                >
-                  {p.options[Math.round(paramValue(def.type, plugin.params, p.id))]}
-                </button>
-                <span className="knob-label">{p.name}</span>
-              </div>
-            ) : (
-              <Knob
-                key={p.id}
-                def={p}
-                value={paramValue(def.type, plugin.params, p.id)}
-                onBegin={() => beginGesture(`${def.name}: ${p.name}`)}
-                onEnd={endGesture}
-                onChange={(v) => change(p.id, v)}
-                color={def.kind === 'midi' ? 'var(--midi)' : 'var(--accent)'}
-              />
-            ),
-          )}
+          .map((p) => (
+            <PluginSetting
+              key={p.id}
+              target={target}
+              plugin={id}
+              of={def.name}
+              def={p}
+              value={paramValue(def.type, plugin.params, p.id)}
+              color={def.kind === 'midi' ? 'var(--midi)' : 'var(--accent)'}
+            />
+          ))}
       </div>
       <div className="muted plugin-note">{def.description}</div>
     </Floating>
@@ -1184,7 +1386,7 @@ export function SynthWindow() {
     >
       <div className="face">
         {defs.map((p) => (
-          <Knob
+          <Setting
             key={p.id}
             def={p}
             value={macroValue(inst.preset, inst.params, p.id)}
@@ -1256,7 +1458,7 @@ function KitWindow({
     >
       <div className="face">
         {defs.map((p) => (
-          <Knob
+          <Setting
             key={p.id}
             def={p}
             value={samplerKnobValue(defs, inst.params, p.id)}

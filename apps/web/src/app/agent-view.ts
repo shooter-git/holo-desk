@@ -96,6 +96,9 @@ export async function playBars(view: View, p: Play, key: string): Promise<string
   }
   const now = store.get().project;
   if (!now) return 'No song is open';
+  // the audio starts in the click itself, as the transport's Play starts it: a phone's browser may
+  // refuse to start it once the version has been fetched and the click is over
+  const audio = ensureAudio();
   let song: Project | null = null;
   if (p.version) {
     song = await versionSong(view, p.version);
@@ -105,7 +108,7 @@ export async function playBars(view: View, p: Play, key: string): Promise<string
   // (a version, a solo, or the cycle in the way: a copy of its own plays, straight through)
   const own = song !== null || !!p.solo || (base.cycle.on && base.cycle.start < barToTick(base.meter, p.to));
   const played = own ? { ...base, cycle: { ...base.cycle, on: false } } : null;
-  await ensureAudio();
+  await audio;
   const from = barToTick(base.meter, Math.max(p.from, firstBar(base.meter)));
   const to = barToTick(base.meter, p.to);
   const r = playPasses([{ song: played && p.solo ? soloed(played, p.solo) : played, from, to }], () => {

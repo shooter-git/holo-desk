@@ -329,6 +329,7 @@ list.
 pnpm dev        # the server (:47800) and the studio with hot reload (:47810)
 pnpm engine     # HO[LO] Engine from the repository (after `pnpm engine:build`)
 pnpm test       # unit tests
+pnpm ui:check   # the layout in a browser, desktop to phone (after pnpm build; needs Playwright)
 pnpm typecheck
 pnpm lint       # Biome
 ```

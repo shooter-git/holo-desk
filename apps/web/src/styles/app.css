@@ -58,7 +58,8 @@
   --z-dialog: 100;
   --z-bar: 150;
   --z-popover: 200;
-  --z-toast: 300;
+  /* (over the start screen too: "Audio couldn’t start" has to be read there) */
+  --z-toast: 450;
   --z-start: 400;
   color-scheme: dark;
   accent-color: var(--accent);
@@ -4068,6 +4069,20 @@ html[data-layout="phone-landscape"] .toasts {
 
 .start-audio .start-note {
   font-size: 11px;
+}
+
+.start-audio .start-note.waiting {
+  color: var(--cycle);
+  text-wrap: balance;
+}
+
+/* (its line is kept while the host is still to say, so the card doesn't grow under the button) */
+.start-audio .start-version {
+  min-height: 14px;
+  color: var(--text-3);
+  font-size: 10.5px;
+  line-height: 14px;
+  font-variant-numeric: tabular-nums;
 }
 
 /* another studio is open: the way to drive it from this phone instead */

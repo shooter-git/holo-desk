@@ -48,6 +48,8 @@ export interface StudioState {
   master: { volume: number } | null;
   tempo?: TempoPoint[];
   meter?: MeterPoint[];
+  /** Its tab is hidden, so its browser slows its reports (a studio before this didn't say). */
+  hidden: boolean;
 }
 
 export interface StudioEntry {
@@ -80,6 +82,13 @@ export interface RemoteState {
 
 /** After this long without a word from a studio that should be talking, what's shown is stale. */
 export const STALE_MS = 2000;
+
+/**
+ * The same for a studio whose tab is hidden. Its browser slows its timers, after a few minutes to once
+ * a minute, so its reports and levels may come that seldom: only a longer silence means it's gone. (It
+ * answers a command at once, timers or not, so one it doesn't answer within STALE_MS still shows.)
+ */
+export const HIDDEN_STALE_MS = 75_000;
 
 let state: RemoteState = {
   connection: 'connecting',
@@ -119,20 +128,43 @@ export function useRemote<T>(pick: (s: RemoteState) => T): T {
  */
 const heard = new Map<string, number>();
 
+/** When each studio was sent a command it hasn't answered yet (the first of them), by name. */
+const asked = new Map<string, number>();
+
+/** A studio has been heard from: anything it was asked has been answered. */
+function heardFrom(name: string, now: number): void {
+  heard.set(name, now);
+  asked.delete(name);
+}
+
+/** A studio is gone. */
+function forget(name: string): void {
+  heard.delete(name);
+  asked.delete(name);
+}
+
 /** How long ago the studio was heard from (its last report, when it has sent no levels since). */
 export function silence(entry: StudioEntry, now = Date.now()): number {
   return now - Math.max(entry.at, heard.get(entry.name) ?? 0);
 }
 
 /**
- * Whether the studio has gone quiet for longer than it could while talking: a studio reports only
- * what changes, so an idle one is rightly silent, but one that was playing reports its position
- * steadily and one with its audio running sends levels steadily.
+ * Whether a studio is out of touch, from what it last said, how long it has been quiet (ms), and how
+ * long it has had a command it hasn't answered (ms; null: none). A studio reports only what changes,
+ * so an idle one is rightly silent, but one that was playing reports its position steadily and one
+ * with its audio running sends levels steadily. Hidden, it may be quiet for up to a minute (see
+ * HIDDEN_STALE_MS), but it answers every command at once.
  */
-export function isStale(entry: StudioEntry, now = Date.now()): boolean {
-  const s = entry.state;
+export function outOfTouch(s: StudioState, quiet: number, unanswered: number | null): boolean {
   const talking = s.playing || (s.audio && s.project !== null);
-  return talking && silence(entry, now) > STALE_MS;
+  if (!s.hidden) return talking && quiet > STALE_MS;
+  return (unanswered !== null && unanswered > STALE_MS) || (talking && quiet > HIDDEN_STALE_MS);
+}
+
+/** Whether the studio has gone quiet for longer than it could while in touch (see outOfTouch). */
+export function isStale(entry: StudioEntry, now = Date.now()): boolean {
+  const sent = asked.get(entry.name);
+  return outOfTouch(entry.state, silence(entry, now), sent === undefined ? null : now - sent);
 }
 
 /** The studio being driven: the chosen one if it's open, else the one heard from last. */
@@ -176,6 +208,7 @@ export function command(action: string, args: Record<string, unknown> = {}): voi
     notify('Not connected to HO[LO]. Trying again…');
     return;
   }
+  if (studio && !asked.has(studio.name)) asked.set(studio.name, Date.now());
   // a studio that should be talking but isn't: make sure the socket itself is still alive
   if (studio && isStale(studio)) probe();
 }
@@ -228,6 +261,7 @@ function complete(raw: unknown): StudioState {
     master: s.master ?? null,
     tempo: Array.isArray(s.tempo) ? s.tempo : [],
     meter: Array.isArray(s.meter) ? s.meter : [],
+    hidden: s.hidden === true,
   };
 }
 
@@ -239,7 +273,7 @@ function onMessage(msg: Record<string, unknown>): void {
       const known = state.studios[name];
       if (known && typeof updated === 'number' && known.updated === updated) return;
       const now = Date.now();
-      heard.set(name, now);
+      heardFrom(name, now);
       const entry: StudioEntry = { name, state: complete(msg.state), at: now };
       if (typeof updated === 'number') entry.updated = updated;
       set({ studios: { ...state.studios, [name]: entry } });
@@ -247,7 +281,7 @@ function onMessage(msg: Record<string, unknown>): void {
     }
     case 'studio-gone': {
       const name = String(msg.name);
-      heard.delete(name);
+      forget(name);
       const { [name]: _gone, ...rest } = state.studios;
       set({ studios: rest });
       return;
@@ -264,7 +298,7 @@ function onMessage(msg: Record<string, unknown>): void {
       for (const [name, e] of Object.entries(state.studios)) {
         if (open.has(name)) studios[name] = e;
         else {
-          heard.delete(name);
+          forget(name);
           dropped = true;
         }
       }
@@ -272,7 +306,7 @@ function onMessage(msg: Record<string, unknown>): void {
       return;
     }
     case 'meters': {
-      heard.set(String(msg.name), Date.now());
+      heardFrom(String(msg.name), Date.now());
       const active = activeStudio();
       if (!active || active.name !== msg.name || !Array.isArray(msg.levels)) return;
       for (const [id, l, r] of msg.levels as [string, number, number][]) levels.set(id, [l, r]);

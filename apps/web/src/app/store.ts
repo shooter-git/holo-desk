@@ -318,7 +318,7 @@ export function toast(text: string, kind: Toast['kind'] = 'info', ms = 3500, act
   window.setTimeout(() => store.set((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) })), ms);
 }
 
-/** Open the bar (Ctrl /, the search button, or a swipe down on a phone's top bar). */
+/** Open the bar (Ctrl /, the slash button, or a swipe down on a phone's top bar). */
 export function openBar(): void {
   if (!state.bar) store.set({ bar: true });
 }

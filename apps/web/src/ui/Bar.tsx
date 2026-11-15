@@ -1,5 +1,5 @@
 /**
- * The bar (Ctrl /, the search button in the control bar, or a swipe down on a phone's top bar): the
+ * The bar (Ctrl /, the slash button in the control bar, or a swipe down on a phone's top bar): the
  * studio's commands, tracks and markers, found by name. It's one of the studio's menus with a field on
  * top (the same glass, rows, blue highlight and key hints), so nothing looks bolted on. While it's open
  * the field has the keys: Up and Down choose, Enter runs, Escape closes, and the studio's shortcuts
@@ -11,7 +11,7 @@
  * listens, a permission, Copy brief). A screenshot or a photo it asks for is shown here before it
  * leaves. Nothing else in the studio shows the agent.
  */
-import { AudioLines, FileMusic, FileText, Image as ImageIcon, Music, Search, X } from 'lucide-react';
+import { AudioLines, FileMusic, FileText, Image as ImageIcon, Music, X } from 'lucide-react';
 import { type ClipboardEvent, type DragEvent, type KeyboardEvent, useEffect, useId, useRef, useState } from 'react';
 import { bounceSong, playheadTick, renderForAgent, sendToCreation } from '../app/actions.ts';
 import {
@@ -53,6 +53,7 @@ import { closeBar, openBar, store, useApp } from '../app/store.ts';
 import { installs, useInstalls } from '../audio/installs.ts';
 import { AgentView } from './AgentView.tsx';
 import { closeMenu } from './menu.tsx';
+import { Slash } from './slash.tsx';
 
 /** How far down, and how quickly, a finger goes for a swipe that opens the bar (less is a tap or a slip). */
 const SWIPE_PX = 36;
@@ -553,7 +554,7 @@ function BarPanel() {
         onDrop={onDrop}
       >
         <div className={`field${chips.length ? ' has-chips' : ''}`}>
-          <Search aria-hidden="true" />
+          <Slash />
           {chips.map((c) => {
             const Icon = CHIP_ICON[c.kind];
             return (

@@ -13,7 +13,6 @@ import {
   Play,
   Repeat,
   Rewind,
-  Search,
   Settings,
   SkipBack,
   SlidersVertical,
@@ -48,6 +47,7 @@ import { keyShort } from './key-short.ts';
 import { MetronomeButton } from './Metronome.tsx';
 import { openMenuAt } from './menu.tsx';
 import { jog } from './ruler.ts';
+import { Slash } from './slash.tsx';
 import { tapTempo } from './tap-tempo.ts';
 import { UndoRedo } from './UndoRedo.tsx';
 import { ViewMenu } from './ViewMenu.tsx';
@@ -582,7 +582,7 @@ export function BarButton() {
       aria-haspopup="dialog"
       onClick={openBar}
     >
-      {sign === 'busy' ? <span className="ring" aria-hidden="true" /> : <Search />}
+      {sign === 'busy' ? <span className="ring" aria-hidden="true" /> : <Slash />}
       {sign === 'done' && <span className="cb-dot" aria-hidden="true" />}
     </button>
   );

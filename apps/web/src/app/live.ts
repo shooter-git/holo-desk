@@ -72,6 +72,8 @@ let socket: WebSocket | null = null;
 let retry = 1000;
 let stateTimer = 0;
 let lastSent = '';
+/** When the last report went out (Date.now()). */
+let sentAt = 0;
 let listening = 0;
 const played: { tick: number | null; status: number; d1: number; d2: number; port: string }[] = [];
 
@@ -129,8 +131,9 @@ function songShape(p: Project | null): { markers: unknown[]; tracks: unknown[] }
   return shape;
 }
 
-function report(): void {
-  if (socket?.readyState !== WebSocket.OPEN) return;
+/** Sends the studio's state if it changed since the last report: whether it sent one. */
+function report(): boolean {
+  if (socket?.readyState !== WebSocket.OPEN) return false;
   const s = store.get();
   const p = s.project;
   const tick = engine.positionTick();
@@ -169,13 +172,33 @@ function report(): void {
     // what the agent's request is about: the view, and the scan open in it
     view: viewName(s, document.documentElement.dataset.layout?.startsWith('phone') ?? false),
     scan: s.scanView?.id ?? null,
+    // the tab is hidden: its browser slows its timers, so these reports may come only once a minute
+    // (remotes allow for it: see isStale in remote.ts)
+    hidden: document.visibilityState === 'hidden',
   };
   // (the one text is both the comparison and what's sent)
   const json = JSON.stringify({ type: 'state', state });
-  if (json !== lastSent) {
-    socket.send(json);
-    lastSent = json;
-  }
+  if (json === lastSent) return false;
+  socket.send(json);
+  lastSent = json;
+  sentAt = Date.now();
+  return true;
+}
+
+/** A hidden studio says something at least this often while a remote is giving it commands. */
+const ANSWER_MS = 1000;
+
+/**
+ * A remote's command has been carried out. A hidden page's timers are slowed by its browser (to once
+ * a minute after a few minutes), and a remote is used when the studio isn't in front of you, so its
+ * reports can't wait for them. A socket's messages still arrive at once: a hidden studio answers each
+ * command here, with what changed, or with its report again if it has said nothing for a second, so
+ * the remote knows it was heard.
+ */
+function answerRemote(): void {
+  if (document.visibilityState !== 'hidden') return;
+  if (Date.now() - sentAt >= ANSWER_MS) lastSent = '';
+  report();
 }
 
 async function onMessage(msg: Record<string, unknown>): Promise<void> {
@@ -329,7 +352,11 @@ async function onMessage(msg: Record<string, unknown>): Promise<void> {
       return;
     }
     case 'command':
-      await command(msg);
+      try {
+        await command(msg);
+      } finally {
+        answerRemote();
+      }
       return;
     case 'scan': {
       store.set({ scanTick: store.get().scanTick + 1 });
@@ -631,6 +658,8 @@ export function reconnectSoon(): void {
 if (typeof window !== 'undefined') {
   window.addEventListener('online', reconnectSoon);
   document.addEventListener('visibilitychange', () => {
+    // (remotes hear at once that this studio's reports may slow down, or that they're back)
+    report();
     if (document.visibilityState === 'visible') reconnectSoon();
   });
 }

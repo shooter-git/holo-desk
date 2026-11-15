@@ -1342,7 +1342,7 @@ describe('a line’s note pasted', () => {
     }
   }, 60_000);
 
-  it('made by the paste edit, plays the source’s pitch where it’s pasted, a longer note muted past it', () => {
+  it('made by the paste edit, plays the source’s pitch where it’s pasted, a longer note playing it stretched over itself', () => {
     const paste = noteEdit('paste');
     if (!paste) throw new Error('no paste edit');
     // the middle note takes the first's sound: the same length
@@ -1350,7 +1350,8 @@ describe('a line’s note pasted', () => {
     expect(same.n[1]).toMatchObject({ s: 0.3, p: 57 });
     const o = edited([wide], same).out[0] as Float32Array;
     expect(pitchAlong(o, wide, 2.06, 2.44, (s) => s - 1.7).worst).toBeLessThan(3);
-    // the second phrase's middle, found 0.45 s long, pasted on the first's (0.6 s): all of it, then quiet
+    // the second phrase's middle, found 0.45 s long, pasted on the first's (0.6 s): all of it, stretched
+    // over 0.5625 s, the rest muted and squeezed to a quarter of its 0.15 s
     const notes = line([
       { t: 0.3, d: 0.6, p: 57 },
       { t: 0.9, d: 0.6, p: 60 },
@@ -1360,11 +1361,13 @@ describe('a line’s note pasted', () => {
       { t: 3.55, d: 0.75, p: 61 },
     ]);
     const longer = paste.apply(notes, [1], { from: 5 });
-    expect(longer.n[1]).toMatchObject({ t: 0.9, d: 0.45, s: 3.1, p: 61 });
-    expect(longer.n[2]).toMatchObject({ t: 1.35, d: 0.15, m: true });
+    expect(longer.n[1]).toMatchObject({ t: 0.9, d: 0.45, s: 3.1, p: 61, te: 1.4625 });
+    expect(longer.n[2]).toMatchObject({ t: 1.35, d: 0.15, m: true, ts: 1.4625 });
     const q = edited([phrases], longer).out[0] as Float32Array;
-    expect(pitchAlong(q, phrases, 1.08, 1.3, (s) => s + 2.2).worst).toBeLessThan(3);
-    expect(rmsOf(q, 1.38, 1.47)).toBeLessThan(rmsOf(phrases, 1.38, 1.47) * 1e-3);
+    const sung = pitchAlong(q, phrases, 0.93, 1.44, sourceOf(longer));
+    expect(sung.steady).toBeLessThan(3);
+    expect(Math.abs(sung.mean)).toBeLessThan(1);
+    expect(rmsOf(q, 1.466, 1.497)).toBeLessThan(rmsOf(phrases, 1.466, 1.497) * 1e-3);
   });
 
   it('moved whole from later in the take than the note after it, moved +2 or not: its sound’s pitch to within 3 cents all through, the note after it as recorded', () => {

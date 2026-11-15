@@ -496,7 +496,7 @@ const DEFS: Def[] = [
   {
     name: 'paste',
     summary:
-      'Make notes play another note’s sound in their place (from the same recording), with its pitch as found; a note longer than it plays all of it, then is muted.',
+      'Make notes play another note’s sound in their place (from the same recording), with its pitch as found; a note longer than it plays all of it stretched over the note, quiet at its end for a quarter of the difference.',
     modes: LINE,
     selection: true,
     source: 'from',

@@ -605,17 +605,18 @@ function pasted(n: AudioNote, sound: NoteSound, len: number): AudioNote {
 function pasteOne(notes: AudioNotes, i: number, sound: NoteSound): AudioNotes {
   const n = notes.n[i] as AudioNote;
   if (n.d <= sound.d + 1e-9) return change(notes, [i], () => pasted(n, sound, n.d));
-  // longer than the sound: its first part plays all of it, and the rest is muted
+  // longer than the sound: its first part plays all of it, stretched over the note as far as the warp
+  // lets it, and the rest is muted (squeezed to a quarter of its length at most)
   const head = roundTime(Math.min(sound.d, n.d - MIN_NOTE_S));
   if (head < MIN_NOTE_S - 1e-9) return notes;
   const cut = splitNote(notes, i, n.t + head);
   if (cut === notes) return notes;
-  // (not stretched over the note by the warp: the renderer doesn't yet play a pasted sound stretched)
-  return editNotes(
+  const split = editNotes(
     change(cut, [i], (h) => pasted(h, sound, head)),
     [i + 1],
     { m: true },
   );
+  return resizeNote(split, i, 'end', playedEnd(n));
 }
 
 /**
@@ -625,9 +626,12 @@ function pasteOne(notes: AudioNotes, i: number, sound: NoteSound): AudioNotes {
  * move, kept as a distance from the semitone nearest its pitch as found, is made from the new pitch's
  * (a note tuned to its semitone plays the sound tuned to its own). What's read never runs past the
  * sound's end into the next note's: a note no longer than the sound plays its start, for the note's
- * length (its end left off); a longer note is cut where the sound runs out, its first part playing all
- * of it and the rest muted (the note's own sound would go on under it otherwise), 10 ms at least, so a
- * note just longer than the sound reads a little less of it. A line's notes only, as time edits are.
+ * length (its end left off); a longer note is cut where the sound runs out, 10 ms from its end at
+ * least (so a note just longer than the sound reads a little less of it), its first part playing all
+ * of the sound stretched over the note as far as the warp lets it, and the rest muted (the note's own
+ * sound would go on under it otherwise), squeezed to a quarter of its length: the warp squeezes no
+ * sound further, so a quarter of what the note has past the sound's length stays quiet at its end. A
+ * line's notes only, as time edits are.
  */
 export function pasteNotes(notes: AudioNotes, indices: readonly number[], source: AudioNote): AudioNotes {
   if (notes.mode !== 'mono') return notes;

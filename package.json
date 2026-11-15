@@ -24,6 +24,7 @@
     "lint": "biome check .",
     "format": "biome check --write .",
     "check:secrets": "node tools/scan-secrets.mjs --all",
+    "ui:check": "node --disable-warning=ExperimentalWarning tools/ui-check.mjs",
     "tailnet": "node --env-file-if-exists=.env tools/tailnet.mjs",
     "packs": "node --env-file-if-exists=.env --disable-warning=ExperimentalWarning apps/server/src/packs-cli.ts",
     "holo": "node --env-file-if-exists=.env --disable-warning=ExperimentalWarning packages/cli/src/main.ts",

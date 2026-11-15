@@ -25,7 +25,9 @@ pnpm lint && pnpm typecheck && pnpm test
 - Changes to the session format need a version bump and a migration in `validate.ts`: creations keep
   session files in their own repositories.
 - UI changes should work with a mouse, a pen and a finger, on desktop, tablet and phone (portrait and
-  landscape).
+  landscape). `pnpm build && pnpm ui:check` opens the studio at each of those sizes in a browser and
+  says what's cut off, covered or out of line (it needs Playwright: see the top of
+  `tools/ui-check.mjs`); CI runs it too.
 
 ## Commits
 

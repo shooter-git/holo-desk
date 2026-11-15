@@ -26,6 +26,7 @@ import {
   type InstrumentSpec,
   METER_CHANNELS,
   METER_FLOATS,
+  type SampleFrames,
   type ToWorklet,
 } from './protocol.ts';
 
@@ -493,10 +494,15 @@ export function aheadWorkersFor(cores: number): number {
   return Math.max(0, Math.min(6, cores - (cores <= 8 ? 3 : 2)));
 }
 
-/** A copy in shared memory (so every thread reads the same samples, and none holds its own). */
-export function toShared(a: Float32Array): Float32Array {
+/** A copy in shared memory (so every thread reads the same samples, and none holds its own), of the same kind. */
+export function toShared(a: Float32Array): Float32Array;
+export function toShared(a: SampleFrames): SampleFrames;
+export function toShared(a: SampleFrames): SampleFrames {
   if (a.buffer instanceof SharedArrayBuffer) return a;
-  const s = new Float32Array(new SharedArrayBuffer(a.byteLength));
+  const s =
+    a instanceof Int16Array
+      ? new Int16Array(new SharedArrayBuffer(a.byteLength))
+      : new Float32Array(new SharedArrayBuffer(a.byteLength));
   s.set(a);
   return s;
 }
@@ -534,7 +540,7 @@ export function aheadShared(msg: ToWorklet): ToWorklet {
         }),
       };
     case 'audio':
-      return { ...msg, channels: msg.channels.map(toShared) };
+      return { ...msg, channels: msg.channels.map((c) => toShared(c)) };
     case 'impulse':
       return { ...msg, data: sharedImpulse(msg.data) };
     default:

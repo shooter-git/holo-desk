@@ -7,6 +7,7 @@
 import {
   fadeTail,
   playingExtras,
+  type SampleFrames,
   type SamplerSpec,
   type SampleZone,
   type ZoneManifest,
@@ -14,7 +15,16 @@ import {
 } from '@holo/engine';
 import { type Instrument, type PackSound, type ParamDef, type SampleMic, samplerKnobs } from '@holo/session';
 import { engine } from './engine.ts';
-import { channelData, instrumentManifest, packFileData } from './pack-files.ts';
+import { Turns } from './files.ts';
+import { channelData, channelPcm, instrumentManifest, packFileData, pcm16, pcmChannel } from './pack-files.ts';
+
+/**
+ * Sample files the decoder works on at once, the whole library over. Each leaves its decoded file
+ * behind for the browser to clear away when it gets round to it, and a song opens many instruments
+ * at once: unchecked, what's left over can be more than the samples kept (a phone's browser closes
+ * the page).
+ */
+const decodes = new Turns(4);
 
 export interface InstrumentSummary {
   name: string;
@@ -174,20 +184,38 @@ export class SampleLibrary {
     progress?.(done, total);
     const zones: SampleZone[] = new Array(total);
     // zones that play the same stretch of the same file (a drum on two pads) share one copy
-    const shared = new Map<string, Promise<{ left: Float32Array; right: Float32Array | null; k: number }>>();
+    const shared = new Map<string, Promise<{ left: SampleFrames; right: SampleFrames | null; k: number }>>();
     const load = (z: ZoneManifest) => {
       const key = `${z.file}|${z.start}|${z.end}|${z.fadeOut ?? 0}`;
       let p = shared.get(key);
       if (!p) {
         p = (async () => {
-          const audio = await ctx.decodeAudioData(await packFileData(pack, z.file, priority));
-          // the decoder resampled to the context's rate: move the manifest's frames with it
-          const k = audio.sampleRate / z.rate;
-          const start = Math.max(0, Math.round(z.start * k));
-          const end = Math.min(audio.length, z.end > 0 ? Math.round(z.end * k) : audio.length);
-          // (in shared memory where the page has it: the audio thread and the workers play the one copy)
-          const left = channelData(audio, 0, start, end);
-          const right = audio.numberOfChannels > 1 ? channelData(audio, 1, start, end) : null;
+          const bytes = await packFileData(pack, z.file, priority);
+          // (read before decoding: the decoder takes the bytes)
+          const wav = pcm16(bytes);
+          let left: SampleFrames;
+          let right: SampleFrames | null;
+          let k: number;
+          if (wav && wav.rate === ctx.sampleRate && z.rate === wav.rate) {
+            // 16-bit at the context's own rate: its frames as they are, with nothing decoded (and
+            // nothing left over for the browser to clear away)
+            k = 1;
+            const start = Math.max(0, Math.round(z.start));
+            const end = Math.min(wav.frames, z.end > 0 ? Math.round(z.end) : wav.frames);
+            left = pcmChannel(bytes, wav, 0, start, end);
+            right = wav.channels > 1 ? pcmChannel(bytes, wav, 1, start, end) : null;
+          } else {
+            const audio = await decodes.run(() => ctx.decodeAudioData(bytes));
+            // the decoder resampled to the context's rate: move the manifest's frames with it
+            k = audio.sampleRate / z.rate;
+            const start = Math.max(0, Math.round(z.start * k));
+            const end = Math.min(audio.length, z.end > 0 ? Math.round(z.end * k) : audio.length);
+            // (in shared memory where the page has it: the audio thread and the workers play the one
+            // copy; a sample that was 16-bit stays 16-bit, at half a float's memory)
+            const take = wav ? channelPcm : channelData;
+            left = take(audio, 0, start, end);
+            right = audio.numberOfChannels > 1 ? take(audio, 1, start, end) : null;
+          }
           if (z.fadeOut) {
             fadeTail(left, Math.round(z.fadeOut * k));
             if (right) fadeTail(right, Math.round(z.fadeOut * k));

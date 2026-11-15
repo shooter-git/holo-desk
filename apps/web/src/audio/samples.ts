@@ -173,6 +173,8 @@ export class SampleLibrary {
       })
       .finally(() => {
         if (this.loading.get(key) === p) this.loading.delete(key);
+        // (what's still on its way is read from here: say so once this one isn't)
+        this.emitSoon();
       });
     this.loading.set(key, p);
     return p;
@@ -220,6 +222,11 @@ export class SampleLibrary {
     if (!engine.addSampler({ ...rest, zones: all }, ctx.sampleRate)) return;
     this.states.set(key, { state: 'ready' });
     this.emit();
+  }
+
+  /** Instruments whose samples are on their way. */
+  get pending(): number {
+    return this.loading.size;
   }
 
   /** A part's new zones handed over once the song stops. */

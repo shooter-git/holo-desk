@@ -96,6 +96,88 @@ export async function packFileData(pack: string, file: string, priority = 1): Pr
   }
 }
 
+/** Where a 16-bit PCM WAV keeps its frames (null for any other file). */
+export interface Pcm16 {
+  rate: number;
+  channels: number;
+  /** The byte its first frame starts at. */
+  offset: number;
+  frames: number;
+}
+
+/**
+ * A 16-bit PCM WAV's layout, read from its header (plain or "extensible"): its frames can be taken
+ * as they are, with nothing decoded.
+ */
+export function pcm16(data: ArrayBuffer): Pcm16 | null {
+  const bytes = new Uint8Array(data);
+  const view = new DataView(data);
+  const tag = (at: number) => String.fromCharCode(...bytes.subarray(at, at + 4));
+  if (bytes.length < 12 || tag(0) !== 'RIFF' || tag(8) !== 'WAVE') return null;
+  let at = 12;
+  let format = 0;
+  let channels = 0;
+  let rate = 0;
+  let bits = 0;
+  let body: [number, number] | null = null;
+  while (at + 8 <= bytes.length) {
+    const id = tag(at);
+    const size = view.getUint32(at + 4, true);
+    const start = at + 8;
+    if (id === 'fmt ' && start + 16 <= bytes.length) {
+      format = view.getUint16(start, true);
+      channels = view.getUint16(start + 2, true);
+      rate = view.getUint32(start + 4, true);
+      bits = view.getUint16(start + 14, true);
+      // WAVE_FORMAT_EXTENSIBLE: the real format is the sub-format's first two bytes
+      if (format === 0xfffe && size >= 26 && start + 26 <= bytes.length) format = view.getUint16(start + 24, true);
+    } else if (id === 'data') {
+      body = [start, Math.min(size, bytes.length - start)];
+      break;
+    }
+    at = start + size + (size & 1);
+  }
+  if (format !== 1 || bits !== 16 || !body || channels < 1 || !rate) return null;
+  return { rate, channels, offset: body[0], frames: Math.floor(body[1] / (2 * channels)) };
+}
+
+/** Frames as 16-bit PCM: in shared memory where the page has it (every thread plays the one copy). */
+function int16(frames: number): Int16Array {
+  const n = Math.max(0, frames);
+  return globalThis.crossOriginIsolated === true && typeof SharedArrayBuffer !== 'undefined'
+    ? new Int16Array(new SharedArrayBuffer(n * 2))
+    : new Int16Array(n);
+}
+
+/** One channel's frames from `start` to `end`, taken straight from a 16-bit WAV's bytes. */
+export function pcmChannel(data: ArrayBuffer, wav: Pcm16, channel: number, start: number, end: number): Int16Array {
+  const from = Math.max(0, Math.min(start, wav.frames));
+  const to = Math.max(from, Math.min(end, wav.frames));
+  const out = int16(to - from);
+  const view = new DataView(data);
+  const stride = wav.channels * 2;
+  let p = wav.offset + from * stride + channel * 2;
+  for (let i = 0; i < out.length; i++, p += stride) out[i] = view.getInt16(p, true);
+  return out;
+}
+
+/**
+ * A stretch of a decoded channel as 16-bit PCM, for a sample that was 16-bit before the decoder
+ * brought it to the context's rate: half a float's memory, and the rounding no louder than the
+ * file's own.
+ */
+export function channelPcm(audio: AudioBuffer, channel: number, start: number, end: number): Int16Array {
+  const data = audio.getChannelData(channel);
+  const from = Math.max(0, Math.min(start, data.length));
+  const to = Math.max(from, Math.min(end, data.length));
+  const out = int16(to - from);
+  for (let i = 0; i < out.length; i++) {
+    const v = Math.round((data[from + i] as number) * 32768);
+    out[i] = v > 32767 ? 32767 : v < -32768 ? -32768 : v;
+  }
+  return out;
+}
+
 /**
  * A stretch of a decoded channel: in shared memory where the page has it (the audio thread and the
  * workers then play the one copy, which outlives them), else a copy of its own.

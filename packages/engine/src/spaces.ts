@@ -224,10 +224,18 @@ export function generateSpace(name: string, seed: number, decay: number, rate: n
   }
   const pre = Math.round(p.pre * rate);
   const paths: Float32Array[] = [];
+  // the working arrays, made once for the four paths: a long hall's are tens of megabytes each, and
+  // made anew for every band and path they came to hundreds, more than a phone's browser allows a page
+  const nre = new Float64Array(size);
+  const nim = new Float64Array(size);
+  const re = new Float64Array(size);
+  const im = new Float64Array(size);
+  const late = new Float64Array(n);
+  const er = new Float64Array(n);
   for (let ch = 0; ch < 4; ch++) {
     // the noise, made clumpy for scattering spaces
-    const nre = new Float64Array(size);
-    const nim = new Float64Array(size);
+    nre.fill(0);
+    nim.fill(0);
     for (let i = 0; i < n; i++) nre[i] = r.normal();
     if (p.sparse) {
       // a slowly varying weight (30 points a second), its size twice its absolute value
@@ -246,12 +254,11 @@ export function generateSpace(name: string, seed: number, decay: number, rate: n
     }
     fft(nre, nim);
     // each band rings out at its own rate; two bands per inverse transform (both are real)
-    const late = new Float64Array(n);
+    late.fill(0);
     for (let b = 0; b < 7; b += 2) {
       const ma = masks[b] as Float64Array;
       const mb = (masks[b + 1] ?? null) as Float64Array | null;
-      const re = new Float64Array(size);
-      const im = new Float64Array(size);
+      // (every bin of re and im is written below: nothing of the last band is left in them)
       for (let k = 0; k < bins; k++) {
         const ga = (ma[k] as number) * (roll[k] as number);
         const gb = mb ? (mb[k] as number) * (roll[k] as number) : 0;
@@ -280,7 +287,7 @@ export function generateSpace(name: string, seed: number, decay: number, rate: n
       late[i] = t < p.pre ? 0 : (late[i] as number) * (1 - Math.exp(-(t - p.pre) / p.build));
     }
     // early reflections after the pre-delay, thicker and duller as they go
-    const er = new Float64Array(n);
+    er.fill(0);
     if (p.er) {
       const times: number[] = [];
       for (let k = 0; k < p.er; k++) times.push(p.pre + r.uniform() * p.erSpan * (1 + 0.25 * (ch % 2)));

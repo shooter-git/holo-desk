@@ -38,7 +38,7 @@ import {
   projectEnd,
   SYNTH_PRESETS,
 } from '@holo/session';
-import { AheadPlayer, AheadPool, aheadPartGuess, aheadTrackGuess } from '../src/ahead.ts';
+import { AheadPlayer, AheadPool, aheadPartGuess, aheadTrackGuess, toShared } from '../src/ahead.ts';
 import {
   clipKey,
   compileClips,
@@ -297,7 +297,7 @@ function shared<T extends ToWorklet>(msg: T): T {
         ...msg,
         spec: {
           ...msg.spec,
-          zones: msg.spec.zones.map((z) => ({ ...z, left: share(z.left), right: opt(z.right) })),
+          zones: msg.spec.zones.map((z) => ({ ...z, left: toShared(z.left), right: z.right && toShared(z.right) })),
         },
       };
     case 'performance':

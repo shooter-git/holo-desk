@@ -21,7 +21,7 @@
 
 import { MIC_OFF, micParam } from '@holo/session';
 import { type Controls, Envelope, Instrument, type Voice } from './instrument.ts';
-import type { SamplerSpec, SampleZone } from './protocol.ts';
+import { type SampleFrames, type SamplerSpec, type SampleZone, sampleScale } from './protocol.ts';
 
 /** What a sampler's voices read as they play: its knobs, and the envelope buffer they share. */
 class SamplerState {
@@ -70,18 +70,20 @@ class SampleLayer {
     this.mic = mic;
     this.baseRatio = baseRatio;
     this.m = micGain;
+    // (16-bit frames come to full scale by the gain: floats are played by exactly the gain they always were)
+    const g = gain * sampleScale(zone.left);
     if (pan === 0) {
-      this.gl = gain;
-      this.gr = gain;
+      this.gl = g;
+      this.gr = g;
     } else if (zone.right) {
       // a stereo sample: its balance
-      this.gl = gain * Math.min(1, 1 - pan);
-      this.gr = gain * Math.min(1, 1 + pan);
+      this.gl = g * Math.min(1, 1 - pan);
+      this.gr = g * Math.min(1, 1 + pan);
     } else {
       // a mono one: constant power, as loud as both sides in the center
       const theta = ((pan + 1) * Math.PI) / 4;
-      this.gl = gain * Math.cos(theta) * Math.SQRT2;
-      this.gr = gain * Math.sin(theta) * Math.SQRT2;
+      this.gl = g * Math.cos(theta) * Math.SQRT2;
+      this.gr = g * Math.sin(theta) * Math.SQRT2;
     }
     // a loop that runs to the sample's end (or past it) loops the whole of what's there
     const loopEnd = Math.min(zone.loopEnd, zone.left.length);
@@ -104,7 +106,7 @@ class SampleLayer {
    * last frame), into `y`. The position comes from the fields and the sample goes to one: a call V8
    * doesn't inline boxes every double it passes or returns, a heap allocation each sample.
    */
-  private read(data: Float32Array, back: boolean): void {
+  private read(data: SampleFrames, back: boolean): void {
     const p = back ? this.pos - this.loopLen : this.pos;
     const i = Math.floor(p);
     const t = p - i;

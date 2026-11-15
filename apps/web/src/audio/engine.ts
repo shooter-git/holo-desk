@@ -79,9 +79,13 @@ import processorUrl from './worklet/processor.ts?worker&url';
 export type LatencyMode = 'lowest' | 'balanced' | 'safe';
 
 /** An audio context at the engine's rate for this device (engineRate). */
-async function openContext(hint: AudioContextLatencyCategory | number, song?: number): Promise<AudioContext> {
+async function openContext(
+  hint: AudioContextLatencyCategory | number,
+  song?: number,
+  chosen?: number | null,
+): Promise<AudioContext> {
   const ctx = new AudioContext({ latencyHint: hint });
-  const rate = engineRate(ctx.sampleRate, song);
+  const rate = engineRate(ctx.sampleRate, song, chosen);
   if (rate === ctx.sampleRate) return ctx;
   try {
     const paced = new AudioContext({ latencyHint: hint, sampleRate: rate });
@@ -193,8 +197,11 @@ export class AudioEngine {
   private samplers = new Set<string>();
   /** How many microphones each loaded instrument sounds a hit on (what a hit costs, rendering ahead). */
   private samplerMics = new Map<string, number>();
-  /** Samplers whose samples are in shared memory: they outlive the threads, so a restart needn't load them again. */
-  private kept = new Map<string, SamplerSpec>();
+  /**
+   * Samplers whose samples are in shared memory, and the rate they were loaded at: they outlive the
+   * threads, so a restart at the same rate needn't load them again.
+   */
+  private kept = new Map<string, { spec: SamplerSpec; rate: number }>();
   /**
    * The song's clips as the audio thread was handed them in shared memory, by clip and rate: a new
    * audio thread (new latency settings) is handed the same, where a clip decoded again would be held
@@ -210,6 +217,8 @@ export class AudioEngine {
   private forgetListeners = new Set<(keys: string[]) => void>();
   private errorListeners = new Set<(message: string) => void>();
   latencyMode: LatencyMode = 'balanced';
+  /** The rate Settings › Audio asks for (null: the device's own, as engineRate has it). */
+  chosenRate: number | null = null;
   private lowLatency = true;
   /** The sound device to play through ('' = the system's default). */
   private output = '';
@@ -237,12 +246,16 @@ export class AudioEngine {
     return this.ctx !== null && (this.remote || this.ctx.state === 'running');
   }
 
-  /** Must be called from a user gesture (a click or a key) the first time. */
-  async start(mode: LatencyMode = this.latencyMode): Promise<void> {
+  /**
+   * Must be called from a user gesture (a click or a key) the first time. `chosen`: the rate
+   * Settings › Audio asks for (null: the device's own); HO[LO] Engine plays at its device's.
+   */
+  async start(mode: LatencyMode = this.latencyMode, chosen: number | null = this.chosenRate): Promise<void> {
     const remote = companion.device;
     if (
       this.ctx &&
       this.latencyMode === mode &&
+      (remote !== null || this.chosenRate === chosen) &&
       this.remote === (remote !== null) &&
       this.sampleRate === (remote?.rate ?? this.sampleRate)
     ) {
@@ -254,6 +267,7 @@ export class AudioEngine {
     if (this.ctx) await this.close();
     this.idleTick = keep;
     this.latencyMode = mode;
+    this.chosenRate = chosen;
     if (remote) {
       // HO[LO] Engine plays: this context decodes the samples at its rate and plays nothing
       this.ctx = new AudioContext({ sampleRate: remote.rate });
@@ -272,7 +286,7 @@ export class AudioEngine {
       this.locate(Math.max(0, keep));
       return;
     }
-    const ctx = await openContext(HINT[mode], this.project?.sampleRate);
+    const ctx = await openContext(HINT[mode], this.project?.sampleRate, chosen);
     await ctx.audioWorklet.addModule(processorUrl);
     const node = new AudioWorkletNode(ctx, 'holo-engine', {
       // the input is for audio tracks: monitoring and recording
@@ -350,9 +364,13 @@ export class AudioEngine {
     const keys = [...this.samplers];
     this.samplers.clear();
     for (const key of keys) {
-      const spec = this.kept.get(key);
-      if (spec) this.addSampler(spec);
-      else again.push(key);
+      // (samples are at the rate they were loaded at: at another, they're loaded again)
+      const kept = this.kept.get(key);
+      if (kept && kept.rate === this.sampleRate) this.addSampler(kept.spec, kept.rate);
+      else {
+        this.kept.delete(key);
+        again.push(key);
+      }
     }
     if (again.length) for (const fn of this.restartListeners) fn(again);
     if (this.project) this.sync(this.project);
@@ -689,8 +707,11 @@ export class AudioEngine {
       this.audioSent.delete(key);
       this.post({ type: 'forgetAudio', key });
     }
-    for (const key of this.keptAudio.keys())
-      if (!keys.has(key.slice(0, key.lastIndexOf('@')))) this.keptAudio.delete(key);
+    // (and what was kept at another rate: a clip is loaded again at this one)
+    for (const key of this.keptAudio.keys()) {
+      const at = key.lastIndexOf('@');
+      if (!keys.has(key.slice(0, at)) || Number(key.slice(at + 1)) !== ctx.sampleRate) this.keptAudio.delete(key);
+    }
     for (const clip of wanted) {
       const key = clipKey(clip);
       if (this.audioSent.has(key)) continue;
@@ -873,8 +894,14 @@ export class AudioEngine {
    * Hand an instrument's samples to the audio thread. In shared memory (rendering ahead, or decoded
    * there to begin with) the audio thread and every worker play the one copy, and this side keeps
    * it for the next audio thread; otherwise they're transferred, and this side keeps no copy.
+   * `rate`: the rate they were loaded at. Loaded for an audio thread at another (the rate changed
+   * while they came), they're loaded again, and this says false.
    */
-  addSampler(spec: SamplerSpec): void {
+  addSampler(spec: SamplerSpec, rate = this.sampleRate): boolean {
+    if (rate !== this.sampleRate) {
+      for (const fn of this.restartListeners) fn([spec.key]);
+      return false;
+    }
     this.samplers.add(spec.key);
     this.samplerMics.set(spec.key, Math.max(1, spec.mics?.length ?? 1));
     if (this.usedSamplers.has(spec.key)) this.unused.delete(spec.key);
@@ -886,7 +913,7 @@ export class AudioEngine {
         zones: spec.zones.map((z) => ({ ...z, left: toShared(z.left), right: z.right ? toShared(z.right) : null })),
       };
     const arrays = own.zones.flatMap((z) => (z.right ? [z.left, z.right] : [z.left]));
-    if (arrays.every(isShared)) this.kept.set(spec.key, own);
+    if (arrays.every(isShared)) this.kept.set(spec.key, { spec: own, rate });
     else this.kept.delete(spec.key);
     if (this.remote) {
       // HO[LO] Engine gets floats: one built before 16-bit samples would play their numbers as they are
@@ -895,9 +922,10 @@ export class AudioEngine {
         zones: own.zones.map((z) => ({ ...z, left: floats(z.left), right: z.right && floats(z.right) })),
       };
       this.post({ type: 'sampler', spec: sent });
-      return;
+      return true;
     }
     this.post({ type: 'sampler', spec: own }, transferable(arrays));
+    return true;
   }
 
   /** In shared memory as it is, or as a copy there when rendering ahead; otherwise a copy to transfer. */

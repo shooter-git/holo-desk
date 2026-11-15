@@ -58,6 +58,7 @@ import {
 import { bounce, bounceRange } from '../audio/bounce.ts';
 import { companion, STUDIO_ENGINE } from '../audio/companion.ts';
 import { engine, type RecordedTake, warmEngine } from '../audio/engine.ts';
+import { chosenRate, type RateChoice } from '../audio/engine-rate.ts';
 import { audioFiles } from '../audio/files.ts';
 import { midi } from '../audio/midi.ts';
 import { instrumentManifest } from '../audio/pack-files.ts';
@@ -70,6 +71,7 @@ import { ApiError, api } from './api.ts';
 import { comparePlan, type Pass } from './compare.ts';
 import * as history from './history.ts';
 import { browserShelf, Keeper, type Restored, stepJobs } from './kept-history.ts';
+import { isTouch } from './layout.ts';
 // (live.ts imports this module too: neither uses the other while loading, so the cycle is harmless)
 import { reconnectSoon, reportHistory } from './live.ts';
 import { type AppState, type Step, store, toast } from './store.ts';
@@ -706,7 +708,7 @@ export function ensureAudio(): Promise<void> {
   if (!starting) {
     starting = (async () => {
       try {
-        await engine.start(store.get().latencyMode);
+        await engine.start(store.get().latencyMode, wantedRate());
         store.set({ audioReady: true });
         await engine.setInput(store.get().inputDevice);
         const p = store.get().project;
@@ -738,6 +740,19 @@ export async function setLatencyMode(mode: AppStateLatency): Promise<void> {
   }
 }
 type AppStateLatency = ReturnType<typeof store.get>['latencyMode'];
+
+/** The rate this device's choice asks the engine for (null: the sound device's own). */
+const wantedRate = () => chosenRate(store.get().rateChoice, isTouch());
+
+/** Play at another rate (Settings › Audio): the audio starts again at it, and the song's sounds load at it. */
+export async function setRateChoice(choice: RateChoice): Promise<void> {
+  store.set({ rateChoice: choice, roundTrip: null });
+  // (before the audio starts, or while HO[LO] Engine plays at its device's rate, it waits for the next start)
+  if (engine.ctx && !engine.remote) {
+    await engine.start(store.get().latencyMode, wantedRate());
+    syncMetronome();
+  }
+}
 
 export async function enableMidi(): Promise<void> {
   const status = await midi.enable();
@@ -802,7 +817,7 @@ async function switchEngine(remote: boolean): Promise<void> {
   if (playing) stop();
   starting = null;
   try {
-    await engine.start(store.get().latencyMode);
+    await engine.start(store.get().latencyMode, wantedRate());
     store.set({ audioReady: true });
     syncMetronome();
     engine.setLowLatency(store.get().lowLatency);

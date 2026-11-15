@@ -1316,12 +1316,20 @@ export function TracksArea() {
       menu(e.clientX, e.clientY);
       return;
     }
+    const touch = e.pointerType === 'touch';
     if (hit >= 0 && doubleTap) {
-      commit(
-        points.filter((_, i) => i !== hit),
-        'Delete Point',
-      );
-      return;
+      const remove = () =>
+        commit(
+          points.filter((_, i) => i !== hit),
+          'Delete Point',
+        );
+      // a mouse's second press deletes the point. A finger's second tap does once it lifts: a tap on
+      // a point and a drag straight after it move the point
+      if (!touch) {
+        remove();
+        return;
+      }
+      tapAt.current = remove;
     }
     const grid = DIVISIONS[store.get().grid] ?? 240;
     let working = points;
@@ -1331,6 +1339,15 @@ export function TracksArea() {
       at = working.findIndex((p) => p[0] > tick);
       if (at < 0) at = working.length;
       working = [...working.slice(0, at), [tick, fromY(y)], ...working.slice(at)];
+    }
+    // A finger on a lane, away from its points, scrolls the view, as it does with the lanes hidden:
+    // a tap puts a point there, and a point is what a finger drags. With the lanes showing, a scroll
+    // over the tracks used to leave a point wherever it began.
+    if (touch && hit < 0) {
+      const added = working;
+      menuAt.current = (ev) => menu(ev.clientX, ev.clientY);
+      panDrag(e, () => commit(added, 'Add Automation Point'));
+      return;
     }
     const show = (px: number, py: number, v: number) => {
       const tip = laneTip.current;
@@ -1358,10 +1375,12 @@ export function TracksArea() {
         show(px, py, v);
         redraw();
       },
-      onUp: () => {
+      onUp: (_ev, g) => {
         if (laneTip.current) laneTip.current.style.display = 'none';
         lanePreview.current = null;
         redraw();
+        // (a point pressed and let go where it was hasn't moved: that is no step to undo)
+        if (hit >= 0 && !g.moved) return;
         commit(working, hit >= 0 ? 'Move Automation Point' : 'Add Automation Point');
       },
     });

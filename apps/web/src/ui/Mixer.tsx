@@ -60,6 +60,7 @@ import { isMenuPress } from './gesture.ts';
 import { openMenu, openMenuAt } from './menu.tsx';
 import { pressToReorder, useNoScrollWhileDragging } from './reorder.ts';
 import { useScrollCue } from './scroll-cue.ts';
+import { pastSlop, upDownOnly } from './slop.ts';
 import { slotName, stripRows } from './strips.ts';
 import { inputLabel, instrumentLabel, instrumentMenu } from './Tracks.tsx';
 
@@ -279,10 +280,15 @@ export const Strip = memo(function Strip({ id, kind, name, color, channel, track
                     if (e.button !== 0) return;
                     e.stopPropagation();
                     let level = s.level;
+                    // (a finger's sideways swipe scrolls the strips: the level follows it up and down, slop.ts)
+                    const upDown = upDownOnly(e);
+                    const rise = pastSlop();
                     beginGesture('Send Level');
                     startDrag(e, {
                       onMove: (dx, dy) => {
-                        level = Math.max(-60, Math.min(6, level + (dx - dy) * 0.25));
+                        const by = upDown ? -rise(dy) : dx - dy;
+                        if (by === 0) return;
+                        level = Math.max(-60, Math.min(6, level + by * 0.25));
                         gestureChange([
                           {
                             op: 'updateChannel',
@@ -369,14 +375,18 @@ export const Strip = memo(function Strip({ id, kind, name, color, channel, track
                   let tx = 0;
                   let ty = 0;
                   let moved = false;
+                  // (a finger's sideways swipe scrolls the strips: the distance follows it up and down, slop.ts)
+                  const upDown = upDownOnly(e);
+                  const rise = pastSlop();
                   beginGesture('Distance');
                   startDrag(e, {
                     onMove: (dx, dy) => {
                       tx += dx;
                       ty += dy;
-                      if (!moved && Math.hypot(tx, ty) < TAP) return;
+                      const by = upDown ? -rise(dy) : dx - dy;
+                      if (upDown ? by === 0 : !moved && Math.hypot(tx, ty) < TAP) return;
                       moved = true;
-                      d = Math.max(0, Math.min(1, d + (dx - dy) * 0.004));
+                      d = Math.max(0, Math.min(1, d + by * 0.004));
                       gestureChange([
                         {
                           op: 'updateChannel',

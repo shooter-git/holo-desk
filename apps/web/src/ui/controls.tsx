@@ -14,6 +14,7 @@ import {
 import { engine } from '../audio/engine.ts';
 import { prepare, useFrame } from './frame.ts';
 import { entryText, parseParam } from './param-entry.ts';
+import { pastSlop, upDownOnly } from './slop.ts';
 import { sideways, WheelSteps } from './wheel-steps.ts';
 
 // ---- the fader law: about 0 dB at 84% of the travel, +6 dB at the top ----
@@ -212,11 +213,17 @@ export function Knob({
         if (e.button !== 0) return;
         burst.flush();
         unit.current = toUnit(def, value);
+        // under a finger in the mixer's strips a knob answers to up and down alone: a sideways swipe
+        // is the browser's, and scrolls the strips (slop.ts)
+        const upDown = upDownOnly(e);
+        const rise = pastSlop();
         startDrag(e, {
           onStart: onBegin,
           onMove: (dx, dy, ev) => {
+            const by = upDown ? -rise(dy) : dx - dy;
+            if (by === 0) return;
             const speed = ev.shiftKey ? 0.0015 : 0.006;
-            unit.current = clamp01(unit.current + (dx - dy) * speed);
+            unit.current = clamp01(unit.current + by * speed);
             let v = fromUnit(def, unit.current);
             if (detent !== undefined && Math.abs(v - def.default) <= detent) v = def.default;
             onChange(v);
@@ -494,10 +501,15 @@ export function Fader({ db, onChange, onBegin, onEnd, height, label = 'Volume' }
         if (e.button !== 0) return;
         burst.flush();
         p.current = dbToFader(db);
+        // (in a row of strips a finger's sideways swipe scrolls them, from a fader too: slop.ts)
+        const upDown = upDownOnly(e);
+        const rise = pastSlop();
         startDrag(e, {
           onStart: onBegin,
           onMove: (_dx, dy, ev) => {
-            p.current = Math.max(0, Math.min(1, p.current - dy / travel / (ev.shiftKey ? 6 : 1)));
+            const by = upDown ? rise(dy) : dy;
+            if (by === 0) return;
+            p.current = Math.max(0, Math.min(1, p.current - by / travel / (ev.shiftKey ? 6 : 1)));
             const v = faderToDb(p.current);
             onChange(v > -0.25 && v < 0.25 ? 0 : Math.round(v * 10) / 10);
           },

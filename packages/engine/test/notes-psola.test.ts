@@ -897,14 +897,19 @@ function glideAt(x: Float32Array, m: number, from: number, to: number, near: num
   return best;
 }
 
-/** The fine track's pitch of `x` at each time from `from` to `to` (s) against that of `base` at f(time): the mean difference and the worst (cents). */
+/**
+ * The fine track's pitch of `x` at each time from `from` to `to` (s) against that of `base` at f(time),
+ * `by` cents above it: the mean difference, the worst, and the worst of its means over 25 ms (five
+ * steps: the track's own jitter step to step evens out), in cents.
+ */
 function pitchAlong(
   x: Float32Array,
   base: Float32Array,
   from: number,
   to: number,
   f: (s: number) => number,
-): { mean: number; worst: number } {
+  by = 0,
+): { mean: number; worst: number; steady: number } {
   const a = fineTrack(x, SR);
   const b = fineTrack(base, SR);
   const step = (b.t[1] as number) - (b.t[0] as number);
@@ -915,9 +920,12 @@ function pitchAlong(
     const u = (f(s) - (b.t[0] as number)) / step;
     const j = Math.floor(u);
     const m = (b.midi[j] as number) + ((b.midi[j + 1] as number) - (b.midi[j] as number)) * (u - j);
-    if (!Number.isNaN(m)) diffs.push(((a.midi[k] as number) - m) * 100);
+    if (!Number.isNaN(m)) diffs.push(((a.midi[k] as number) - m) * 100 - by);
   }
-  return { mean: diffs.reduce((s, d) => s + d, 0) / diffs.length, worst: Math.max(...diffs.map(Math.abs)) };
+  let steady = 0;
+  for (let k = 0; k + 5 <= diffs.length; k++)
+    steady = Math.max(steady, Math.abs(diffs.slice(k, k + 5).reduce((s, d) => s + d, 0) / 5));
+  return { mean: diffs.reduce((s, d) => s + d, 0) / diffs.length, worst: Math.max(...diffs.map(Math.abs)), steady };
 }
 
 /** A sound's level above 9 kHz within 5 ms of frame `at`: its RMS through a windowed-sinc high pass (255 taps). */
@@ -1056,6 +1064,27 @@ const timeEdits = (): [string, Float32Array, AudioNotes][] => [
   ['pasted after a rest', wide, wideNotes({ p: 57, s: 0.3 })],
   ['pasted in a legato line', phrases, pastedPhrase],
 ];
+
+type Edit = [string, Float32Array, AudioNotes];
+
+/**
+ * A note pasted from later in the take, then stretched to f times its length (its end moved), moved up
+ * `up` semitones too: after a rest (the third note's sound in the second's place) and in a legato line
+ * (as `pastedPhrase`; to twice its length, the note after it moved 200 ms later first, for room).
+ */
+const pastedStretched = (f: number, up: number): [Edit, Edit] => {
+  const tuned = (n: Partial<AudioNote>) => (up ? { ...n, to: (n.p as number) + up } : n);
+  const inLine = line(pastedPhrase.n.map((n, i) => (i === 1 ? tuned(n) : n)));
+  const name = `×${f}${up ? `, +${up}` : ''}`;
+  return [
+    [`after a rest, ${name}`, wide, resizeNote(wideNotes(tuned({ p: 59, s: 3.7 })), 1, 'end', 2 + 0.5 * f)],
+    [
+      `in a legato line, ${name}`,
+      phrases,
+      resizeNote(f > 1.5 ? moveNotes(inLine, [2], 0.2) : inLine, 1, 'end', 0.9 + 0.6 * f),
+    ],
+  ];
+};
 
 describe('a line’s note moved in time', () => {
   it('lands where it was moved to after a rest: 40, 120 and 250 ms either way, to within 2 ms, its pitch to within 3 cents', () => {
@@ -1235,6 +1264,82 @@ describe('a line’s note pasted', () => {
     expect(sung.worst).toBeLessThan(3);
     expect(Math.abs(pitchAlong(p, phrases, 0.95, 1.45, (s) => s + 2.2).mean)).toBeLessThan(3);
   });
+
+  it('pasted and stretched ×1.5 or ×2 or squeezed to ×0.75, moved +2 or not: its sound’s pitch as played there to within 3 cents once settled, its start and end where the warp puts them to within 2 ms', () => {
+    // after a rest: where the sound pasted rises and falls through half its level, as recorded (s)
+    const rise = crosses(wide, true, 3.5, [3.8, 4.1]);
+    const fall = crosses(wide, false, 4, [3.8, 4.1]);
+    // in a line: where it glides up through 60 from the note before it, and down through 60.5 into the next
+    const into = glideAt(phrases, 60, 2.9, 3.3, 3.1);
+    const out = glideAt(phrases, 60.5, 3.5, 3.9, 3.7);
+    for (const f of [1.5, 2, 0.75])
+      for (const up of [0, 2]) {
+        const [[restName, , rest], [lineName, , inLine]] = pastedStretched(f, up);
+        // (settled: 100 ms in from either end, as played, or 100 ms times the stretch)
+        const m = 0.1 * Math.max(1, f);
+        expect(rest.n[1]?.te, restName).toBeCloseTo(2 + 0.5 * f, 9);
+        const w = warpOf(rest);
+        const o = edited([wide], rest).out[0] as Float32Array;
+        const sung = pitchAlong(o, wide, 2 + m, 2 + 0.5 * f - m, sourceOf(rest), 100 * up);
+        expect(sung.steady, restName).toBeLessThan(3);
+        expect(Math.abs(sung.mean), restName).toBeLessThan(1);
+        const held: [number, number] = [2.1, 2 + 0.4 * f];
+        expect(Math.abs(crosses(o, true, 1.8, held) - warpAt(w, rise - 1.7)), restName).toBeLessThan(0.002);
+        expect(Math.abs(crosses(o, false, 2 + 0.4 * f, held) - warpAt(w, fall - 1.7)), restName).toBeLessThan(0.002);
+        // in a line, its glides where the warp puts them: through 60 and 60.5 as the sound pasted was sung,
+        // plus the shift its edit makes there (crossing over into its neighbours' at its edges)
+        const te = 0.9 + 0.6 * f;
+        expect(inLine.n[1]?.te, lineName).toBeCloseTo(te, 9);
+        const v = warpOf(inLine);
+        const p = edited([phrases], inLine).out[0] as Float32Array;
+        const sungLine = pitchAlong(p, phrases, 0.9 + m, te - m, sourceOf(inLine), 100 * up);
+        expect(sungLine.steady, lineName).toBeLessThan(3);
+        expect(Math.abs(sungLine.mean), lineName).toBeLessThan(1);
+        const played = (s: number) => warpAt(v, s - 2.2);
+        const lift = (s: number) => targetShift(inLine.n, [s - 2.2])[0] as number;
+        expect(Math.abs(glideAt(p, 60 + lift(into), 0.7, 1.1, played(into)) - played(into)), lineName).toBeLessThan(
+          0.002,
+        );
+        expect(
+          Math.abs(glideAt(p, 60.5 + lift(out), te - 0.2, te + 0.2, played(out)) - played(out)),
+          lineName,
+        ).toBeLessThan(0.002);
+      }
+  }, 60_000);
+
+  it('pasted and stretched: the recording to the bit outside its patches, their first and last frames too, no click at its seams, the same twice', () => {
+    for (const f of [1.5, 2, 0.75])
+      for (const up of [0, 2])
+        for (const [name, base, notes] of pastedStretched(f, up)) {
+          const { out, patches } = edited([base], notes);
+          const o = out[0] as Float32Array;
+          expect(patches.length, name).toBeGreaterThan(0);
+          for (const p of patches) {
+            const rendered = renderNotePatch([base], SR, p.spec)[0] as Float32Array;
+            expect(rendered.length, name).toBe(p.spec.b - p.spec.a);
+            expect(rendered[0], name).toBe(base[p.spec.a]);
+            expect(rendered[rendered.length - 1], name).toBe(base[p.spec.b - 1]);
+          }
+          for (const [first, last] of differing(base, o))
+            expect(
+              patches.some((p) => first > p.spec.a && last < p.spec.b),
+              name,
+            ).toBe(true);
+          for (const seam of seamsOf(o, base, notes, patches)) {
+            expect(seam.step, name).toBeLessThanOrEqual(1.5);
+            expect(seam.high, name).toBeLessThanOrEqual(seam.highRef);
+          }
+        }
+    for (const [, base, notes] of pastedStretched(2, 2)) {
+      const other = Float32Array.from(base, (v, i) => v * 0.7 + 0.01 * Math.sin(i / 10));
+      for (const job of regionPatches(clip(notes), SR)) {
+        const one = renderNotePatch([base, other], SR, job.spec);
+        const two = renderNotePatch([base, other], SR, job.spec);
+        expect(bytes(one[0]).equals(bytes(two[0]))).toBe(true);
+        expect(bytes(one[1]).equals(bytes(two[1]))).toBe(true);
+      }
+    }
+  }, 60_000);
 });
 
 describe('a song with a line’s notes edited, rendered', () => {

@@ -436,6 +436,7 @@ export function aheadOwners(graph: GraphSpec, workers: number, cost: (num: numbe
     const c = cost(s.num);
     return Number.isFinite(c) ? Math.max(1e-4, c) : 1e-4;
   });
+  const total = costs.reduce((a, b) => a + b, 0);
   const order = [
     ...graph.buses.map((_, i) => tracks + i).reverse(),
     ...graph.tracks.map((_, i) => i).sort((a, b) => (costs[b] as number) - (costs[a] as number) || a - b),
@@ -451,12 +452,15 @@ export function aheadOwners(graph: GraphSpec, workers: number, cost: (num: numbe
   const pack = (cap: number): { at: number[]; busiest: number; spread: number } | null => {
     const load = new Array<number>(workers).fill(0);
     const at = strips.map(() => workers - 1);
+    // (a hair over the cap: the loads add up in another order than the total did, and their last
+    // digit can come out above it, which on one worker refused the whole song)
+    const room = cap + total * 1e-9;
     for (const i of order) {
       let hi = workers - 1;
       for (const to of feeds[i] as number[]) hi = Math.min(hi, at[to] as number);
       const c = costs[i] as number;
       let w = hi;
-      while (w >= 0 && (load[w] as number) + c > cap) w--;
+      while (w >= 0 && (load[w] as number) + c > room) w--;
       if (w < 0) return null;
       load[w] = (load[w] as number) + c;
       at[i] = w;
@@ -466,8 +470,8 @@ export function aheadOwners(graph: GraphSpec, workers: number, cost: (num: numbe
   // (a greedy packing isn't sure to fit at a cap because it fits at a lower one: try a range, keep the
   // one whose busiest worker is lightest, and of those as good, the most even)
   const lo = Math.max(...costs);
-  const total = costs.reduce((a, b) => a + b, 0);
-  let best = pack(total) as { at: number[]; busiest: number; spread: number };
+  // (everything on the last worker fits whatever happens: what's left when no packing does)
+  let best = pack(total) ?? { at: strips.map(() => workers - 1), busiest: total, spread: total * total };
   for (let step = 0; step < 96; step++) {
     const tried = pack(lo + ((total - lo) * step) / 96);
     if (!tried) continue;

@@ -1406,9 +1406,11 @@ a.btn {
   box-shadow: inset 1px 0 0 var(--hi);
 }
 
+/* (under a finger a strip is wide enough for its slots' names beside their finger-sized buttons,
+   and for the longest of its headings) */
 @media (pointer: coarse) {
   .strip {
-    width: 96px;
+    width: 104px;
   }
 }
 
@@ -1432,6 +1434,10 @@ a.btn {
   gap: 4px;
   flex: 0 1 auto;
   min-height: 60px;
+  /* (up and down only: a box that could be scrolled sideways, even by the pixel or two its slots
+     overhang on a touch screen, keeps a sideways swipe that starts on a slot for itself, and the
+     strips don't move) */
+  overflow-x: hidden;
   overflow-y: auto;
   scrollbar-width: none;
 }
@@ -1520,7 +1526,10 @@ a.btn {
   .mixer[data-short],
   .inspector-strips[data-short] {
     --fader-min: max(96px, calc(var(--strips-h) - var(--strip-foot)));
-    grid-template-rows: max-content auto auto auto minmax(var(--fader-min), 1fr) auto auto;
+    /* (the name's row is max-content as the slots' is: a name clips what's too long for it, so an
+       auto row, with nothing to spare here, gave it less than its height, and it hung out of the
+       strip's foot with no margin under it) */
+    grid-template-rows: max-content auto auto auto minmax(var(--fader-min), 1fr) auto max-content;
   }
 
   [data-short] .strip-top {
@@ -1561,6 +1570,16 @@ a.btn {
 /* a slot that is dragged (a send's level, the stage's distance) keeps the finger from scrolling */
 .slot.drag {
   touch-action: none;
+}
+
+/* In a row of strips, what a finger drags answers to up and down alone, and a sideways swipe is
+   left to the browser: it scrolls the strips from wherever it starts, a pan knob, a fader or a send
+   included, and leaves them as they were (slop.ts reads this). */
+.strip .knob,
+.strip .fader,
+.strip .slot.drag,
+.mini-strip .fader {
+  touch-action: pan-x;
 }
 
 .slot:hover {
@@ -1605,9 +1624,32 @@ a.btn {
 }
 
 @media (pointer: coarse) {
+  /* The knobs' button is narrow to look at and finger-sized to press (its ::before reaches over the
+     slot's edge and a little of the name), so the name beside it has room for its longest words. */
   .slot-edit {
-    width: 30px;
+    position: relative;
+    width: 18px;
     height: 28px;
+  }
+  .slot-edit::before {
+    content: "";
+    position: absolute;
+    inset: -3px -6px -3px -10px;
+  }
+  .slot.instrument {
+    gap: 2px;
+  }
+  /* The instrument's name has the slot's two lines there: on one line beside the button it showed
+     four letters ("Tone…" for Tonewheel Jazz). */
+  .slot.instrument .grow {
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+    font-size: 11px;
+    line-height: 13px;
+    white-space: normal;
+    overflow-wrap: break-word;
   }
 }
 

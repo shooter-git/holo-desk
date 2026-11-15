@@ -28,6 +28,7 @@ import {
   pruneNotes,
   type Region,
   regionWindow,
+  warpAt,
   warpOf,
   warpProblem,
 } from '../src/index.ts';
@@ -87,25 +88,28 @@ describe('pasting a note’s sound', () => {
     expect(run('paste', LINE, [3], { from: 5 }).n[3]?.to).toBeUndefined();
   });
 
-  it('never reads past the source’s end: a longer note plays all of it, then is muted', () => {
+  it('never reads past the source’s end: a longer note plays all of it stretched over itself, as far as the warp lets it, then is muted', () => {
     // note 4 (0.9 s, sung into note 5) pasted with note 2's sound (0.5 s)
     const out = run('paste', LINE, [3], { from: 2 });
     expectCanonical(out);
     expect(out.n).toHaveLength(6);
-    // (only the sound comes: none of the source's edits)
-    expect(out.n[3]).toEqual({ t: 2.8, d: 0.5, p: 64.3, s: 1.6 });
-    expect(out.n[4]).toEqual({ t: 3.3, d: 0.4, p: 67.2, m: true });
+    // (only the sound comes: none of the source's edits) all of it, played over 0.8 s of the note's 0.9:
+    // the rest is muted and squeezed to a quarter of its 0.4 s, as far as the warp squeezes
+    expect(out.n[3]).toEqual({ t: 2.8, d: 0.5, p: 64.3, s: 1.6, te: 3.6 });
+    expect(out.n[4]).toEqual({ t: 3.3, d: 0.4, p: 67.2, m: true, ts: 3.6 });
     expect(reads(out)).toEqual([[1.6, 2.1]]);
-    // nothing moves in time: the next note is as it was
-    expect(warpOf(out).src).toEqual([]);
+    // the note still starts and ends where it did, and the next note is as it was
+    const w = warpOf(out);
+    expect(warpAt(w, 2.8)).toBe(2.8);
+    expect(warpAt(w, 3.7)).toBe(3.7);
     expect(out.n[5]).toBe(LINE.n[4]);
     expect(noteChangesText(noteChanges(LINE, out))).toBe('1 note pasted');
     // (a note moved in time is cut where the cut now plays, both parts keeping the move)
     const moved = run('move', LINE, [3], { seconds: -0.05 });
     const later = run('paste', moved, [3], { from: 2 });
     expectCanonical(later);
-    expect(later.n[3]).toMatchObject({ t: 2.8, d: 0.5, s: 1.6, ts: 2.75, te: 3.25 });
-    expect(later.n[4]).toMatchObject({ t: 3.3, m: true, ts: 3.25 });
+    expect(later.n[3]).toMatchObject({ t: 2.8, d: 0.5, s: 1.6, ts: 2.75, te: 3.55 });
+    expect(later.n[4]).toMatchObject({ t: 3.3, m: true, ts: 3.55, te: 3.65 });
   });
 
   it('within 10 ms of the source’s length, reads a little less of it rather than past its end', () => {
@@ -115,7 +119,11 @@ describe('pasting a note’s sound', () => {
     ]);
     const out = run('paste', notes, [1], { from: 1 });
     expect(reads(out)).toEqual([[1, 1.295]]);
+    // (stretched over the note but for a quarter of the 10 ms muted)
+    const cut = 2.305 - 0.01 / 4;
+    expect(out.n[1]?.te).toBeCloseTo(cut, 9);
     expect(out.n[2]).toMatchObject({ t: 2.295, d: 0.01, m: true });
+    expect(out.n[2]?.ts).toBeCloseTo(cut, 9);
     expectCanonical(out);
   });
 

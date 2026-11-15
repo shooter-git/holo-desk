@@ -620,7 +620,9 @@ parity test (`packages/cli/test/parity.test.ts`) fails if either lacks one.
   and unvoiced start as found, `p` and `u`, as the renderer reads a pasted note); the note's other
   edits stay, its pitch move kept as a distance from the semitone nearest its pitch as found, carried
   onto the new pitch's. It never reads past the copied sound's end: a note no longer than it plays its
-  start; a longer one is cut where it runs out, its first part playing all of it and the rest muted.
+  start; a longer one is cut where it runs out, its first part playing all of it stretched over the
+  note as far as the warp lets it, and the rest muted (squeezed to a quarter of its length: a quarter
+  of what the note has past the sound's length stays quiet at its end).
   `copy-settings` gives each note the copied note's drift, vibrato, glide, formant, level, mute and
   attack (`COPIED_SETTINGS`), each put back where that note has none, and its pitch move as a
   distance from each note's own nearest semitone (so a source tuned onto its semitone tunes each onto

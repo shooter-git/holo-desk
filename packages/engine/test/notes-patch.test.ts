@@ -184,7 +184,7 @@ describe('a region’s patches', () => {
     expect(pasted?.spec.ctx[1]).toBe(Math.ceil(3.71 * SR));
     const elsewhere = regionPatches(clip(line([{ t: 1 }, { t: 3, s: 1.5 }])), SR);
     expect(elsewhere[0]?.key).not.toBe(pasted?.key);
-    expect(RENDER_V).toBe(4);
+    expect(RENDER_V).toBe(5);
   });
 
   it('are keyed by what they sound like: the same edits share a key, another edit doesn’t', () => {

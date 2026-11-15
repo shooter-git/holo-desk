@@ -120,7 +120,8 @@ an edit's flags and ranges): `shift [--semitones N] [--cents N] [--snap free|sem
 `reset [--what all|pitch|drift|vibrato|transition|formant|gain|mute|time]` (100% is as sung),
 `paste --from N [--from-region R]` (the notes play note N's sound in their place, with its pitch as
 found: their other edits stay, a pitch move carried from the nearest semitone; a note longer than the
-sound plays all of it, then is muted; within one recording only, `--from-region` naming another region
+sound plays all of it stretched over the note, quiet at its end for a quarter of the difference (the
+most the time warp squeezes); within one recording only, `--from-region` naming another region
 of it), `copy-settings --from N [--from-region R]` (the notes take note N's drift, vibrato, glide,
 formant, level, mute and attack, and its pitch move as a distance from each note's own nearest
 semitone; never its timing or sound). The macros, on many notes at once: `correct-pitch [--centre %] [--drift %] [--snap semitone|scale]

@@ -1,10 +1,11 @@
 /** The studio's frame: the desktop layout, the tablet's, and the phone's (portrait and landscape). */
 import { Library as LibraryIcon, Music2, Piano, Rows3, Settings, SlidersVertical } from 'lucide-react';
-import { lazy, type ReactNode, Suspense, useEffect, useRef } from 'react';
+import { lazy, type ReactNode, Suspense, useEffect, useRef, useState } from 'react';
 import { ensureAudio, resolveConflict } from '../app/actions.ts';
 import { clampEditorHeight, fitEditorHeight, isPhone, type Layout, useLayout } from '../app/layout.ts';
 import { otherStudioToDrive } from '../app/live.ts';
 import { type MobileTab, openSettings, store, useApp, useShow } from '../app/store.ts';
+import { useVersion } from '../app/version.ts';
 import { AudioEditor, AudioEditorBar } from './AudioEditor.tsx';
 import { Bar } from './Bar.tsx';
 import { BarButton, ControlBar, Lcd, SaveDot, TransportButtons } from './ControlBar.tsx';
@@ -256,9 +257,27 @@ function BounceStatus() {
   );
 }
 
+/** How long the audio may take to start before the start screen says it's still waiting. */
+const START_SLOW_MS = 4000;
+
 function StartAudio() {
   const ready = useApp((s) => s.audioReady);
   const other = useApp((s) => otherStudioToDrive(s.peers));
+  const version = useVersion();
+  // A browser with no sound output to use may never answer (it neither starts the audio nor
+  // refuses): the screen says so instead of sitting there as if the button hadn't been pressed.
+  const [waiting, setWaiting] = useState(false);
+  const slow = useRef(0);
+  useEffect(() => () => window.clearTimeout(slow.current), []);
+  const start = () => {
+    window.clearTimeout(slow.current);
+    setWaiting(false);
+    slow.current = window.setTimeout(() => setWaiting(true), START_SLOW_MS);
+    void ensureAudio().finally(() => {
+      window.clearTimeout(slow.current);
+      setWaiting(false);
+    });
+  };
   if (ready) return null;
   return (
     <div className="start-audio">
@@ -269,10 +288,16 @@ function StartAudio() {
         </h1>
         <p className="start-what">A studio for writing, recording and mixing music</p>
         <p className="start-tag">Headphones On [Lights Out]</p>
-        <button type="button" className="btn primary large" onClick={() => void ensureAudio()}>
+        <button type="button" className="btn primary large" onClick={start}>
           Start the studio
         </button>
-        <p className="start-note">Starts the audio and asks to use your MIDI devices.</p>
+        {waiting ? (
+          <p className="start-note waiting" role="status">
+            The audio hasn’t started yet. Check that this device has a sound output the browser can use.
+          </p>
+        ) : (
+          <p className="start-note">Starts the audio and asks to use your MIDI devices.</p>
+        )}
         {other && (
           <div className="start-remote">
             <p>
@@ -284,6 +309,7 @@ function StartAudio() {
             </a>
           </div>
         )}
+        <p className="start-version">{version ? `Version ${version}` : ''}</p>
       </div>
     </div>
   );

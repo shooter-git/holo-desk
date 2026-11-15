@@ -21,6 +21,7 @@ import { api, type Creation, type ProjectRow } from '../app/api.ts';
 import { KEY_COMMANDS } from '../app/keys.ts';
 import { device, renameDevice } from '../app/live.ts';
 import { type SettingsTab, store, toast, useApp } from '../app/store.ts';
+import { useVersion } from '../app/version.ts';
 import { companion, STUDIO_ENGINE } from '../audio/companion.ts';
 import { engine } from '../audio/engine.ts';
 import { midi } from '../audio/midi.ts';
@@ -1122,13 +1123,7 @@ function RemoteDialog() {
 
 /** About HO[LO] Desk: what it is, its version and license, and where it lives. */
 function AboutDialog() {
-  const [version, setVersion] = useState<string | null>(null);
-  useEffect(() => {
-    void fetch('/api/health')
-      .then((r) => r.json() as Promise<{ version?: string }>)
-      .then((h) => setVersion(h.version ?? null))
-      .catch(() => undefined);
-  }, []);
+  const version = useVersion();
   return (
     <Dialog title="About">
       <div className="about">

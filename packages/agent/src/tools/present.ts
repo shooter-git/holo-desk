@@ -1,5 +1,5 @@
 /**
- * A reply's view (view.ts) as the agent writes it, in the song's own names ("Vocal", "pitch.speed",
+ * A reply's view (view.ts) as the agent writes it, in the song's own names ("Vocal", "pitch.amount",
  * a version it named), turned into the ids the studio draws it with, or a plain reason it can't be:
  * a track that isn't there, a setting it hasn't got, a version never made, a command the studio
  * doesn't have.
@@ -23,7 +23,7 @@ import { pluginRef } from './mix.ts';
 
 /** The settings a binding can name, said the same way in the tool's description and its refusals. */
 export const PARAMS_TEXT =
-  'volume, pan, mute, solo, send:BUS, TYPE.PARAM (a plugin\'s setting: "pitch.speed", "eq#2.hsGain"; the plugins tool lists them) or TYPE.on (the plugin on or bypassed)';
+  'volume, pan, mute, solo, send:BUS, TYPE.PARAM (a plugin\'s setting: "pitch.amount", "eq#2.hsGain"; the plugins tool lists them) or TYPE.on (the plugin on or bypassed)';
 
 /** A binding's setting from the model's words, resolved on its channel. */
 function bindingParam(project: Project, track: string, spec: string): string {

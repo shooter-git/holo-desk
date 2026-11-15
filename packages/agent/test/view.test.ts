@@ -39,7 +39,7 @@ describe('a reply’s view, checked', () => {
       },
       {
         group: [
-          { slider: { track: 'Vocal', param: 'pitch.speed' }, label: 'Speed' },
+          { slider: { track: 'Vocal', param: 'pitch.amount' }, label: 'Strength' },
           { toggle: { track: 'Vocal', param: 'pitch.on' } },
         ],
         title: 'Correction',
@@ -99,7 +99,7 @@ describe('a reply’s view, checked', () => {
   });
 
   it('wants resolved references when strict', () => {
-    const named = [{ slider: { track: 'Vocal', param: 'pitch.speed' } }];
+    const named = [{ slider: { track: 'Vocal', param: 'pitch.amount' } }];
     expect(checkView(named).ok).toBe(true);
     expect(error(named, true)).toMatch(/isn't a resolved setting/);
     expect(checkView([{ slider: { track: 'trk_1', param: 'fx:fx_1:speed' } }], true).ok).toBe(true);

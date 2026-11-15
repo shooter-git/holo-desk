@@ -1,5 +1,5 @@
 import type { Scan } from '@holo/score';
-import { newRegion, PPQ, parseNoteName, SYNTH_PRESETS } from '@holo/session';
+import { newRegion, PLUGINS, PPQ, parseNoteName, SYNTH_PRESETS } from '@holo/session';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ApiError, type PlayedNote } from '../src/api.ts';
 import { toolWords } from '../src/harness/adapter.ts';
@@ -18,6 +18,22 @@ describe('the tool list', () => {
       expect(describeTool(t, 'C4').length).toBeGreaterThan(60);
       expect(['see', 'change', 'play', 'ask']).toContain(t.kind);
     }
+  });
+
+  it('gives as examples only plugin settings that exist (TYPE.PARAM, TYPE#2.PARAM)', () => {
+    const types = new Map(PLUGINS.map((p) => [p.type, new Set(p.params.map((x) => x.id))]));
+    const named: string[] = [];
+    for (const t of TOOLS) {
+      const words = [describeTool(t, 'C4'), ...t.args.map((a) => a.describe)].join(' ');
+      for (const m of words.matchAll(/\b([a-z]+)(?:#\d+)?\.([A-Za-z_]+)\b/g)) {
+        const params = types.get(m[1] as string);
+        // ("on" is a view's word for the plugin on or bypassed)
+        if (!params || m[2] === 'PARAM' || m[2] === 'on') continue;
+        named.push(m[0]);
+        expect(params.has(m[2] as string), `${t.name}: ${m[0]}`).toBe(true);
+      }
+    }
+    expect(named).toContain('eq#2.hsGain');
   });
 
   it('says each tool in words under the bar while it runs, never "Working"', () => {

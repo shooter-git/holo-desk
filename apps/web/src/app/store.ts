@@ -6,6 +6,7 @@ import type { ClickSound } from '@holo/engine';
 import type { DIVISIONS, MiddleC, Note, Project } from '@holo/session';
 import { useSyncExternalStore } from 'react';
 import type { LatencyMode } from '../audio/engine.ts';
+import type { RateChoice } from '../audio/engine-rate.ts';
 import type { MidiStatus, PortInfo } from '../audio/midi.ts';
 
 export interface Step {
@@ -103,6 +104,8 @@ export interface AppState {
   metronomeSound: ClickSound;
   countIn: number;
   latencyMode: LatencyMode;
+  /** The rate the studio plays at on this device (Settings › Audio): Automatic, or one of its own. */
+  rateChoice: RateChoice;
   /** Logic's Low Latency Mode: nothing that delays the sound while you play. */
   lowLatency: boolean;
   /** This device's chosen sound output ('' = the system's default). */
@@ -222,6 +225,7 @@ const initial: AppState = {
   metronomeSound: 'beep',
   countIn: 1,
   latencyMode: 'lowest',
+  rateChoice: 'auto',
   lowLatency: true,
   outputDevice: '',
   inputDevice: '',
@@ -265,6 +269,7 @@ const REMEMBER: (keyof AppState)[] = [
   'metronomeSound',
   'countIn',
   'latencyMode',
+  'rateChoice',
   'lowLatency',
   'outputDevice',
   'inputDevice',

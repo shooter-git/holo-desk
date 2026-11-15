@@ -160,7 +160,8 @@ export class SampleLibrary {
       },
       priority,
     );
-    engine.addSampler(spec);
+    // (the audio thread's rate changed while they came: they're on their way again, at the new one)
+    if (!engine.addSampler(spec, ctx.sampleRate)) return;
     this.states.set(key, { state: 'ready' });
     this.loading.delete(key);
     this.emit();

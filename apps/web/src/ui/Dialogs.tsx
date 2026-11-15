@@ -487,7 +487,10 @@ function LatencyReadout() {
     const m = midi.handling();
     const handling = m?.median ?? 0;
     const total = handling + block / 2 + out + pluginMs;
+    // (a phone's browser stops a page's sound when something else takes it, and starts it again only from a tap)
+    const state = engine.ctx.state as string;
     const rows = [
+      ...(state !== 'running' ? [`The browser's audio is ${state}: press Play to start it again`] : []),
       `Key to ear ≈ ${total.toFixed(1)} ms`,
       `  output ${out.toFixed(1)} ms (browser ${l.base.toFixed(1)} + device ${l.output.toFixed(1)}) at ${l.sampleRate} Hz`,
       `  engine ${(block / 2).toFixed(1)} ms on average (one ${block.toFixed(1)} ms block at most)${pluginMs ? ` + plugins ${pluginMs.toFixed(1)} ms` : ''}`,

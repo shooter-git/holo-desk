@@ -49,6 +49,7 @@ import {
   viewName,
 } from './agent.ts';
 import { answerAgentRequest } from './agent-studio.ts';
+import { goTo } from './agent-view.ts';
 import { PlayedMemory } from './played.ts';
 import { store, toast } from './store.ts';
 
@@ -60,6 +61,9 @@ import './agent-meters.ts';
 
 // ---- import ----
 import './agent-import.ts';
+
+// ---- the reply's view ----
+import './agent-commands.ts';
 
 /** Scans this studio has heard of (so a phone's new one is offered once). */
 const seenScans = new Set<string>();
@@ -582,6 +586,8 @@ function jobEffects(effects: JobEffect[]): void {
   for (const fx of effects) {
     setJobRunning(fx.job, fx.running);
     if (fx.label) relabelJob(fx.job, fx.label);
+    // they asked to see something: the studio goes there as the reply arrives (behind the bar, if it's open)
+    if (fx.go) goTo(fx.go);
   }
 }
 

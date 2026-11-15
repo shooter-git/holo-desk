@@ -4,7 +4,9 @@
  * and each song's conversation with it (its thread: what the agent last saw of the song, what the
  * user did since, and the requests and replies the bar shows).
  */
+
 import type { DatabaseSync } from 'node:sqlite';
+import type { Go, View } from '@holo/agent/view';
 
 export type HarnessId = 'claude' | 'codex' | 'cursor';
 export const HARNESSES: readonly HarnessId[] = ['claude', 'codex', 'cursor'];
@@ -71,6 +73,9 @@ export interface TurnExtra {
   error?: string;
   /** The attachments its request carried (its job, and later ones on the thread, may read them). */
   attachments?: string[];
+  /** What its reply shows under it, and where the studio went as it arrived. */
+  view?: View;
+  go?: Go;
 }
 
 export interface TurnRow {

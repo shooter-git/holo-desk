@@ -119,6 +119,8 @@ export class Threads {
           ...(extra.permission ? { permission: extra.permission } : {}),
           ...(extra.brief ? { brief: extra.brief } : {}),
           ...(extra.briefWarnings ? { briefWarnings: extra.briefWarnings } : {}),
+          ...(extra.view ? { view: extra.view } : {}),
+          ...(extra.go ? { go: extra.go } : {}),
           ...(extra.error ? { error: extra.error } : {}),
         };
       }),
@@ -137,6 +139,8 @@ export interface TurnView {
   permission?: TurnExtra['permission'];
   brief?: string;
   briefWarnings?: TurnExtra['briefWarnings'];
+  view?: TurnExtra['view'];
+  go?: TurnExtra['go'];
   error?: string;
 }
 

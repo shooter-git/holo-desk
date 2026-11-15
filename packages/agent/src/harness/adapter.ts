@@ -218,6 +218,7 @@ const TOOL_WORDS: Record<string, string> = {
   look: 'Asking you',
   ask_permission: 'Asking you',
   hand_off: 'Writing a brief',
+  version: 'Keeping a version',
   finish: 'Finishing',
 };
 

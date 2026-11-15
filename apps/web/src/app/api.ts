@@ -79,6 +79,8 @@ async function call<T>(path: string, init?: RequestInit): Promise<T> {
 export const api = {
   projects: () => call<ProjectRow[]>('/api/projects'),
   project: (id: string) => call<Project>(`/api/projects/${id}`),
+  /** A song as one of its kept revisions had it (a version a reply plays or keeps). */
+  revision: (id: string, revision: number) => call<Project>(`/api/projects/${id}/history/${revision}`),
   create: (title: string) => call<Project>('/api/projects', { method: 'POST', body: JSON.stringify({ title }) }),
   createFrom: (doc: Project) => call<Project>('/api/projects', { method: 'POST', body: JSON.stringify({ doc }) }),
   save: (doc: Project, baseRevision: number) =>

@@ -14,6 +14,7 @@
  */
 import { createReadStream } from 'node:fs';
 import { join } from 'node:path';
+import { checkGo, checkView } from '@holo/agent/view';
 import { SCAN_ID, type Scan } from '@holo/score';
 import { describeProject, type Op } from '@holo/session';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
@@ -810,7 +811,18 @@ export function agentRoutes(app: FastifyInstance, o: AgentOptions): { jobs: Jobs
     `${J}/finish`,
     forJob(async (req, _reply, job) => {
       const b = body(req);
-      theJobs.finish(job, line(b.label, 'label', 80), text(b.reply, 'reply', 600));
+      // what the reply shows under it, checked as the studio will draw it (the tool resolved its names)
+      const view = b.view === undefined || b.view === null ? null : checkView(b.view, true);
+      if (view && !view.ok) throw bad(view.error);
+      const go = b.go === undefined || b.go === null ? null : checkGo(b.go, true);
+      if (go && !go.ok) throw bad(go.error);
+      theJobs.finish(
+        job,
+        line(b.label, 'label', 80),
+        text(b.reply, 'reply', 600),
+        view?.ok ? view.blocks : undefined,
+        go?.ok ? go.go : undefined,
+      );
       return { ok: true };
     }),
   );

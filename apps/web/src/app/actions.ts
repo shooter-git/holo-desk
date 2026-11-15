@@ -236,16 +236,17 @@ export function jobSteps(job: string): Step[] {
 let comparing: { end: () => void } | null = null;
 
 /**
- * Before and after (the agent's A/B): bars `from` up to `to` as they were before the job, then the same
- * bars as they are now; then the song is back as it is, the playhead where they began. Pressing Stop,
- * or changing the song, ends it there. Says why not when the song from before is gone from the undo
- * history.
+ * Stretches of a song played one after another, then stopped: each its own song (a version of it,
+ * its cycle off) or the song as it is (`song` null), from a tick to a tick. Then the song as it is is
+ * back, the playhead where the last began. Pressing Stop, another of these starting, or (while a
+ * version plays) a change to the song ends it there; the song as it is plays on through edits, as
+ * playback does. `ended` is called once it's over, however it ended.
  */
-export function compareJob(job: string, from: number, to: number): { ok: true } | { ok: false; error: string } {
+export function playPasses(passes: readonly Pass[], ended?: () => void): { ok: true } | { ok: false; error: string } {
   const s = store.get();
+  const last = passes[passes.length - 1];
   if (!s.project) return { ok: false, error: 'No song is open in the studio' };
-  const plan = comparePlan(jobSteps(job), s.project, from, to);
-  if ('error' in plan) return { ok: false, error: plan.error };
+  if (!last) return { ok: false, error: 'Nothing to play' };
   comparing?.end();
   if (s.playing) stop();
   const now = s.project;
@@ -259,25 +260,78 @@ export function compareJob(job: string, from: number, to: number): { ok: true } 
     // the audio thread plays the song as it is again
     const back = store.get().project;
     if (back) engine.sync(back);
-    engine.locate(plan.after.from);
+    engine.locate(last.from);
     store.set({});
+    ended?.();
   };
-  const pass = (p: Pass, then: () => void) => {
-    engine.sync(p.song);
+  const pass = (i: number) => {
+    const p = passes[i];
+    if (!p) return end();
+    if (p.song) engine.sync(p.song);
     engine.locate(p.from);
     engine.play(p.from);
     store.set({ playing: true });
     window.clearInterval(timer);
     timer = window.setInterval(() => {
       const cur = store.get();
-      // stopped, or the song changed under it: it ends here
-      if (!cur.playing || cur.project !== now) return end();
-      if (engine.positionTick() >= p.to) then();
+      // stopped, or the song changed under a version: it ends here
+      if (!cur.playing || (p.song && cur.project !== now)) return end();
+      if (engine.positionTick() >= p.to) pass(i + 1);
     }, 30);
   };
   comparing = { end };
-  pass(plan.before, () => pass(plan.after, end));
+  pass(0);
   return { ok: true };
+}
+
+/** Whether playPasses is playing now. */
+export const passesPlaying = (): boolean => comparing !== null;
+
+/** Stop what playPasses is playing, if it is. */
+export function stopPasses(): void {
+  comparing?.end();
+}
+
+/**
+ * Before and after (the agent's A/B): bars `from` up to `to` as they were before the job, then the same
+ * bars as they are now; then the song is back as it is, the playhead where they began. Pressing Stop,
+ * or changing the song, ends it. Says why not when the song from before is gone from the undo
+ * history.
+ */
+export function compareJob(job: string, from: number, to: number): { ok: true } | { ok: false; error: string } {
+  const s = store.get();
+  if (!s.project) return { ok: false, error: 'No song is open in the studio' };
+  const plan = comparePlan(jobSteps(job), s.project, from, to);
+  if ('error' in plan) return { ok: false, error: plan.error };
+  return playPasses([plan.before, plan.after]);
+}
+
+/**
+ * The song replaced by another of its versions (a reply's Keep), as one undo step: the version's
+ * music and mix, under the song's own id, revision and origin.
+ */
+export function replaceSong(version: Project, label: string): Project | null {
+  const s = store.get();
+  const cur = s.project;
+  if (!cur) return null;
+  let next: Project;
+  try {
+    next = parseProject({
+      ...version,
+      id: cur.id,
+      revision: cur.revision,
+      created: cur.created,
+      modified: cur.modified,
+      origin: cur.origin,
+    });
+  } catch (err) {
+    toast(err instanceof Error ? err.message : String(err), 'error');
+    return null;
+  }
+  store.set({ project: next, ...history.push(s, { project: cur, label, at: Date.now() }), saveState: 'dirty' });
+  changed(next);
+  userStep(label);
+  return next;
 }
 
 // ---- saving ----

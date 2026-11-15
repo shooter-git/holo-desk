@@ -48,6 +48,13 @@ keeps it to the open song:
   song's scan or attachment is refused), and it's revoked when the job ends. Before each job the
   server takes a restore point of the song. The job's changes go only to the studio that asked, as one
   undo step.
+- **What a reply shows.** The view under a reply is data in a closed format (docs/agent.md, "What a
+  reply shows"): plain text and a fixed set of pieces, with no markup, links, pictures from outside the
+  song, or script. Its controls can only do what the user could do with a click (play some bars, go
+  somewhere in the studio, set a setting, keep a version, run one of the bar's own commands, send a
+  request they can read), and nothing happens until they click. The tool, the server and the studio
+  each check it; a button that changes the song says how in the studio's own words, a command button
+  shows the command's own title, and a request button shows the request it sends.
 - **The harness, sealed.** The runner starts the harness with HO[LO]'s MCP tools and nothing else: no
   shell, file or web tools, and none of the user's own MCP servers, skills, hooks or settings. Each
   conversation has its own workspace, `${XDG_CACHE_HOME:-~/.cache}/holo/agent/<thread>` (mode 0700). The

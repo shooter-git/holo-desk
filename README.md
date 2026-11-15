@@ -184,9 +184,12 @@ when you open Settings › Agent an hour or more after the last look.
 
 Type a request and press Enter. A picture, a recording, a MIDI or MusicXML file or a text file dropped
 or pasted on the bar goes with it (a picture is redrawn on your device first, without its location
-data). The reply is a sentence or two under the field, with a button only when the agent needs your
-click: to install a pack, send the song to its creation, share the screen, take a photo or record from
-the microphone. Close the bar and the work goes on: the bar's button shows a turning ring while the
+data). The reply is a sentence or two under the field, with a button when the agent needs your click:
+to install a pack, send the song to its creation, share the screen, take a photo or record from the
+microphone. Under the reply the agent shows what you'll want to do next with its work, composed in the
+studio's own buttons, switches, sliders and lists: play the original against its change, try the
+versions it made and keep one, set how much, or go to the bars it means. Nothing plays or moves until
+you click, unless you asked to see or hear something. Close the bar and the work goes on: the bar's button shows a turning ring while the
 agent works, then a dot until you open the bar again (a phone has the bar's button too, at the top). The
 agent works on the open song and nothing else:
 
@@ -319,7 +322,7 @@ They follow Logic's (Ctrl in place of ⌘): Space play/stop, R record, C cycle, 
 P Piano Roll, I Inspector, Y Library, Q quantize, Ctrl T split, Ctrl R repeat, Ctrl Z undo, Ctrl K
 Musical Typing, A automation, Ctrl B bounce. N shows the Score and Shift N writes in it: letters for
 notes, 1–7 for values (as in MuseScore), Shift L lyrics, Shift Q chord symbols. Ctrl / opens the bar,
-where every command, track and marker is found by name (the search button in the control bar, or a
+where every command, track and marker is found by name (the slash button, /, in the control bar, or a
 swipe down on a phone's top bar). Press <kbd>?</kbd> in the studio for the whole
 list.
 

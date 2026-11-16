@@ -2383,6 +2383,19 @@ button.list-item {
   }
 }
 
+/* A phone on its side has the Library's width and not its height: its rows go in two columns, so
+   twice as many show. A palette opened takes both, its sounds in two columns of their own. */
+.app.phone-landscape .library.full .list,
+.app.phone-landscape .library.full .palette-list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  column-gap: 16px;
+}
+
+.app.phone-landscape .library.full .palette[open] {
+  grid-column: 1 / -1;
+}
+
 .palette-about {
   padding: 0 10px 6px;
   font-size: 11px;

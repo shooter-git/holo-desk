@@ -8,6 +8,8 @@ export type MenuEntry =
       onSelect: () => void;
       hint?: string;
       icon?: ReactNode;
+      /** A color before the label (a track's), beside the check rather than in its place. */
+      color?: string;
       checked?: boolean;
       disabled?: boolean;
       /** The keyboard starts here, scrolled into view, not on the first item (a long menu's middle). */
@@ -155,6 +157,7 @@ export function MenuHost() {
               }}
             >
               <span className="mark">{item.checked ? <Check size={13} aria-hidden="true" /> : item.icon}</span>
+              {item.color && <span className="swatch" style={{ background: item.color }} />}
               <span>{item.label}</span>
               {item.hint && <span className="hint">{item.hint}</span>}
             </button>

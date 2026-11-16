@@ -151,6 +151,7 @@ import {
 } from './note-tools.ts';
 import { drawRuler } from './ruler.ts';
 import { UndoRedo } from './UndoRedo.tsx';
+import { UprightBar } from './UprightBar.tsx';
 import { DOUBLE_TAP_MS, gridStep, TouchPan, WHEEL_ZOOM, ZOOM } from './view.ts';
 
 /**
@@ -1834,12 +1835,35 @@ function ToolButton({ id, on }: { id: NoteTool; on: boolean }) {
   );
 }
 
+/** Every tool and where a dragged pitch lands, as a phone's menu has them. */
+function toolEntries(tool: NoteTool, snap: PitchSnap): MenuEntry[] {
+  return [
+    { heading: 'Tool' },
+    ...NOTE_TOOLS.map(
+      (t): MenuEntry => ({
+        label: t.name,
+        checked: t.id === tool,
+        onSelect: () => store.set({ noteTool: t.id }),
+      }),
+    ),
+    'sep',
+    { heading: 'Pitch snap' },
+    ...PITCH_SNAPS.map(
+      (v): MenuEntry => ({
+        label: PITCH_SNAP_NAMES[v],
+        checked: v === snap,
+        onSelect: () => store.set({ pitchSnap: v }),
+      }),
+    ),
+  ];
+}
+
 /**
  * The tools: each a button, and where a pitch dragged lands. A phone has the Pointer, the Pitch tool
  * (or the one chosen) and the rest, with the snap and the bar's `more` (the macros, the notes as
- * MIDI), in a menu.
+ * MIDI), in a menu: its own, or (`more` null, a phone held upright) the bar's ⋯.
  */
-function NoteTools({ phone, more }: { phone: boolean; more: MenuEntry[] }) {
+function NoteTools({ phone, more }: { phone: boolean; more: MenuEntry[] | null }) {
   const tool = useApp((s) => s.noteTool);
   const snap = useApp((s) => s.pitchSnap);
   const setSnap = (v: PitchSnap) => store.set({ pitchSnap: v });
@@ -1849,34 +1873,24 @@ function NoteTools({ phone, more }: { phone: boolean; more: MenuEntry[] }) {
       <div className="seg">
         <ToolButton id="pointer" on={tool === 'pointer'} />
         <ToolButton id={second} on={tool === second} />
-        <button
-          type="button"
-          className="btn icon"
-          title="More tools, where a dragged pitch lands, the macros, and the notes as MIDI"
-          aria-label="More tools"
-          onClick={(e) =>
-            // (the macros, MIDI and the toggles first: below the tools and snaps they'd be past a phone's fold)
-            openMenuAt(e.currentTarget, [
-              ...more,
-              ...(more.length ? (['sep'] as const) : []),
-              { heading: 'Tool' },
-              ...NOTE_TOOLS.map(
-                (t): MenuEntry => ({
-                  label: t.name,
-                  checked: t.id === tool,
-                  onSelect: () => store.set({ noteTool: t.id }),
-                }),
-              ),
-              'sep',
-              { heading: 'Pitch snap' },
-              ...PITCH_SNAPS.map(
-                (v): MenuEntry => ({ label: PITCH_SNAP_NAMES[v], checked: v === snap, onSelect: () => setSnap(v) }),
-              ),
-            ])
-          }
-        >
-          <Ellipsis />
-        </button>
+        {more && (
+          <button
+            type="button"
+            className="btn icon"
+            title="More tools, where a dragged pitch lands, the macros, and the notes as MIDI"
+            aria-label="More tools"
+            onClick={(e) =>
+              // (the macros, MIDI and the toggles first: below the tools and snaps they'd be past a phone's fold)
+              openMenuAt(e.currentTarget, [
+                ...more,
+                ...(more.length ? (['sep'] as const) : []),
+                ...toolEntries(tool, snap),
+              ])
+            }
+          >
+            <Ellipsis />
+          </button>
+        )}
       </div>
     );
   }
@@ -1926,7 +1940,8 @@ function HearNotes() {
 
 export function AudioNotesBar() {
   const { project, track, region } = useAudioRegion();
-  const phone = isPhone(useLayout());
+  const layout = useLayout();
+  const phone = isPhone(layout);
   const middleC = useApp((s) => s.middleC);
   const clip = region?.audio;
   const state = useFound(project?.id, clip?.file);
@@ -1963,6 +1978,53 @@ export function AudioNotesBar() {
   );
   useSyncExternalStore(onPatches, patchVersion);
   const patches = clip ? patchStatus(clip) : null;
+  const status = project && region && clip && (
+    <span
+      className="muted"
+      style={{ whiteSpace: 'nowrap' }}
+      data-patches={patches ? `${patches.ready}/${patches.pending}` : '0/0'}
+    >
+      {/* (a phone's bar has room for a few words: how many notes, or that edits are rendering) */}
+      {phone && patches?.pending ? 'Rendering…' : notesStatus(project, region, clip, state, phone ? 0 : selected)}
+      {!phone && patches?.pending ? ` · Rendering ${patches.notes === 1 ? '1 note' : `${patches.notes} notes`}…` : ''}
+    </span>
+  );
+  const ab = track && region && clip?.notes && (
+    <button
+      type="button"
+      className={`btn${clip.notes.off ? ' on' : ''}`}
+      title={
+        clip.notes.off
+          ? 'Hearing the recording as it was: click to hear the note edits again'
+          : 'Hear the recording as it was, without the note edits'
+      }
+      onClick={() => toggleEdits(track, region, clip)}
+    >
+      A/B
+    </button>
+  );
+  const macrosWindow = macros && (
+    <NoteMacros session={macros} levels={levelsFor(macros.base, state)} phone={phone} onClose={() => setMacros(null)} />
+  );
+  if (layout === 'phone-portrait') {
+    // upright, the bar's ⋯ holds what the tools' own ⋯ does on a phone on its side
+    return (
+      <>
+        <UprightBar
+          more={() => {
+            if (!project || !region || !clip) return [];
+            const s = store.get();
+            return [...more, 'sep', ...toolEntries(s.noteTool, s.pitchSnap)];
+          }}
+        >
+          {project && region && clip && <NoteTools phone more={null} />}
+          {status}
+          {ab}
+        </UprightBar>
+        {macrosWindow}
+      </>
+    );
+  }
   return (
     <>
       {!phone && <span className="title">Audio Editor</span>}
@@ -1972,33 +2034,8 @@ export function AudioNotesBar() {
         </span>
       )}
       {project && region && clip && <NoteTools phone={phone} more={more} />}
-      {project && region && clip && (
-        <span
-          className="muted"
-          style={{ whiteSpace: 'nowrap' }}
-          data-patches={patches ? `${patches.ready}/${patches.pending}` : '0/0'}
-        >
-          {/* (a phone's bar has room for a few words: how many notes, or that edits are rendering) */}
-          {phone && patches?.pending ? 'Rendering…' : notesStatus(project, region, clip, state, phone ? 0 : selected)}
-          {!phone && patches?.pending
-            ? ` · Rendering ${patches.notes === 1 ? '1 note' : `${patches.notes} notes`}…`
-            : ''}
-        </span>
-      )}
-      {track && region && clip?.notes && (
-        <button
-          type="button"
-          className={`btn${clip.notes.off ? ' on' : ''}`}
-          title={
-            clip.notes.off
-              ? 'Hearing the recording as it was: click to hear the note edits again'
-              : 'Hear the recording as it was, without the note edits'
-          }
-          onClick={() => toggleEdits(track, region, clip)}
-        >
-          A/B
-        </button>
-      )}
+      {status}
+      {ab}
       {!phone && clip && <HearNotes />}
       {!phone && project && region && clip && (
         <button
@@ -2033,14 +2070,7 @@ export function AudioNotesBar() {
           <Ellipsis />
         </button>
       )}
-      {macros && (
-        <NoteMacros
-          session={macros}
-          levels={levelsFor(macros.base, state)}
-          phone={phone}
-          onClose={() => setMacros(null)}
-        />
-      )}
+      {macrosWindow}
       <span className="grow" />
       {/* a phone has undo and redo in its control bar or side rail, and zooms with two fingers (across
           for time, up and down for pitch): its bar keeps its room for the tools */}

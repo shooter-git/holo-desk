@@ -136,8 +136,9 @@ function NoteViewSwitch() {
 }
 
 /**
- * An editor's bar. Where it's wider than its pane (a phone held upright) it scrolls sideways, and
- * the edge that has more fades: the bar has no scrollbar to say so.
+ * An editor's bar. Where it's wider than its pane it scrolls sideways, and the edge that has more
+ * fades: the bar has no scrollbar to say so. (A phone held upright has bars made to fit it, with ⋯
+ * for the rest: UprightBar.)
  */
 function PaneBar({ children }: { children: ReactNode }) {
   const bar = useRef<HTMLDivElement>(null);
@@ -400,6 +401,7 @@ function PhoneView() {
   const tab = useApp((s) => s.mobileTab);
   const audio = useAudioSelected();
   const score = useScoreShown();
+  const upright = useLayout() === 'phone-portrait';
   if (tab === 'editor') {
     return (
       <div className="phone-view editor">
@@ -413,7 +415,8 @@ function PhoneView() {
           ) : (
             <PianoRollBar />
           )}
-          {audio ? <AudioModeSwitch /> : <NoteViewSwitch />}
+          {/* (held upright, the bar's ⋯ has the other view: see UprightBar) */}
+          {!upright && (audio ? <AudioModeSwitch /> : <NoteViewSwitch />)}
         </PaneBar>
         {audio ? (
           <AudioView />

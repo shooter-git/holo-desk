@@ -35,6 +35,7 @@ import { capture, edgeScroll, type Gesture, Pinch, screenDpr, useWheel } from '.
 import { drawRuler } from './ruler.ts';
 import { chooseAudioFiles, inputLabel } from './Tracks.tsx';
 import { UndoRedo } from './UndoRedo.tsx';
+import { UprightBar } from './UprightBar.tsx';
 import { gridStep, Viewport, WHEEL_ZOOM, ZOOM } from './view.ts';
 import { drawClipWave, drawFades, fadeTo, fileSpan, setStretch, trimEnd, trimStart } from './wave.ts';
 
@@ -497,6 +498,82 @@ export function AudioEditorBar() {
     if (!track || !region) return;
     apply([{ op: 'updateRegion', track: track.id, region: region.id, patch: { ...patch, audio } }], label);
   };
+  const fields = project && track && region && clip && (
+    <>
+      <div className="hstack" style={{ gap: 4 }}>
+        <Knob
+          def={GAIN}
+          value={clip.gain}
+          // (finger-sized where there's no mouse)
+          size={layout === 'desktop' ? 26 : 32}
+          compact
+          label="Region gain"
+          color={track.color}
+          onBegin={() => beginGesture('Region Gain')}
+          onChange={(gain) =>
+            gestureChange([
+              {
+                op: 'updateRegion',
+                track: track.id,
+                region: region.id,
+                patch: { audio: { ...clip, gain: Math.round(gain * 10) / 10 } },
+              },
+            ])
+          }
+          onEnd={endGesture}
+        />
+        <span className="mono" style={{ minWidth: 52 }}>
+          {clip.gain > 0 ? '+' : ''}
+          {clip.gain.toFixed(1)} dB
+        </span>
+      </div>
+      <NumberBox
+        label="Fade in"
+        unit="ms"
+        value={Math.round(clip.fadeIn * 1000)}
+        min={0}
+        max={60000}
+        onCommit={(v) => update({ ...clip, fadeIn: v / 1000 }, 'Fade')}
+      />
+      <NumberBox
+        label="Fade out"
+        unit="ms"
+        value={Math.round(clip.fadeOut * 1000)}
+        min={0}
+        max={60000}
+        onCommit={(v) => update({ ...clip, fadeOut: v / 1000 }, 'Fade')}
+      />
+      <NumberBox
+        label="Stretch"
+        unit="%"
+        value={Math.round(clip.stretch * 1000) / 10}
+        min={25}
+        max={400}
+        onCommit={(v) => {
+          const next = setStretch(project, region, clip, v / 100);
+          if (next.audio) update(next.audio, 'Time Stretch', { length: next.length });
+        }}
+      />
+    </>
+  );
+  const zoomBy = (factor: number) => audioView.zoomAt(factor, 0, ...ZOOM.audio);
+  if (layout === 'phone-portrait') {
+    // upright, gain, fades and stretch keep the bar (where the phone is too narrow for them all, they
+    // scroll between the track and ⋯); Normalize and zoom are behind ⋯
+    return (
+      <UprightBar
+        more={() => [
+          ...(track && region && clip
+            ? [{ label: 'Normalize', onSelect: () => normalizeRegion(track.id, region.id) }, 'sep' as const]
+            : []),
+          { label: 'Zoom in', onSelect: () => zoomBy(1.4) },
+          { label: 'Zoom out', onSelect: () => zoomBy(0.7) },
+        ]}
+      >
+        {fields}
+      </UprightBar>
+    );
+  }
   return (
     <>
       {!phone && <span className="title">Audio Editor</span>}
@@ -505,60 +582,7 @@ export function AudioEditorBar() {
       </span>
       {project && track && region && clip && (
         <>
-          <div className="hstack" style={{ gap: 4 }}>
-            <Knob
-              def={GAIN}
-              value={clip.gain}
-              // (finger-sized where there's no mouse)
-              size={layout === 'desktop' ? 26 : 32}
-              compact
-              label="Region gain"
-              color={track.color}
-              onBegin={() => beginGesture('Region Gain')}
-              onChange={(gain) =>
-                gestureChange([
-                  {
-                    op: 'updateRegion',
-                    track: track.id,
-                    region: region.id,
-                    patch: { audio: { ...clip, gain: Math.round(gain * 10) / 10 } },
-                  },
-                ])
-              }
-              onEnd={endGesture}
-            />
-            <span className="mono" style={{ minWidth: 52 }}>
-              {clip.gain > 0 ? '+' : ''}
-              {clip.gain.toFixed(1)} dB
-            </span>
-          </div>
-          <NumberBox
-            label="Fade in"
-            unit="ms"
-            value={Math.round(clip.fadeIn * 1000)}
-            min={0}
-            max={60000}
-            onCommit={(v) => update({ ...clip, fadeIn: v / 1000 }, 'Fade')}
-          />
-          <NumberBox
-            label="Fade out"
-            unit="ms"
-            value={Math.round(clip.fadeOut * 1000)}
-            min={0}
-            max={60000}
-            onCommit={(v) => update({ ...clip, fadeOut: v / 1000 }, 'Fade')}
-          />
-          <NumberBox
-            label="Stretch"
-            unit="%"
-            value={Math.round(clip.stretch * 1000) / 10}
-            min={25}
-            max={400}
-            onCommit={(v) => {
-              const next = setStretch(project, region, clip, v / 100);
-              if (next.audio) update(next.audio, 'Time Stretch', { length: next.length });
-            }}
-          />
+          {fields}
           <button
             type="button"
             className="btn"

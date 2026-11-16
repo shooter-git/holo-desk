@@ -427,6 +427,17 @@ describe('patches about to be played (a version an A/B plays)', () => {
     expect(r.over(other[0]?.key as string)).toBe(true);
   });
 
+  it('wait for their recording when the workers don’t hold it yet, and render once they do', () => {
+    const w = pool();
+    const r = new PatchRenderer({ workers: 1, budget: 1e6, shared: true, make: w.make });
+    // (the song as it is edits nothing: no recording held)
+    r.ready('passes', other);
+    expect(w.workers.flatMap((x) => x.got.filter((m) => m.type === 'render'))).toEqual([]);
+    expect(r.over(other[0]?.key as string)).toBe(false);
+    r.hold('aud_take', [new Float32Array(SR * 8)]);
+    expect(w.rendering(0)).toBe(other[0]?.key);
+  });
+
   it('are dropped when no longer wanted, and nothing is rendered twice', () => {
     const w = pool();
     const r = new PatchRenderer({ workers: 1, budget: 1e6, shared: true, make: w.make });

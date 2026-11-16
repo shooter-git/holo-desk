@@ -348,9 +348,8 @@ export class PatchRenderer {
    * song's patches change. None (or null): no longer wanted.
    */
   ready(group: string, jobs: readonly PatchJob[] | null): void {
-    const todo = (jobs ?? []).filter(
-      (j) => !this.cache.has(j.key) && !this.failed.has(j.key) && this.holds(recordingOf(j)),
-    );
+    // (one whose recording isn't held yet waits for it: `hold` takes the queue up again)
+    const todo = (jobs ?? []).filter((j) => !this.cache.has(j.key) && !this.failed.has(j.key));
     if (todo.length) this.readied.set(group, todo);
     else this.readied.delete(group);
     this.pump();
@@ -503,13 +502,23 @@ export class PatchRenderer {
     return null;
   }
 
-  /** A patch about to be played to render next, of the first group with one still to come. */
+  /**
+   * A patch about to be played to render next: of the first group with one still to come whose
+   * recording the workers hold (the rest wait for theirs).
+   */
   private takeReadied(): PatchJob | null {
     for (const [group, jobs] of this.readied) {
-      let job = jobs.shift();
-      while (job && this.settled(job.key)) job = jobs.shift();
+      for (let i = 0; i < jobs.length; ) {
+        const job = jobs[i] as PatchJob;
+        if (this.settled(job.key)) jobs.splice(i, 1);
+        else if (!this.holds(recordingOf(job))) i++;
+        else {
+          jobs.splice(i, 1);
+          if (!jobs.length) this.readied.delete(group);
+          return job;
+        }
+      }
       if (!jobs.length) this.readied.delete(group);
-      if (job) return job;
     }
     return null;
   }

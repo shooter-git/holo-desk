@@ -191,14 +191,18 @@ export function Lcd({ compact = false, keyCell = !compact }: { compact?: boolean
         <span className="value pos" ref={pos} />
         <span className={`caption${waiting || (audioReady && coming) ? ' loading' : ''}`} aria-live="polite">
           {/* how many of the song's sounds are still to come (a waiting Play or Record button says
-              it's waiting for them) */}
-          {waiting || (audioReady && coming)
-            ? `${coming} ${compact ? '' : 'sounds '}to load`
-            : compact
-              ? asTime
-                ? 'time'
-                : 'position'
-              : 'bar beat div tick'}
+              it's waiting for them; with them all in, it's waiting for note edits to render) */}
+          {waiting && !coming
+            ? compact
+              ? 'rendering'
+              : 'rendering notes'
+            : waiting || (audioReady && coming)
+              ? `${coming} ${compact ? '' : 'sounds '}to load`
+              : compact
+                ? asTime
+                  ? 'time'
+                  : 'position'
+                : 'bar beat div tick'}
         </span>
       </div>
       {!compact && showTime && (
@@ -420,7 +424,11 @@ export function TransportButtons({ minimal = false }: { minimal?: boolean }) {
       <button
         type="button"
         className={`btn play${playing ? ' on' : ''}${waiting === 'play' ? ' waiting' : ''}`}
-        title={waiting === 'play' ? 'Plays when the sounds are in: press again to call it off' : 'Play (Space)'}
+        title={
+          waiting === 'play'
+            ? 'Plays when the sounds and the note edits are in: press again to call it off'
+            : 'Play (Space)'
+        }
         aria-label="Play (Space)"
         aria-pressed={playing}
         onClick={() => void togglePlay()}
@@ -430,7 +438,11 @@ export function TransportButtons({ minimal = false }: { minimal?: boolean }) {
       <button
         type="button"
         className={`btn rec${recording ? ' on' : ''}${waiting === 'record' ? ' waiting' : ''}`}
-        title={waiting === 'record' ? 'Records when the sounds are in: press again to call it off' : 'Record (R)'}
+        title={
+          waiting === 'record'
+            ? 'Records when the sounds and the note edits are in: press again to call it off'
+            : 'Record (R)'
+        }
         aria-label="Record (R)"
         aria-pressed={recording}
         onClick={() => void toggleRecord()}

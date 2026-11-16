@@ -880,13 +880,14 @@ export class AudioEngine {
     if (!ctx) return;
     const sr = this.sampleRate;
     const jobs = songPatches(project, sr);
-    if (!jobs.length && !this.patchRenderer) return;
+    if (!jobs.length && !this.readied.size && !this.patchRenderer) return;
     const renderer = this.patches();
     // the recordings they're rendered from: given to the workers, let go when no patch needs them
     // (nor a drag in the Notes view)
     const bases = new Map<string, PatchJob['base']>();
     for (const j of jobs) bases.set(recordingOf(j), j.base);
     if (this.previewBase) bases.set(this.previewBase.key, this.previewBase.base);
+    for (const readied of this.readied.values()) for (const j of readied) bases.set(recordingOf(j), j.base);
     this.patchBases = new Set(bases.keys());
     for (const key of renderer.held()) if (!bases.has(key)) renderer.release(key);
     for (const [key, base] of bases) if (!renderer.holds(key)) this.holdRecording(project, key, base, ctx);
@@ -1051,9 +1052,15 @@ export class AudioEngine {
    * before the song's own (`group`: what asks for them; null: no longer).
    */
   preparePatches(group: string, jobs: readonly PatchJob[] | null): void {
-    if (!jobs?.length && !this.patchRenderer) return;
+    if (jobs?.length) this.readied.set(group, [...jobs]);
+    else if (!this.readied.delete(group)) return;
     this.patches().ready(group, jobs);
+    // their recordings held for the workers, as the song's own are: the song as it is may not edit
+    // the recording a version does (a version kept as it was, its edits played again)
+    if (this.synced && this.port) this.syncPatches(this.synced);
   }
+  /** Patches about to be played besides the song's own, by what asks for them (preparePatches). */
+  private readied = new Map<string, PatchJob[]>();
 
   /** How many of these patches are still to come: neither with the engines nor rendered (nor given up on). */
   patchesComing(jobs: readonly PatchJob[]): number {

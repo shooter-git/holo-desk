@@ -194,48 +194,50 @@ export function Palettes({ query, overlay }: { query: string; overlay: boolean }
           {found.map(({ palette, sound }) => row(palette, sound, `${palette.name} · ${sound.family}`))}
         </div>
       )}
-      {shown.map(({ palette, sounds }) => {
-        const mine = queue?.label.startsWith(`${palette.id}/`) ? queue : null;
-        const ready = sounds.filter((s) => soundState(s, installed, available).kind !== 'coming').length;
-        const families = [
-          ...SOUND_FAMILIES.filter((f) => sounds.some((s) => s.family === f)),
-          ...new Set(sounds.map((s) => s.family).filter((f) => !(SOUND_FAMILIES as readonly string[]).includes(f))),
-        ];
-        return (
-          <details key={palette.id} className="palette">
-            <summary>
-              <Palette size={14} className="muted" />
-              <span>{palette.name}</span>
-              <span className="meta muted">
-                {ready === sounds.length ? '' : `${ready} of `}
-                {sounds.length} sound{sounds.length === 1 ? '' : 's'}
-              </span>
-            </summary>
-            {palette.description && <div className="muted palette-about">{palette.description}</div>}
-            {mine && (
-              <div className="palette-progress" role="status">
-                <div className="muted">
-                  {mine.label.slice(palette.id.length + 1)}: installing{' '}
-                  {installs.pack(mine.ids[mine.at] ?? '')?.name ?? mine.ids[mine.at]}
-                  {mine.ids.length > 1 ? ` (${mine.at + 1} of ${mine.ids.length})` : ''}
+      <div className="palette-list">
+        {shown.map(({ palette, sounds }) => {
+          const mine = queue?.label.startsWith(`${palette.id}/`) ? queue : null;
+          const ready = sounds.filter((s) => soundState(s, installed, available).kind !== 'coming').length;
+          const families = [
+            ...SOUND_FAMILIES.filter((f) => sounds.some((s) => s.family === f)),
+            ...new Set(sounds.map((s) => s.family).filter((f) => !(SOUND_FAMILIES as readonly string[]).includes(f))),
+          ];
+          return (
+            <details key={palette.id} className="palette">
+              <summary>
+                <Palette size={14} className="muted" />
+                <span>{palette.name}</span>
+                <span className="meta muted">
+                  {ready === sounds.length ? '' : `${ready} of `}
+                  {sounds.length} sound{sounds.length === 1 ? '' : 's'}
+                </span>
+              </summary>
+              {palette.description && <div className="muted palette-about">{palette.description}</div>}
+              {mine && (
+                <div className="palette-progress" role="status">
+                  <div className="muted">
+                    {mine.label.slice(palette.id.length + 1)}: installing{' '}
+                    {installs.pack(mine.ids[mine.at] ?? '')?.name ?? mine.ids[mine.at]}
+                    {mine.ids.length > 1 ? ` (${mine.at + 1} of ${mine.ids.length})` : ''}
+                  </div>
+                  <progress
+                    max={Math.max(1, job?.total ?? 1)}
+                    value={job?.state === 'running' ? job.done : 0}
+                    aria-label={`Installing for ${mine.label.slice(palette.id.length + 1)}`}
+                  />
+                  {job?.state === 'running' && <span className="muted">{job.line}</span>}
                 </div>
-                <progress
-                  max={Math.max(1, job?.total ?? 1)}
-                  value={job?.state === 'running' ? job.done : 0}
-                  aria-label={`Installing for ${mine.label.slice(palette.id.length + 1)}`}
-                />
-                {job?.state === 'running' && <span className="muted">{job.line}</span>}
-              </div>
-            )}
-            {families.map((family) => (
-              <div key={family}>
-                <div className="label category">{family}</div>
-                <div className="list">{sounds.filter((s) => s.family === family).map((s) => row(palette, s))}</div>
-              </div>
-            ))}
-          </details>
-        );
-      })}
+              )}
+              {families.map((family) => (
+                <div key={family}>
+                  <div className="label category">{family}</div>
+                  <div className="list">{sounds.filter((s) => s.family === family).map((s) => row(palette, s))}</div>
+                </div>
+              ))}
+            </details>
+          );
+        })}
+      </div>
     </details>
   );
 }

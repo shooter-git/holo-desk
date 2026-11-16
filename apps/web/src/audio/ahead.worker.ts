@@ -32,8 +32,9 @@ self.onmessage = (e: MessageEvent<Message>) => {
     });
     core.receive({ type: 'init', ring: null, meters: null, transport: null, ahead: msg.ahead });
     core.clock = () => performance.now();
-    // (playing live: a strip with nothing to play rests)
+    // (playing live: a strip with nothing to play rests, and the song fades where it stops or jumps)
     core.rest = true;
+    core.transportFades = true;
     const { control, data, edges, self: index } = msg.ahead;
     runner = new AheadWorker(core, new AheadLink(control, data, edges), index, () => performance.now(), pause);
     void runner.run();

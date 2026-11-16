@@ -981,10 +981,11 @@ export class AheadPlayer {
   /**
    * Starting from a stop: the blocks already played ahead are only the stop going on (silence, and
    * what's still ringing), so the song starts as soon as the workers have played the block the start
-   * lands in, not after them all.
+   * lands in, not after them all. Not while what was playing still fades out where it stopped (a few
+   * blocks): skipped, it would be cut.
    */
   private startSoon(): void {
-    if (this.core.isPlaying) return;
+    if (this.core.isPlaying || this.core.fading) return;
     const at = this.inbox.pending('play');
     if (at < 0) return;
     const k = this.block;

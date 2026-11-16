@@ -23,8 +23,9 @@ port.on('message', (msg: ToAheadThread | ToWorklet) => {
     });
     core.receive({ type: 'init', ring: null, meters: null, transport: null, ahead });
     core.clock = () => performance.now();
-    // (playing live: a strip with nothing to play rests)
+    // (playing live: a strip with nothing to play rests, and the song fades where it stops or jumps)
     core.rest = true;
+    core.transportFades = true;
     const link = new AheadLink(ahead.control, ahead.data, ahead.edges);
     runner = new AheadWorker(core, link, ahead.self, () => performance.now(), pause);
     void runner.run();

@@ -56,6 +56,14 @@ wraps `EngineCore` from `@holo/engine`):
 - **Each track** runs its MIDI effects (arpeggiator, harmonizer…), then its instruments (sampler,
   synth, drum kit; one per articulation), splitting the block at each event. Then come its inserts,
   fader and balance, and its sends to buses. Buses, then the master, follow.
+- **Where the song stops or jumps, it fades.** Stopped, located while it plays, or around a cycle,
+  what was playing (its recordings, a planned part's voices) goes on from where it was for 15 ms,
+  fading out, and a recording already under way where the song lands fades in over the same, so
+  neither a stop nor a jump clicks; an A/B's passes go from one to the next the same way, the next
+  version's sound from its first frame. Stop pressed again silences what is still fading at once. A
+  take ends where Stop was pressed, as ever. The engines that play live turn this on
+  (`transportFades`); a bounce and a headless render never stop part way, and a loop's jump there
+  is the music's own, so they play as they always have.
 - **Meters and the playhead** come back through shared memory, read by the screen every frame.
 - **With shared memory, the song itself is played ahead** by worker threads on the other cores, and
   the audio thread plays the master and whatever comes in live (see Scaling, below).

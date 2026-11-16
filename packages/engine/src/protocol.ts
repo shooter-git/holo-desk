@@ -314,7 +314,11 @@ export type ToWorklet =
   | { type: 'inputs'; tracks: InputSpec[] }
   /** Punching in and out while playing. */
   | { type: 'record'; on: boolean }
-  /** `cmd` numbers transport commands, so the page knows when the audio thread has caught up. */
+  /**
+   * `cmd` numbers transport commands, so the page knows when the audio thread has caught up. Played
+   * live (`transportFades`), a stop, a locate while playing and a cycle's jump fade what was playing
+   * out over 15 ms, and a recording under way where the song lands fades in; 'panic' ends a fade at once.
+   */
   | { type: 'play'; frame: number; record: boolean; countIn: number; cmd?: number }
   | { type: 'stop'; cmd?: number }
   | { type: 'locate'; frame: number; cmd?: number }

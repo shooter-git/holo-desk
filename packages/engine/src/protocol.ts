@@ -296,18 +296,21 @@ export type ToWorklet =
   /**
    * A track's clips. `fade`: frames to crossfade from the clips it played to these, both playing
    * meanwhile (the studio's, when a note edit's patch comes in or goes, so the switch doesn't click);
-   * absent, they take over at once (a bounce never fades).
+   * absent, or with the song stopped, they take over at once (a bounce never fades). Clips that come
+   * while a crossfade is under way wait for it to end.
    */
   | { type: 'clips'; num: number; clips: ClipSpec[]; fade?: number }
   /**
    * A stretch of a track's audio heard now, once, through its channel, while the song is stopped (the
    * Notes view's audition: a note as it sounds edited). `clips` are laid out from the audition's own
    * frame 0 and play audio the engine already holds (a recording, a patch). They take over from one
-   * still sounding, which fades out over a few ms; an empty list stops it, and so does the song
-   * starting. The engine that plays live notes plays it (the audio thread, not a worker rendering
-   * ahead). Engines from before it let it go by.
+   * still sounding, which fades out over 10 ms; an empty list stops it, and so does the song starting.
+   * `follow`: they're the stretch sounding, edited again (a note being dragged), and take over from the
+   * frame it has got to, fading in as it fades out, instead of from their start. The engine that plays
+   * live notes plays it (the audio thread, not a worker rendering ahead). Engines from before it let it
+   * go by (and before `follow`, start again from the top).
    */
-  | { type: 'audition'; num: number; clips: ClipSpec[] }
+  | { type: 'audition'; num: number; clips: ClipSpec[]; follow?: boolean }
   | { type: 'inputs'; tracks: InputSpec[] }
   /** Punching in and out while playing. */
   | { type: 'record'; on: boolean }

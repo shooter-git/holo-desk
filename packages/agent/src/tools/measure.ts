@@ -149,6 +149,20 @@ function takeText(r: TakeMeasure, song: Project, middleC: MiddleC): string {
   ];
   lines.push(...unplayableLines(r.unplayable, song));
   if (r.through?.errors.length) lines.push(`The render reported: ${r.through.errors.join('; ')}`);
+  if (r.clicks) {
+    const c = r.clicks;
+    lines.push(
+      c.length
+        ? `Clicks the note edits make: ${c
+            .slice(0, 8)
+            .map(
+              (k) =>
+                `${pos(song, k.tick)} (${k.kind === 'burst' ? `a burst ${k.size.toFixed(0)} dB over the recording's` : `the level jumping by ${Math.round(k.size * 100)}%`}, at ${k.level} dB)`,
+            )
+            .join('; ')}${c.length > 8 ? `; … ${c.length - 8} more` : ''}.`
+        : 'No clicks in what the note edits change.',
+    );
+  }
   if (!notes.length) {
     lines.push(
       'No notes were heard: it may be silent there, too quiet, or more than one line at a time (only one voice or instrument is measured).',

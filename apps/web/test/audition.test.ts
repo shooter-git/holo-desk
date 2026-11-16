@@ -87,8 +87,8 @@ describe('an audition’s clips', () => {
     expect(c?.end).toBe(Math.round((range[1] - range[0]) * SR));
     expect(c?.source).toBe(Math.round(range[0] * SR));
     expect(c?.gain).toBeCloseTo(10 ** (-6 / 20), 9);
-    // a few ms in, and out at the note's end
-    expect(c?.fadeIn).toBe(Math.round(0.003 * SR));
+    // in over 10 ms (within its lead: often in the middle of a sound, a few ms would click), and out at the note's end
+    expect(c?.fadeIn).toBe(Math.round(0.01 * SR));
     expect(c?.fadeOut).toBe(Math.round(0.01 * SR));
   });
 

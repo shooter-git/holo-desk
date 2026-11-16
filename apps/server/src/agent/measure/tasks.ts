@@ -63,7 +63,7 @@ import {
   ticksPerBar,
   tickToSeconds,
 } from '@holo/session';
-import { findNotes, type NoteShape, playedTake } from './notes.ts';
+import { type EditClick, findNotes, type NoteShape, playedTake } from './notes.ts';
 import { decodeFile, type MeasureSource, measureSource } from './source.ts';
 import { takeSpan } from './span.ts';
 
@@ -111,6 +111,8 @@ export interface TakeResult extends TakeReport {
   /** Measured as it comes out of the track's plugins (rendered): which they were, in order. */
   through?: { plugins: { id: string; name: string; bypass: boolean }[]; errors: string[] };
   unplayable?: Unplayable;
+  /** Where its regions' note edits are (as recorded, not through its plugins): the clicks they make, if any. */
+  clicks?: EditClick[];
 }
 
 /** A stretch of the mix: a marker's section, some bars, or some seconds. */
@@ -696,7 +698,13 @@ async function take(input: Extract<ChildInput, { kind: 'take' }>, progress: Prog
     against,
     grid: input.grid,
   });
-  return { kind: 'take', track: track.id, name: track.name, ...report };
+  return {
+    kind: 'take',
+    track: track.id,
+    name: track.name,
+    ...report,
+    ...(played.clicks ? { clicks: played.clicks } : {}),
+  };
 }
 
 async function mix(input: Extract<ChildInput, { kind: 'mix' }>, progress: Progress): Promise<MixResult> {

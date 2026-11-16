@@ -156,6 +156,23 @@ describe('measure', () => {
     expect(r.text).toContain('2.3.1 F4 -38c -35 ms -20 dB vibrato 5.4 Hz ±31c drifts -16c');
   });
 
+  it('says the clicks a take’s note edits make, where, or that they make none', async () => {
+    const clicks = [
+      { region: 'rgn_v1', tick: BAR + 1920, at: 3, kind: 'jump' as const, size: 0.72, level: -34 },
+      { region: 'rgn_v1', tick: BAR * 3, at: 6, kind: 'burst' as const, size: 9.4, level: -40 },
+    ];
+    const api = setup({ measured: { take: [done({ ...take, clicks }), done({ ...take, clicks: [] }), done(take)] } });
+    const r = await call(api, 'measure', { what: 'take', track: 'Vocals' });
+    expect(r.text).toContain(
+      "Clicks the note edits make: 2.3.1 (the level jumping by 72%, at -34 dB); 4.1.1 (a burst 9 dB over the recording's, at -40 dB).",
+    );
+    expect((await call(api, 'measure', { what: 'take', track: 'Vocals' })).text).toContain(
+      'No clicks in what the note edits change.',
+    );
+    // (nothing edited: nothing said)
+    expect((await call(api, 'measure', { what: 'take', track: 'Vocals' })).text).not.toContain('lick');
+  });
+
   it('measures a take through its track’s effects, to check what they did', async () => {
     const through = {
       plugins: [

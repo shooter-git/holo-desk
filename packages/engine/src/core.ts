@@ -72,6 +72,23 @@ const MAX_BLOCK = 1024;
  * audio meets itself at the seam.
  */
 const DECLICK = 64;
+/**
+ * An audition taken over fades out over this long, and one that follows it (the same note, edited
+ * again as it sounds) fades in over the same, seconds. A cut over DECLICK's frames in the middle of a
+ * held note is a click (a phone's speaker hears it plainly); over 10 ms it's a note let go.
+ */
+const AUDITION_FADE_S = 0.01;
+/**
+ * A clips crossfade while the song plays (a note edit's patch coming in or going, A/B) starts within
+ * this long of when it's asked for, where what it fades from and what it fades to agree best (seconds).
+ * They're one voice at two pitches: where they're out of phase, a crossfade dips to nothing; a moment
+ * later they're in phase, and it doesn't.
+ */
+const SWAP_LOOK_S = 0.25;
+/** The most of a crossfade that's read to find where they agree, seconds. */
+const SWAP_READ_S = 0.03;
+/** They agree enough here to start at once (energy through the crossfade's middle: (1 + this) / 2 of theirs). */
+const SWAP_AGREE = 0.9;
 const METER_FALL = 0.9939; // about 20 dB a second at 48 kHz, 128-frame blocks
 
 /**
@@ -773,16 +790,28 @@ class TrackNode extends Strip {
   fadeStart = 0;
   fadeLength = 0;
   /**
+   * Clips that came with a `fade` while a crossfade was still under way, and their fade: they wait for
+   * it to end (a few ms), so no list sounding is ever dropped part way (null: none waiting).
+   */
+  nextClips: ClipSpec[] | null = null;
+  nextFade = 0;
+  /**
    * An audition ('audition'): pieces of held audio heard once, laid out from its own frame 0, and the
    * frame it has got to and ends at (null: none sounding). The one it took over from fades out over
-   * DECLICK frames from where it was (`auditionFading` frames of it left).
+   * the engine's audition fade from where it was (`auditionFading` frames of it left); one that
+   * follows it fades in over the same (`auditionRising` frames left).
    */
   audition: ClipSpec[] | null = null;
   auditionPos = 0;
   auditionEnd = 0;
+  auditionRising = 0;
   auditionOld: ClipSpec[] | null = null;
   auditionOldPos = 0;
   auditionFading = 0;
+  /** One that came while a fade was under way waits for it to end: its pieces (null: stop) and whether it follows. */
+  auditionWaiting = false;
+  auditionNext: ClipSpec[] | null = null;
+  auditionNextFollows = false;
   part: PartRuntime | null = null;
   input: InputSpec | null = null;
   capture: Capture | null = null;
@@ -853,6 +882,11 @@ export class EngineCore implements Host {
   rest = false;
   /** Blocks played (what a strip's rest is counted in). */
   private tick = 0;
+  /** Frames an audition fades out over when another takes over (and one following it fades in over). */
+  private readonly auditionFade: number;
+  /** Where a clips crossfade starts: the two lists' sound ahead, read into these (made once). */
+  private readonly swapFrom: Float32Array;
+  private readonly swapTo: Float32Array;
   /** Frames played, and where this block starts among them (what a clips crossfade is counted in). */
   private frames = 0;
   private blockFrame = 0;
@@ -922,6 +956,10 @@ export class EngineCore implements Host {
   constructor(sr: number, post: EnginePost) {
     this.sr = sr;
     this.send = post;
+    this.auditionFade = Math.max(DECLICK, Math.round(AUDITION_FADE_S * sr));
+    const ahead = Math.ceil((SWAP_LOOK_S + SWAP_READ_S) * sr);
+    this.swapFrom = new Float32Array(ahead);
+    this.swapTo = new Float32Array(ahead);
     this.master = new Strip(sr);
     this.click = new Click(sr);
     this.allStrips = [this.master];
@@ -1108,24 +1146,22 @@ export class EngineCore implements Host {
         // (a worker rendering ahead plays nothing live: the audio thread does, its twin if need be)
         if (this.split && this.split.self >= 0) break;
         const t = this.tracks.get(msg.num);
-        if (t) this.startAudition(t, msg.clips.length && !this.playing ? msg.clips : null);
+        if (t) this.auditionTo(t, msg.clips.length && !this.playing ? msg.clips : null, msg.follow === true);
         break;
       }
       case 'clips': {
         const t = this.tracks.get(msg.num);
-        if (t) {
-          // a crossfade: what it played goes on, fading out, while these fade in
-          if (msg.fade && msg.fade > 0 && t.clips.length) {
-            t.oldClips = t.clips;
-            t.oldCursor = t.clipCursor;
-            t.oldFrom = t.clipFrom;
-            t.fadeStart = this.frames;
-            t.fadeLength = msg.fade;
-          } else t.oldClips = null;
-          t.clips = msg.clips;
-          t.clipCursor = 0;
-          t.clipFrom = Number.NEGATIVE_INFINITY;
+        if (!t) break;
+        // (stopped, nothing sounds to fade from)
+        const fade = msg.fade && msg.fade > 0 && t.clips.length && this.playing ? msg.fade : 0;
+        // a crossfade still under way: these wait for it to end, and take over from what it ends on
+        if (fade && t.oldClips && this.frames - t.fadeStart < t.fadeLength) {
+          t.nextClips = msg.clips;
+          t.nextFade = fade;
+          break;
         }
+        t.nextClips = null;
+        this.swapClips(t, msg.clips, fade, this.frames, this.pos);
         break;
       }
       case 'plans': {
@@ -1192,7 +1228,11 @@ export class EngineCore implements Host {
         this.recording = msg.record;
         for (const t of this.trackOrder) {
           // (an audition is for the song stopped: the song takes over)
-          if (t.audition) this.startAudition(t, null);
+          if (t.audition || t.auditionWaiting) this.auditionTo(t, null, false);
+          if (t.nextClips) {
+            this.swapClips(t, t.nextClips, 0, this.frames, this.pos);
+            t.nextClips = null;
+          }
           this.seek(t, Math.max(0, this.pos));
           if (msg.record && t.input?.record) this.beginCapture(t);
         }
@@ -1679,6 +1719,11 @@ export class EngineCore implements Host {
     if (old && this.blockFrame - t.fadeStart >= t.fadeLength) {
       old = null;
       t.oldClips = null;
+      if (t.nextClips) {
+        this.swapClips(t, t.nextClips, t.nextFade, this.blockFrame, this.spans[1] as number);
+        t.nextClips = null;
+        old = t.oldClips;
+      }
     }
     if (!old) {
       this.playClipList(t, t.clips, false, 0);
@@ -1686,6 +1731,89 @@ export class EngineCore implements Host {
     }
     this.playClipList(t, t.clips, false, 1);
     this.playClipList(t, old, true, -1);
+  }
+
+  /**
+   * A track's clips become `clips`: at once (`fade` 0), or crossfaded from what it plays over `fade`
+   * frames, from the engine's frame `from` (the song's frame `song`) or a little after, where the two
+   * agree (agreeAt).
+   */
+  private swapClips(t: TrackNode, clips: ClipSpec[], fade: number, from: number, song: number): void {
+    if (fade > 0) {
+      // a crossfade: what it played goes on, fading out, while these fade in (from where they agree)
+      t.oldClips = t.clips;
+      t.oldCursor = t.clipCursor;
+      t.oldFrom = t.clipFrom;
+      // (rendering ahead, the audio thread plays no track's clips: the workers read where, every one alike)
+      const ahead = this.split !== null && this.split.self < 0;
+      t.fadeStart = from + (ahead ? 0 : this.agreeAt(t.clips, clips, Math.max(0, song), fade));
+      t.fadeLength = fade;
+    } else t.oldClips = null;
+    t.clips = clips;
+    t.clipCursor = 0;
+    t.clipFrom = Number.NEGATIVE_INFINITY;
+  }
+
+  /**
+   * How many frames after the song frame `at` two lists of a track's clips agree best over a crossfade
+   * of `fade` frames (within SWAP_LOOK_S): 0 where they agree enough at once (the same sound there, or
+   * silence). Their sound ahead is read (the first channel, at the clips' gains) into the scratch made
+   * for it; nothing is made.
+   */
+  private agreeAt(from: ClipSpec[], to: ClipSpec[], at: number, fade: number): number {
+    const x = this.swapFrom;
+    const y = this.swapTo;
+    const win = Math.min(fade, Math.round(SWAP_READ_S * this.sr));
+    const look = x.length - win;
+    this.soundOf(from, at, x);
+    this.soundOf(to, at, y);
+    let xy = 0;
+    let xx = 0;
+    let yy = 0;
+    for (let i = 0; i < win; i++) {
+      const a = x[i] as number;
+      const b = y[i] as number;
+      xy += a * b;
+      xx += a * a;
+      yy += b * b;
+    }
+    let best = 0;
+    let most = Number.NEGATIVE_INFINITY;
+    for (let d = 0; ; d++) {
+      // (silence, or as good as: nothing to dip)
+      const agree = xx + yy < 1e-9 * win ? 1 : (2 * xy) / (xx + yy);
+      if (agree >= SWAP_AGREE) return d;
+      if (agree > most) {
+        most = agree;
+        best = d;
+      }
+      if (d >= look) return best;
+      const a0 = x[d] as number;
+      const b0 = y[d] as number;
+      const a1 = x[d + win] as number;
+      const b1 = y[d + win] as number;
+      xy += a1 * b1 - a0 * b0;
+      xx += a1 * a1 - a0 * a0;
+      yy += b1 * b1 - b0 * b0;
+    }
+  }
+
+  /** A list of clips' sound from the song frame `at` on (the first channel, at their gains), into `out`. */
+  private soundOf(clips: ClipSpec[], at: number, out: Float32Array): void {
+    out.fill(0);
+    const end = at + out.length;
+    for (let c = 0; c < clips.length; c++) {
+      const clip = clips[c] as ClipSpec;
+      if (clip.end <= at) continue;
+      if (clip.start >= end) break;
+      const L = this.audio.get(clip.key)?.[0];
+      if (!L) continue;
+      const f1 = Math.min(end, clip.end);
+      for (let f = Math.max(at, clip.start); f < f1; f++) {
+        const i = clip.source + (f - clip.start);
+        if (i >= 0 && i < L.length) out[f - at] = (L[i] as number) * clip.gain;
+      }
+    }
   }
 
   /**
@@ -1740,8 +1868,9 @@ export class EngineCore implements Host {
           const o = out + (f - song);
           if (fade !== 0) {
             // linear across the crossfade: the new list's share from its first frame on
+            // (none of it before the crossfade starts)
             const k = this.blockFrame + o - t.fadeStart + 1;
-            const x = k >= t.fadeLength ? 1 : k / t.fadeLength;
+            const x = k <= 0 ? 0 : k >= t.fadeLength ? 1 : k / t.fadeLength;
             g *= fade > 0 ? x : 1 - x;
           }
           t.l[o] = (t.l[o] as number) + (L[i] as number) * g;
@@ -1752,17 +1881,37 @@ export class EngineCore implements Host {
   }
 
   /**
-   * A track's audition becomes these pieces (null: none), the one sounding fading out from where it
-   * is. Nothing is made: the pieces are the message's own.
+   * A track's audition becomes these pieces (null: none): at once, or once a fade under way has ended
+   * (a few ms on), so the one fading is never cut short.
    */
-  private startAudition(t: TrackNode, clips: ClipSpec[] | null): void {
-    if (t.audition && t.auditionPos < t.auditionEnd) {
+  private auditionTo(t: TrackNode, clips: ClipSpec[] | null, follow: boolean): void {
+    if (t.auditionOld || t.auditionRising > 0) {
+      t.auditionWaiting = true;
+      t.auditionNext = clips;
+      t.auditionNextFollows = follow;
+      return;
+    }
+    this.startAudition(t, clips, follow);
+  }
+
+  /**
+   * A track's audition becomes these pieces (null: none), the one sounding fading out from where it
+   * is. `follow`: they're the same stretch edited again, and take over from the frame the one sounding
+   * has got to, fading in as it fades out (none sounding: from their start). Nothing is made: the
+   * pieces are the message's own.
+   */
+  private startAudition(t: TrackNode, clips: ClipSpec[] | null, follow: boolean): void {
+    t.auditionWaiting = false;
+    t.auditionNext = null;
+    const sounding = t.audition !== null && t.auditionPos < t.auditionEnd;
+    if (sounding) {
       t.auditionOld = t.audition;
       t.auditionOldPos = t.auditionPos;
-      t.auditionFading = DECLICK;
+      t.auditionFading = this.auditionFade;
     }
     t.audition = clips;
-    t.auditionPos = 0;
+    t.auditionPos = sounding && follow ? t.auditionOldPos : 0;
+    t.auditionRising = sounding && follow ? this.auditionFade : 0;
     t.auditionEnd = 0;
     if (clips)
       for (let i = 0; i < clips.length; i++) t.auditionEnd = Math.max(t.auditionEnd, (clips[i] as ClipSpec).end);
@@ -1770,28 +1919,42 @@ export class EngineCore implements Host {
 
   /** A track's audition over this block (and the one it took over from, fading out), whether or not the song plays. */
   private playAudition(t: TrackNode, n: number): void {
+    if (t.auditionWaiting && !t.auditionOld && t.auditionRising <= 0)
+      this.startAudition(t, t.auditionNext, t.auditionNextFollows);
     const old = t.auditionOld;
     if (old) {
       const count = Math.min(n, t.auditionFading);
-      this.auditionPieces(t, old, t.auditionOldPos, count, t.auditionFading);
+      this.auditionPieces(t, old, t.auditionOldPos, count, t.auditionFading, 0);
       t.auditionOldPos += count;
       t.auditionFading -= count;
       if (t.auditionFading <= 0) t.auditionOld = null;
     }
     const now = t.audition;
     if (now) {
-      this.auditionPieces(t, now, t.auditionPos, n, 0);
+      this.auditionPieces(t, now, t.auditionPos, n, 0, t.auditionRising);
+      t.auditionRising = Math.max(0, t.auditionRising - n);
       t.auditionPos += n;
-      if (t.auditionPos >= t.auditionEnd) t.audition = null;
+      if (t.auditionPos >= t.auditionEnd) {
+        t.audition = null;
+        t.auditionRising = 0;
+      }
     }
   }
 
   /**
    * An audition's pieces from its frame `pos`, `count` frames, into the track's channels: each as a
    * clip plays (its gain, its fades, a ramp where it cuts into its recording, none at a seam).
-   * `fading`: the frames left of a fade-out over DECLICK (0: none).
+   * `fading`: the frames left of a fade-out over the audition fade; `rising`: of a fade-in (0: none).
    */
-  private auditionPieces(t: TrackNode, clips: ClipSpec[], pos: number, count: number, fading: number): void {
+  private auditionPieces(
+    t: TrackNode,
+    clips: ClipSpec[],
+    pos: number,
+    count: number,
+    fading: number,
+    rising: number,
+  ): void {
+    const fade = this.auditionFade;
     const end = pos + count;
     for (let c = 0; c < clips.length; c++) {
       const clip = clips[c] as ClipSpec;
@@ -1819,7 +1982,8 @@ export class EngineCore implements Host {
         if (cutIn && a < DECLICK) g *= a / DECLICK;
         if (cutOut && b < DECLICK) g *= b / DECLICK;
         const o = f - pos;
-        if (fading > 0) g *= (fading - o) / DECLICK;
+        if (fading > 0) g *= (fading - o) / fade;
+        if (rising > o) g *= 1 - (rising - o) / fade;
         t.l[o] = (t.l[o] as number) + (L[i] as number) * g;
         t.r[o] = (t.r[o] as number) + (R[i] as number) * g;
       }
@@ -1859,7 +2023,7 @@ export class EngineCore implements Host {
     t.events.clear();
     t.work.clear();
     if ((t.clips.length || t.oldClips) && this.playing && song) this.playClips(t);
-    if (t.audition || t.auditionOld) this.playAudition(t, n);
+    if (t.audition || t.auditionOld || t.auditionWaiting) this.playAudition(t, n);
     if (t.part && this.playing && song) this.playPart(t, t.part);
     if (t.input && this.inputOf(t, input)) {
       const { inA, inB } = this;
@@ -1995,7 +2159,7 @@ export class EngineCore implements Host {
    * (Asked before it plays: playing empties its events.)
    */
   private trackBusy(t: TrackNode): boolean {
-    if (t.events.count > 0 || t.input || t.capture || t.audition || t.auditionOld) return true;
+    if (t.events.count > 0 || t.input || t.capture || t.audition || t.auditionOld || t.auditionWaiting) return true;
     for (const inst of t.instruments) if (inst && inst.active > 0) return true;
     for (const m of t.midiFx) if (!m.bypass && m.fx.busy?.()) return true;
     return this.playing && (t.part !== null || (t.clips.length > 0 && this.clipsAhead(t)));
@@ -2447,7 +2611,8 @@ export class EngineCore implements Host {
 
   /** A twin plays while something live comes in or still sounds (its voices, its plugins' tails). */
   private twinAwake(t: TrackNode, k: number, hold: number): boolean {
-    if (t.events.count > 0 || t.input || t.audition || t.auditionOld || k - t.twinSeen < hold) return true;
+    if (t.events.count > 0 || t.input || t.audition || t.auditionOld || t.auditionWaiting || k - t.twinSeen < hold)
+      return true;
     for (const inst of t.instruments) if (inst && inst.active > 0) return true;
     for (const m of t.midiFx) if (!m.bypass && m.fx.busy?.()) return true;
     return false;

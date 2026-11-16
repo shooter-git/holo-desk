@@ -7,8 +7,10 @@
  */
 import { type MiddleC, noteName, PPQ, tickToBarBeat } from '@holo/session';
 import type { PermissionKind } from '../api.ts';
+import { AFTER, BEFORE, LIMITS, VERSION_NAME } from '../view.ts';
 import { getAttachment, need, plural, str, type Tool, ToolError } from './common.ts';
 import { playedText, recordedNotes } from './play.ts';
+import { PARAMS_TEXT, resolvePresentation } from './present.ts';
 
 const WAIT =
   "Now end your turn: call finish with a short reply that says what you are waiting for (e.g. \"Once it's installed I'll write the strings.\"), then stop. The user's answer starts your next turn.";
@@ -227,11 +229,65 @@ export const handOff: Tool = {
   },
 };
 
+/** The view's grammar, as finish describes it: what each piece is and does, nothing about when to use it. */
+const VIEW_GRAMMAR = [
+  'Blocks:',
+  '{"text": "…", "quiet"?: true}',
+  '{"row": [blocks]} side by side',
+  '{"group": [blocks], "title"?}',
+  '{"list": [{"text", "detail"?, "do"?}]} rows; one with "do" is clicked',
+  '{"table": {"head"?: ["…"], "rows": [[cell…]]}} a cell is words, a number, or a text, button, slider or toggle block',
+  '{"button": "label", "do": action}',
+  '{"choice": [{"label", "do"}]} a switch: the one clicked stays lit',
+  '{"slider": setting, "label"?, "min"?, "max"?} live while dragged, one undo step a drag',
+  '{"toggle": setting, "label"?} on or off',
+  '{"chart": [{"y", "x"?, "label"?, "go"?} or numbers], "kind"?: "line"|"bars"|"dots", "unit"?, "min"?, "max"?, "ref"?} a click on a point goes to its "go"',
+  '{"notes": {"track", "from", "to", "version"?}} bars of a track\'s notes drawn small; {"wave": …} a recording\'s waveform; a click goes there.',
+  'Actions ("do"):',
+  '{"play": {"from": bar, "to": bar (not played), "version"?, "solo"?: [tracks]}} clicked again it stops',
+  '{"go": {"bar"?, "track"?, "region"?, "notes"?: {"from", "to", "pitch"?}, "view"?: "tracks"|"editor"|"mixer"|"score", "plugin"?}} selects, opens and moves the playhead there',
+  '{"set": setting, "value": n}',
+  '{"keep": version} makes it the song (one undo step)',
+  '{"command": id} one of the studio\'s commands, as song_status lists them',
+  '{"ask": "…"} a next request, sent when clicked.',
+  `A setting is {"track": a track, bus or "master", "param": ${PARAMS_TEXT}}.`,
+  `A version is "before" (the song before this request), "after" (as you leave it) or a name you gave the version tool. Plain text only, no markdown. At most ${LIMITS.top} blocks at the top, ${LIMITS.pieces} in all, ${LIMITS.depth} deep.`,
+].join(' ');
+
+export const version: Tool = {
+  name: 'version',
+  kind: 'change',
+  summary: `Keep the song as it is now as a version, named in a few words ("Half step down", "Hall reverb"), so the reply's view can play it ({"play": {…, "version": name}}) or keep it ({"keep": name}) beside the others. "before" (the song before this request) and "after" (as you leave it) are there anyway. Name each alternative as you make it, then change the song for the next. At most ${LIMITS.versions} a turn.`,
+  args: [
+    {
+      name: 'name',
+      type: 'string',
+      describe: 'A few words naming it, e.g. "Half step down"',
+      required: true,
+      maxLength: 40,
+    },
+  ],
+  async run(ctx, args) {
+    const name = need(args, 'name');
+    if (name === BEFORE || name === AFTER)
+      throw new ToolError(`"${name}" is there anyway: name this version something else`);
+    if (!VERSION_NAME.test(name)) throw new ToolError('Name it in a few words, letters and numbers first');
+    if (ctx.memory.versions.includes(name))
+      throw new ToolError(`There's a version "${name}" already: name this one differently`);
+    if (ctx.memory.versions.length >= LIMITS.versions)
+      throw new ToolError(`At most ${LIMITS.versions} versions a turn`);
+    await ctx.api.version(name);
+    ctx.memory.versions.push(name);
+    return {
+      text: `Kept the song as it is now as "${name}". Change the song for the next version, or finish with a view that plays and keeps them.`,
+    };
+  },
+};
+
 export const finish: Tool = {
   name: 'finish',
   kind: 'ask',
-  summary:
-    'End your turn: "label" names the undo step for everything you changed (at most 80 characters, e.g. "Counter-melody on oboe, bars 9–16"), and "reply" is what the user reads under the bar: one or two short sentences, at most about 200 characters, in musical terms; what changed and where, nothing else (or what you\'re waiting for, or why you couldn\'t). Call it exactly once, last.',
+  summary: `End your turn: "label" names the undo step for everything you changed (at most 80 characters, e.g. "Counter-melody on oboe, bars 9–16"), and "reply" is what the user reads under the bar: one or two short sentences, at most about 200 characters, in musical terms; what changed and where (or what you're waiting for, or why you couldn't). "view" (optional) is what shows under the reply, made of the blocks and actions below. "go" (optional, only when they asked to see something) is a go the studio moves to as the reply arrives. Call it exactly once, last. ${VIEW_GRAMMAR}`,
   args: [
     {
       name: 'label',
@@ -244,15 +300,32 @@ export const finish: Tool = {
       name: 'reply',
       type: 'string',
       describe:
-        'The reply under the bar: one or two short sentences, at most about 200 characters; what changed and where, nothing else',
+        'The reply under the bar: one or two short sentences, at most about 200 characters; what changed and where',
       required: true,
       maxLength: 600,
     },
+    {
+      name: 'view',
+      type: 'array',
+      items: 'object',
+      maxLength: LIMITS.top,
+      describe:
+        'What shows under the reply: a list of blocks, e.g. [{"row": [{"button": "Original", "do": {"play": {"from": 9, "to": 17, "version": "before"}}}]}]',
+    },
+    {
+      name: 'go',
+      type: 'object',
+      describe:
+        'Where the studio goes as the reply arrives, only when they asked to see something, e.g. {"track": "Vocal", "notes": {"from": "12", "to": "13"}}',
+    },
   ],
   async run(ctx, args) {
-    await ctx.api.finish(need(args, 'label'), need(args, 'reply'));
+    const label = need(args, 'label');
+    const reply = need(args, 'reply');
+    const { view, go } = await resolvePresentation(ctx, args.view, args.go);
+    await ctx.api.finish(label, reply, view, go);
     return { text: 'Done. Stop now: your turn is over.' };
   },
 };
 
-export const conversationTools: Tool[] = [attachmentGet, look, askPermission, handOff, finish];
+export const conversationTools: Tool[] = [attachmentGet, look, askPermission, handOff, version, finish];

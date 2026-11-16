@@ -31,10 +31,18 @@ export const songStatus: Tool = {
   name: 'song_status',
   kind: 'see',
   summary: ({ middleC }) =>
-    `Where the user is now: the song's title, who it's by, its album and creation, tempo, meter, key and length; its tracks; the playhead (bar.beat.sixteenth) and whether it's playing; what's selected; the cycle; the editor in front; and how note names are written here (middle C, MIDI 60, is ${middleC}). Cheap: call it first, and again after the user may have moved.`,
+    `Where the user is now: the song's title, who it's by, its album and creation, tempo, meter, key and length; its tracks; the playhead (bar.beat.sixteenth) and whether it's playing; what's selected; the cycle; the editor in front; how note names are written here (middle C, MIDI 60, is ${middleC}); and the studio's commands a button in your reply can run. Cheap: call it first, and again after the user may have moved.`,
   args: [],
   async run(ctx) {
-    const [state, project] = await Promise.all([ctx.api.state(), ctx.api.song()]);
+    const [state, project, commands] = await Promise.all([
+      ctx.api.state(),
+      ctx.api.song(),
+      // (the studio's own list; none where there's no studio, as in the terminal)
+      ctx.api.commands().then(
+        (c) => c.commands,
+        () => [],
+      ),
+    ]);
     const bars = barOf(project, projectEnd(project) - 1);
     const m = project.meter[0];
     const lines = [
@@ -68,6 +76,8 @@ export const songStatus: Tool = {
     if (state.view) lines.push(`View: ${state.view}`);
     if (state.scan) lines.push(`Scan window open on scan ${state.scan}`);
     lines.push(`Note names: middle C (MIDI 60) is ${ctx.middleC}.`);
+    if (commands.length)
+      lines.push(`Commands a button can run: ${commands.map((c) => `${c.id} (${c.title})`).join(', ')}`);
     return { text: lines.join('\n') };
   },
 };

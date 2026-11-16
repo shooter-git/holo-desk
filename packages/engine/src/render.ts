@@ -32,7 +32,7 @@ import { finish } from './master.ts';
 import { renderNotePatch } from './notes/patch.ts';
 import { songPatches } from './notes/plan.ts';
 import { isPlanned, type PerformanceManifest, partReach, partSamples, planTrack, wrapPlans } from './parts.ts';
-import { EV_OFF, EV_ON, EVENT_SIZE, type SamplerSpec, type SampleZone } from './protocol.ts';
+import { EV_OFF, EV_ON, EVENT_SIZE, type SampleFrames, type SamplerSpec, type SampleZone } from './protocol.ts';
 import { resample } from './resample.ts';
 import { type ImpulseSource, impulseFromAudio } from './space.ts';
 import { generateSpace } from './spaces.ts';
@@ -72,12 +72,15 @@ export interface ZoneManifest {
  * Fade a loaded sample's last `frames` out (an S curve to silence), in place: where a pack keeps a
  * sample shorter than its file, it ends without a click.
  */
-export function fadeTail(data: Float32Array, frames: number): void {
+export function fadeTail(data: SampleFrames, frames: number): void {
   const n = Math.min(Math.round(frames), data.length);
+  // (16-bit frames round to the nearest step: storing would cut toward zero)
+  const whole = data instanceof Int16Array;
   for (let i = 0; i < n; i++) {
     const t = (i + 1) / n;
     const j = data.length - n + i;
-    data[j] = (data[j] as number) * (1 - t * t * (3 - 2 * t));
+    const v = (data[j] as number) * (1 - t * t * (3 - 2 * t));
+    data[j] = whole ? Math.round(v) : v;
   }
 }
 

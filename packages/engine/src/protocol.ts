@@ -106,10 +106,22 @@ export interface GraphSpec {
   soloed: string[] | null;
 }
 
+/**
+ * A sample's frames: floats, or 16-bit PCM (full scale 32768) at half the memory, for samples that
+ * were 16-bit to begin with. A big multi-sampled instrument is hundreds of megabytes as floats, more
+ * than a phone's browser lets a page hold.
+ */
+export type SampleFrames = Float32Array | Int16Array;
+
+/** What a 16-bit sample's frames are multiplied by to play at full scale (1 for floats). */
+export function sampleScale(data: SampleFrames): number {
+  return data instanceof Int16Array ? 1 / 32768 : 1;
+}
+
 /** One instrument's samples. Channel data is transferred, not copied. */
 export interface SampleZone {
-  left: Float32Array;
-  right: Float32Array | null;
+  left: SampleFrames;
+  right: SampleFrames | null;
   /** The sample's true pitch (MIDI, fractional). */
   root: number;
   lo: number;

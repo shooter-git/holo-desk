@@ -6,8 +6,10 @@ import { createRoot } from 'react-dom/client';
 import { findCompanion, startup } from './app/actions.ts';
 import { installKeys } from './app/keys.ts';
 import { connectLive, device } from './app/live.ts';
+import { readPairLink } from './app/pair-link.ts';
 import { connectRemote } from './app/remote.ts';
 import { installRightClick } from './app/right-click.ts';
+import { openSettings } from './app/store.ts';
 
 // the studio and the remote are files of their own, so a phone loads only the remote's
 const App = lazy(() => import('./ui/App.tsx').then((m) => ({ default: m.App })));
@@ -31,6 +33,12 @@ if (isRemote) {
   connectRemote(`Remote (${device().replace(/ on an? /, ', ')})`);
 } else {
   installKeys();
+  // a pairing link from `holo pair`: Settings › Agent, with its code filled in
+  const paired = () => {
+    if (readPairLink()) openSettings('agent');
+  };
+  paired();
+  window.addEventListener('hashchange', paired);
   // the live channel and HO[LO] Engine need no song: they're looked for while it loads
   connectLive();
   findCompanion();

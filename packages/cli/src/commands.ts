@@ -44,6 +44,7 @@ export const COMMANDS = [
   'init',
   'update-engine',
   'runner',
+  'pair',
   'render',
   'import-midi',
   'import-score',

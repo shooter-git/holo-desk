@@ -11,10 +11,20 @@
  * opened another song or undid the job's change, the device was removed, the agent turned off).
  */
 import { randomBytes } from 'node:crypto';
+import { AFTER, BEFORE, type Block, type Go, LIMITS as VIEW_LIMITS, type View, viewVersions } from '@holo/agent/view';
 import { SCAN_ID, type Scan } from '@holo/score';
 import { applyOps, barToTick, type MiddleC, type Op, type Project, parseProject } from '@holo/session';
 import type { Store } from '../db.ts';
-import { type AgentHooks, type Answer, GONE, type Live, type LiveClient, NO_ANSWER, type PlayedNote } from '../live.ts';
+import {
+  type AgentHooks,
+  type Answer,
+  GONE,
+  type Live,
+  type LiveClient,
+  NO_ANSWER,
+  type PlayedNote,
+  type RunnerState,
+} from '../live.ts';
 import { hashToken, newToken, sameHash } from './auth.ts';
 import {
   type AttachmentInfo,
@@ -57,6 +67,9 @@ export interface JobView {
   permission?: Permission;
   brief?: string;
   briefWarnings?: BriefWarning[];
+  /** What the reply shows under it (resolved, its versions as revisions), and where the studio goes as it arrives. */
+  view?: View;
+  go?: Go;
   error?: string;
   started: number;
   finished?: number;
@@ -114,6 +127,9 @@ export interface AgentJob {
   listenOff: NodeJS.Timeout | null;
   /** Done was pressed between two parts of a listen: the next part ends at once. */
   doneListening: boolean;
+  /** The revision kept as the song before the request ("before"), and the versions its tools named. */
+  before: number | null;
+  versions: Map<string, number>;
 }
 
 /**
@@ -246,6 +262,21 @@ const LIVE: ReadonlySet<JobState> = new Set(['waiting', 'running']);
 const isLive = (job: AgentJob) => LIVE.has(job.view.state);
 const HARNESS_NAMES: Record<HarnessId, string> = { claude: 'Claude Code', codex: 'Codex', cursor: 'Cursor' };
 
+/**
+ * Why no runner takes the agent's jobs, said to an allowed device: none connected, or the one that is
+ * from before keys, can't read the key, or has another HO[LO]'s.
+ */
+export function noRunnerText({ state, host }: { state: RunnerState; host: string | null }): string {
+  const it = `The runner${host ? ` on ${host}` : ''}`;
+  if (state === 'old')
+    return `${it} is from an older HO[LO] than this one: bring its checkout up to this version and restart it`;
+  if (state === 'no-key')
+    return `${it} can’t read HO[LO]’s runner key: run it from the checkout whose data folder HO[LO] uses (or give it HOLO_RUNNER_KEY)`;
+  if (state === 'wrong-key')
+    return `${it} has another HO[LO]’s runner key: point its HOLO_DATA_DIR at this HO[LO]’s data folder`;
+  return 'No runner is connected: start it on the computer HO[LO] runs on (pnpm runner; on Linux, pnpm run runner-service on keeps it running)';
+}
+
 export class Jobs implements AgentHooks {
   private readonly o: JobsOptions;
   private readonly limits: Limits;
@@ -336,12 +367,7 @@ export class Jobs implements AgentHooks {
 
   /** The harness a request runs with, and its runner; or why there's none. */
   private pick(wanted: HarnessId | null): { harness: HarnessId; runner: LiveClient } {
-    if (!this.o.live.agentRunners().length)
-      throw new Refusal(
-        409,
-        'The agent runs through the runner on this computer: start it with pnpm runner',
-        'no-runner',
-      );
+    if (!this.o.live.agentRunners().length) throw new Refusal(409, noRunnerText(this.o.live.runners()), 'no-runner');
     // none chosen: the first that can be sealed, else the first found (whose refusal then says why)
     const sealed = HARNESSES.filter((id) => this.runnerFor(id)?.info.sealed);
     const ids = wanted ? [wanted] : sealed.length ? sealed : HARNESSES.filter((id) => this.runnerFor(id));
@@ -376,7 +402,7 @@ export class Jobs implements AgentHooks {
   relay(action: 'refresh' | 'login' | 'login-code' | 'update' | 'install', harness?: HarnessId, code?: string): void {
     if (action === 'refresh') {
       const runners = this.o.live.agentRunners();
-      if (!runners.length) throw new Refusal(409, 'Start the runner on this computer: pnpm runner', 'no-runner');
+      if (!runners.length) throw new Refusal(409, noRunnerText(this.o.live.runners()), 'no-runner');
       for (const r of runners) {
         this.looked.set(r, Date.now());
         this.o.live.sendTo(r, { type: 'agent-refresh' });
@@ -385,8 +411,7 @@ export class Jobs implements AgentHooks {
     }
     if (!harness) throw new Refusal(400, 'Which harness?');
     if (action === 'install') {
-      if (!this.o.live.agentRunners().length)
-        throw new Refusal(409, 'Start the runner on this computer: pnpm runner', 'no-runner');
+      if (!this.o.live.agentRunners().length) throw new Refusal(409, noRunnerText(this.o.live.runners()), 'no-runner');
       // only one that isn't there: HO[LO] never reinstalls over one (Update is for that)
       if (this.runnerFor(harness)) throw new Refusal(409, `${HARNESS_NAMES[harness]} is installed already`);
       if ([...this.jobs.values()].some((j) => j.harness === harness && isLive(j)))
@@ -506,8 +531,8 @@ export class Jobs implements AgentHooks {
       await this.flush(device, project);
       const now = this.o.store.get(project);
       if (!now) throw new Refusal(404, 'No such song');
-      // a restore point, whatever the agent does
-      this.o.store.snapshotNow(project, 'Agent');
+      // a restore point, whatever the agent does (and the reply's "before")
+      const before = this.o.store.snapshotNow(project, 'Agent');
       const text = await prompt(now);
       const settings = this.o.agentStore.settings();
       const token = newToken();
@@ -535,6 +560,8 @@ export class Jobs implements AgentHooks {
         hearing: null,
         listenOff: null,
         doneListening: false,
+        before,
+        versions: new Map(),
       };
       // the runner may have gone while the studio saved
       if (!this.o.live.agentRunners().includes(runner))
@@ -750,6 +777,12 @@ export class Jobs implements AgentHooks {
     if (!isLive(job)) return;
     const song = this.o.store.get(job.view.project);
     if (song) this.o.threads.seen(job.thread, song);
+    // the song as the turn left it, when the reply's view plays or keeps it
+    const view = job.view.view;
+    if (view && viewVersions(view.blocks).includes(AFTER)) {
+      const after = this.o.store.snapshotNow(job.view.project, 'Agent');
+      if (after !== null) view.versions[AFTER] = after;
+    }
     job.view.state = job.asked ? 'awaiting' : 'done';
     if (job.asked) job.view.permission = job.asked;
     job.view.finished = Date.now();
@@ -1163,11 +1196,72 @@ export class Jobs implements AgentHooks {
     this.tell(job);
   }
 
-  /** The undo step's label and the reply under the bar. */
-  finish(job: AgentJob, label: string, reply: string): void {
+  /**
+   * The undo step's label, the reply under the bar, and what it shows under it (blocks already checked,
+   * every version they name one this job has: its revision goes with them; "after" once the turn is
+   * done) and where the studio goes as it arrives.
+   */
+  finish(job: AgentJob, label: string, reply: string, blocks?: Block[], go?: Go): void {
     job.view.label = label;
     job.view.reply = reply;
+    if (blocks) {
+      const versions: Record<string, number> = {};
+      for (const name of viewVersions(blocks)) {
+        if (name === AFTER) continue;
+        const revision = name === BEFORE ? job.before : job.versions.get(name);
+        if (revision === null || revision === undefined)
+          throw new Refusal(
+            400,
+            name === BEFORE
+              ? 'The song from before this request wasn’t kept'
+              : `No version "${name}" was kept this turn`,
+          );
+        versions[name] = revision;
+      }
+      job.view.view = { blocks, versions };
+    } else delete job.view.view;
+    if (go) job.view.go = go;
+    else delete job.view.go;
     this.saveTurn(job);
+  }
+
+  /**
+   * A version for the reply's view: the studio saves, and the song as saved is kept in its history
+   * under the name; its revision.
+   */
+  async version(job: AgentJob, name: string): Promise<{ ok: true; revision: number }> {
+    if (name === BEFORE || name === AFTER || job.versions.has(name))
+      throw new Refusal(409, `There's a version "${name}" already`);
+    if (job.versions.size >= VIEW_LIMITS.versions)
+      throw new Refusal(409, `At most ${VIEW_LIMITS.versions} versions a turn`);
+    if (!job.preset) {
+      const studio = await this.studioBack(job);
+      const answer = await this.o.live.request(studio, { type: 'agent-flush' }, this.limits.flushMs, true);
+      awayIfGone(answer);
+      if (!answer.ok)
+        throw new Refusal(answer.error === NO_ANSWER ? 504 : 409, answer.error ?? 'The studio couldn’t save the song');
+    }
+    const revision = this.o.store.snapshotNow(job.view.project, `Agent: ${name}`);
+    if (revision === null) throw new Refusal(404, 'The song is gone');
+    job.versions.set(name, revision);
+    return { ok: true, revision };
+  }
+
+  /** The commands the requester's studio can run now (its bar's), for the buttons of a reply. */
+  async commands(job: AgentJob): Promise<{ commands: { id: string; title: string }[] }> {
+    const studio = await this.studioBack(job);
+    const answer = await this.o.live.request(studio, { type: 'agent-commands' }, this.limits.compareMs, true);
+    awayIfGone(answer);
+    if (!answer.ok || !Array.isArray(answer.commands))
+      throw new Refusal(answer.error === NO_ANSWER ? 504 : 409, answer.error ?? 'The studio didn’t list its commands');
+    const commands: { id: string; title: string }[] = [];
+    for (const c of answer.commands.slice(0, 200)) {
+      if (typeof c !== 'object' || c === null) continue;
+      const { id, title } = c as Record<string, unknown>;
+      if (typeof id === 'string' && /^[a-z][a-z0-9-]{0,40}$/.test(id) && typeof title === 'string')
+        commands.push({ id, title: title.replace(/\p{Cc}/gu, ' ').slice(0, 60) });
+    }
+    return { commands };
   }
 
   // ---- listening, what was just played, A/B ----
@@ -1379,6 +1473,8 @@ function turnExtra(job: AgentJob): string {
     ...(v.permission ? { permission: v.permission } : {}),
     ...(v.brief ? { brief: v.brief } : {}),
     ...(v.briefWarnings ? { briefWarnings: v.briefWarnings } : {}),
+    ...(v.view ? { view: v.view } : {}),
+    ...(v.go ? { go: v.go } : {}),
     ...(v.error ? { error: v.error } : {}),
     ...(job.attachments.length ? { attachments: job.attachments } : {}),
   };

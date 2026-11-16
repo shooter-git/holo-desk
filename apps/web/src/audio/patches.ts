@@ -460,7 +460,7 @@ export class PatchRenderer {
     void store.get(job.key).then((channels) => {
       this.running.delete(job.key);
       if (channels) {
-        this.cache.set(job.key, this.opts.shared ? channels.map(toShared) : channels);
+        this.cache.set(job.key, this.opts.shared ? channels.map((c) => toShared(c)) : channels);
         this.onDevice.add(job.key);
         this.stats.fromDevice++;
         this.dropPreviewing(job.key);

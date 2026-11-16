@@ -42,9 +42,11 @@ export interface ToolMemory {
   listening: Listening | null;
   /** The notes of the last listen that ended. */
   lastListen: PlayedNote[] | null;
+  /** The versions of the song named this turn (the version tool), for the reply's view to play or keep. */
+  versions: string[];
 }
 
-export const newMemory = (): ToolMemory => ({ listening: null, lastListen: null });
+export const newMemory = (): ToolMemory => ({ listening: null, lastListen: null, versions: [] });
 
 export interface ToolContext {
   api: JobApi;

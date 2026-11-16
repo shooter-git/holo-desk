@@ -298,7 +298,7 @@ function laneParam(project: Project, target: ChannelRef, spec: string): string {
   const dot = spec.lastIndexOf('.');
   if (!raw && dot <= 0)
     throw new ToolError(
-      '"param" is volume, pan, mute, distance, send:BUS, or a plugin\'s TYPE.PARAM (e.g. reverb.mix, eq#2.high_gain, fx_….mix)',
+      '"param" is volume, pan, mute, distance, send:BUS, or a plugin\'s TYPE.PARAM (e.g. reverb.mix, eq#2.hsGain, fx_….mix)',
     );
   const ref = raw ? (raw[1] as string) : spec.slice(0, dot);
   const id = raw ? (raw[2] as string) : spec.slice(dot + 1);
@@ -333,7 +333,7 @@ export const automate: Tool = {
   name: 'automate',
   kind: 'change',
   summary:
-    'Automation on a track, a bus or the master ("target"; "master" for the master): how a setting moves through the song. action "list" gives every setting there that can move (with its range, its value now, and its lane if it has one); "show" a lane\'s points; "set" (the default) writes "points", position=value pairs, e.g. "9=-24 13=-6 17.3=-6 21=-30" (between them the value moves in a line; "smooth" eases it); "clear" removes the lane, "off" keeps it but stops it playing, "read" turns it back on. "param" is volume (dB), pan (-1..1), mute (0/1), distance (0 near … 1 far, for a channel on a stage), send:BUS (dB, e.g. send:Reverb), or an audio effect\'s parameter: TYPE.PARAM for the first of that type (reverb.mix), TYPE#2.PARAM for the second (eq#2.high_gain), or PLUGIN_ID.PARAM.',
+    'Automation on a track, a bus or the master ("target"; "master" for the master): how a setting moves through the song. action "list" gives every setting there that can move (with its range, its value now, and its lane if it has one); "show" a lane\'s points; "set" (the default) writes "points", position=value pairs, e.g. "9=-24 13=-6 17.3=-6 21=-30" (between them the value moves in a line; "smooth" eases it); "clear" removes the lane, "off" keeps it but stops it playing, "read" turns it back on. "param" is volume (dB), pan (-1..1), mute (0/1), distance (0 near … 1 far, for a channel on a stage), send:BUS (dB, e.g. send:Reverb), or an audio effect\'s parameter: TYPE.PARAM for the first of that type (reverb.mix), TYPE#2.PARAM for the second (eq#2.hsGain), or PLUGIN_ID.PARAM.',
   args: [
     { name: 'target', type: 'string', describe: 'A track or bus name (or id), or "master"', required: true },
     {

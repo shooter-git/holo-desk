@@ -330,6 +330,9 @@ export function terminalApi(o: TerminalApiOptions): TerminalApi {
     permission: unsupported('Asking the user', 'ask them yourself'),
     handoff: unsupported('A brief for the user’s harness', 'you are in a terminal already'),
     finish: unsupported('Finishing a turn', 'there is no turn to finish'),
+    version: unsupported('A version for a reply’s buttons', 'there is no reply in the studio’s bar here'),
+    // (the studio's commands are for the buttons of a reply in its bar: none here)
+    commands: async () => ({ commands: [] }),
   };
 
   // anything the agent's API offers that the terminal has no route for answers so, rather than failing

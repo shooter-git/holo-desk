@@ -30,8 +30,10 @@ describe('the terminal has what the in-app agent has', () => {
         expect(p.commands, tool.name).not.toContain('tool');
       } else {
         expect(p.conversation.length, tool.name).toBeGreaterThan(20);
-        // a tool that only sees or plays isn't the conversation's
-        expect(tool.kind === 'ask' || tool.name === 'compare' || tool.name === 'attachment_get', tool.name).toBe(true);
+        // a tool that only sees or plays isn't the conversation's (a version is only for a reply's buttons)
+        expect(tool.kind === 'ask' || ['compare', 'attachment_get', 'version'].includes(tool.name), tool.name).toBe(
+          true,
+        );
       }
     }
     expect(missing, 'tools with neither a holo command nor a reason (add their line to src/parity.ts)').toEqual([]);

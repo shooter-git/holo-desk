@@ -6,6 +6,7 @@ import type { ClickSound } from '@holo/engine';
 import type { DIVISIONS, MiddleC, Note, PitchSnap, Project } from '@holo/session';
 import { useSyncExternalStore } from 'react';
 import type { LatencyMode } from '../audio/engine.ts';
+import type { RateChoice } from '../audio/engine-rate.ts';
 import type { MidiStatus, PortInfo } from '../audio/midi.ts';
 import type { NoteTool } from '../ui/note-tools.ts';
 
@@ -95,6 +96,8 @@ export interface AppState {
   mobileTab: MobileTab;
   /** The compact display (a phone, a narrow bar), which has room for one: the time instead of the position. */
   positionTime: boolean;
+  /** Play (or Record) pressed while the song's sounds were still on their way: it starts once they're in. */
+  playWaiting: 'play' | 'record' | null;
 
   tool: Tool;
   grid: keyof typeof DIVISIONS;
@@ -119,6 +122,8 @@ export interface AppState {
   metronomeSound: ClickSound;
   countIn: number;
   latencyMode: LatencyMode;
+  /** The rate the studio plays at on this device (Settings › Audio): Automatic, or one of its own. */
+  rateChoice: RateChoice;
   /** Logic's Low Latency Mode: nothing that delays the sound while you play. */
   lowLatency: boolean;
   /** This device's chosen sound output ('' = the system's default). */
@@ -226,6 +231,7 @@ const initial: AppState = {
   synth: null,
   mobileTab: 'tracks',
   positionTime: false,
+  playWaiting: null,
   tool: 'pointer',
   grid: '1/16',
   zoom: 40,
@@ -244,6 +250,7 @@ const initial: AppState = {
   metronomeSound: 'beep',
   countIn: 1,
   latencyMode: 'lowest',
+  rateChoice: 'auto',
   lowLatency: true,
   outputDevice: '',
   inputDevice: '',
@@ -292,6 +299,7 @@ const REMEMBER: (keyof AppState)[] = [
   'metronomeSound',
   'countIn',
   'latencyMode',
+  'rateChoice',
   'lowLatency',
   'outputDevice',
   'inputDevice',
@@ -345,7 +353,7 @@ export function toast(text: string, kind: Toast['kind'] = 'info', ms = 3500, act
   window.setTimeout(() => store.set((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) })), ms);
 }
 
-/** Open the bar (Ctrl /, the search button, or a swipe down on a phone's top bar). */
+/** Open the bar (Ctrl /, the slash button, or a swipe down on a phone's top bar). */
 export function openBar(): void {
   if (!state.bar) store.set({ bar: true });
 }

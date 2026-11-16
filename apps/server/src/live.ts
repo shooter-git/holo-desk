@@ -72,6 +72,8 @@ export interface LiveClient {
   caps?: RunnerCaps;
   /** A runner that said the runner key: the only kind handed the agent's jobs. */
   keyed?: boolean;
+  /** A runner's key as its hello said it: the key, none, or another. */
+  key?: 'ok' | 'missing' | 'wrong';
   name: string;
   state: EditorState | null;
   /** The song this studio was last brought up to date about (on joining, or opening another). */
@@ -85,6 +87,19 @@ type Client = LiveClient;
  * The agent's part of the live channel (agent/jobs.ts): the devices' studios, and the runners that
  * run its jobs. Set once the agent is set up; until then nothing of the agent's is accepted.
  */
+/**
+ * How the runners stand, for the agent: `ready` (one said the key), `old` (one from before keys, which
+ * doesn't know to say it), `no-key` (a current one that couldn't read it), `wrong-key` (one that read
+ * another HO[LO]'s), or `none`.
+ */
+export type RunnerState = 'none' | 'ready' | 'old' | 'no-key' | 'wrong-key';
+
+/** The computer a runner is on, from its hello's name (`runner on <host>`): letters, digits, `.`, `-`, `_`. */
+export function runnerHost(name: string): string | null {
+  const host = /^runner on (.+)$/.exec(name)?.[1] ?? name;
+  return /^[\w.-]{1,64}$/.test(host) ? host : null;
+}
+
 export interface AgentHooks {
   /** The device an agent token belongs to (null: no device, or not allowed). */
   device(token: string): string | null;
@@ -205,7 +220,8 @@ export class Live {
         client.name = typeof msg.name === 'string' ? msg.name.slice(0, 80) : client.role;
         if (client.role === 'runner') {
           client.caps = runnerCaps(msg.caps);
-          client.keyed = this.keyed(msg.key);
+          client.key = this.keyed(msg.key);
+          client.keyed = client.key === 'ok';
         } else client.keyed = false;
         // a studio on a device allowed to use the agent (each hello says it again, or it's no longer one)
         client.device =
@@ -397,9 +413,28 @@ export class Live {
     return [...this.clients].filter((c) => c.role === 'editor');
   }
 
-  /** Whether a runner is connected, and whether one said the key. */
-  runners(): { connected: boolean; keyed: boolean } {
-    return { connected: this.runner(), keyed: this.keyedRunners().length > 0 };
+  /**
+   * Whether a runner is connected, whether one said the key, how they stand, and the computer of the
+   * one that counts (a keyed one, else the first).
+   */
+  runners(): { connected: boolean; keyed: boolean; state: RunnerState; host: string | null } {
+    const all = [...this.clients].filter((c) => c.role === 'runner');
+    const one = all.find((c) => c.keyed) ?? all[0];
+    const state: RunnerState = !one
+      ? 'none'
+      : one.keyed
+        ? 'ready'
+        : one.key === 'wrong'
+          ? 'wrong-key'
+          : one.caps?.agent
+            ? 'no-key'
+            : 'old';
+    return { connected: !!one, keyed: !!one?.keyed, state, host: one ? runnerHost(one.name) : null };
+  }
+
+  /** Whether this is the runner key (what proves a program runs on this computer, as its owner). */
+  isRunnerKey(given: unknown): boolean {
+    return this.key !== null && typeof given === 'string' && given.length <= 256 && sameKey(given, this.key);
   }
 
   /** The runners the agent's jobs may go to: keyed ones that run them. */
@@ -481,14 +516,15 @@ export class Live {
    * Whether a runner's hello carries the runner key. One without it still renders; the server says
    * once why it gets no agent jobs.
    */
-  private keyed(given: unknown): boolean {
-    if (this.key !== null && typeof given === 'string' && given.length <= 256 && sameKey(given, this.key)) return true;
+  private keyed(given: unknown): 'ok' | 'missing' | 'wrong' {
+    if (this.isRunnerKey(given)) return 'ok';
+    const missing = given === undefined || given === null || given === '';
     this.tellOnce(
-      given === undefined || given === null || given === ''
+      missing
         ? 'A runner without the key connected: restart it with the current HO[LO] to use the agent'
         : 'A runner with the wrong key connected: it reads runner.key in HO[LO]’s data folder (or HOLO_RUNNER_KEY), so check its HOLO_DATA_DIR',
     );
-    return false;
+    return missing ? 'missing' : 'wrong';
   }
 
   private tellOnce(line: string): void {

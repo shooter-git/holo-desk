@@ -4,9 +4,10 @@
  * runs with), its model and effort, what it asks first and never does, and the devices allowed to use
  * it. Off is the default, and then this section is all there is of it.
  *
- * Turning it on from a device that isn't allowed yet: the first device pairs with the code the runner
- * prints on the host; a later one asks to join, and a device that's allowed approves it. With no
- * allowed device at hand, a later one can pair with the runner's code too.
+ * Turning it on from a device that isn't allowed yet: the first device pairs with a code from the host
+ * (`pnpm holo pair` prints one any time, with a link that opens this filled in; a keyed runner prints
+ * one too); a later one asks to join, and a device that's allowed approves it. With no allowed device
+ * at hand, a later one can pair with a code too.
  */
 import { useEffect, useState } from 'react';
 import {
@@ -24,22 +25,24 @@ import {
   pollJoin,
   refreshAgent,
   removeDevice,
+  runnerProblem,
   sendLoginCode,
   setSettings,
   startPairing,
   useAgent,
 } from '../app/agent.ts';
 import { device } from '../app/live.ts';
+import { takePairCode } from '../app/pair-link.ts';
 import { choices, harnessRow, installQuestion } from './harness-row.ts';
 
 /**
- * Where turning it on has got to, on a device not allowed yet. `code`: the runner's code is asked for
- * (with the request to join it took the place of, withdrawn once paired). Only `code` and `asking` are
- * on their way: the others light Off.
+ * Where turning it on has got to, on a device not allowed yet. `code`: a code from the host is asked for
+ * (with the request to join it took the place of, withdrawn once paired; `prefill`, a pairing link's).
+ * Only `code` and `asking` are on their way: the others light Off.
  */
 type Step =
   | { kind: 'idle' }
-  | { kind: 'code'; request?: string }
+  | { kind: 'code'; request?: string; prefill?: string }
   | { kind: 'asking'; id: string; secret: string; code: string }
   | { kind: 'off' }
   | { kind: 'denied' }
@@ -59,7 +62,11 @@ export function AgentSettings() {
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
-    void refreshAgent();
+    void refreshAgent().then((info) => {
+      // opened by a pairing link: its code, ready to pair (a device allowed already has no use for it)
+      const code = takePairCode();
+      if (code && info && !info.allowed) setStep({ kind: 'code', prefill: code });
+    });
   }, []);
   // once on for this device: its settings and devices (the devices list keeps up by itself after)
   useEffect(() => {
@@ -117,6 +124,7 @@ export function AgentSettings() {
       if (!info) throw new Error('Can’t reach HO[LO]’s host');
       if (info.allowed) await setSettings({ enabled: true });
       else if (info.pairing) {
+        // a keyed runner prints a code (one that still works is kept); without one, holo pair does
         await startPairing();
         setStep({ kind: 'code' });
       } else if (info.enabled) {
@@ -160,8 +168,8 @@ export function AgentSettings() {
 }
 
 /**
- * Turning it on from a device not allowed yet: the runner's code, or asking an allowed device. With no
- * allowed device at hand (waiting, lapsed, or the agent off), the runner's code is offered quietly too.
+ * Turning it on from a device not allowed yet: a code from the host, or asking an allowed device. With
+ * no allowed device at hand (waiting, lapsed, or the agent off), a code is offered quietly too.
  */
 function Joining({
   step,
@@ -175,6 +183,11 @@ function Joining({
   busy: boolean;
 }) {
   const [code, setCode] = useState('');
+  const keyed = useAgent((a) => !!a.info?.runner.keyed);
+  const prefill = step.kind === 'code' ? step.prefill : undefined;
+  useEffect(() => {
+    if (prefill) setCode(prefill);
+  }, [prefill]);
   const codeLink = (request?: string) => (
     <div className="hstack agent-alt">
       <span className="muted">No allowed device at hand?</span>
@@ -190,7 +203,7 @@ function Joining({
           })
         }
       >
-        Use a code from the runner
+        Use a pairing code
       </button>
     </div>
   );
@@ -203,7 +216,9 @@ function Joining({
       });
     return (
       <div className="agent-join">
-        <label htmlFor="agent-code">Enter the code the runner printed on the host</label>
+        <label htmlFor="agent-code">
+          {prefill ? 'The code from the pairing link: press Pair' : 'Enter the pairing code from the host'}
+        </label>
         <div className="hstack">
           <input
             id="agent-code"
@@ -220,21 +235,28 @@ function Joining({
           <button type="button" className="btn primary" disabled={busy || code.length !== 6} onClick={send}>
             Pair
           </button>
-          <button
-            type="button"
-            className="btn ghost"
-            disabled={busy}
-            onClick={() =>
-              void doing(async () => {
-                setCode('');
-                await startPairing();
-              })
-            }
-          >
-            New code
-          </button>
+          {keyed && (
+            <button
+              type="button"
+              className="btn ghost"
+              disabled={busy}
+              onClick={() =>
+                void doing(async () => {
+                  setCode('');
+                  await startPairing(true);
+                })
+              }
+            >
+              New code
+            </button>
+          )}
         </div>
-        <span className="muted">It works once, for 10 minutes. The runner shows it where it runs (pnpm runner).</span>
+        <span className="muted">
+          {prefill ? 'If it has expired: on' : 'On'} the computer HO[LO] runs on, run{' '}
+          <span className="mono">pnpm holo pair</span>: it prints a code, and a link (with a QR code) that fills it in
+          here.{keyed && !prefill ? ' The runner there printed one just now too.' : ''} A code works once, for 10
+          minutes.
+        </span>
       </div>
     );
   }
@@ -286,8 +308,15 @@ function Allowed() {
   const found = listed.filter((h) => h.found);
   const usable = found.filter((h) => h.sealed);
   const current = found.find((h) => h.id === settings.harness) ?? usable[0] ?? null;
+  // harnesses a runner listed before it went (or one that can't take the agent's jobs connected)
+  const problem = listed.length ? runnerProblem(runner) : null;
   return (
     <>
+      {problem && (
+        <div className="agent-error" role="status">
+          {problem}
+        </div>
+      )}
       <div className="agent-grid">
         <span className="agent-key">Harness</span>
         {listed.length ? (
@@ -295,9 +324,7 @@ function Allowed() {
         ) : (
           <div className="hstack" style={{ flexWrap: 'wrap' }}>
             <span className="muted">
-              {runner?.keyed
-                ? 'The runner hasn’t said yet which harnesses the host has.'
-                : 'Start the runner on the host (pnpm runner): it finds Claude Code, Codex and Cursor.'}
+              {runner?.keyed ? 'The runner hasn’t said yet which harnesses the host has.' : runnerProblem(runner)}
             </span>
             {runner?.keyed && <LookAgain />}
           </div>

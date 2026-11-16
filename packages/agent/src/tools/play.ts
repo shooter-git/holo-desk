@@ -344,7 +344,7 @@ export const compare: Tool = {
   name: 'compare',
   kind: 'play',
   summary:
-    'Let the user hear the difference: the studio plays the song as it was before this request (A), then as it is now (B), over bars "from" to "to" ("to" is where it stops, not played). Example: {"from": 9, "to": 17} plays bars 9–16 twice.',
+    'Play the difference at once, without asking: the studio plays the song as it was before this request (A), then as it is now (B), over bars "from" to "to" ("to" is where it stops, not played). Example: {"from": 9, "to": 17} plays bars 9–16 twice. Only when they asked to hear it now: to let them compare at their own pace, give them play buttons in finish\'s view instead.',
   args: [
     { name: 'from', type: 'integer', describe: 'The first bar', required: true, min: 0 },
     { name: 'to', type: 'integer', describe: 'The bar it stops at (not played)', required: true, min: 1 },

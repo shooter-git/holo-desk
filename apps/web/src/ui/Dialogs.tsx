@@ -15,6 +15,7 @@ import {
   renderInCreation,
   sendToCreation,
   setLatencyMode,
+  setRateChoice,
   setShareDevice,
 } from '../app/actions.ts';
 import { api, type Creation, type ProjectRow } from '../app/api.ts';
@@ -24,6 +25,7 @@ import { type SettingsTab, store, toast, useApp } from '../app/store.ts';
 import { useVersion } from '../app/version.ts';
 import { companion, STUDIO_ENGINE } from '../audio/companion.ts';
 import { engine } from '../audio/engine.ts';
+import type { RateChoice } from '../audio/engine-rate.ts';
 import { midi } from '../audio/midi.ts';
 import { AgentSettings } from './AgentSettings.tsx';
 import { Wordmark } from './controls.tsx';
@@ -484,7 +486,10 @@ function LatencyReadout() {
     const m = midi.handling();
     const handling = m?.median ?? 0;
     const total = handling + block / 2 + out + pluginMs;
+    // (a phone's browser stops a page's sound when something else takes it, and starts it again only from a tap)
+    const state = engine.ctx.state as string;
     const rows = [
+      ...(state !== 'running' ? [`The browser's audio is ${state}: press Play to start it again`] : []),
       `Key to ear ≈ ${total.toFixed(1)} ms`,
       `  output ${out.toFixed(1)} ms (browser ${l.base.toFixed(1)} + device ${l.output.toFixed(1)}) at ${l.sampleRate} Hz`,
       `  engine ${(block / 2).toFixed(1)} ms on average (one ${block.toFixed(1)} ms block at most)${pluginMs ? ` + plugins ${pluginMs.toFixed(1)} ms` : ''}`,
@@ -737,8 +742,15 @@ function GeneralSettings() {
 }
 
 /** Settings › Audio: latency, HO[LO] Engine, the sound devices, and where the time from key to ear goes. */
+const RATE_CHOICES: readonly [RateChoice, string][] = [
+  ['auto', 'Automatic'],
+  [44100, '44.1 kHz'],
+  [48000, '48 kHz'],
+];
+
 function AudioSettings() {
   const mode = useApp((s) => s.latencyMode);
+  const rate = useApp((s) => s.rateChoice);
   const lowLatency = useApp((s) => s.lowLatency);
   return (
     <section className="vstack">
@@ -777,6 +789,23 @@ function AudioSettings() {
           Low Latency Mode
         </label>
       </div>
+      <div className="label">Sample rate</div>
+      <div className="seg" style={{ alignSelf: 'flex-start' }}>
+        {RATE_CHOICES.map(([c, label]) => (
+          <button
+            key={c}
+            type="button"
+            className={`btn${rate === c ? ' on' : ''}`}
+            onClick={() => void setRateChoice(c)}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+      <span className="muted">
+        Automatic is 44.1 kHz on a phone or tablet, where most instruments then load straight from their files, quicker
+        and in less memory, and the sound device's own rate elsewhere. Changing it starts the audio again.
+      </span>
       <EngineLink />
       <OutputPicker />
       <InputPicker />

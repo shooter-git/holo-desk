@@ -42,6 +42,9 @@ cp .env.example .env
 pnpm run update             # pull ghcr.io/shooter-git/holo-desk:stable and start it (or: pnpm run update main)
 pnpm run autoupdate on      # then it keeps itself up to date (Linux: a systemd timer, as you)
 pnpm run runner-service on  # and the runner, for creations' renders and the agent (Linux: a service, as you)
+# on a server nobody stays logged into, once: the timer and the runner keep running after you log out,
+# and start at boot (without it, systemd stops them at logout and waits for your next login)
+sudo loginctl enable-linger "$USER"
 ```
 
 Install sample packs from the studio's Library (**More packs → Install**; browse them at
@@ -173,10 +176,15 @@ confirm (it says what runs, and where). One you install yourself in a terminal s
 again**, or, if it went somewhere the runner doesn't look, once you run `pnpm run runner-service on`
 again.
 
-The first device pairs with a 6-digit code the runner prints; the code works once, for 10 minutes. A
-later device asks to join, and a device already allowed approves it in its own Settings › Agent, where
-any device can also be removed, at once. A device that has lost its way back in (its site data
-cleared, or the only allowed device lost) pairs with a new code from the runner, the same way. The
+The first device pairs with a 6-digit code from the host: run `pnpm holo pair` there. It prints the
+code, a link that opens Settings › Agent with the code filled in for each way your setup opens HO[LO]
+to other devices (`pnpm tailnet on`, `pnpm lan on`), and a QR code a phone can scan. The code works once,
+for 10 minutes. (A running runner prints one too when a studio turns the agent on.) A later device asks
+to join, and a device already allowed approves it in its own Settings › Agent, where any device can
+also be removed, at once. A device that has lost its way back in (its site data cleared, or the only
+allowed device lost) pairs with a new code, the same way. If the runner can't serve the agent (none is
+connected, or it's from an older HO[LO] than the studio, or reads another data folder), Settings › Agent
+says which and what to do. The
 harness, its model and effort, its install, its sign-in and its updates are there too. An install or
 an update runs only when you click it and confirm, and it's the same harness your terminal uses. The
 models and efforts are the harness's own, as it lists them on the host, and they're looked at again
@@ -184,9 +192,12 @@ when you open Settings › Agent an hour or more after the last look.
 
 Type a request and press Enter. A picture, a recording, a MIDI or MusicXML file or a text file dropped
 or pasted on the bar goes with it (a picture is redrawn on your device first, without its location
-data). The reply is a sentence or two under the field, with a button only when the agent needs your
-click: to install a pack, send the song to its creation, share the screen, take a photo or record from
-the microphone. Close the bar and the work goes on: the bar's button shows a turning ring while the
+data). The reply is a sentence or two under the field, with a button when the agent needs your click:
+to install a pack, send the song to its creation, share the screen, take a photo or record from the
+microphone. Under the reply the agent shows what you'll want to do next with its work, composed in the
+studio's own buttons, switches, sliders and lists: play the original against its change, try the
+versions it made and keep one, set how much, or go to the bars it means. Nothing plays or moves until
+you click, unless you asked to see or hear something. Close the bar and the work goes on: the bar's button shows a turning ring while the
 agent works, then a dot until you open the bar again (a phone has the bar's button too, at the top). The
 agent works on the open song and nothing else:
 
@@ -319,7 +330,7 @@ They follow Logic's (Ctrl in place of ⌘): Space play/stop, R record, C cycle, 
 P Piano Roll, I Inspector, Y Library, Q quantize, Ctrl T split, Ctrl R repeat, Ctrl Z undo, Ctrl K
 Musical Typing, A automation, Ctrl B bounce. N shows the Score and Shift N writes in it: letters for
 notes, 1–7 for values (as in MuseScore), Shift L lyrics, Shift Q chord symbols. Ctrl / opens the bar,
-where every command, track and marker is found by name (the search button in the control bar, or a
+where every command, track and marker is found by name (the slash button, /, in the control bar, or a
 swipe down on a phone's top bar). Press <kbd>?</kbd> in the studio for the whole
 list.
 

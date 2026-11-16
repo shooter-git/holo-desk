@@ -1,12 +1,18 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import type { Scan } from '@holo/score';
-import { newRegion, PPQ, parseNoteName, SYNTH_PRESETS } from '@holo/session';
+import { newRegion, PLUGINS, PPQ, parseNoteName, SYNTH_MACROS, SYNTH_PRESETS } from '@holo/session';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ApiError, type PlayedNote } from '../src/api.ts';
 import { toolWords } from '../src/harness/adapter.ts';
 import { notationLength } from '../src/index.ts';
-import { describeTool } from '../src/tools/common.ts';
+import { describeTool, type Tool } from '../src/tools/common.ts';
 import { TOOLS, toolNamed } from '../src/tools/index.ts';
+import { checkGo, checkView } from '../src/view.ts';
 import { allOps, BAR, call, lastOps, memoryOf, refused, setup } from './helpers.ts';
+
+/** Everything the model reads of a tool: its description and its fields' help. */
+const wordsOf = (t: Tool) => [describeTool(t, 'C4'), ...t.args.map((a) => a.describe)].join(' ');
 
 describe('the tool list', () => {
   it('has at most 48 tools, named for MCP, each described', () => {
@@ -18,6 +24,83 @@ describe('the tool list', () => {
       expect(describeTool(t, 'C4').length).toBeGreaterThan(60);
       expect(['see', 'change', 'play', 'ask']).toContain(t.kind);
     }
+  });
+
+  it('gives as examples only plugin settings that exist (TYPE.PARAM, TYPE#2.PARAM)', () => {
+    const types = new Map(PLUGINS.map((p) => [p.type, new Set(p.params.map((x) => x.id))]));
+    const named: string[] = [];
+    for (const t of TOOLS) {
+      for (const m of wordsOf(t).matchAll(/\b([a-z]+)(?:#\d+)?\.([A-Za-z_]+)\b/g)) {
+        const params = types.get(m[1] as string);
+        // ("on" is a view's word for the plugin on or bypassed)
+        if (!params || m[2] === 'PARAM' || m[2] === 'on') continue;
+        named.push(m[0]);
+        expect(params.has(m[2] as string), `${t.name}: ${m[0]}`).toBe(true);
+      }
+    }
+    expect(named).toContain('eq#2.hsGain');
+  });
+
+  it('names in snake_case only its own tools, fields and values, in its words and in AGENT.md', () => {
+    const own = new Set([
+      ...TOOLS.map((t) => t.name),
+      ...TOOLS.flatMap((t) => t.args.flatMap((a) => [a.name, ...(a.values ?? [])])),
+    ]);
+    // (an installed pack's instrument, as the catalog names it: "vsco2/violins_pizz")
+    const elsewhere = new Set(['violins_pizz']);
+    const rules = readFileSync(join(import.meta.dirname, '../AGENT.md'), 'utf8');
+    const texts: [string, string][] = [
+      ...TOOLS.map((t): [string, string] => [t.name, wordsOf(t)]),
+      ['AGENT.md', rules],
+    ];
+    for (const [where, text] of texts)
+      for (const m of text.matchAll(/\b[a-z]+(?:_[a-z]+)+\b/g))
+        expect(own.has(m[0]) || elsewhere.has(m[0]), `${where}: ${m[0]}`).toBe(true);
+  });
+
+  it('gives examples of its own fields, each choice among its values', () => {
+    let seen = 0;
+    for (const t of TOOLS) {
+      const args = new Map(t.args.map((a) => [a.name, a]));
+      for (const m of wordsOf(t).matchAll(/\{([^{}]*)\}/g)) {
+        const pairs = [...(m[1] as string).matchAll(/"([^"]+)"\s*:\s*(?:"([^"]*)")?/g)];
+        // an example of an object field's contents (knobs, params, sends, a view's piece) is checked below
+        if (!pairs.some((p) => args.has(p[1] as string))) continue;
+        for (const [, key, value] of pairs) {
+          const a = args.get(key as string);
+          expect(a, `${t.name}: ${m[0]} has "${key}"`).toBeDefined();
+          if (a?.type === 'enum' && value !== undefined) expect(a.values, `${t.name}: ${m[0]}`).toContain(value);
+          seen++;
+        }
+      }
+    }
+    expect(seen).toBeGreaterThan(50);
+  });
+
+  it('sets only settings that exist in its examples of a plugin’s params and a synth’s knobs', () => {
+    const fx = toolNamed('fx') as Tool;
+    const examples = [...wordsOf(fx).matchAll(/"plugin": "([a-z]+)"[^{}]*"params": \{([^{}]*)\}/g)];
+    expect(examples.length).toBeGreaterThan(0);
+    for (const [, type, params] of examples) {
+      const def = PLUGINS.find((p) => p.type === type);
+      expect(def, `fx: ${type}`).toBeDefined();
+      for (const [, key] of (params as string).matchAll(/"([^"]+)"\s*:/g))
+        expect(
+          def?.params.map((p) => p.id),
+          `fx: ${type}.${key}`,
+        ).toContain(key);
+    }
+    const knobs = new Set(Object.values(SYNTH_MACROS).flatMap((defs) => defs.map((d) => d.id)));
+    for (const [, key] of wordsOf(toolNamed('synth_set') as Tool).matchAll(/"([a-z]+)":\s*[-\d.]/g))
+      expect(knobs.has(key as string), `synth_set: ${key}`).toBe(true);
+  });
+
+  it('shows finish’s examples as a view and a go the studio would take', () => {
+    const finish = toolNamed('finish') as Tool;
+    const example = (name: string) =>
+      JSON.parse(/e\.g\. (.*)$/.exec(finish.args.find((a) => a.name === name)?.describe ?? '')?.[1] ?? 'null');
+    expect(checkView(example('view')).ok).toBe(true);
+    expect(checkGo(example('go')).ok).toBe(true);
   });
 
   it('says each tool in words under the bar while it runs, never "Working"', () => {

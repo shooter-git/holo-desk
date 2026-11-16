@@ -301,6 +301,8 @@ Files and creations
   holo render [--no-wait]             the creation renders the song itself (edits and all): its own sound
                                       comes back as a soloed audio track (needs \`pnpm runner\` on the host)
   holo runner [--creations DIR]       run creations' renderers for the studio (keep it running on the host)
+  holo pair                           a code (and a link) that pairs a phone or computer with the agent in
+                                      Settings › Agent: run it on the computer HO[LO] runs on
   holo render-audio [--session FILE] [--out FILE.wav] [--rate 44100] [--format float|24] [--from 9 --to 17]
                     [--no-finish] [--no-loop]
                                       the song rendered headless by HO[LO]'s engine, exactly as the studio
@@ -1018,6 +1020,12 @@ async function main(): Promise<void> {
       const fallback = process.env.HOLO_IMAGE ? 'data/creations' : '..';
       const dir = resolve(repo, String(flag('creations') ?? (process.env.HOLO_CREATIONS_DIR || fallback)));
       await runner(BASE, dir);
+      return;
+    }
+
+    case 'pair': {
+      const { pair } = await import('./pair.ts');
+      await pair(BASE, resolve(dirname(fileURLToPath(import.meta.url)), '../../..'));
       return;
     }
 

@@ -26,7 +26,7 @@ self.onmessage = (e: MessageEvent<ToPatchWorker>) => {
       const t0 = performance.now();
       const rendered = renderNotePatch(base, msg.sr, msg.spec);
       // in shared memory, every engine reads the one copy; else it's handed over whole
-      const channels = msg.shared ? rendered.map(toShared) : rendered;
+      const channels = msg.shared ? rendered.map((c) => toShared(c)) : rendered;
       const ms = performance.now() - t0;
       post({ id, key, channels, ms }, msg.shared ? [] : channels.map((c) => c.buffer as ArrayBuffer));
     } catch (err) {

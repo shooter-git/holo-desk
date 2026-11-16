@@ -6,9 +6,12 @@
 import { barToTick, firstBar, type Project } from '@holo/session';
 import type { Step } from './store.ts';
 
-/** A stretch of a song to play: the song (its cycle off, so it plays straight through), from a tick to a tick. */
+/**
+ * A stretch of a song to play, from a tick to a tick: a song of its own (a version, its cycle off, so
+ * it plays straight through), or the song as it is (null).
+ */
 export interface Pass {
-  song: Project;
+  song: Project | null;
   from: number;
   to: number;
 }
@@ -24,11 +27,11 @@ export function comparePlan(
   now: Project,
   from: number,
   to: number,
-): { before: Pass; after: Pass } | { error: string } {
+): { before: Pass & { song: Project }; after: Pass & { song: Project } } | { error: string } {
   const first = steps[0];
   if (!first) return { error: 'The song from before isn’t in the undo history any more' };
   if (!(to > from) || from < firstBar(now.meter)) return { error: 'Those aren’t bars of the song' };
-  const pass = (song: Project): Pass => ({
+  const pass = (song: Project): Pass & { song: Project } => ({
     song: { ...song, cycle: { ...song.cycle, on: false } },
     from: barToTick(song.meter, from),
     to: barToTick(song.meter, to),

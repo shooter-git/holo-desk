@@ -92,6 +92,7 @@ import {
   useWheel,
 } from './gesture.ts';
 import { type MenuEntry, openMenu, openMenuAt } from './menu.tsx';
+import { drawMiniNotes, pitchRange } from './mini-notes.ts';
 import { pressToReorder, type ReorderList } from './reorder.ts';
 import { rulerHold } from './ruler.ts';
 import { DOUBLE_TAP_MS, gridStep, revealBy, TouchPan, Viewport, WHEEL_ZOOM, ZOOM } from './view.ts';
@@ -546,23 +547,6 @@ function regionGradient(ctx: CanvasRenderingContext2D, base: string, selected: b
   return g;
 }
 
-// a MIDI region's pitch range is scanned once per region, not per frame
-const pitchRanges = new WeakMap<Region, { lo: number; hi: number }>();
-function pitchRange(r: Region): { lo: number; hi: number } {
-  let range = pitchRanges.get(r);
-  if (!range) {
-    let lo = 127;
-    let hi = 0;
-    for (const n of r.notes) {
-      if (n.p < lo) lo = n.p;
-      if (n.p > hi) hi = n.p;
-    }
-    range = { lo, hi };
-    pitchRanges.set(r, range);
-  }
-  return range;
-}
-
 /**
  * What of a song the timeline and the ruler draw, as a list to compare with the last one's (the
  * song shares whatever an edit leaves alone): everything but the mixer (each track's and bus's
@@ -716,22 +700,8 @@ function drawRegion(
   if (r.audio && show.regionContents) drawWave(ctx, project, r, r.audio, x, y + header, w, h - header, canvasWidth);
   // the notes, scaled to the region's own range
   if (r.notes.length && show.regionContents) {
-    const { lo, hi } = pitchRange(r);
-    const span = Math.max(12, hi - lo + 1);
-    const top = y + header + 3;
-    const avail = h - header - 6;
-    const pxPerTick = w / r.length;
     ctx.fillStyle = r.muted ? '#9aa1ab' : '#f2f5f8';
-    for (const n of r.notes) {
-      if (n.t >= r.length) continue;
-      const nx = x + n.t * pxPerTick;
-      // (a long region zoomed in holds far more notes than the canvas shows: those off it aren't drawn)
-      if (nx > canvasWidth) continue;
-      const nw = Math.max(1.5, Math.min(n.d, r.length - n.t) * pxPerTick - 0.5);
-      if (nx + nw < 0) continue;
-      const ny = top + (1 - (n.p - lo + 0.5) / span) * avail;
-      ctx.fillRect(nx, ny - 1, nw, Math.max(1.5, Math.min(3, avail / span)));
-    }
+    drawMiniNotes(ctx, r.notes, r.length, { x, y: y + header + 3, w, h: h - header - 6 }, pitchRange(r), canvasWidth);
   }
   ctx.restore();
   ctx.lineWidth = selected ? 1.5 : 1;

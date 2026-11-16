@@ -552,6 +552,28 @@ a.btn {
   }
 }
 
+/* Play (or Record) pressed while the song's sounds load: it waits for them, its light breathing
+   as the recording light does, an opacity a frame */
+.transport .btn.play.waiting,
+.transport .btn.rec.waiting {
+  position: relative;
+}
+
+.transport .btn.play.waiting {
+  color: var(--play);
+}
+
+.transport .btn.play.waiting::after,
+.transport .btn.rec.waiting::after {
+  content: "";
+  position: absolute;
+  inset: -1px;
+  border-radius: inherit;
+  box-shadow: 0 0 0 1px currentColor;
+  animation: rec-pulse 1.2s ease-in-out infinite;
+  pointer-events: none;
+}
+
 .transport .btn.cycle.on {
   color: #1c1505;
   background: linear-gradient(180deg, #ffe08a, var(--cycle));
@@ -650,6 +672,18 @@ a.btn {
   font: 600 8.5px / 1 var(--font);
   letter-spacing: 0.12em;
   text-transform: uppercase;
+}
+
+/* the song's sounds on their way: the caption says so, a little brighter, on one line, and never
+   wider than the position above it (the tempo and signature beside it stay where they are) */
+.lcd .caption.loading {
+  width: 0;
+  min-width: 100%;
+  overflow: hidden;
+  color: var(--lcd-text);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  letter-spacing: 0.06em;
 }
 
 @media (pointer: coarse) {
@@ -2941,6 +2975,206 @@ html[data-layout="phone-landscape"] .bar .field input {
   -webkit-user-select: text;
 }
 
+/* what a reply shows under it, composed by the agent from the studio's own pieces (ui/AgentView.tsx):
+   its buttons, switches and rows, in its own colours */
+.bar .agent-view {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: -6px;
+  padding: 0 16px 14px;
+  font-size: 12.5px;
+}
+
+.bar .v-text {
+  color: var(--text);
+  line-height: 1.5;
+  white-space: pre-line;
+  overflow-wrap: anywhere;
+}
+
+.bar .v-text.quiet {
+  color: var(--text-3);
+  font-size: 12px;
+}
+
+.bar .agent-view > .btn,
+.bar .v-group > .btn,
+.bar .agent-view .seg {
+  align-self: flex-start;
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.bar .v-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.bar .v-row > .v-slider,
+.bar .v-row > .v-chart,
+.bar .v-row > .v-span {
+  flex: 1 1 180px;
+}
+
+.bar .v-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.bar .v-title {
+  color: var(--text-2);
+  font-size: 11.5px;
+  font-weight: 600;
+}
+
+.bar .v-list {
+  display: flex;
+  flex-direction: column;
+  margin: 0 -9px;
+}
+
+.bar .v-list .item {
+  width: 100%;
+  border: 0;
+  background: none;
+  font: inherit;
+  text-align: left;
+}
+
+.bar .v-list button.item:hover,
+.bar .v-list button.item:focus-visible {
+  background: var(--bg-3);
+}
+
+.bar .v-list .item.static {
+  cursor: default;
+}
+
+.bar .v-list .item:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.bar .v-table {
+  overflow-x: auto;
+}
+
+.bar .v-table table {
+  border-collapse: collapse;
+  min-width: 100%;
+}
+
+.bar .v-table th {
+  padding: 2px 8px 4px 0;
+  color: var(--text-3);
+  font-size: 11px;
+  font-weight: 600;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.bar .v-table td {
+  padding: 3px 8px 3px 0;
+  border-top: 1px solid var(--line-2);
+  color: var(--text);
+  vertical-align: middle;
+  white-space: nowrap;
+}
+
+.bar .v-table td.num {
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+/* a label column of its own, so sliders one under another line up */
+.bar .v-slider {
+  display: grid;
+  grid-template-columns: minmax(0, 112px) minmax(80px, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.bar .v-slider .v-label {
+  overflow: hidden;
+  color: var(--text-2);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bar .v-slider input {
+  min-width: 0;
+}
+
+.bar .v-slider .v-value {
+  min-width: 64px;
+  color: var(--text-2);
+  font-family: var(--mono);
+  font-size: 11.5px;
+  text-align: right;
+}
+
+.bar .v-chart canvas {
+  display: block;
+  width: 100%;
+  border-radius: var(--radius);
+  background: var(--bg-1);
+}
+
+.bar .v-chart-note {
+  padding-top: 3px;
+  color: var(--text-3);
+  font-size: 11.5px;
+}
+
+.bar .v-span {
+  display: block;
+  width: 100%;
+  height: 44px;
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid var(--line-2);
+  border-radius: var(--radius);
+  background: none;
+  cursor: pointer;
+}
+
+.bar .v-span:hover {
+  border-color: var(--line-3);
+}
+
+.bar .v-span.muted {
+  display: flex;
+  align-items: center;
+  padding: 0 10px;
+  color: var(--text-3);
+  cursor: default;
+}
+
+.bar .v-span canvas {
+  display: block;
+}
+
+.bar .v-why {
+  color: var(--text-3);
+  font-size: 12px;
+}
+
+/* a finger's rows and controls */
+@media (pointer: coarse) {
+  .bar .agent-view .btn.small {
+    height: 34px;
+    padding: 0 12px;
+  }
+  .bar .v-slider input {
+    min-height: 34px;
+  }
+}
+
 .bar .status {
   display: flex;
   align-items: center;
@@ -3223,7 +3457,7 @@ html[data-layout="phone-landscape"] .bar .field input {
   min-width: 0;
 }
 
-/* "No allowed device at hand?": the quiet second way, the runner's code */
+/* "No allowed device at hand?": the quiet second way, a code from the host */
 .agent-alt {
   gap: 2px;
   flex-wrap: wrap;

@@ -13,7 +13,6 @@ import {
   Play,
   Repeat,
   Rewind,
-  Search,
   Settings,
   SkipBack,
   SlidersVertical,
@@ -41,6 +40,7 @@ import { TYPING_PORT } from '../app/keys.ts';
 import { isPhone, useLayout } from '../app/layout.ts';
 import { openBar, openSettings, store, useApp, useShow } from '../app/store.ts';
 import { engine } from '../audio/engine.ts';
+import { useSoundsComing } from '../audio/loading.ts';
 import { midi } from '../audio/midi.ts';
 import { startDrag, TAP, Wordmark } from './controls.tsx';
 import { useFrame, useMedia, wake } from './frame.ts';
@@ -48,6 +48,7 @@ import { keyShort } from './key-short.ts';
 import { MetronomeButton } from './Metronome.tsx';
 import { openMenuAt } from './menu.tsx';
 import { jog } from './ruler.ts';
+import { Slash } from './slash.tsx';
 import { tapTempo } from './tap-tempo.ts';
 import { UndoRedo } from './UndoRedo.tsx';
 import { ViewMenu } from './ViewMenu.tsx';
@@ -95,6 +96,10 @@ export function Lcd({ compact = false, keyCell = !compact }: { compact?: boolean
   const showSig = useShow('barSig');
   const showKey = useShow('barKey');
   const asTime = useApp((s) => s.positionTime) && compact;
+  // the song's sounds still on their way (after Start), and whether Play waits for them
+  const coming = useSoundsComing();
+  const waiting = useApp((s) => s.playWaiting);
+  const audioReady = useApp((s) => s.audioReady);
   const pos = useRef<HTMLSpanElement>(null);
   const time = useRef<HTMLSpanElement>(null);
   const [editingTempo, setEditingTempo] = useState(false);
@@ -184,7 +189,17 @@ export function Lcd({ compact = false, keyCell = !compact }: { compact?: boolean
         onDoubleClick={() => locate(0)}
       >
         <span className="value pos" ref={pos} />
-        <span className="caption">{compact ? (asTime ? 'time' : 'position') : 'bar beat div tick'}</span>
+        <span className={`caption${waiting || (audioReady && coming) ? ' loading' : ''}`} aria-live="polite">
+          {/* how many of the song's sounds are still to come (a waiting Play or Record button says
+              it's waiting for them) */}
+          {waiting || (audioReady && coming)
+            ? `${coming} ${compact ? '' : 'sounds '}to load`
+            : compact
+              ? asTime
+                ? 'time'
+                : 'position'
+              : 'bar beat div tick'}
+        </span>
       </div>
       {!compact && showTime && (
         <div className="lcd-time" title="Time">
@@ -358,6 +373,7 @@ export function Lcd({ compact = false, keyCell = !compact }: { compact?: boolean
 export function TransportButtons({ minimal = false }: { minimal?: boolean }) {
   const playing = useApp((s) => s.playing);
   const recording = useApp((s) => s.recording);
+  const waiting = useApp((s) => s.playWaiting);
   const cycle = useApp((s) => s.project?.cycle.on ?? false);
   return (
     <div className="transport">
@@ -403,8 +419,8 @@ export function TransportButtons({ minimal = false }: { minimal?: boolean }) {
       </button>
       <button
         type="button"
-        className={`btn play${playing ? ' on' : ''}`}
-        title="Play (Space)"
+        className={`btn play${playing ? ' on' : ''}${waiting === 'play' ? ' waiting' : ''}`}
+        title={waiting === 'play' ? 'Plays when the sounds are in: press again to call it off' : 'Play (Space)'}
         aria-label="Play (Space)"
         aria-pressed={playing}
         onClick={() => void togglePlay()}
@@ -413,8 +429,8 @@ export function TransportButtons({ minimal = false }: { minimal?: boolean }) {
       </button>
       <button
         type="button"
-        className={`btn rec${recording ? ' on' : ''}`}
-        title="Record (R)"
+        className={`btn rec${recording ? ' on' : ''}${waiting === 'record' ? ' waiting' : ''}`}
+        title={waiting === 'record' ? 'Records when the sounds are in: press again to call it off' : 'Record (R)'}
         aria-label="Record (R)"
         aria-pressed={recording}
         onClick={() => void toggleRecord()}
@@ -582,7 +598,7 @@ export function BarButton() {
       aria-haspopup="dialog"
       onClick={openBar}
     >
-      {sign === 'busy' ? <span className="ring" aria-hidden="true" /> : <Search />}
+      {sign === 'busy' ? <span className="ring" aria-hidden="true" /> : <Slash />}
       {sign === 'done' && <span className="cb-dot" aria-hidden="true" />}
     </button>
   );

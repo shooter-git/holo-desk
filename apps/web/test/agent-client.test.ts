@@ -161,6 +161,37 @@ describe('a job, as the host tells it', () => {
     expect(A.statusEffects(a, job({ device: 'dev_other', state: 'running' }))).toBeNull();
   });
 
+  it('goes where the reply says only as it arrives, on the device that asked', () => {
+    const a = on();
+    const running = job({ state: 'running' });
+    const done = job({ state: 'done', label: 'Read the take', go: { bar: 12 } });
+    expect(A.statusEffects(a, done, running)).toEqual({ running: false, label: 'Read the take', go: { bar: 12 } });
+    // told again, or caught up on after a reload: it doesn't go again
+    expect(A.statusEffects(a, done, done)).toEqual({ running: false, label: 'Read the take' });
+    expect(A.statusEffects(a, done)).toEqual({ running: false, label: 'Read the take' });
+    expect(A.statusEffects(a, { ...done, device: 'dev_other' }, running)).toBeNull();
+    expect(A.statusEffects(a, { ...done, state: 'cancelled' }, running)).toEqual({
+      running: false,
+      label: 'Read the take',
+    });
+  });
+
+  it('shows what the reply shows under it once it’s done, from the job or the song’s conversation', () => {
+    const view = { blocks: [{ text: 'Two takes.' }], versions: { before: 3 } };
+    let a = on();
+    a = A.reduce(a, { type: 'status', job: job({ state: 'running', view }), barOpen: true });
+    expect(A.exchange(a, 'prj_a')?.view).toBeNull();
+    a = A.reduce(a, { type: 'status', job: job({ state: 'done', reply: 'Done.', view }), barOpen: true });
+    expect(A.exchange(a, 'prj_a')?.view).toEqual(view);
+    let b = on();
+    b = A.reduce(b, {
+      type: 'thread',
+      project: 'prj_a',
+      turns: [{ job: 'agj_x', request: 'A/B it', reply: 'Here.', label: 'x', state: 'done', at: 5, view }],
+    });
+    expect(A.exchange(b, 'prj_a')?.view).toEqual(view);
+  });
+
   it('asks for a permission with one button, on the device that asked only', () => {
     let a = on();
     const asking = job({

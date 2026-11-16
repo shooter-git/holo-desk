@@ -59,10 +59,13 @@ import {
 import { bounce, bounceRange } from '../audio/bounce.ts';
 import { companion, STUDIO_ENGINE } from '../audio/companion.ts';
 import { engine, type RecordedTake, warmEngine } from '../audio/engine.ts';
+import { chosenRate, type RateChoice } from '../audio/engine-rate.ts';
 import { audioFiles } from '../audio/files.ts';
+import { onSoundsComing, soundsComing } from '../audio/loading.ts';
 import { midi } from '../audio/midi.ts';
 import { instrumentManifest } from '../audio/pack-files.ts';
 import { library } from '../audio/samples.ts';
+import { songKeys } from '../audio/song-samples.ts';
 import { takes as keptTakes, type TakePlan, uploadTake } from '../audio/takes.ts';
 import { holdDuringDrags } from '../ui/gesture.ts';
 import { NOTE_EFFECTS, playsHits } from '../ui/pads.ts';
@@ -71,6 +74,7 @@ import { ApiError, api } from './api.ts';
 import { comparePlan, type Pass } from './compare.ts';
 import * as history from './history.ts';
 import { browserShelf, Keeper, type Restored, stepJobs } from './kept-history.ts';
+import { isTouch } from './layout.ts';
 // (live.ts imports this module too: neither uses the other while loading, so the cycle is harmless)
 import { reconnectSoon, reportHistory } from './live.ts';
 import { type AppState, type Step, store, toast } from './store.ts';
@@ -237,16 +241,17 @@ export function jobSteps(job: string): Step[] {
 let comparing: { end: () => void } | null = null;
 
 /**
- * Before and after (the agent's A/B): bars `from` up to `to` as they were before the job, then the same
- * bars as they are now; then the song is back as it is, the playhead where they began. Pressing Stop,
- * or changing the song, ends it there. Says why not when the song from before is gone from the undo
- * history.
+ * Stretches of a song played one after another, then stopped: each its own song (a version of it,
+ * its cycle off) or the song as it is (`song` null), from a tick to a tick. Then the song as it is is
+ * back, the playhead where the last began. Pressing Stop, another of these starting, or (while a
+ * version plays) a change to the song ends it there; the song as it is plays on through edits, as
+ * playback does. `ended` is called once it's over, however it ended.
  */
-export function compareJob(job: string, from: number, to: number): { ok: true } | { ok: false; error: string } {
+export function playPasses(passes: readonly Pass[], ended?: () => void): { ok: true } | { ok: false; error: string } {
   const s = store.get();
+  const last = passes[passes.length - 1];
   if (!s.project) return { ok: false, error: 'No song is open in the studio' };
-  const plan = comparePlan(jobSteps(job), s.project, from, to);
-  if ('error' in plan) return { ok: false, error: plan.error };
+  if (!last) return { ok: false, error: 'Nothing to play' };
   comparing?.end();
   if (s.playing) stop();
   const now = s.project;
@@ -260,25 +265,78 @@ export function compareJob(job: string, from: number, to: number): { ok: true } 
     // the audio thread plays the song as it is again
     const back = store.get().project;
     if (back) engine.sync(back);
-    engine.locate(plan.after.from);
+    engine.locate(last.from);
     store.set({});
+    ended?.();
   };
-  const pass = (p: Pass, then: () => void) => {
-    engine.sync(p.song);
+  const pass = (i: number) => {
+    const p = passes[i];
+    if (!p) return end();
+    if (p.song) engine.sync(p.song);
     engine.locate(p.from);
     engine.play(p.from);
     store.set({ playing: true });
     window.clearInterval(timer);
     timer = window.setInterval(() => {
       const cur = store.get();
-      // stopped, or the song changed under it: it ends here
-      if (!cur.playing || cur.project !== now) return end();
-      if (engine.positionTick() >= p.to) then();
+      // stopped, or the song changed under a version: it ends here
+      if (!cur.playing || (p.song && cur.project !== now)) return end();
+      if (engine.positionTick() >= p.to) pass(i + 1);
     }, 30);
   };
   comparing = { end };
-  pass(plan.before, () => pass(plan.after, end));
+  pass(0);
   return { ok: true };
+}
+
+/** Whether playPasses is playing now. */
+export const passesPlaying = (): boolean => comparing !== null;
+
+/** Stop what playPasses is playing, if it is. */
+export function stopPasses(): void {
+  comparing?.end();
+}
+
+/**
+ * Before and after (the agent's A/B): bars `from` up to `to` as they were before the job, then the same
+ * bars as they are now; then the song is back as it is, the playhead where they began. Pressing Stop,
+ * or changing the song, ends it. Says why not when the song from before is gone from the undo
+ * history.
+ */
+export function compareJob(job: string, from: number, to: number): { ok: true } | { ok: false; error: string } {
+  const s = store.get();
+  if (!s.project) return { ok: false, error: 'No song is open in the studio' };
+  const plan = comparePlan(jobSteps(job), s.project, from, to);
+  if ('error' in plan) return { ok: false, error: plan.error };
+  return playPasses([plan.before, plan.after]);
+}
+
+/**
+ * The song replaced by another of its versions (a reply's Keep), as one undo step: the version's
+ * music and mix, under the song's own id, revision and origin.
+ */
+export function replaceSong(version: Project, label: string): Project | null {
+  const s = store.get();
+  const cur = s.project;
+  if (!cur) return null;
+  let next: Project;
+  try {
+    next = parseProject({
+      ...version,
+      id: cur.id,
+      revision: cur.revision,
+      created: cur.created,
+      modified: cur.modified,
+      origin: cur.origin,
+    });
+  } catch (err) {
+    toast(err instanceof Error ? err.message : String(err), 'error');
+    return null;
+  }
+  store.set({ project: next, ...history.push(s, { project: cur, label, at: Date.now() }), saveState: 'dirty' });
+  changed(next);
+  userStep(label);
+  return next;
 }
 
 // ---- saving ----
@@ -653,7 +711,7 @@ export function ensureAudio(): Promise<void> {
   if (!starting) {
     starting = (async () => {
       try {
-        await engine.start(store.get().latencyMode);
+        await engine.start(store.get().latencyMode, wantedRate());
         store.set({ audioReady: true });
         await engine.setInput(store.get().inputDevice);
         const p = store.get().project;
@@ -685,6 +743,19 @@ export async function setLatencyMode(mode: AppStateLatency): Promise<void> {
   }
 }
 type AppStateLatency = ReturnType<typeof store.get>['latencyMode'];
+
+/** The rate this device's choice asks the engine for (null: the sound device's own). */
+const wantedRate = () => chosenRate(store.get().rateChoice, isTouch());
+
+/** Play at another rate (Settings › Audio): the audio starts again at it, and the song's sounds load at it. */
+export async function setRateChoice(choice: RateChoice): Promise<void> {
+  store.set({ rateChoice: choice, roundTrip: null });
+  // (before the audio starts, or while HO[LO] Engine plays at its device's rate, it waits for the next start)
+  if (engine.ctx && !engine.remote) {
+    await engine.start(store.get().latencyMode, wantedRate());
+    syncMetronome();
+  }
+}
 
 export async function enableMidi(): Promise<void> {
   const status = await midi.enable();
@@ -749,7 +820,7 @@ async function switchEngine(remote: boolean): Promise<void> {
   if (playing) stop();
   starting = null;
   try {
-    await engine.start(store.get().latencyMode);
+    await engine.start(store.get().latencyMode, wantedRate());
     store.set({ audioReady: true });
     syncMetronome();
     engine.setLowLatency(store.get().lowLatency);
@@ -778,11 +849,16 @@ export function setShareDevice(on: boolean): void {
 export function loadInstruments(project: Project): void {
   if (!engine.ctx) return;
   const selected = store.get().selectedTrack;
+  // on a phone or tablet, each instrument's samples for the keys the song plays (more come as more
+  // are played): a big song's instruments whole are more than its browser allows a page
+  const keys = isTouch() ? songKeys(project) : null;
+  const keysOf = (pack: string, name: string) => keys?.get(`${pack}/${name}`) ?? undefined;
   for (const t of project.tracks) {
     const first = t.id === selected || t.armed;
     for (const i of [t.instrument, ...t.articulations.map((a) => a.instrument)]) {
       // a Performance instrument's live notes play on its pack's plain sampler
-      if (i.type === 'sampler' || i.type === 'performance') void library.ensure(i.pack, i.name, first ? 0 : 1);
+      if (i.type === 'sampler' || i.type === 'performance')
+        void library.ensure(i.pack, i.name, first ? 0 : 1, keysOf(i.pack, i.name));
     }
   }
   // the kits plugins play (a Drum Replacer's)
@@ -811,8 +887,56 @@ export function playheadTick(): number {
 
 export async function togglePlay(): Promise<void> {
   await ensureAudio();
-  if (store.get().playing) stop();
-  else play(false);
+  if (store.get().playWaiting) cancelWaiting();
+  else if (store.get().playing) stop();
+  else playWhenLoaded(false);
+}
+
+/** How long a wait for the song's sounds goes without one arriving before it plays anyway. */
+const STALLED = 20_000;
+let waitingOff: (() => void) | null = null;
+
+/**
+ * Play (or record) once the song's sounds are in: at once if they are; else the transport says
+ * it's waiting, and Play pressed again calls it off. A load that stops moving (a file that never
+ * comes) doesn't hold it up for good: it plays anyway, and says so.
+ */
+function playWhenLoaded(record: boolean): void {
+  if (!soundsComing()) {
+    play(record);
+    return;
+  }
+  store.set({ playWaiting: record ? 'record' : 'play' });
+  let left = soundsComing();
+  let stall = window.setTimeout(stalled, STALLED);
+  function stalled() {
+    finish();
+    toast('Some sounds are still loading: they come in as they arrive', 'info', 6000);
+    play(record);
+  }
+  const off = onSoundsComing(() => {
+    const now = soundsComing();
+    if (now === 0) {
+      finish();
+      play(record);
+    } else if (now !== left) {
+      left = now;
+      clearTimeout(stall);
+      stall = window.setTimeout(stalled, STALLED);
+    }
+  });
+  function finish() {
+    clearTimeout(stall);
+    off();
+    waitingOff = null;
+    store.set({ playWaiting: null });
+  }
+  waitingOff = finish;
+}
+
+/** Play no longer waiting for the song's sounds (pressed again, or Stop). */
+function cancelWaiting(): void {
+  waitingOff?.();
 }
 
 export function play(record: boolean): void {
@@ -828,6 +952,10 @@ export function play(record: boolean): void {
 
 export function stop(): void {
   const s = store.get();
+  if (s.playWaiting) {
+    cancelWaiting();
+    return;
+  }
   if (!s.playing) {
     // stopped already: back to the beginning, and every note still sounding stops (a latched
     // arpeggio, a key held on a keyboard that came loose, a Drum Replacer's hit)
@@ -845,6 +973,10 @@ export function stop(): void {
 export async function toggleRecord(): Promise<void> {
   await ensureAudio();
   const s = store.get();
+  if (s.playWaiting) {
+    cancelWaiting();
+    return;
+  }
   if (s.recording) {
     store.set({ recording: false });
     engine.setRecording(false);
@@ -858,7 +990,7 @@ export async function toggleRecord(): Promise<void> {
     startRecording();
     return;
   }
-  play(true);
+  playWhenLoaded(true);
 }
 
 export function locate(tick: number): void {

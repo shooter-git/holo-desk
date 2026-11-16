@@ -555,6 +555,26 @@ describe('rendering ahead', () => {
     expect(Math.max(...load)).toBeLessThan(0.56);
   });
 
+  it('puts a song on one worker whatever its strips cost (their sum rounds one way or the other)', () => {
+    // costs whose loads, added up heaviest first, came out a last digit over their total
+    const costs = [0.0262, 0.0047, 0.0736, 0.0328, 0.0633, 0.0756, 0.0991, 0.0365, 0.0247, 0.0983];
+    const flat = (n: number) => ({
+      num: n,
+      id: `s${n}`,
+      volume: 0,
+      pan: 0,
+      mute: false,
+      solo: false,
+      inserts: [],
+      sends: [],
+      output: 'master',
+    });
+    const tracks = costs.map((_, i) => ({ ...flat(i + 1), instrument: { type: 'none' } }));
+    const one = { tracks, buses: [], master: flat(0), soloed: null } as unknown as GraphSpec;
+    const owners = aheadOwners(one, 1, (num) => costs[num - 1] as number);
+    expect(tracks.map((t) => owners[t.num])).toEqual(tracks.map(() => 0));
+  });
+
   it('keeps on the audio thread whatever a strip it plays feeds', () => {
     const owners = aheadOwners(graph, 2, () => 0.1);
     const hall = graph.buses.findIndex((b) => b.id === p.buses[0]?.id);

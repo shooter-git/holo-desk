@@ -225,12 +225,16 @@ describe('a take measured as it plays', () => {
     expect(Math.abs((r.notes[1]?.pitch ?? 0) - 67.3)).toBeLessThan(0.05);
     expect(r.notes[0]?.pitch).toBeCloseTo(62, 2);
     expect(r.notes[2]?.pitch).toBeCloseTo(69, 2);
+    // and the edit makes no click (the engine's click measure, over what it changes)
+    expect(r.clicks).toEqual([]);
     // on the timeline where it was, at its level
     const audio = vocals.regions[0]?.audio;
     const plain = structuredClone(song);
     delete plain.tracks[1]?.regions[0]?.audio?.notes;
     const raw = await runTask({ ...take, project: plain }, () => {});
     if (raw.kind !== 'take') throw new Error(raw.kind);
+    // (nothing edited, nothing to find clicks in)
+    expect(raw.clicks).toBeUndefined();
     r.notes.forEach((n, i) => {
       const was = raw.notes[i] as (typeof raw.notes)[number];
       expect(Math.abs(n.at - was.at), `note ${i}`).toBeLessThan(0.01);

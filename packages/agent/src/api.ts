@@ -217,6 +217,11 @@ export interface TakeMeasure {
   /** Measured as it comes out of its track's plugins (rendered): which they were, and what the render reported. */
   through?: { plugins: { id: string; name: string; bypass: boolean }[]; errors: string[] };
   unplayable?: UnplayableMeasure;
+  /**
+   * Where its regions' notes are edited: the clicks the edits make (a burst of high frequencies, `size`
+   * dB over the recording's there, or the level jumping by `size` of itself), at `tick` (`at` seconds).
+   */
+  clicks?: { region: string; tick: number; at: number; kind: 'burst' | 'jump'; size: number; level: number }[];
   regions: string[];
   seconds: number;
   against: { kind: 'key'; keys: string[] } | { kind: 'track'; track: string } | { kind: 'none' };

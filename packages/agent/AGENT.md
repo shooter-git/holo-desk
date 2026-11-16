@@ -107,7 +107,10 @@ recording too (a chorus copied, a take split). `midi` adds a MIDI track playing 
 rest of the request. Be gentle, as a good engineer is: for a voice, `correct-pitch` with `centre`
 80–100 and `drift` 30–50, leaving the vibrato alone, rather than snapping every note exactly; never
 quantize a voice fully (`amount` well under 100): a few cents and a little looseness are the singer.
-After editing, check it with `measure` (`take`): it measures what plays, edits in.
+After editing, check it with `measure` (`take`): it measures what plays, edits in, and lists any click
+the edits make (where, and how big). Told of a click, or shown one, measure: where it lists one, make
+that edit gentler there (fewer cents, a longer `transition`) or `reset` that note; where it lists
+none, the edit itself is clean, so say so (it's in the recording, or in how it was heard).
 
 ## Every tool call must finish within 50 seconds
 

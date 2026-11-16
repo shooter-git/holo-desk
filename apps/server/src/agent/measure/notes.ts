@@ -12,7 +12,8 @@
  * - **What plays.** A region whose notes are edited plays its recording with its patches in place
  *   (`renderNotePatch`, `assembleClip`): the recording at the song's rate, stretched as the region
  *   stretches it, as a bounce plays it. Measuring a take reads that, so a note tuned is measured where
- *   it now sings.
+ *   it now sings, and finds any click its edits make (the engine's click measure, over each patch
+ *   against the recording there).
  */
 import {
   assembleClip,
@@ -27,7 +28,18 @@ import {
   regionPatches,
   renderNotePatch,
 } from '@holo/engine';
-import type { AudioClip, AudioNote, AudioNotes, AudioNotesMode, Project, Track } from '@holo/session';
+import { findClicks } from '@holo/engine/analysis';
+import {
+  type AudioClip,
+  type AudioNote,
+  type AudioNotes,
+  type AudioNotesMode,
+  fileToTicks,
+  type Project,
+  type Region,
+  type Track,
+  tickToSeconds,
+} from '@holo/session';
 
 /** A note's drift (cents a straight line through its held part moves) and vibrato ([Hz, ±cents]), as sung. */
 export interface NoteShape {
@@ -68,15 +80,52 @@ export function findNotes(wav: Uint8Array): FoundNotes & { seconds: number } {
   };
 }
 
-/** A region's recording as it plays with its note edits (at `sr`, stretched), or null when none is edited. */
-export async function editedClip(source: RenderSource, clip: AudioClip, sr: number): Promise<Float32Array[] | null> {
+/** A click a region's note edits make: where it plays (ticks, and seconds of the song), what kind and how big. */
+export interface EditClick {
+  region: string;
+  tick: number;
+  at: number;
+  kind: 'burst' | 'jump';
+  /** dB of high frequencies over the recording's there (a burst), or the share of the level it jumps by (a jump). */
+  size: number;
+  /** How loud it is there, dBFS. */
+  level: number;
+}
+
+/** The mean of a recording's channels. */
+const meanOf = (channels: readonly Float32Array[]): Float32Array => {
+  const first = channels[0] ?? new Float32Array(0);
+  if (channels.length < 2) return first;
+  return first.map((_, i) => channels.reduce((m, c) => m + ((c[i] as number) ?? 0), 0) / channels.length);
+};
+
+/**
+ * A region's recording as it plays with its note edits (at `sr`, stretched), and the clicks they make
+ * in it (the patches' sound against the recording's, 50 ms either side of each: elsewhere it's the
+ * recording itself), by frame; null when none is edited.
+ */
+export async function editedClip(
+  source: RenderSource,
+  clip: AudioClip,
+  sr: number,
+): Promise<{
+  channels: Float32Array[];
+  clicks: { frame: number; kind: 'burst' | 'jump'; size: number; level: number }[];
+} | null> {
   const jobs = regionPatches(clip, sr);
   if (!jobs.length) return null;
   const base = await loadClipAudio(source, clip, sr);
-  return assembleClip(
+  const channels = assembleClip(
     base,
     jobs.map((job) => ({ spec: job.spec, channels: renderNotePatch(base, sr, job.spec) })),
   );
+  const heard = meanOf(base);
+  const ref = new Float32Array(heard.length).fill(Number.NaN);
+  const pad = Math.round(0.05 * sr);
+  for (const j of jobs)
+    for (let i = Math.max(0, j.spec.a - pad); i < Math.min(ref.length, j.spec.b + pad); i++)
+      ref[i] = heard[i] as number;
+  return { channels, clicks: findClicks(meanOf(channels), sr, [ref]) };
 }
 
 /** What stands for an edited region's recording while a take is measured. */
@@ -96,16 +145,21 @@ export async function playedTake(
   project: Project;
   track: Track;
   decode: (file: string) => { rate: number; channels: Float32Array[] } | null;
+  /** The clicks the edits make, where the regions play them (none edited: null). */
+  clicks: EditClick[] | null;
 }> {
   const sr = project.sampleRate ?? 48000;
   const edited = new Map<string, Float32Array[]>();
+  const clicks: EditClick[] = [];
   const regions = await Promise.all(
     track.regions.map(async (r) => {
       const clip = r.audio;
       if (!clip?.notes || r.muted || (region && r.id !== region)) return r;
-      const channels = await editedClip(source, clip, sr);
-      if (!channels) return r;
+      const done = await editedClip(source, clip, sr);
+      if (!done) return r;
+      const { channels } = done;
       edited.set(r.id, channels);
+      clicks.push(...placed(project, r, clip, sr, done.clicks));
       const audio: AudioClip = {
         file: `${EDITED}${r.id}`,
         offset: clip.offset * clip.stretch,
@@ -117,9 +171,10 @@ export async function playedTake(
       return { ...r, audio };
     }),
   );
-  if (!edited.size) return { project, track, decode: (file) => source.decodeAudio(file) };
+  if (!edited.size) return { project, track, decode: (file) => source.decodeAudio(file), clicks: null };
   const played = { ...track, regions };
   return {
+    clicks: clicks.sort((a, b) => a.tick - b.tick),
     project: { ...project, tracks: project.tracks.map((t) => (t.id === track.id ? played : t)) },
     track: played,
     decode: (file) => {
@@ -127,4 +182,30 @@ export async function playedTake(
       return channels ? { rate: sr, channels } : source.decodeAudio(file);
     },
   };
+}
+
+/** A region's clicks (by frame of its recording as it plays, at `sr`) where it plays them on the song's timeline; those it doesn't play left out. */
+function placed(
+  project: Project,
+  region: Region,
+  clip: AudioClip,
+  sr: number,
+  found: readonly { frame: number; kind: 'burst' | 'jump'; size: number; level: number }[],
+): EditClick[] {
+  const tickOf = fileToTicks(project, region, true);
+  const out: EditClick[] = [];
+  for (const c of found) {
+    const tick = tickOf(c.frame / (sr * clip.stretch));
+    if (tick < region.start || tick >= region.start + region.length) continue;
+    const at = Math.round(tickToSeconds(project.tempo, tick) * 1000) / 1000;
+    out.push({
+      region: region.id,
+      tick: Math.round(tick),
+      at,
+      kind: c.kind,
+      size: Math.round(c.size * 100) / 100,
+      level: Math.round(c.level),
+    });
+  }
+  return out;
 }

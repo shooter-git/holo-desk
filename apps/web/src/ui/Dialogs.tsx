@@ -36,7 +36,8 @@ import { SongGroups } from './Songs.tsx';
 import { SETTINGS_TABS, tabForKey } from './settings-tabs.ts';
 import { ViewOptions } from './ViewMenu.tsx';
 
-function Dialog({
+/** A dialog over the studio: the one the store names (`dialog`), or one a view opens itself with `onClose`. */
+export function Dialog({
   title,
   children,
   footer,
@@ -44,6 +45,7 @@ function Dialog({
   tabs,
   page,
   className,
+  onClose = () => store.set({ dialog: null }),
 }: {
   title: string;
   children: ReactNode;
@@ -54,11 +56,13 @@ function Dialog({
   /** The tab shown: each starts at its top. */
   page?: string;
   className?: string;
+  /** What closing it does (its X, Escape, a press outside it): by default, the store's dialog closes. */
+  onClose?: () => void;
 }) {
   const box = useRef<HTMLDivElement>(null);
   useFocusInside(box);
   return (
-    <div className="scrim" onPointerDown={(e) => e.target === e.currentTarget && store.set({ dialog: null })}>
+    <div className="scrim" onPointerDown={(e) => e.target === e.currentTarget && onClose()}>
       <div
         ref={box}
         className={`dialog${wide ? ' wide' : ''}${className ? ` ${className}` : ''}`}
@@ -70,18 +74,13 @@ function Dialog({
           // Escape closes from inside too (a field in the dialog has the keyboard, so the studio's keys don't see it)
           if (e.key !== 'Escape') return;
           e.stopPropagation();
-          store.set({ dialog: null });
+          onClose();
         }}
       >
         <header>
           <h2>{title}</h2>
           <span className="grow" />
-          <button
-            type="button"
-            className="btn ghost icon"
-            aria-label="Close"
-            onClick={() => store.set({ dialog: null })}
-          >
+          <button type="button" className="btn ghost icon" aria-label="Close" onClick={onClose}>
             <X />
           </button>
         </header>

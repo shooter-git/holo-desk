@@ -1418,22 +1418,61 @@ a.btn {
   background: var(--bg-1);
 }
 
-.audio-ed .cell {
+.audio-ed .cell,
+.audio-notes .cell {
   position: relative;
   overflow: hidden;
   touch-action: none;
   contain: layout paint;
 }
 
-.audio-ed .ruler-cell {
+.audio-ed .ruler-cell,
+.audio-notes .ruler-cell {
   border-bottom: 1px solid var(--line);
   cursor: pointer;
 }
 
-.audio-ed canvas {
+.audio-ed canvas,
+.audio-notes canvas {
   position: absolute;
   inset: 0;
   display: block;
+}
+
+/* the Notes view: the Piano Roll's keys down the left, the waveform's ruler along the top */
+.audio-notes {
+  position: relative;
+  display: grid;
+  grid-template-columns: var(--keys, 66px) minmax(0, 1fr);
+  grid-template-rows: 26px minmax(0, 1fr);
+  min-height: 0;
+  background: var(--bg-1);
+}
+
+.audio-notes .corner {
+  border-right: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  background: var(--bg-3);
+}
+
+.audio-notes .keys-cell {
+  border-right: 1px solid var(--line);
+  cursor: ns-resize;
+}
+
+/* (the cursor over the notes follows the tool and what it's over) */
+.audio-notes .cell:last-child {
+  cursor: default;
+}
+
+/* the view takes the keyboard once pressed (arrows, M, Delete for its notes): no ring for a click */
+.audio-notes:focus {
+  outline: none;
+}
+
+.audio-notes:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
 }
 
 .audio-ed.empty {
@@ -2546,6 +2585,89 @@ button.list-item {
   gap: 14px;
 }
 
+/* the Notes view's Macros: narrow, to the right, over a lighter scrim, so the notes it changes show beside it */
+.scrim:has(> .dialog.macros) {
+  justify-items: end;
+  background: rgba(3, 4, 6, 0.28);
+}
+
+.dialog.macros {
+  width: min(400px, 100%);
+}
+
+.macro-list {
+  gap: 10px;
+}
+
+.macro {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 10px 12px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--bg-1);
+  opacity: 0.6;
+  transition: opacity 0.12s;
+}
+
+.macro.on {
+  border-color: var(--line-3);
+  opacity: 1;
+}
+
+.macro-head {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.macro-head:disabled {
+  cursor: default;
+}
+
+.macro-row input[type="range"] {
+  width: 100%;
+}
+
+.macro-row .seg {
+  align-self: flex-start;
+}
+
+.macro-help,
+.macro-why {
+  margin: 0;
+  font-size: 11px;
+}
+
+.macro-scope {
+  align-self: center;
+}
+
+/* on a phone, a sheet over the whole screen */
+.scrim:has(> .dialog.macros.full) {
+  place-items: stretch;
+  padding: 0;
+  background: rgba(3, 4, 6, 0.72);
+}
+
+.dialog.macros.full {
+  width: 100%;
+  height: 100dvh;
+  max-height: 100dvh;
+  border-radius: 0;
+  padding-top: var(--safe-top);
+  padding-bottom: var(--safe-bottom);
+}
+
 @media (max-width: 700px) {
   .scrim {
     place-items: end stretch;
@@ -2642,6 +2764,16 @@ button.list-item {
   background: var(--accent-2);
   color: white;
   outline: none;
+}
+
+/* an item that wouldn't change anything here (a note's edits put back when it has none) is greyed */
+.menu .item:disabled {
+  color: var(--text-3);
+  cursor: default;
+}
+
+.menu .item:disabled:hover {
+  background: none;
 }
 
 .menu .item .hint {

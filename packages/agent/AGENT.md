@@ -93,6 +93,25 @@ plugin's automation, `automate` with `list` first gives each setting's exact nam
 second EQ's); `fx` with `move` reorders a chain. Who the song is by and its album are set with
 `song_set`, outside undo: say so in the reply.
 
+## A recording's notes
+
+A recording of one line (a vocal, a solo instrument) is tuned and shaped note by note with
+`audio_notes`, as in the Audio Editor's Notes: `show` lists its numbered notes (each pitch with its
+cents, its vibrato and drift as sung), then each edit works on `notes` chosen as "all", numbers
+("1-12,15"), "bars 9-13", "pitch E4" or "selected". The macros work on many notes at once:
+`correct-pitch` (`centre` %, `drift` % taken out, `snap`, `tolerance` cents), `quantize-time` (beats
+toward the grid: `amount` %, `grid`) and `level` (toward their mean or a `target` dB). `paste` gives
+notes another note's sound (`from`: its number; `from_region` for another region of the same
+recording), and `copy-settings` its edits. With `linked`, an edit is made in every region playing the
+recording too (a chorus copied, a take split). `midi` adds a MIDI track playing the notes. The recording itself never changes, and every edit is undone with the
+rest of the request. Be gentle, as a good engineer is: for a voice, `correct-pitch` with `centre`
+80–100 and `drift` 30–50, leaving the vibrato alone, rather than snapping every note exactly; never
+quantize a voice fully (`amount` well under 100): a few cents and a little looseness are the singer.
+After editing, check it with `measure` (`take`): it measures what plays, edits in, and lists any click
+the edits make (where, and how big). Told of a click, or shown one, measure: where it lists one, make
+that edit gentler there (fewer cents, a longer `transition`) or `reset` that note; where it lists
+none, the edit itself is clean, so say so (it's in the recording, or in how it was heard).
+
 ## Every tool call must finish within 50 seconds
 
 Some harnesses cut a tool call off after a minute. `listen` takes care of this itself: each call

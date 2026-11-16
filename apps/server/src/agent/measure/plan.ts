@@ -7,17 +7,31 @@
  * A render is refused when it would take too long (about ten minutes of work): the answer says to
  * measure fewer bars or one track, or to bounce the song and measure the bounce, in the asker's words
  * (the agent's tool names, or the command line's flags).
+ *
+ * A recording's notes (`notes`: the agent's `audio_notes`, `holo notes`) depend on its file and the
+ * engine's code alone, not on the song's revision: they're found once for both, whoever asks, until
+ * the engine changes.
  */
 import { existsSync, readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
-import { keysOf, PLUGINS, type Project, projectEnd, type Track, tickToSeconds } from '@holo/session';
+import { engineCode } from '@holo/music';
+import {
+  isNoteEdited,
+  keysOf,
+  PLUGINS,
+  type Project,
+  projectEnd,
+  type Region,
+  type Track,
+  tickToSeconds,
+} from '@holo/session';
 import { type Body, bad, ID, int, isObj } from '../check.ts';
 import { Refusal } from '../jobs.ts';
 import { type Lane, type MeasureAnswer, MeasureFailed, type MeasureRunner } from './runner.ts';
 import { takeSpan } from './span.ts';
 import type { ChildInput } from './tasks.ts';
 
-export const MEASURE_WHAT = ['take', 'mix', 'tracks', 'plugin', 'meters', 'file'] as const;
+export const MEASURE_WHAT = ['take', 'mix', 'tracks', 'plugin', 'meters', 'file', 'notes'] as const;
 export type MeasureWhat = (typeof MEASURE_WHAT)[number];
 
 /** A render estimated to take longer than this (s) is refused, with what to do instead. */
@@ -107,6 +121,15 @@ const mixWeight = (song: Project) =>
   inserts(song.master.inserts);
 
 const plural = (n: number, w: string) => `${n} ${w}${n === 1 ? '' : 's'}`;
+
+/** HO[LO]'s folder, from here (apps/server/src/agent/measure). */
+const REPO = join(import.meta.dirname, '..', '..', '..', '..', '..');
+
+/** Seconds of a region's recording its note edits render again, about (each edited note and a little around it). */
+const editedSeconds = (r: Region): number =>
+  r.audio?.notes && !r.audio.notes.off && !r.muted
+    ? r.audio.notes.n.reduce((s, n) => s + (isNoteEdited(n) ? n.d + 0.4 : 0), 0)
+    : 0;
 
 function tooLong(seconds: number, what: string, words: PlanWords): Refusal {
   const minutes = Math.round(seconds / 60);
@@ -263,12 +286,45 @@ export function planMeasure(ctx: PlanContext, song: Project, what: Exclude<Measu
           s + (r.audio ? tickToSeconds(song.tempo, r.start + r.length) - tickToSeconds(song.tempo, r.start) : 0),
         0,
       );
+      // a region whose notes are edited is measured as it plays: its recording loaded, its patches rendered
+      const edited = t.regions.filter((r) => (!region || r.id === region) && editedSeconds(r) > 0);
+      const files = new Set(edited.map((r) => r.audio?.file));
+      const recordings = [...files].reduce((s, f) => s + (song.files?.find((x) => x.id === f)?.seconds ?? 0), 0);
+      const patches = edited.reduce((s, r) => s + editedSeconds(r), 0);
       return {
         lane: 'files',
         key: `take:${rev}:${JSON.stringify([t.id, region, from, to, ref, grid])}`,
         label: `the take on ${t.name}`,
-        estimate: 1 + seconds * 0.015,
+        estimate: 1 + seconds * 0.015 + recordings * 0.02 + patches * 0.08,
         input,
+      };
+    }
+    case 'notes': {
+      // a recording's notes, found once whoever asks: by its file and the engine's code, not the song's revision
+      const t = trackOf(b.track);
+      if (t.kind !== 'audio') throw bad(`${t.name} isn’t an audio track: notes are found in a recording`);
+      const audio = t.regions.filter((r) => r.audio);
+      let r: Region | undefined;
+      if (opt(b.region)) {
+        if (audio.length !== 1)
+          throw bad(
+            audio.length ? `${t.name} has ${plural(audio.length, 'region')}: say which` : `${t.name} has no recording`,
+          );
+        r = audio[0];
+      } else {
+        const id = idOf(b.region, 'region');
+        r = t.regions.find((x) => x.id === id);
+        if (!r) throw new Refusal(404, `No region ${id} on ${t.name}`);
+        if (!r.audio) throw bad('That region plays no recording');
+      }
+      const file = (r as Region).audio?.file as string;
+      const known = song.files?.find((f) => f.id === file);
+      return {
+        lane: 'files',
+        key: `notes:${song.id}:${file}:${engineCode(REPO)}`,
+        label: `the notes of ${known?.name ?? 'the recording'}`,
+        estimate: 1 + (known?.seconds ?? 60) * 0.05,
+        input: { kind: 'notes', dataDir, project: song.id, file, name: known?.name ?? file },
       };
     }
     case 'mix':

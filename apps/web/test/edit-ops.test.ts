@@ -55,6 +55,12 @@ function song(): Project {
   const midi: Region = {
     ...newRegion(BAR, 4 * BAR, 'Riff'),
     id: 'rgn_midi',
+    // score marks, a hairpin across where it's split: each half keeps those that start in it
+    marks: [
+      { t: 0, k: 'dyn', v: 'mf' },
+      { t: BAR, k: 'cresc', e: 2 * BAR },
+      { t: 2 * BAR, k: 'text', v: 'dolce' },
+    ],
     notes: [
       { t: 0, d: 3 * PPQ, p: 60, v: 90 },
       { t: BAR + PPQ, d: PPQ, p: 64, v: 70, n: { a: ['stacc'] } },
@@ -77,7 +83,25 @@ function song(): Project {
     {
       ...newRegion(BAR, 3 * BAR, 'Take'),
       id: 'rgn_audio',
-      audio: { file: 'aud_take', offset: 0.8, gain: -2, fadeIn: 0.1, fadeOut: 0.3, stretch: 1.2 },
+      audio: {
+        file: 'aud_take',
+        offset: 0.8,
+        gain: -2,
+        fadeIn: 0.1,
+        fadeOut: 0.3,
+        stretch: 1.2,
+        // its recording's notes, one edited: each half keeps those it plays
+        notes: {
+          mode: 'mono',
+          v: 1,
+          n: Array.from({ length: 30 }, (_, i) => ({
+            t: 0.4 * i,
+            d: 0.3,
+            p: 60 + (i % 5),
+            ...(i === 9 ? { to: 62 } : {}),
+          })),
+        },
+      },
     },
   ];
   p.tracks = [keys, vox];

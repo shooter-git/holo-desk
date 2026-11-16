@@ -10,6 +10,7 @@
  * repeats aren't taken again unless the jump says to (`repeats`). A song that would never end stops
  * after a few hundred passes.
  */
+import { pruneNotes } from './audio-notes-edit.ts';
 import { automationAt } from './automation.ts';
 import { newId } from './defaults.ts';
 import { keyAt, keysOf } from './keysig.ts';
@@ -283,12 +284,19 @@ export function cutRegion(r: Region, p: Pass, opts: CutOptions): Region | null {
   } else delete piece.marks;
   if (r.audio) {
     const moved = tickToSeconds(opts.tempo, a) - tickToSeconds(opts.tempo, r.start);
+    const offset = r.audio.offset + moved / r.audio.stretch;
     piece.audio = {
       ...r.audio,
-      offset: r.audio.offset + moved / r.audio.stretch,
+      offset,
       fadeIn: x0 > 0 ? EDGE : r.audio.fadeIn,
       fadeOut: x1 < r.length ? EDGE : r.audio.fadeOut,
     };
+    // a piece written into the song keeps its recording's notes where it plays them, as a split does
+    // (one only played, through a repeat, keeps them all: its patches are the region's own)
+    if (opts.written && r.audio.notes) {
+      const played = (tickToSeconds(opts.tempo, b) - tickToSeconds(opts.tempo, a)) / r.audio.stretch;
+      piece.audio.notes = pruneNotes(r.audio.notes, [offset, offset + played]);
+    }
   }
   return piece;
 }

@@ -3,11 +3,12 @@
  * out. One small store; components read slices of it with useApp(selector).
  */
 import type { ClickSound } from '@holo/engine';
-import type { DIVISIONS, MiddleC, Note, Project } from '@holo/session';
+import type { DIVISIONS, MiddleC, Note, PitchSnap, Project } from '@holo/session';
 import { useSyncExternalStore } from 'react';
 import type { LatencyMode } from '../audio/engine.ts';
 import type { RateChoice } from '../audio/engine-rate.ts';
 import type { MidiStatus, PortInfo } from '../audio/midi.ts';
+import type { NoteTool } from '../ui/note-tools.ts';
 
 export interface Step {
   project: Project;
@@ -23,6 +24,8 @@ export type Tool = 'pointer' | 'pencil' | 'eraser';
 export type EditorPane = 'piano' | 'mixer' | null;
 /** What the editor shows for a track's notes: the Piano Roll or the Score. */
 export type NoteView = 'roll' | 'score';
+/** What the Audio Editor shows of a recording: its waveform or its notes. */
+export type AudioMode = 'wave' | 'notes';
 export type MobileTab = 'tracks' | 'editor' | 'mixer' | 'play' | 'library';
 export type Dialog = null | 'projects' | 'settings' | 'creations' | 'shortcuts' | 'about' | 'remote';
 /** Settings' tabs. */
@@ -51,9 +54,22 @@ export interface AppState {
   selectedTrack: string | null;
   selectedRegions: string[];
   selectedNotes: Note[];
+  /**
+   * The notes selected in the Audio Editor's Notes view: a region's, by their indices in its notes as
+   * it keeps them (or will keep them with its first edit); null when none are.
+   */
+  selectedAudioNotes: { region: string; notes: number[] } | null;
 
   editor: EditorPane;
   noteView: NoteView;
+  audioMode: AudioMode;
+  /** The Notes view's tool, and where a pitch dragged in it lands. */
+  noteTool: NoteTool;
+  pitchSnap: PitchSnap;
+  /** The Notes view's Link: an edit of a region's notes is made in every region playing its recording too. */
+  linkRegions: boolean;
+  /** Hear a note in the Notes view as it's pressed, and again as a drag changes it. */
+  hearNotes: boolean;
   /** The Score shows every track (a full score), not just the selected one. */
   scoreAll: boolean;
   /** The Score's size, as a percentage. */
@@ -189,8 +205,14 @@ const initial: AppState = {
   selectedTrack: null,
   selectedRegions: [],
   selectedNotes: [],
+  selectedAudioNotes: null,
   editor: 'piano',
   noteView: 'roll',
+  audioMode: 'wave',
+  noteTool: 'pointer',
+  pitchSnap: 'semitone',
+  linkRegions: false,
+  hearNotes: true,
   scoreAll: false,
   scoreZoom: 45,
   scoreWrite: false,
@@ -256,6 +278,11 @@ const initial: AppState = {
 const REMEMBER: (keyof AppState)[] = [
   'editor',
   'noteView',
+  'audioMode',
+  'noteTool',
+  'pitchSnap',
+  'linkRegions',
+  'hearNotes',
   'scoreAll',
   'scoreZoom',
   'editorHeight',

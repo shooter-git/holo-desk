@@ -6,6 +6,9 @@
  * Lines come in a fixed order (the song's settings, tracks, mix, plugins, automation, regions,
  * notes), at most `max` of them; the last then says how many more there were.
  */
+
+import { fileToTicks } from './audio-notes.ts';
+import { noteChanges as audioNoteChanges, noteChangesText } from './audio-notes-edit.ts';
 import { automationTargets } from './automation.ts';
 import { keyText } from './keysig.ts';
 import { type MiddleC, noteName } from './notation.ts';
@@ -14,6 +17,7 @@ import { describeInstrument } from './summary.ts';
 import { meterAt, ticksPerBar, ticksPerBeat, tickToBarBeat } from './time.ts';
 import type {
   AudioClip,
+  AudioNote,
   Channel,
   Finish,
   Instrument,
@@ -563,10 +567,18 @@ function regionChanges({ a, b, meter }: Context): string[] {
         );
       }
       if (o.r.muted !== r.muted) parts.push(r.muted ? 'muted' : 'unmuted');
+      let notesLine: string | null = null;
       if (!equal(o.r.audio, r.audio)) {
         const [x, y] = [o.r.audio, r.audio];
-        const words = x && y ? AUDIO_WORDS.filter(([k]) => x[k] !== y[k]).map(([, word]) => word) : [];
-        parts.push(words.length ? `${words.join(', ')} changed` : 'recording changed');
+        if (x && y) {
+          const words = AUDIO_WORDS.filter(([k]) => x[k] !== y[k]).map(([, word]) => word);
+          if (words.length) parts.push(`${words.join(', ')} changed`);
+          if (!equal(x.notes, y.notes)) {
+            const said = notesChange(a, b, o.r, r);
+            if (said.bars) notesLine = `${t.name} ${said.bars}: ${said.text}`;
+            else parts.push(said.text);
+          }
+        } else parts.push('recording changed');
       }
       if (o.r.cc !== r.cc) {
         const lanes = [...new Set([...Object.keys(o.r.cc), ...Object.keys(r.cc)])].filter(
@@ -576,6 +588,7 @@ function regionChanges({ a, b, meter }: Context): string[] {
       }
       if (!equal(o.r.marks ?? [], r.marks ?? [])) parts.push('score markings changed');
       if (parts.length) out.push(`${t.name}: region at ${at(meter, o.r.start)} ${parts.join('; ')}`);
+      if (notesLine) out.push(notesLine);
     }
   }
   for (const t of a.tracks) {
@@ -587,6 +600,38 @@ function regionChanges({ a, b, meter }: Context): string[] {
     }
   }
   return out;
+}
+
+/**
+ * How an audio region's notes changed, in words ("4 notes tuned, 1 moved"), and the bars the notes
+ * that changed play in now ("bars 9–12"; those that went, where they played); no bars when it's the
+ * notes as a whole that changed (their edits turned off, found again).
+ */
+function notesChange(a: Project, b: Project, was: Region, now: Region): { text: string; bars?: string } {
+  const x = was.audio?.notes;
+  const y = now.audio?.notes;
+  const whole: string[] = [];
+  if (x && y && (x.mode !== y.mode || x.v !== y.v)) whole.push('notes found again');
+  else if (x && y && !x.off !== !y.off) whole.push(y.off ? 'note edits turned off' : 'note edits turned on');
+  const changes = whole.length ? null : audioNoteChanges(x, y);
+  const text = changes && noteChangesText(changes);
+  if (!changes || !text) {
+    if (!whole.length) whole.push(y ? (x ? 'notes changed' : 'notes found') : 'notes taken away');
+    return { text: whole.join('; ') };
+  }
+  let first = Number.POSITIVE_INFINITY;
+  let last = Number.NEGATIVE_INFINITY;
+  const place = (project: Project, region: Region, notes: AudioNote[]) => {
+    if (!notes.length) return;
+    const tick = fileToTicks(project, region);
+    for (const n of notes) {
+      first = Math.min(first, tick(n.t));
+      last = Math.max(last, tick(n.t + n.d));
+    }
+  };
+  place(b, now, changes.now);
+  place(a, was, changes.was);
+  return first <= last ? { text, bars: bars(b.meter, Math.round(first), Math.round(last)) } : { text };
 }
 
 // ---- notes ----

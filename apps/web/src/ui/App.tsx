@@ -55,6 +55,57 @@ function Scanning() {
   );
 }
 
+// the Audio Editor's Notes view (and its note-finding) loads the first time it's shown
+const AudioNotes = lazy(() => import('./AudioNotes.tsx').then((m) => ({ default: m.AudioNotes })));
+const AudioNotesBar = lazy(() => import('./AudioNotes.tsx').then((m) => ({ default: m.AudioNotesBar })));
+
+/** The Audio Editor: the recording's waveform, or its notes. */
+function AudioView() {
+  const notes = useApp((s) => s.audioMode === 'notes');
+  if (!notes) return <AudioEditor />;
+  return (
+    <Suspense fallback={<div className="audio-ed" />}>
+      <AudioNotes />
+    </Suspense>
+  );
+}
+
+/** The Audio Editor's bar, for the view it shows. */
+function AudioBar() {
+  const notes = useApp((s) => s.audioMode === 'notes');
+  if (!notes) return <AudioEditorBar />;
+  return (
+    <Suspense fallback={null}>
+      <AudioNotesBar />
+    </Suspense>
+  );
+}
+
+/** Wave or Notes, for an audio track's recording. */
+function AudioModeSwitch() {
+  const mode = useApp((s) => s.audioMode);
+  return (
+    <div className="seg">
+      <button
+        type="button"
+        className={`btn${mode === 'wave' ? ' on' : ''}`}
+        title="The recording's waveform: trim, stretch, fades and gain"
+        onClick={() => store.set({ audioMode: 'wave' })}
+      >
+        Wave
+      </button>
+      <button
+        type="button"
+        className={`btn${mode === 'notes' ? ' on' : ''}`}
+        title="The recording's notes: each one's pitch and length"
+        onClick={() => store.set({ audioMode: 'notes' })}
+      >
+        Notes
+      </button>
+    </div>
+  );
+}
+
 /** Whether the notes editor shows the Score (an audio track always has its Audio Editor). */
 function useScoreShown(): boolean {
   const audio = useAudioSelected();
@@ -151,7 +202,7 @@ function EditorPane() {
       <PaneBar>
         {editor === 'piano' ? (
           audio ? (
-            <AudioEditorBar />
+            <AudioBar />
           ) : score ? (
             <Suspense fallback={<span className="title">Score</span>}>
               <ScoreBar />
@@ -167,12 +218,12 @@ function EditorPane() {
             <UndoRedo group="seg" />
           </>
         )}
-        {/* how the notes are shown; the Piano Roll and the Mixer themselves are opened at the top right */}
-        {editor === 'piano' && !audio && <NoteViewSwitch />}
+        {/* how the notes (or the recording) are shown; the Piano Roll and the Mixer themselves are opened at the top right */}
+        {editor === 'piano' && (audio ? <AudioModeSwitch /> : <NoteViewSwitch />)}
       </PaneBar>
       {editor === 'piano' ? (
         audio ? (
-          <AudioEditor />
+          <AudioView />
         ) : score ? (
           <Suspense fallback={<div className="score" />}>
             <Score />
@@ -354,7 +405,7 @@ function PhoneView() {
       <div className="phone-view editor">
         <PaneBar>
           {audio ? (
-            <AudioEditorBar />
+            <AudioBar />
           ) : score ? (
             <Suspense fallback={null}>
               <ScoreBar />
@@ -362,10 +413,10 @@ function PhoneView() {
           ) : (
             <PianoRollBar />
           )}
-          {!audio && <NoteViewSwitch />}
+          {audio ? <AudioModeSwitch /> : <NoteViewSwitch />}
         </PaneBar>
         {audio ? (
-          <AudioEditor />
+          <AudioView />
         ) : score ? (
           <Suspense fallback={<div className="score" />}>
             <Score />

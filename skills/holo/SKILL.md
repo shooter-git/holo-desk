@@ -155,6 +155,17 @@ holo regions fade selected --fade-out 1.5          #   repeat (--times), trim (-
 holo regions stretch "Take 2" --ratio 2            #   stretch, mute, unmute, rename (--name); MIDI only:
 holo regions quantize --track Keys --unit 1/16 --strength 80   # quantize, transpose (--semitones) and
 holo regions cc rgn_… --lane pb --points "9=0 9.3=4096 10=0"   # controller lanes (mod 1, 11, 64, pb, at)
+holo notes show --track Vocal                      # a recording's notes, numbered: pitch and cents, vibrato, drift
+holo notes shift --notes 5 --semitones 2           # each Audio Editor edit, on notes chosen as all, 1-12,15,
+holo notes vibrato --notes "bars 9-12" --keep 60   #   "bars 9-12" or "pitch E4" (holo notes help lists the
+holo notes reset --notes all                       #   edits; holo notes ACTION --help an edit's flags)
+holo notes correct-pitch --notes all --centre 90 --drift 40   # the macros: tune toward the semitone (or
+holo notes quantize-time --notes "bars 9-12" --amount 60      #   --snap scale), beats toward the grid
+holo notes level --notes all --amount 70                      #   (--grid 1/16), levels toward their mean
+holo notes midi --track Vocal                      # a MIDI track playing the notes ("Vocal notes")
+holo notes paste 7 --from 3                        # note 7 plays note 3's sound (copy-settings: its edits;
+holo notes shift 5 --semitones 2 --linked          #   --from-region: another region's); --linked: every region
+                                                   #   playing the recording gets the edit too
 holo timeline insert --at 17 --bars 4              # whole bars across every track: insert, copy (--from 9
 holo timeline copy --from 9 --to 17 --at 33        #   --to 17 --at 33); delete and move need --confirm
 holo measure take --track Vocal --from 17 --to 25  # a take's pitch (cents against the key or --against a
@@ -179,6 +190,18 @@ than the song plays: a measurement not done within 40 s says how far it got, and
 collects it (`--wait 300` waits here; `--json` gives the numbers). `holo import` places at the
 playhead when `--at` is left out (unlike `holo audio`, which starts at bar 1); the song keeps its meter
 and key, and new tracks play a synth until you give them instruments.
+
+A recording's notes (a vocal, a solo instrument) are edited one by one with `holo notes`, as the Audio
+Editor's Notes edits them: `holo notes` shows them, then each edit works on `--notes`. Until a
+region's first edit its notes are found on the host and nothing is kept; that edit keeps them in the
+song with it, one undo step. The recording itself never changes. Be gentle with a voice:
+`holo notes correct-pitch --notes all --centre 90 --drift 40` (centre 80–100, drift 30–50, the
+vibrato left alone) rather than snapping every note exactly, and never quantize it fully
+(`quantize-time --amount` well under 100); then check it with `holo measure take`, which measures what
+plays, edits in. `holo notes midi` writes the notes as a MIDI track, to double or score them.
+`holo notes paste` replaces a note's sound with another's of the same recording (a better take of a
+word), `copy-settings` gives notes another's edits, and `--linked` makes an edit in every region
+playing the recording (a chorus copied, a take split), all in one undo step.
 
 Anything else the studio's agent does, by its tool's name: `holo tool` lists them, `holo tool fx --help`
 shows a tool's fields, and `holo tool fx --action move --target Keys --plugin eq --index 1` runs it

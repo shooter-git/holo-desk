@@ -10,6 +10,7 @@ import {
   ticksPerBar,
   ticksPerBeat,
 } from '@holo/session';
+import { type PatchJob, regionPatches } from './notes/plan.ts';
 import {
   type ChannelSpec,
   type ClipSpec,
@@ -111,8 +112,18 @@ export const clipKey = (clip: Pick<AudioClip, 'file' | 'stretch'>): string =>
 /**
  * An audio track's regions as clips in song frames, in start order. Like Logic, a track plays one
  * region at a time: where regions overlap, the later one (drawn on top, the newer take) is heard.
+ *
+ * A region whose notes are edited plays its patches in place (notes/plan.ts): its pieces split where
+ * a patch starts and ends, joined sample to sample. `ready` says which patches have their sound (the
+ * studio renders them as they're asked for: until one is, the recording plays there as it was); left
+ * out, every patch is played (a bounce renders them all first).
  */
-export function compileClips(track: Track, segments: readonly TempoSegment[], sr: number): ClipSpec[] {
+export function compileClips(
+  track: Track,
+  segments: readonly TempoSegment[],
+  sr: number,
+  ready?: (key: string) => boolean,
+): ClipSpec[] {
   if (track.kind !== 'audio') return [];
   const out: ClipSpec[] = [];
   const covered: [number, number][] = [];
@@ -131,9 +142,10 @@ export function compileClips(track: Track, segments: readonly TempoSegment[], sr
       );
     }
     const source = Math.round(a.offset * a.stretch * sr);
+    const patches = a.notes ? regionPatches(a, sr).filter((p) => !ready || ready(p.key)) : [];
     for (const [s, e] of pieces) {
       if (e <= s) continue;
-      out.push({
+      const piece: ClipSpec = {
         key: clipKey(a),
         start: s,
         end: e,
@@ -143,11 +155,52 @@ export function compileClips(track: Track, segments: readonly TempoSegment[], sr
         gain: 10 ** (a.gain / 20),
         fadeIn: Math.round(a.fadeIn * sr),
         fadeOut: Math.round(a.fadeOut * sr),
-      });
+      };
+      if (patches.length) out.push(...withPatches(piece, patches));
+      else out.push(piece);
     }
     covered.push([start, end]);
   }
   return out.sort((x, y) => x.start - y.start);
+}
+
+/**
+ * A piece of a region split where its patches start and end: the recording's frames it plays, then a
+ * patch's, then the recording's again, each joined to the next sample to sample (`seamIn`, `seamOut`).
+ */
+function withPatches(piece: ClipSpec, patches: readonly PatchJob[]): ClipSpec[] {
+  const x0 = piece.source;
+  const x1 = piece.source + (piece.end - piece.start);
+  const out: ClipSpec[] = [];
+  const add = (from: number, to: number, patch: PatchJob | null) => {
+    if (to <= from) return;
+    const spec: ClipSpec = {
+      ...piece,
+      start: piece.start + (from - x0),
+      end: piece.start + (to - x0),
+      source: patch ? from - patch.spec.a : from,
+    };
+    if (patch) {
+      spec.key = patch.key;
+      spec.base = piece.key;
+      spec.at = from;
+    }
+    if (from > x0) spec.seamIn = true;
+    if (to < x1) spec.seamOut = true;
+    out.push(spec);
+  };
+  let at = x0;
+  for (const p of patches) {
+    if (p.spec.b <= at) continue;
+    if (p.spec.a >= x1) break;
+    add(at, Math.max(at, p.spec.a), null);
+    const from = Math.max(at, p.spec.a);
+    const to = Math.min(x1, p.spec.b);
+    add(from, to, p);
+    at = to;
+  }
+  add(at, x1, null);
+  return out;
 }
 
 /** Every clip of a song, one per key: what the engine needs loaded. */

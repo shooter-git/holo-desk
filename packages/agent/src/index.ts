@@ -5,6 +5,7 @@
 export * from './api.ts';
 export * from './args.ts';
 export { createServer, PROTOCOL_VERSIONS, type Server, type ServerOptions, serveStdio, VERSION } from './mcp.ts';
+export { audioNotes, NOTE_TOOL_FIELDS, noteArgText } from './tools/audio-notes.ts';
 export * from './tools/common.ts';
 export { TOOLS, toolNamed } from './tools/index.ts';
 export { notationLength, placeNotes } from './tools/notes.ts';

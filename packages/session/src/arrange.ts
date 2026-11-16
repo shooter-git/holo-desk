@@ -12,7 +12,8 @@
  *   (form.ts's cutRegion), except that a MIDI region stays one region where the song only opens up
  *   (an insert: its later notes move on) or closes up (a delete: what was in the bars goes), so it
  *   keeps its id. Pieces of a recording that end up side by side, playing on exactly where the other
- *   stopped, are one region again.
+ *   stopped, are one region again (when their notes' edits agree). A recording's piece keeps its notes
+ *   where it plays them, as a split does.
  * - Automation and dynamics hold their value through inserted bars, and keep their shape on both
  *   sides of a cut; a point a seam leaves that changes nothing goes.
  * - So inserting bars and deleting them again gives the song back as it was.
@@ -20,6 +21,7 @@
  * It's applied where the song is (the studio, or the server without one), as one operation: the song
  * it works on is never an old copy.
  */
+import { mergeNotes, notesCompatible } from './audio-notes-edit.ts';
 import { automationAt, automationTargets } from './automation.ts';
 import { newId } from './defaults.ts';
 import { cutMeter, cutRange, cutRegion, EDGE, type Pass } from './form.ts';
@@ -27,6 +29,7 @@ import { textForKeys } from './keysig.ts';
 import { OpError } from './ops.ts';
 import { barToTick, meterAt, ticksPerBar, tickToBarBeat, tickToSeconds } from './time.ts';
 import type {
+  AudioClip,
   AutomationLane,
   CCPoint,
   Channel,
@@ -470,7 +473,9 @@ function mapRegion(project: Project, r: Region, map: readonly Span[]): Region[] 
 
 /**
  * Two pieces of one recording that end up side by side, the second playing on exactly where the
- * first stops (as an insert leaves them, once its bars are deleted again), are one region again.
+ * first stops (as an insert leaves them, once its bars are deleted again), are one region again:
+ * when their notes agree (the notes both keep are the same, with the same edits), with the notes of
+ * both.
  */
 function heal(tempo: readonly TempoPoint[], regions: Region[], at: ReadonlySet<number>): Region[] {
   if (!at.size) return regions;
@@ -485,16 +490,17 @@ function heal(tempo: readonly TempoPoint[], regions: Region[], at: ReadonlySet<n
       if (ra.file !== la.file || ra.gain !== la.gain || ra.stretch !== la.stretch) return false;
       if (r.muted !== l.muted || r.name !== l.name || r.color !== l.color) return false;
       if (la.fadeOut > EDGE + 1e-9 || ra.fadeIn > EDGE + 1e-9) return false;
+      if (!notesCompatible(la.notes, ra.notes)) return false;
       const played = (tickToSeconds(tempo, l.start + l.length) - tickToSeconds(tempo, l.start)) / la.stretch;
       return Math.abs(ra.offset - (la.offset + played)) < 1e-6;
     });
     if (j < 0) continue;
     const r = out[j] as Region;
-    out[i] = {
-      ...l,
-      length: l.length + r.length,
-      audio: { ...la, fadeOut: (r.audio as Region['audio'] & {}).fadeOut },
-    };
+    const ra = r.audio as AudioClip;
+    const audio: AudioClip = { ...la, fadeOut: ra.fadeOut };
+    const notes = mergeNotes(la.notes, ra.notes);
+    if (notes) audio.notes = notes;
+    out[i] = { ...l, length: l.length + r.length, audio };
     out.splice(j, 1);
     if (j < i) i--;
     i--;

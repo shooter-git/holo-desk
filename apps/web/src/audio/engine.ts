@@ -32,6 +32,7 @@ import {
   METER_FLOATS,
   meterTicks,
   mixChanges,
+  type PatchJob,
   type PerformanceManifest,
   type PreparedImpulse,
   partSamples,
@@ -39,12 +40,14 @@ import {
   RING_EVENTS,
   RING_HEADER,
   RING_INTS,
+  regionPatches,
   type SampleFrames,
   type SamplerSpec,
   sampleScale,
   sharedImpulse,
   songClips,
   songImpulses,
+  songPatches,
   type TempoSegment,
   type ToWorklet,
   TR_FINE_CLOCK,
@@ -57,6 +60,8 @@ import {
 } from '@holo/engine';
 import type { CompanionDevice } from '@holo/engine/companion';
 import {
+  type AudioClip,
+  type AudioNotes,
   type PlayMap,
   type Project,
   performed,
@@ -68,12 +73,15 @@ import {
   writtenAt,
 } from '@holo/session';
 import { aheadThreads, loadAheadScale, loadAheadTimings, saveAhead, startAhead, warmAhead } from './ahead.ts';
+import { auditionClips, auditionPatches, auditionRange } from './audition.ts';
 import { companion, STUDIO_ENGINE } from './companion.ts';
 import { engineRate } from './engine-rate.ts';
 import { audioFiles } from './files.ts';
 import ImpulseWorker from './impulse.worker.ts?worker';
 import { OnceAFrame } from './once-a-frame.ts';
 import { instrumentManifest, sampleFile } from './pack-files.ts';
+import { PatchStore } from './patch-store.ts';
+import { PatchRenderer, type PatchWorker, patchesWithin, planPatches, recordingOf } from './patches.ts';
 import processorUrl from './worklet/processor.ts?worker&url';
 
 export type LatencyMode = 'lowest' | 'balanced' | 'safe';
@@ -104,6 +112,21 @@ function impulseWorkersFor(cores: number): number {
 
 /** How long an instrument no track plays keeps its samples (an undo often brings it back). */
 const FORGET_AFTER = 30_000;
+
+/**
+ * Seconds a track's clips crossfade over when a note edit's patch comes in or goes while the song
+ * plays (A/B, an edit's sound arriving, an edit undone). The two sides are one voice at two pitches:
+ * over 5 ms, where they were out of phase, the sound dipped by as much as 6 dB at once; over 20 ms,
+ * started where they agree (the engine finds where), it's a quick blend.
+ */
+const PATCH_FADE_S = 0.02;
+/** How long the engines keep a patch the song no longer plays, ms (the crossfade away from it, and the workers' lead). */
+const PATCH_FORGET_AFTER = 1000;
+/** How long past an audition's end the patches it plays are kept with the engines, ms (rendering ahead, messages arrive a few blocks late). */
+const AUDITION_KEEP = 500;
+
+/** Whether this page has shared memory (cross-origin isolated). */
+const sharedMemory = () => globalThis.crossOriginIsolated === true && typeof SharedArrayBuffer !== 'undefined';
 
 /** The audio thread's and the workers' scripts into the browser's cache, so the Start click doesn't wait for them. */
 export function warmEngine(): void {
@@ -225,6 +248,53 @@ export class AudioEngine {
   private idleTick = 0;
   /** Clip audio the audio thread has (or is being given), by key. */
   private audioSent = new Set<string>();
+  /** Clip audio the engines have (loaded and handed over), by key. */
+  private audioLoaded = new Set<string>();
+  /** Rendering ahead, the recordings the engines read in shared memory, by key: the patch workers read them too. */
+  private recordings = new Map<string, Float32Array[]>();
+  /** Note edits' patches: rendered on workers as the song asks for them, and kept a while (patches.ts). */
+  private patchRenderer: PatchRenderer | null = null;
+  /** Patch audio the engines have, by key. */
+  private patchSent = new Set<string>();
+  /** The patches the song plays, by key (as last planned). */
+  private patchWanted = new Set<string>();
+  /** The recordings those are rendered from, by key. */
+  private patchBases = new Set<string>();
+  /** Patches the song no longer plays, and since when: the engines let go of them a second later. */
+  private patchUnused = new Map<string, number>();
+  private patchTimer: ReturnType<typeof setTimeout> | null = null;
+  private patchSoonTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Recordings decoded again for the patch workers (the audio thread was given its own whole), on their way. */
+  private patchLoading = new Map<string, object>();
+  /** The patches each audio track's clips were last compiled with (those the engines had then). */
+  private clipsReady = new Map<string, string>();
+  /** The region the Audio Editor shows: its patches are rendered first. */
+  private patchFocus: string | null = null;
+  private patchListeners = new Set<() => void>();
+  /** Goes up whenever the patches' state does (what the Notes view reads). */
+  patchVersion = 0;
+  /**
+   * The audition last sent (hearNote): the patches it plays, kept with the engines till it's over, its
+   * clips as text (the same again, as a drag's patch comes in, isn't sent again), and the note it's of
+   * (its track, its number and where it starts: a drag's next follows it).
+   */
+  private heard: { keys: Set<string>; until: number; text: string; track: string; index: number; from: number } | null =
+    null;
+  /**
+   * A note being dragged in the Notes view (previewNote): its track and region, the region's recording
+   * as the drag leaves its notes, the note, and the patches its audition plays. `released`: the drag is
+   * over, and the note is heard once more when they're in.
+   */
+  private previewing: {
+    track: string;
+    region: string;
+    clip: AudioClip;
+    index: number;
+    jobs: PatchJob[];
+    released: boolean;
+  } | null = null;
+  /** The recording the region shown in the Notes view plays: held by the patch workers, for a drag's patches. */
+  private previewBase: { key: string; base: PatchJob['base'] } | null = null;
   /** Space Designer responses the audio thread has (or is being given), by key. */
   private impulsesSent = new Set<string>();
   private sentInputs = '';
@@ -356,6 +426,15 @@ export class AudioEngine {
     this.sentGraph = this.sentCycle = this.sentInputs = '';
     this.sentMix = null;
     this.audioSent.clear();
+    this.audioLoaded.clear();
+    this.recordings.clear();
+    // note edits: the engines have no patches, and the workers' recordings go (perhaps at another
+    // rate); those rendered are kept, under keys that say their rate
+    this.patchSent.clear();
+    this.patchUnused.clear();
+    this.patchLoading.clear();
+    this.clipsReady.clear();
+    this.patchRenderer?.releaseAll();
     this.impulsesSent.clear();
     this.closeInput();
     // a new audio thread needs its samples again: those in shared memory are handed over as they
@@ -583,6 +662,7 @@ export class AudioEngine {
         }
         this.syncAudio(project);
         this.syncImpulses(project);
+        this.syncPatches(project);
       }
       for (const t of project.tracks) {
         const planned = isPlanned(t);
@@ -607,11 +687,12 @@ export class AudioEngine {
         // rendering ahead, every engine reads the one copy in shared memory; else it's transferred
         if (this.ahead) this.post({ type: 'sequence', num: this.numOf(t.id), events: sharedEvents(events) });
         else this.post({ type: 'sequence', num: this.numOf(t.id), events }, [events.buffer]);
-        if (t.kind === 'audio')
-          this.post({ type: 'clips', num: this.numOf(t.id), clips: compileClips(t, this.segments, sr) });
+        // (note edits play as recorded until their patches are rendered)
+        if (t.kind === 'audio') this.postClips(t);
         this.sentTracks.set(t.id, t.regions);
         this.sentArts.set(t.id, t.articulations);
       }
+      this.refreshPatchClips(project);
     }
     this.syncInputs(written);
     const c = project.cycle;
@@ -710,6 +791,8 @@ export class AudioEngine {
     for (const key of this.audioSent) {
       if (keys.has(key)) continue;
       this.audioSent.delete(key);
+      this.audioLoaded.delete(key);
+      this.recordings.delete(key);
       this.post({ type: 'forgetAudio', key });
     }
     // (and what was kept at another rate: a clip is loaded again at this one)
@@ -724,7 +807,10 @@ export class AudioEngine {
       // in shared memory from the last audio thread (new latency settings, the same rate): handed over as it is
       const kept = this.keptAudio.get(`${key}@${ctx.sampleRate}`);
       if (kept && this.ahead) {
+        this.recordings.set(key, kept);
         this.post({ type: 'audio', key, channels: kept });
+        this.audioLoaded.add(key);
+        if (this.patchBases.has(key)) this.patchesSoon();
         continue;
       }
       this.clipsComing++;
@@ -736,13 +822,23 @@ export class AudioEngine {
           if (this.ctx !== ctx || !this.audioSent.has(key)) return;
           if (this.ahead) {
             const shared = channels.map((c) => toShared(c));
+            this.recordings.set(key, shared);
             this.keptAudio.set(`${key}@${ctx.sampleRate}`, shared);
             this.post({ type: 'audio', key, channels: shared });
-          } else
+          } else {
+            // a recording with note edits: a copy for the patch workers (the audio thread takes this one whole)
+            if (this.patchBases.has(key))
+              this.patches().hold(
+                key,
+                channels.map((c) => (sharedMemory() ? toShared(c) : c.slice())),
+              );
             this.post(
               { type: 'audio', key, channels },
               channels.map((c) => c.buffer as ArrayBuffer),
             );
+          }
+          this.audioLoaded.add(key);
+          if (this.patchBases.has(key)) this.patchesSoon();
         })
         .catch((err: unknown) => {
           this.audioSent.delete(key);
@@ -753,6 +849,375 @@ export class AudioEngine {
           this.pendingChanged();
         });
     }
+  }
+
+  /** The patch renderer, made the first time a song has note edits. */
+  private patches(): PatchRenderer {
+    if (!this.patchRenderer) {
+      const cores = typeof navigator !== 'undefined' ? navigator.hardwareConcurrency || 2 : 2;
+      const phone = typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches;
+      const renderer = new PatchRenderer({
+        workers: Math.max(1, Math.min(3, cores - 2)),
+        budget: (phone ? 96 : 256) * 2 ** 20,
+        shared: sharedMemory(),
+        make: () =>
+          new Worker(new URL('./patch.worker.ts', import.meta.url), { type: 'module' }) as unknown as PatchWorker,
+        // (kept on the device too, under the engine that renders them)
+        store: new PatchStore({ engine: STUDIO_ENGINE, budget: (phone ? 128 : 512) * 2 ** 20 }),
+      });
+      renderer.onRendered(() => {
+        this.previewReady();
+        this.patchesSoon();
+      });
+      renderer.onError((message) => {
+        for (const fn of this.errorListeners) fn(message);
+      });
+      this.patchRenderer = renderer;
+    }
+    return this.patchRenderer;
+  }
+
+  /**
+   * Note edits: the patches the song plays, rendered from their recordings (the region the Audio
+   * Editor shows first, then what the playhead comes to), handed to the engines as they're ready,
+   * and let go of a second after the song stops playing them. A song without edits costs nothing.
+   */
+  private syncPatches(project: Project): void {
+    const ctx = this.ctx;
+    if (!ctx) return;
+    const sr = this.sampleRate;
+    const jobs = songPatches(project, sr);
+    if (!jobs.length && !this.readied.size && !this.patchRenderer) return;
+    const renderer = this.patches();
+    // the recordings they're rendered from: given to the workers, let go when no patch needs them
+    // (nor a drag in the Notes view)
+    const bases = new Map<string, PatchJob['base']>();
+    for (const j of jobs) bases.set(recordingOf(j), j.base);
+    if (this.previewBase) bases.set(this.previewBase.key, this.previewBase.base);
+    for (const readied of this.readied.values()) for (const j of readied) bases.set(recordingOf(j), j.base);
+    this.patchBases = new Set(bases.keys());
+    for (const key of renderer.held()) if (!bases.has(key)) renderer.release(key);
+    for (const [key, base] of bases) if (!renderer.holds(key)) this.holdRecording(project, key, base, ctx);
+    const plan = planPatches(project, this.segments, sr, {
+      loaded: (key) => this.audioLoaded.has(key) && renderer.holds(key),
+      rendered: (key) => renderer.has(key),
+      sent: this.patchSent,
+      focus: this.focusClip(),
+      playhead: this.songFrame(),
+    });
+    renderer.want(plan.render);
+    // (on the device, what the song plays: a drag's patch once it's let go where it landed)
+    renderer.keep(plan.wanted.keys());
+    // (a drag's patches, whose recording may only now be held)
+    const p = this.previewing;
+    if (p && !p.released) renderer.preview(p.region, p.jobs);
+    for (const key of plan.send) {
+      const channels = renderer.get(key);
+      if (!channels) continue;
+      // (in shared memory every engine reads the one copy; else the audio thread gets a copy, and the cache keeps this one)
+      this.post({ type: 'audio', key, channels });
+      this.patchSent.add(key);
+    }
+    const now = performance.now();
+    for (const key of plan.forget) if (!this.patchUnused.has(key)) this.patchUnused.set(key, now);
+    for (const key of [...this.patchUnused.keys()]) if (plan.wanted.has(key)) this.patchUnused.delete(key);
+    this.forgetPatchesSoon();
+    this.patchWanted = new Set(plan.wanted.keys());
+    this.emitPatches();
+  }
+
+  /**
+   * A recording for the patch workers: the engines' own copy in shared memory; else, once the audio
+   * thread has its own, decoded again (it was handed over whole). One still loading is given as it
+   * comes (syncAudio).
+   */
+  private holdRecording(project: Project, key: string, base: PatchJob['base'], ctx: AudioContext): void {
+    const kept = this.recordings.get(key);
+    if (kept) {
+      this.patches().hold(key, kept);
+      return;
+    }
+    if (!this.audioLoaded.has(key) || this.patchLoading.has(key)) return;
+    const token = {};
+    this.patchLoading.set(key, token);
+    const shared = sharedMemory();
+    void audioFiles
+      .load(project.id, base, ctx, shared)
+      .then((channels) => {
+        if (this.ctx !== ctx || this.patchLoading.get(key) !== token || !this.patchBases.has(key)) return;
+        this.patches().hold(key, shared ? channels.map((c) => toShared(c)) : channels);
+        this.patchesSoon();
+      })
+      .catch((err: unknown) => {
+        for (const fn of this.errorListeners) fn(err instanceof Error ? err.message : String(err));
+      })
+      .finally(() => {
+        if (this.patchLoading.get(key) === token) this.patchLoading.delete(key);
+      });
+  }
+
+  /** The clip of the region the Audio Editor shows (its patches render first). */
+  private focusClip(): AudioClip | null {
+    if (!this.patchFocus) return null;
+    for (const t of this.project?.tracks ?? [])
+      for (const r of t.regions) if (r.id === this.patchFocus) return r.audio ?? null;
+    return null;
+  }
+
+  /** The patches brought up to date in a moment (one rendered, a recording loaded): those that come together, at once. */
+  private patchesSoon(): void {
+    if (this.patchSoonTimer) return;
+    this.patchSoonTimer = setTimeout(() => {
+      this.patchSoonTimer = null;
+      const project = this.synced;
+      if (!project || !this.port) return;
+      this.syncPatches(project);
+      this.refreshPatchClips(project);
+    }, 10);
+  }
+
+  /** The patches the song no longer plays, let go of by the engines a second after it stopped. */
+  private forgetPatchesSoon(): void {
+    if (this.patchTimer || !this.patchUnused.size) return;
+    const due = Math.min(...this.patchUnused.values()) + PATCH_FORGET_AFTER - performance.now();
+    this.patchTimer = setTimeout(
+      () => {
+        this.patchTimer = null;
+        const now = performance.now();
+        let gone = false;
+        for (const [key, since] of this.patchUnused) {
+          if (now - since < PATCH_FORGET_AFTER) continue;
+          if (this.heard?.keys.has(key) && now < this.heard.until) {
+            // (an audition still plays it: asked again in a second)
+            this.patchUnused.set(key, now);
+            continue;
+          }
+          this.patchUnused.delete(key);
+          if (!this.patchSent.delete(key)) continue;
+          this.post({ type: 'forgetAudio', key });
+          gone = true;
+        }
+        if (gone && this.synced) this.refreshPatchClips(this.synced);
+        if (gone) this.emitPatches();
+        this.forgetPatchesSoon();
+      },
+      Math.max(0, due),
+    );
+  }
+
+  /** The patches of a track's regions the engines have (what its clips play), as one text. */
+  private readyPatches(t: Track): string {
+    let out = '';
+    if (!this.patchSent.size) return out;
+    for (const r of t.regions) {
+      const a = r.audio;
+      if (!a?.notes || r.muted) continue;
+      for (const j of regionPatches(a, this.sampleRate)) if (this.patchSent.has(j.key)) out += `${j.key} `;
+    }
+    return out;
+  }
+
+  /**
+   * An audio track's clips, playing the patches the engines have: crossfaded from what it played
+   * when a patch comes in or goes (an edit's sound arriving, an edit undone, A/B), so it doesn't click.
+   */
+  private postClips(t: Track): void {
+    const ready = this.readyPatches(t);
+    const was = this.clipsReady.get(t.id);
+    const clips = compileClips(t, this.segments, this.sampleRate, (key) => this.patchSent.has(key));
+    const fade = was !== undefined && was !== ready ? { fade: Math.round(PATCH_FADE_S * this.sampleRate) } : {};
+    this.post({ type: 'clips', num: this.numOf(t.id), clips, ...fade });
+    this.clipsReady.set(t.id, ready);
+  }
+
+  /** The audio tracks whose patches have come in or gone since their clips went out: their clips again. */
+  private refreshPatchClips(project: Project): void {
+    for (const t of project.tracks) {
+      // (a track whose regions haven't gone out yet gets its clips with them)
+      if (t.kind !== 'audio' || this.sentTracks.get(t.id) !== t.regions) continue;
+      if (this.readyPatches(t) !== (this.clipsReady.get(t.id) ?? '')) this.postClips(t);
+    }
+  }
+
+  private emitPatches(): void {
+    this.patchVersion++;
+    for (const fn of this.patchListeners) fn();
+  }
+
+  /**
+   * The note patches a song plays from one tick to another (the open song, or a version of it): what
+   * Play and an A/B wait for, so those bars are heard as they're edited from their first note.
+   */
+  patchesWithin(project: Project, fromTick: number, toTick: number): PatchJob[] {
+    const sr = this.sampleRate;
+    const segments = compileTempo(project, sr);
+    return patchesWithin(project, segments, sr, tickToFrame(segments, fromTick), tickToFrame(segments, toTick));
+  }
+
+  /**
+   * Patches about to be played that the song as it is doesn't play (a version an A/B plays), rendered
+   * before the song's own (`group`: what asks for them; null: no longer).
+   */
+  preparePatches(group: string, jobs: readonly PatchJob[] | null): void {
+    if (jobs?.length) this.readied.set(group, [...jobs]);
+    else if (!this.readied.delete(group)) return;
+    this.patches().ready(group, jobs);
+    // their recordings held for the workers, as the song's own are: the song as it is may not edit
+    // the recording a version does (a version kept as it was, its edits played again)
+    if (this.synced && this.port) this.syncPatches(this.synced);
+  }
+  /** Patches about to be played besides the song's own, by what asks for them (preparePatches). */
+  private readied = new Map<string, PatchJob[]>();
+
+  /** How many of these patches are still to come: neither with the engines nor rendered (nor given up on). */
+  patchesComing(jobs: readonly PatchJob[]): number {
+    let n = 0;
+    for (const j of jobs) if (!this.patchSent.has(j.key) && !this.patchRenderer?.over(j.key)) n++;
+    return n;
+  }
+
+  /** The Audio Editor shows a region (null: none): its patches are rendered first. */
+  focusPatches(regionId: string | null): void {
+    if (this.patchFocus === regionId) return;
+    this.patchFocus = regionId;
+    // (the recording a drag rendered from is let go with it)
+    this.previewBase = null;
+    this.previewing = null;
+    if (this.patchRenderer) this.patchesSoon();
+  }
+
+  /**
+   * A note heard now through its track, as the song plays it edited (a press in the Notes view): from
+   * just before it starts to its end (auditionRange). Where its patch isn't rendered yet, the recording
+   * plays there as it is, and that's all: nothing waits for it. A press again, or on another note,
+   * takes over. Never while the song plays. `notes`: the region's, or those found in its recording
+   * before its first edit.
+   */
+  hearNote(trackId: string, clip: AudioClip, notes: AudioNotes, index: number): void {
+    this.previewing = null;
+    if (this.playing) return;
+    this.sendAudition(trackId, { ...clip, notes }, index, true);
+    // a drag may follow: its recording held by the patch workers from now on
+    this.holdPreviewBase(clip);
+  }
+
+  /**
+   * A note being dragged (`notes`: the region's as the drag leaves them): the patches of that state are
+   * rendered before anything else (patches.ts' preview: one at a time for the region, the latest after
+   * it), and the note is heard again as they come in. They're the patches the song plays once the drag
+   * is let go, under the same keys, so its sound is usually there already.
+   */
+  previewNote(trackId: string, regionId: string, clip: AudioClip, notes: AudioNotes, index: number): void {
+    if (!this.ctx || this.playing) return;
+    const heard = { ...clip, notes };
+    const range = auditionRange(notes, index);
+    if (!range) return;
+    const jobs = auditionPatches(heard, range, this.sampleRate);
+    this.previewing = { track: trackId, region: regionId, clip: heard, index, jobs, released: false };
+    this.holdPreviewBase(clip);
+    this.patches().preview(regionId, jobs);
+    this.previewReady();
+  }
+
+  /**
+   * The drag is over. Let go (`kept`), the note is heard once more when the patches of where it landed
+   * are in (unless they are already, and it has been); cancelled, those not begun are dropped.
+   */
+  endPreview(kept: boolean): void {
+    const p = this.previewing;
+    if (!p) return;
+    if (kept) {
+      p.released = true;
+      this.previewReady();
+      return;
+    }
+    this.previewing = null;
+    this.patchRenderer?.preview(p.region, []);
+  }
+
+  /**
+   * A drag's patches, once all are rendered: handed to the engines (not yet the song's: let go of a
+   * second after, unless the edit is let go there), and the note heard with them, if it sounds other
+   * than it last did.
+   */
+  private previewReady(): void {
+    const p = this.previewing;
+    const renderer = this.patchRenderer;
+    if (!p || !renderer) return;
+    if (!p.jobs.every((j) => this.patchSent.has(j.key) || renderer.has(j.key))) return;
+    const now = performance.now();
+    for (const j of p.jobs) {
+      if (this.patchSent.has(j.key)) continue;
+      const channels = renderer.get(j.key);
+      if (!channels) continue;
+      this.post({ type: 'audio', key: j.key, channels });
+      this.patchSent.add(j.key);
+      if (!this.patchWanted.has(j.key)) this.patchUnused.set(j.key, now);
+    }
+    this.forgetPatchesSoon();
+    if (!this.playing) this.sendAudition(p.track, p.clip, p.index, false);
+    if (p.released) this.previewing = null;
+  }
+
+  /**
+   * An audition of a note to the engines, as `clip` plays it: its pieces cut where the patches the
+   * engines have start and end. Not sent when it's the one last sent, unless `again`. Not `again` (a
+   * drag's patches come in) and the same note from the same place, it follows the one sounding: it
+   * goes on from where that has got to, edited, instead of from the top.
+   */
+  private sendAudition(trackId: string, clip: AudioClip, index: number, again: boolean): void {
+    const track = this.project?.tracks.find((t) => t.id === trackId);
+    const range = clip.notes ? auditionRange(clip.notes, index) : null;
+    if (!this.port || !track || !range) return;
+    const sr = this.sampleRate;
+    const clips = auditionClips(track, clip, range, sr, (key) => this.patchSent.has(key));
+    const text = JSON.stringify(clips);
+    if (!again && text === this.heard?.text) return;
+    const frames = clips.reduce((n, c) => Math.max(n, c.end), 0);
+    const last = this.heard;
+    const follow = !again && last?.track === trackId && last.index === index && last.from === range[0];
+    this.heard = {
+      keys: new Set(clips.flatMap((c) => (c.base === undefined ? [] : [c.key]))),
+      until: performance.now() + (frames / sr) * 1000 + AUDITION_KEEP,
+      text,
+      track: trackId,
+      index,
+      from: range[0],
+    };
+    this.post({ type: 'audition', num: this.numOf(trackId), clips, ...(follow ? { follow } : {}) });
+  }
+
+  /** The recording a region plays, held by the patch workers while the Notes view shows it (a drag renders from it). */
+  private holdPreviewBase(clip: AudioClip): void {
+    const ctx = this.ctx;
+    const project = this.project;
+    const base = { file: clip.file, stretch: clip.stretch };
+    const key = clipKey(base);
+    if (!ctx || !project || this.previewBase?.key === key) return;
+    this.previewBase = { key, base };
+    this.patchBases.add(key);
+    const renderer = this.patches();
+    if (!renderer.holds(key)) this.holdRecording(project, key, base, ctx);
+  }
+
+  /**
+   * A note edit's patch (by key): 'ready' when the engines play it, 'pending' while its sound is still
+   * to come (the recording plays there as it was), null when the song doesn't play it.
+   */
+  patchState(key: string): 'ready' | 'pending' | null {
+    if (!this.patchWanted.has(key)) return null;
+    return this.patchSent.has(key) ? 'ready' : 'pending';
+  }
+
+  /** How long the last patches took to render, ms. */
+  patchTimes(): number[] {
+    return [...(this.patchRenderer?.times ?? [])];
+  }
+
+  /** Called whenever the patches' state changes. */
+  onPatches(fn: () => void): () => void {
+    this.patchListeners.add(fn);
+    return () => this.patchListeners.delete(fn);
   }
 
   /** Space Designer's spaces: made (or read) in a worker, then handed to the audio thread. */
@@ -1084,6 +1549,8 @@ export class AudioEngine {
   }
 
   play(fromTick: number, record = false, countInBars = 0): void {
+    // (a drag's note isn't heard again once the song plays: the song stops any audition itself)
+    this.previewing = null;
     // starting: the strips laid out afresh by how long each has been taking, if that helps a good deal
     // (a strip that moves builds what it plays with as it starts)
     if (this.ahead && !this.playing) for (const m of this.ahead.rebalance(1.25)) this.post(m);

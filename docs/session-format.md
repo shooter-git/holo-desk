@@ -110,6 +110,59 @@ inside the session file:
 - Where regions overlap on one track, the later one in the list (drawn on top) is heard, as in Logic.
 - Which input *device* a track records from is each computer's own setting (Audio & MIDI), not the song's.
 
+#### An audio region's notes
+
+An audio region can carry the notes found in its recording, and how each is edited (`audio.notes`,
+`packages/session/src/audio-notes.ts`). They're kept in the song, so the region plays the same wherever
+it's rendered, from the song and the recording alone:
+
+```jsonc
+"audio": { "file": "aud_…", "offset": 0, "gain": 0, "fadeIn": 0, "fadeOut": 0, "stretch": 1, "notes": {
+  "mode": "mono", "v": 1,
+  "n": [
+    { "t": 1.2345, "d": 0.412, "p": 64.183, "u": 0.06, "to": 64, "dr": 0.5 },   // E4 18¢ sharp, tuned to E4
+    { "t": 1.6465, "d": 0.18, "p": null, "g": -12 },                            // a breath, 12 dB quieter
+    { "t": 1.8265, "d": 0.5, "p": 67.02, "ts": 1.85, "te": 2.4 }                // moved later and stretched
+  ]
+} }
+```
+
+- `mode`: `mono` (one line at a time: a voice, a solo), `poly` (the notes of chords) or `perc` (hits).
+  `v` is the version of the detection that found them; they're never found again unasked.
+- Each note's `t` and `d` are its start and length in **seconds of the recording** (before the region's
+  stretch), so trimming a region never touches its notes. `p` is its pitch as found (MIDI with cents),
+  or `null` for none (a breath, a lone consonant, a hit). `u` is how long its unvoiced start (s, t, k)
+  lasts: it keeps its length when the note is stretched, and the note's beat comes after it.
+- Edits, each absent while the note is untouched: `to` its pitch moved to; `dr` how much of its drift is
+  kept (0–1) and `mo` of its vibrato (0–2); `tr` the glide into it against as sung (0–3); `fo` its
+  formant moved (semitones, −12 to 12); `g` its level (dB, −60 to 24) and `m` muted; `ts` and `te` where
+  it now starts and ends, and `at` its attack's length against as sung (0.25–4); `s` (pasted) the place
+  in the recording it plays instead (from `s` for the note's length, where the note now plays, moved too
+  if it's moved; its other edits apply to the sound pasted, whose pitch as found is `p` and unvoiced
+  start `u`: a paste brings them with it); `off` (chords) a note left out by hand.
+- The notes object may also carry `off` (edits kept but not played), `a4` (the pitch A4 is tuned to, when
+  not 440) and `sens` (how readily chords' notes were found, 0–1).
+- Only a line's notes move in time. A move warps the sound between the rests on either side of it (the
+  identity everywhere else, so no other sample moves; a note's other edits move with it, and a voice
+  played longer or shorter keeps its pitch); a move that would run time backwards, squeeze or
+  stretch any part past four times, or go more than 4 s is let go. A line's notes don't overlap. Where
+  one note ends and the next starts (legato), both play that place at the same time: a note moved there
+  moves its neighbour's edge with it (the neighbour stretches or squeezes), as a rest between would.
+- The edits HO[LO] makes (the studio's tools, the agent, `holo notes`: `NOTE_EDITS` in
+  `packages/session/src/note-edits.ts`) never leave an edit that changes nothing (`to` equal to `p`,
+  `dr`, `mo`, `tr` or `at` of 1, `fo` or `g` of 0, `ts` at `t`, `te` at the note's end), and a move that
+  doesn't fit is made as far as it fits rather than let go.
+- **Splits and heals.** A region split in two (or cut by inserted, deleted or moved bars, or by repeats
+  written out) keeps in each piece the notes it plays and the two nearest past either edge; a note across
+  the cut goes to both pieces as it is, so each sounds as the region did. Past a note moved in time it
+  keeps on to the first that isn't, so the warp is the same where the piece plays; notes further out are
+  let go. Two pieces of one recording heal back into one region (bars deleted again) only when the notes
+  both keep are the same, with the same edits; the healed region has the notes of both. A piece only
+  played through a repeat (not written out) keeps the region's notes whole.
+- Every number is rounded as it's made (times to 0.1 ms, pitches to 0.1 cent, the rest to hundredths)
+  and kept within its range, so a song read and saved again is the same to the bit. At most 20,000
+  notes a region. A HO[LO] from before notes reads the region without them.
+
 ## The score
 
 A song can be written out as a score. The notes stay what plays (and what the piano roll shows);

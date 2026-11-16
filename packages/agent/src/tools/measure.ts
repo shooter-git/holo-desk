@@ -60,7 +60,7 @@ function pos(song: Project, tick: number): string {
  * A note's name as the song's key spells it there (B♭ in D minor, A♯ in B major; sharps with no key),
  * named the studio's way (middle C is C4 or C3).
  */
-function keyName(pitch: number, key: KeyPoint | null, middleC: MiddleC): string {
+export function keyName(pitch: number, key: KeyPoint | null, middleC: MiddleC): string {
   if (!key) return noteName(pitch, middleC);
   const s = spellInKey(Math.round(pitch), key.fifths, key.mode);
   const accidental = s.alter > 0 ? '#'.repeat(s.alter) : 'b'.repeat(-s.alter);
@@ -149,6 +149,20 @@ function takeText(r: TakeMeasure, song: Project, middleC: MiddleC): string {
   ];
   lines.push(...unplayableLines(r.unplayable, song));
   if (r.through?.errors.length) lines.push(`The render reported: ${r.through.errors.join('; ')}`);
+  if (r.clicks) {
+    const c = r.clicks;
+    lines.push(
+      c.length
+        ? `Clicks the note edits make: ${c
+            .slice(0, 8)
+            .map(
+              (k) =>
+                `${pos(song, k.tick)} (${k.kind === 'burst' ? `a burst ${k.size.toFixed(0)} dB over the recording's` : `the level jumping by ${Math.round(k.size * 100)}%`}, at ${k.level} dB)`,
+            )
+            .join('; ')}${c.length > 8 ? `; … ${c.length - 8} more` : ''}.`
+        : 'No clicks in what the note edits change.',
+    );
+  }
   if (!notes.length) {
     lines.push(
       'No notes were heard: it may be silent there, too quiet, or more than one line at a time (only one voice or instrument is measured).',
@@ -422,6 +436,9 @@ function resultText(r: MeasureResult, song: Project, middleC: MiddleC): string {
       return pluginText(r, song);
     case 'meters':
       return metersText(r, song);
+    case 'notes':
+      // (audio_notes says a recording's notes; this only names them)
+      return `${plural(r.notes.n.length, 'note')} found in ${r.name}.`;
   }
 }
 

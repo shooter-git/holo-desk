@@ -2,6 +2,7 @@
  * Reading a session that came from outside (a file, a creation, the network): check its shape and
  * fill in anything an older or a hand-written session left out, so the rest of the code can trust it.
  */
+import { parseAudioNotes } from './audio-notes.ts';
 import { newChannel, TRACK_COLORS } from './defaults.ts';
 import { KEY_MODES, textForKeys } from './keysig.ts';
 import {
@@ -380,6 +381,9 @@ function region(v: unknown, where: string): Region {
       fadeOut: Math.max(0, num(a.fadeOut, `${where}.audio.fadeOut`, 0)),
       stretch: Math.max(0.25, Math.min(4, num(a.stretch, `${where}.audio.stretch`, 1))),
     };
+    // its notes and how they're edited, canonical (audio-notes.ts): what can't be read is left out
+    const notes = parseAudioNotes(a.notes);
+    if (notes) r.audio.notes = notes;
   }
   if (Array.isArray(v.marks)) {
     const marks = v.marks.map(mark).filter((m): m is Mark => m !== null);

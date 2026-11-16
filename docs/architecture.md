@@ -67,6 +67,54 @@ wraps `EngineCore` from `@holo/engine`):
   seconds of work: the studio makes a song's halls on up to three workers, side by side, and keeps
   each prepared response in the device's cache under the engine that made it, so a song opened again
   has its halls at once.
+- **A recording's note edits play as they're made.** Each stretch the edits change is a patch, keyed
+  by what it sounds like (`@holo/engine`'s `notes/plan.ts`). The studio renders the song's patches on
+  up to three workers, from the recording in shared memory (`apps/web/src/audio/patches.ts`): the
+  region shown in the Audio Editor first, then what the playhead comes to next. Until a patch is
+  ready, the recording plays there as it was. Once it is, the track's clips are sent again with a
+  `fade`: the engine plays the old and new lists together for 20 ms, crossfading, with nothing
+  allocated. The two are one voice at two pitches, so the crossfade starts where they agree best
+  within the next 250 ms (where they're out of phase, a crossfade dips), and one that comes while
+  another is under way waits for it to end. Patches are kept by the memory they take (256 MB, 96 MB on a phone), so an undo
+  or a redo is heard at once. They're kept on the device too (`patch-store.ts`, in the browser's cache
+  under the engine that rendered them, 512 MB, 128 MB on a phone, and no more than a quarter of what
+  the device allows, the least lately used going first): a patch's key says everything its sound
+  depends on, so one found there is always right, and a song opened again, or undone to an earlier
+  state after a reload, plays its edits at once. It's read before a patch is rendered and written
+  after; where storage is refused or full, nothing is kept. A bounce renders every patch first and
+  never fades.
+- **A recording's notes are edited from one list.** The Audio Editor's Notes view
+  (`apps/web/src/ui/AudioNotes.tsx`, its tools' arithmetic in `note-tools.ts`) makes every edit
+  through `@holo/session`'s `NOTE_EDITS`, as the agent's `audio_notes` and `holo notes` do, and a
+  test fails when an edit there has no control in the studio. A drag shows its result as it goes and
+  is one undo step when it's let go; a region's first edit keeps the notes found in its recording,
+  pruned to what it plays (as a split keeps them), so the studio and the agent number them alike. The
+  Macros dialog (`NoteMacros.tsx`) is made from the macros' arguments in the same list, previews
+  through a gesture and applies as one undo step; Level reads each note's level from the curve the
+  notes were found with (`noteLevel`), as the host reads it for the agent.
+- **A note copied is the note itself; a linked edit is the same edits again.** The Notes view's
+  clipboard (`note-clipboard.ts`, in memory, the tab's own) holds the note copied and its recording;
+  `paste` and `copy-settings` take it as their context's `source`, so a paste is self-contained
+  wherever it's made (the agent hands them the note `from` numbers). With Link on, every set of notes
+  `runEdit` makes remembers the notes and the edit it was made from, so a commit knows the edits that
+  made it and `@holo/session`'s `linkedNoteEdits` makes them again in each other region playing the
+  recording (on the notes found at the same place, where that region plays them), all one batch:
+  the agent's and `holo notes`' `linked` go through the same function.
+- **A note is heard as it's pressed.** With Hear notes on (the Notes view's bar, kept on the device),
+  a press plays the note through its track's channel, as edited, from 30 ms before it starts to its
+  end (`audio/audition.ts`): an `audition` message gives the engine the pieces to play, cut as the
+  song cuts them (the recording, or a patch where one is rendered; the recording there while it
+  isn't, and nothing waits for it). It fades in over 10 ms (its start is often in the middle of the
+  note before) and out over 10 ms at the note's end. The core plays them once on a voice each track
+  has from the start, nothing allocated, a new one taking over from the last, which fades out over
+  10 ms (a held note cut over a ms or two clicks); the audio thread plays it (a twin, where a worker
+  renders the track ahead), and so does HO[LO] Engine. Never while the song plays. While a note is
+  dragged, the patches of where the drag has got to are rendered before anything else, one at a time
+  for the region and only the latest wanted after it, and the note goes on as they come in, from
+  where it has got to, crossfaded into its new sound (from the top once it has ended); they're the
+  patches the song plays once it's let go, under the same keys, so its sound is usually there
+  already. The engine's click measure (`analysis/clicks.ts`) is what the tests hold these to. Hearing and the device's patches are listening aids, not
+  note edits: the agent and `holo notes` hear an edit through `measure take`, and need neither.
 - **Convolution is spread over the period.** A hall's long partitions take their forward transform,
   the sum over the spectrum and the inverse transform in about-equal pieces, one or two per block,
   so no single block pays for a 32768-point transform; the output lands in the same block as before,

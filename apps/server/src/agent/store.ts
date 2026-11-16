@@ -73,6 +73,8 @@ export interface TurnExtra {
   error?: string;
   /** The attachments its request carried (its job, and later ones on the thread, may read them). */
   attachments?: string[];
+  /** The revision kept as the song before its request (the next request's "previous"). */
+  before?: number;
   /** What its reply shows under it, and where the studio went as it arrived. */
   view?: View;
   go?: Go;

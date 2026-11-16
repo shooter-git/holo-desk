@@ -11,7 +11,16 @@
  * opened another song or undid the job's change, the device was removed, the agent turned off).
  */
 import { randomBytes } from 'node:crypto';
-import { AFTER, BEFORE, type Block, type Go, LIMITS as VIEW_LIMITS, type View, viewVersions } from '@holo/agent/view';
+import {
+  AFTER,
+  BEFORE,
+  type Block,
+  type Go,
+  PREVIOUS,
+  LIMITS as VIEW_LIMITS,
+  type View,
+  viewVersions,
+} from '@holo/agent/view';
 import { SCAN_ID, type Scan } from '@holo/score';
 import { applyOps, barToTick, type MiddleC, type Op, type Project, parseProject } from '@holo/session';
 import type { Store } from '../db.ts';
@@ -130,6 +139,10 @@ export interface AgentJob {
   /** The revision kept as the song before the request ("before"), and the versions its tools named. */
   before: number | null;
   versions: Map<string, number>;
+  /** The song before the conversation's previous request ("previous"); none on its first. */
+  previous: number | null;
+  /** Its tools changed the song (an A/B of "before" and "after" plays the same song otherwise). */
+  changed: boolean;
 }
 
 /**
@@ -531,8 +544,10 @@ export class Jobs implements AgentHooks {
       await this.flush(device, project);
       const now = this.o.store.get(project);
       if (!now) throw new Refusal(404, 'No such song');
-      // a restore point, whatever the agent does (and the reply's "before")
+      // a restore point, whatever the agent does (and the reply's "before"); the previous request's is "previous"
       const before = this.o.store.snapshotNow(project, 'Agent');
+      const earlier = this.o.agentStore.turns(thread.id).at(-1);
+      const previous = (earlier && parseExtra(earlier.extra).before) ?? null;
       const text = await prompt(now);
       const settings = this.o.agentStore.settings();
       const token = newToken();
@@ -562,6 +577,8 @@ export class Jobs implements AgentHooks {
         doneListening: false,
         before,
         versions: new Map(),
+        previous,
+        changed: false,
       };
       // the runner may have gone while the studio saved
       if (!this.o.live.agentRunners().includes(runner))
@@ -1114,6 +1131,7 @@ export class Jobs implements AgentHooks {
    */
   async ops(job: AgentJob, ops: Op[], label: string, batch: string): Promise<{ ok: true; revision?: number }> {
     const arrived = Date.now();
+    job.changed = true;
     // (a scan preset carries on without its studio: no waiting for it)
     const studio = job.preset ? this.studio(job) : await this.studioBack(job);
     if (studio) {
@@ -1206,15 +1224,24 @@ export class Jobs implements AgentHooks {
     job.view.reply = reply;
     if (blocks) {
       const versions: Record<string, number> = {};
-      for (const name of viewVersions(blocks)) {
+      const named = viewVersions(blocks);
+      // (an A/B of two of the same song is no comparison)
+      if (!job.changed && named.includes(BEFORE) && named.includes(AFTER))
+        throw new Refusal(
+          400,
+          'Nothing changed in this request, so "before" and "after" are the same song. To compare an earlier change, play "previous" (the song before your previous request) against "before".',
+        );
+      for (const name of named) {
         if (name === AFTER) continue;
-        const revision = name === BEFORE ? job.before : job.versions.get(name);
+        const revision = name === BEFORE ? job.before : name === PREVIOUS ? job.previous : job.versions.get(name);
         if (revision === null || revision === undefined)
           throw new Refusal(
             400,
             name === BEFORE
               ? 'The song from before this request wasn’t kept'
-              : `No version "${name}" was kept this turn`,
+              : name === PREVIOUS
+                ? 'There’s no earlier request in this conversation to compare with'
+                : `No version "${name}" was kept this turn`,
           );
         versions[name] = revision;
       }
@@ -1230,7 +1257,7 @@ export class Jobs implements AgentHooks {
    * under the name; its revision.
    */
   async version(job: AgentJob, name: string): Promise<{ ok: true; revision: number }> {
-    if (name === BEFORE || name === AFTER || job.versions.has(name))
+    if (name === BEFORE || name === AFTER || name === PREVIOUS || job.versions.has(name))
       throw new Refusal(409, `There's a version "${name}" already`);
     if (job.versions.size >= VIEW_LIMITS.versions)
       throw new Refusal(409, `At most ${VIEW_LIMITS.versions} versions a turn`);
@@ -1470,6 +1497,7 @@ export function awayIfGone(answer: Answer): void {
 function turnExtra(job: AgentJob): string {
   const v = job.view;
   const extra: TurnExtra = {
+    ...(job.before !== null ? { before: job.before } : {}),
     ...(v.permission ? { permission: v.permission } : {}),
     ...(v.brief ? { brief: v.brief } : {}),
     ...(v.briefWarnings ? { briefWarnings: v.briefWarnings } : {}),

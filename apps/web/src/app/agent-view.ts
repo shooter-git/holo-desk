@@ -7,7 +7,17 @@
  * something (live.ts runs it as the reply arrives, on the device that asked).
  */
 import { AFTER, BEFORE, type Binding, bindingInfo, bindingOps, type Go, type Play, type View } from '@holo/agent/view';
-import { barToTick, firstBar, type Note, type Project, parsePosition, parseProject } from '@holo/session';
+import {
+  type AudioNote,
+  barToTick,
+  fileToTicks,
+  firstBar,
+  type Note,
+  type Project,
+  parsePosition,
+  parseProject,
+  type Region,
+} from '@holo/session';
 import { useSyncExternalStore } from 'react';
 import {
   apply,
@@ -130,6 +140,9 @@ function viewPatch(view: NonNullable<Go['view']>, phone: boolean): Partial<AppSt
       return { editor: 'mixer', mobileTab: 'mixer' };
     case 'score':
       return { editor: 'piano', noteView: 'score', mobileTab: 'editor' };
+    case 'notes':
+      // (a recording's notes; a MIDI track's show in the Piano Roll, as with "editor")
+      return { editor: 'piano', noteView: 'roll', audioMode: 'notes', mobileTab: 'editor' };
     default:
       return { editor: 'piano', noteView: 'roll', mobileTab: 'editor' };
   }
@@ -159,10 +172,58 @@ export function notesIn(
   return { notes, regions };
 }
 
+// ---- a recording's notes ----
+
+/**
+ * A region's notes as the Audio Editor's Notes view numbers them (its own, as edited, else those found
+ * in its recording as its first edit keeps them); null while they're still being found. It's the
+ * Notes view's own, given by ui/AgentView.tsx as it loads (the view lives with the editor).
+ */
+export type RecordingNoteLister = (song: Project, region: Region) => readonly AudioNote[] | null;
+
+let listRecordingNotes: RecordingNoteLister = () => null;
+
+export function setRecordingNoteLister(fn: RecordingNoteLister): void {
+  listRecordingNotes = fn;
+}
+
+/**
+ * A recording's note where it plays: its index in its region's notes, its start and end (song ticks),
+ * and its pitch as sung and as it plays now (MIDI with cents: moved where an edit moved it).
+ */
+export interface PlacedNote {
+  index: number;
+  start: number;
+  end: number;
+  sung: number;
+  pitch: number;
+}
+
+/** A region's sung notes (not its breaths and consonants, nor those muted) where they play; null while still being found. */
+export function placedNotes(song: Project, region: Region): PlacedNote[] | null {
+  if (!region.audio) return [];
+  const list = listRecordingNotes(song, region);
+  if (!list) return null;
+  const asSung = fileToTicks(song, region);
+  const asPlayed = fileToTicks(song, region, true);
+  const out: PlacedNote[] = [];
+  list.forEach((n, index) => {
+    if (n.p === null || n.m) return;
+    out.push({
+      index,
+      start: n.ts !== undefined ? asPlayed(n.ts) : asSung(n.t),
+      end: n.te !== undefined ? asPlayed(n.te) : asSung(n.t + n.d),
+      sung: n.p,
+      pitch: n.to ?? n.p,
+    });
+  });
+  return out;
+}
+
 /**
  * The studio goes where a go says: the track selected, a region selected and open in the editor, notes
- * selected in it, a view in front, a plugin's window open, the playhead at a bar. A plain reason when
- * what it names is gone from the song.
+ * selected in it (a recording's in the Audio Editor's Notes view), a view in front, a plugin's window
+ * open, the playhead at a bar. A plain reason when what it names is gone from the song.
  */
 export function goTo(go: Go): string | null {
   const s = store.get();
@@ -192,9 +253,31 @@ export function goTo(go: Go): string | null {
       return 'Those notes aren’t in the song';
     }
     const pitch = typeof go.notes.pitch === 'number' ? go.notes.pitch : undefined;
-    const { notes, regions } = notesIn(song, track.id, from, to, pitch);
-    if (!notes.length) return 'Those notes are gone from the song';
-    Object.assign(patch, { selectedNotes: notes, selectedRegions: regions, ...viewPatch('editor', phone) });
+    if (track.kind === 'audio') {
+      const plays = (r: Region) => !!r.audio && r.start < to && r.start + r.length > from;
+      const region = track.regions.find((r) => plays(r) && r.start <= from) ?? track.regions.find((r) => plays(r));
+      if (!region) return 'Those notes are gone from the song';
+      const placed = placedNotes(song, region);
+      const chosen = (placed ?? [])
+        .filter(
+          (n) =>
+            n.start >= from &&
+            n.start < to &&
+            (pitch === undefined || Math.round(n.pitch) === pitch || Math.round(n.sung) === pitch),
+        )
+        .map((n) => n.index);
+      // (still being found: the Notes view opens there, and shows them as they come)
+      if (placed && !chosen.length) return 'Those notes are gone from the song';
+      Object.assign(patch, {
+        selectedRegions: [region.id],
+        selectedAudioNotes: chosen.length ? { region: region.id, notes: chosen } : null,
+        ...viewPatch('notes', phone),
+      });
+    } else {
+      const { notes, regions } = notesIn(song, track.id, from, to, pitch);
+      if (!notes.length) return 'Those notes are gone from the song';
+      Object.assign(patch, { selectedNotes: notes, selectedRegions: regions, ...viewPatch('editor', phone) });
+    }
     at = from;
   }
   if (go.view) Object.assign(patch, viewPatch(go.view, phone));
@@ -214,12 +297,18 @@ export function goTo(go: Go): string | null {
   return null;
 }
 
-/** Where a span of a track (a view's notes or wave) goes when it's clicked: its region there, in the editor. */
-export function spanGo(song: Project, track: string, fromBar: number): Go {
+/**
+ * Where a span of a track (a view's notes or wave) goes when it's clicked: its region there, in the
+ * editor (a recording's notes strip, in the Audio Editor's Notes view).
+ */
+export function spanGo(song: Project, track: string, fromBar: number, notes = false): Go {
   const at = barToTick(song.meter, Math.max(fromBar, firstBar(song.meter)));
   const t = song.tracks.find((x) => x.id === track);
   const r = t?.regions.find((x) => x.start <= at && x.start + x.length > at) ?? t?.regions.find((x) => x.start >= at);
-  return r ? { track, region: r.id, bar: fromBar } : { track, bar: fromBar, view: 'editor' };
+  const view = notes && t?.kind === 'audio' ? 'notes' : undefined;
+  return r
+    ? { track, region: r.id, bar: fromBar, ...(view ? { view } : {}) }
+    : { track, bar: fromBar, view: view ?? 'editor' };
 }
 
 // ---- setting a setting ----

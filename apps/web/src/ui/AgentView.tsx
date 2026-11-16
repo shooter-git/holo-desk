@@ -27,9 +27,11 @@ import {
   goTo,
   keepVersion,
   notesIn,
+  placedNotes,
   playBars,
   runCommand,
   setBinding,
+  setRecordingNoteLister,
   slide,
   slideEnd,
   slideStart,
@@ -39,10 +41,19 @@ import {
   versionWords,
 } from '../app/agent-view.ts';
 import { closeBar, useApp } from '../app/store.ts';
+import { recordingNotes } from '../audio/notes.ts';
+import { editableNotes } from './AudioNotes.tsx';
 import { dbToFader, faderToDb } from './controls.tsx';
 import { prepare, useFrame, useSize } from './frame.ts';
-import { drawMiniNotes, rangeOf } from './mini-notes.ts';
+import { drawMiniNotes, type MiniNote, rangeOf } from './mini-notes.ts';
 import { drawClipWave } from './wave.ts';
+
+// a go to a recording's notes, and its notes drawn small, number them as the Notes view does
+setRecordingNoteLister((song, region) =>
+  region.audio
+    ? (editableNotes(song, region, region.audio, recordingNotes.of(song.id, region.audio.file))?.n ?? null)
+    : null,
+);
 
 /** What a block's controls share: the view (its versions), the job it came with, and whether a request is running. */
 interface Ctx {
@@ -455,6 +466,31 @@ function SpanView({ ctx, span, wave }: { ctx: Ctx; span: Span; wave: boolean }) 
         };
         if (!drawClipWave(c, song, r, r.audio, view, style)) done = false;
       }
+    } else if (track.kind === 'audio') {
+      // a recording's notes: where each plays now, and (faint) where it was sung when an edit moved it
+      const sung: MiniNote[] = [];
+      const played: MiniNote[] = [];
+      for (const r of track.regions) {
+        if (!r.audio || r.start >= to || r.start + r.length <= from) continue;
+        const placed = placedNotes(song, r);
+        if (!placed) {
+          done = false;
+          continue;
+        }
+        for (const n of placed) {
+          if (n.end <= from || n.start >= to) continue;
+          const at = { t: n.start - from, d: n.end - n.start };
+          played.push({ ...at, p: n.pitch });
+          if (Math.abs(n.pitch - n.sung) >= 0.05) sung.push({ ...at, p: n.sung });
+        }
+      }
+      const range = rangeOf([...played, ...sung]);
+      const area = { x: 0, y: 4, w, h: SPAN_H - 8 };
+      c.fillStyle = color;
+      c.globalAlpha = 0.3;
+      drawMiniNotes(c, sung, to - from, area, range);
+      c.globalAlpha = 1;
+      drawMiniNotes(c, played, to - from, area, range);
     } else {
       c.fillStyle = color;
       drawMiniNotes(c, notes, to - from, { x: 0, y: 4, w, h: SPAN_H - 8 }, rangeOf(notes));
@@ -473,8 +509,8 @@ function SpanView({ ctx, span, wave }: { ctx: Ctx; span: Span; wave: boolean }) 
       type="button"
       className="v-span"
       ref={box}
-      title={`${track.name}, bars ${span.from}–${span.to - 1}${span.version ? `, as ${versionWords(span.version)} has it` : ''}`}
-      onClick={() => now && void run(ctx, { go: spanGo(now, track.id, span.from) }, 'span')}
+      title={`${track.name}, bars ${span.from}–${span.to - 1}${span.version ? `, as ${versionWords(span.version)} has it` : ''}${track.kind === 'audio' && !wave ? ': its notes, faint where they were sung before an edit moved them' : ''}`}
+      onClick={() => now && void run(ctx, { go: spanGo(now, track.id, span.from, !wave) }, 'span')}
     >
       <canvas ref={canvas} />
     </button>

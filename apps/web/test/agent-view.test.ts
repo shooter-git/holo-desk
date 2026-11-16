@@ -1,5 +1,5 @@
 import type { View } from '@holo/agent/view';
-import { newPlugin, newProject, newRegion, newTrack, PPQ, type Project } from '@holo/session';
+import { newAudioTrack, newPlugin, newProject, newRegion, newTrack, PPQ, type Project } from '@holo/session';
 import { beforeAll, describe, expect, it, vi } from 'vitest';
 import type * as ViewModule from '../src/app/agent-view.ts';
 import type * as StoreModule from '../src/app/store.ts';
@@ -97,6 +97,93 @@ describe('a view’s go', () => {
     expect(V.spanGo(p, 'trk_strings', 2)).toEqual({ track: 'trk_strings', region: 'rgn_a', bar: 2 });
     expect(V.spanGo(p, 'trk_strings', 30)).toEqual({ track: 'trk_strings', bar: 30, view: 'editor' });
     expect(V.notesIn(p, 'trk_strings', BAR, BAR * 3).notes.map((n) => n.p)).toEqual([62, 64]);
+  });
+});
+
+describe('a recording’s notes, from a view', () => {
+  /**
+   * The song with a Vocal take (at 120 bpm a second is 1920 ticks): a C4 at 0.5 s, a D4 at 2 s moved
+   * down to C#4, a breath at 2.6 s, and a muted E4 at 4 s.
+   */
+  const withTake = (): Project => {
+    const p = song();
+    const vocal = { ...newAudioTrack('Vocal'), id: 'trk_vocal' };
+    vocal.regions.push({
+      ...newRegion(0, BAR * 8, 'Take'),
+      id: 'rgn_take',
+      audio: {
+        file: 'aud_1',
+        offset: 0,
+        gain: 0,
+        fadeIn: 0,
+        fadeOut: 0,
+        stretch: 1,
+        notes: {
+          mode: 'mono',
+          v: 1,
+          n: [
+            { t: 0.5, d: 0.5, p: 60 },
+            { t: 2, d: 0.5, p: 62, to: 61 },
+            { t: 2.6, d: 0.3, p: null },
+            { t: 4, d: 0.5, p: 64, m: true },
+          ],
+        },
+      },
+    });
+    p.tracks.push(vocal);
+    return p;
+  };
+
+  it('places them on the song’s timeline, as sung and as they play, without breaths or muted notes', () => {
+    V.setRecordingNoteLister((_song, region) => region.audio?.notes?.n ?? null);
+    const p = withTake();
+    const region = p.tracks.find((t) => t.id === 'trk_vocal')?.regions[0];
+    if (!region) throw new Error('no take');
+    expect(V.placedNotes(p, region)).toEqual([
+      { index: 0, start: 960, end: 1920, sung: 60, pitch: 60 },
+      { index: 1, start: 3840, end: 4800, sung: 62, pitch: 61 },
+    ]);
+    // still being found
+    V.setRecordingNoteLister(() => null);
+    expect(V.placedNotes(p, region)).toBeNull();
+  });
+
+  it('goes to them in the Audio Editor’s Notes view, selected as the Notes view numbers them', () => {
+    V.setRecordingNoteLister((_song, region) => region.audio?.notes?.n ?? null);
+    open(withTake());
+    S.store.set({ audioMode: 'wave' });
+    // bar 2 starts at 2 s: the moved note, by its pitch as sung or as it plays
+    expect(V.goTo({ track: 'trk_vocal', notes: { from: 2, to: 3, pitch: 62 } })).toBeNull();
+    let s = S.store.get();
+    expect([s.selectedAudioNotes, s.selectedRegions, s.editor, s.audioMode]).toEqual([
+      { region: 'rgn_take', notes: [1] },
+      ['rgn_take'],
+      'piano',
+      'notes',
+    ]);
+    expect(V.goTo({ track: 'trk_vocal', notes: { from: 1, to: 3, pitch: 61 } })).toBeNull();
+    expect(S.store.get().selectedAudioNotes).toEqual({ region: 'rgn_take', notes: [1] });
+    expect(V.goTo({ track: 'trk_vocal', notes: { from: 1, to: 3 } })).toBeNull();
+    expect(S.store.get().selectedAudioNotes).toEqual({ region: 'rgn_take', notes: [0, 1] });
+    // the muted note isn't one to go to; none there at all
+    expect(V.goTo({ track: 'trk_vocal', notes: { from: 3, to: 4, pitch: 64 } })).toMatch(/gone/);
+    // still being found: the Notes view opens there, nothing selected yet
+    V.setRecordingNoteLister(() => null);
+    S.store.set({ audioMode: 'wave', selectedAudioNotes: null });
+    expect(V.goTo({ track: 'trk_vocal', notes: { from: 2, to: 3 } })).toBeNull();
+    s = S.store.get();
+    expect([s.selectedAudioNotes, s.audioMode]).toEqual([null, 'notes']);
+    // a go to the notes view alone, and a recording's notes strip clicked
+    S.store.set({ audioMode: 'wave' });
+    expect(V.goTo({ track: 'trk_vocal', region: 'rgn_take', view: 'notes' })).toBeNull();
+    expect(S.store.get().audioMode).toBe('notes');
+    expect(V.spanGo(withTake(), 'trk_vocal', 2, true)).toEqual({
+      track: 'trk_vocal',
+      region: 'rgn_take',
+      bar: 2,
+      view: 'notes',
+    });
+    expect(V.spanGo(withTake(), 'trk_vocal', 2)).toEqual({ track: 'trk_vocal', region: 'rgn_take', bar: 2 });
   });
 });
 

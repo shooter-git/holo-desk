@@ -552,6 +552,28 @@ a.btn {
   }
 }
 
+/* Play (or Record) pressed while the song's sounds load: it waits for them, its light breathing
+   as the recording light does, an opacity a frame */
+.transport .btn.play.waiting,
+.transport .btn.rec.waiting {
+  position: relative;
+}
+
+.transport .btn.play.waiting {
+  color: var(--play);
+}
+
+.transport .btn.play.waiting::after,
+.transport .btn.rec.waiting::after {
+  content: "";
+  position: absolute;
+  inset: -1px;
+  border-radius: inherit;
+  box-shadow: 0 0 0 1px currentColor;
+  animation: rec-pulse 1.2s ease-in-out infinite;
+  pointer-events: none;
+}
+
 .transport .btn.cycle.on {
   color: #1c1505;
   background: linear-gradient(180deg, #ffe08a, var(--cycle));
@@ -650,6 +672,18 @@ a.btn {
   font: 600 8.5px / 1 var(--font);
   letter-spacing: 0.12em;
   text-transform: uppercase;
+}
+
+/* the song's sounds on their way: the caption says so, a little brighter, on one line, and never
+   wider than the position above it (the tempo and signature beside it stay where they are) */
+.lcd .caption.loading {
+  width: 0;
+  min-width: 100%;
+  overflow: hidden;
+  color: var(--lcd-text);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  letter-spacing: 0.06em;
 }
 
 @media (pointer: coarse) {

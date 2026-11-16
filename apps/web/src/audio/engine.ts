@@ -670,13 +670,18 @@ export class AudioEngine {
         const sent = this.perfSent.get(plans.key) ?? new Set<number>();
         this.perfSent.set(plans.key, sent);
         const wanted = partSamples(plans).filter((i) => !sent.has(i));
+        this.partsComing++;
+        this.pendingChanged();
         const samples = await Promise.all(
           wanted.map(async (index) => {
             const [left, right] = await sampleFile(inst.pack, perf?.files[index] as string, ctx);
             const l = this.share(left);
             return { index, left: l, right: right === left ? l : this.share(right) };
           }),
-        );
+        ).finally(() => {
+          this.partsComing--;
+          this.pendingChanged();
+        });
         if (!current()) return;
         for (const x of samples) sent.add(x.index);
         if (samples.length)
@@ -722,6 +727,8 @@ export class AudioEngine {
         this.post({ type: 'audio', key, channels: kept });
         continue;
       }
+      this.clipsComing++;
+      this.pendingChanged();
       void audioFiles
         .load(project.id, clip, ctx, this.ahead !== null)
         .then((channels) => {
@@ -740,6 +747,10 @@ export class AudioEngine {
         .catch((err: unknown) => {
           this.audioSent.delete(key);
           for (const fn of this.errorListeners) fn(err instanceof Error ? err.message : String(err));
+        })
+        .finally(() => {
+          this.clipsComing--;
+          this.pendingChanged();
         });
     }
   }
@@ -756,6 +767,7 @@ export class AudioEngine {
         this.impulseQueue.push({ key, source, rate: ctx.sampleRate, engine: STUDIO_ENGINE });
     }
     this.makeImpulses();
+    this.pendingChanged();
   }
 
   /**
@@ -776,6 +788,7 @@ export class AudioEngine {
         w.terminate();
         this.impulsesMaking--;
         this.makeImpulses();
+        this.pendingChanged();
       };
       const failed = (key: string, error: string) => {
         this.impulsesSent.delete(key);
@@ -799,6 +812,24 @@ export class AudioEngine {
   }
   private impulseQueue: { key: string; source: ImpulseSource; rate: number; engine: string }[] = [];
   private impulsesMaking = 0;
+
+  /**
+   * The song's sounds on their way to the audio thread besides its instruments' samples: clips being
+   * decoded, halls being made, a Performance part's samples.
+   */
+  get pending(): number {
+    return this.clipsComing + this.impulseQueue.length + this.impulsesMaking + this.partsComing;
+  }
+  private clipsComing = 0;
+  private partsComing = 0;
+  private pendingListeners = new Set<() => void>();
+  onPending(fn: () => void): () => void {
+    this.pendingListeners.add(fn);
+    return () => this.pendingListeners.delete(fn);
+  }
+  private pendingChanged(): void {
+    for (const fn of this.pendingListeners) fn();
+  }
 
   /** Audio tracks that are armed or monitoring listen to this device's input. */
   private syncInputs(project: Project): void {

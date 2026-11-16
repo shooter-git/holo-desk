@@ -60,6 +60,7 @@ import { companion, STUDIO_ENGINE } from '../audio/companion.ts';
 import { engine, type RecordedTake, warmEngine } from '../audio/engine.ts';
 import { chosenRate, type RateChoice } from '../audio/engine-rate.ts';
 import { audioFiles } from '../audio/files.ts';
+import { onSoundsComing, soundsComing } from '../audio/loading.ts';
 import { midi } from '../audio/midi.ts';
 import { instrumentManifest } from '../audio/pack-files.ts';
 import { library } from '../audio/samples.ts';
@@ -885,8 +886,56 @@ export function playheadTick(): number {
 
 export async function togglePlay(): Promise<void> {
   await ensureAudio();
-  if (store.get().playing) stop();
-  else play(false);
+  if (store.get().playWaiting) cancelWaiting();
+  else if (store.get().playing) stop();
+  else playWhenLoaded(false);
+}
+
+/** How long a wait for the song's sounds goes without one arriving before it plays anyway. */
+const STALLED = 20_000;
+let waitingOff: (() => void) | null = null;
+
+/**
+ * Play (or record) once the song's sounds are in: at once if they are; else the transport says
+ * it's waiting, and Play pressed again calls it off. A load that stops moving (a file that never
+ * comes) doesn't hold it up for good: it plays anyway, and says so.
+ */
+function playWhenLoaded(record: boolean): void {
+  if (!soundsComing()) {
+    play(record);
+    return;
+  }
+  store.set({ playWaiting: record ? 'record' : 'play' });
+  let left = soundsComing();
+  let stall = window.setTimeout(stalled, STALLED);
+  function stalled() {
+    finish();
+    toast('Some sounds are still loading: they come in as they arrive', 'info', 6000);
+    play(record);
+  }
+  const off = onSoundsComing(() => {
+    const now = soundsComing();
+    if (now === 0) {
+      finish();
+      play(record);
+    } else if (now !== left) {
+      left = now;
+      clearTimeout(stall);
+      stall = window.setTimeout(stalled, STALLED);
+    }
+  });
+  function finish() {
+    clearTimeout(stall);
+    off();
+    waitingOff = null;
+    store.set({ playWaiting: null });
+  }
+  waitingOff = finish;
+}
+
+/** Play no longer waiting for the song's sounds (pressed again, or Stop). */
+function cancelWaiting(): void {
+  waitingOff?.();
 }
 
 export function play(record: boolean): void {
@@ -902,6 +951,10 @@ export function play(record: boolean): void {
 
 export function stop(): void {
   const s = store.get();
+  if (s.playWaiting) {
+    cancelWaiting();
+    return;
+  }
   if (!s.playing) {
     // stopped already: back to the beginning, and every note still sounding stops (a latched
     // arpeggio, a key held on a keyboard that came loose, a Drum Replacer's hit)
@@ -919,6 +972,10 @@ export function stop(): void {
 export async function toggleRecord(): Promise<void> {
   await ensureAudio();
   const s = store.get();
+  if (s.playWaiting) {
+    cancelWaiting();
+    return;
+  }
   if (s.recording) {
     store.set({ recording: false });
     engine.setRecording(false);
@@ -932,7 +989,7 @@ export async function toggleRecord(): Promise<void> {
     startRecording();
     return;
   }
-  play(true);
+  playWhenLoaded(true);
 }
 
 export function locate(tick: number): void {

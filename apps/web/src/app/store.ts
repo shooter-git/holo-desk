@@ -80,6 +80,8 @@ export interface AppState {
   mobileTab: MobileTab;
   /** The compact display (a phone, a narrow bar), which has room for one: the time instead of the position. */
   positionTime: boolean;
+  /** Play (or Record) pressed while the song's sounds were still on their way: it starts once they're in. */
+  playWaiting: 'play' | 'record' | null;
 
   tool: Tool;
   grid: keyof typeof DIVISIONS;
@@ -207,6 +209,7 @@ const initial: AppState = {
   synth: null,
   mobileTab: 'tracks',
   positionTime: false,
+  playWaiting: null,
   tool: 'pointer',
   grid: '1/16',
   zoom: 40,

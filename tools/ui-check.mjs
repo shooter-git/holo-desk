@@ -268,6 +268,12 @@ function views(page, phone, finger) {
     const tab = (label) => [label, () => page.locator('.tabbar button', { hasText: label }).first().tap(), null];
     return [
       ['Tracks', null, null],
+      // the headers, pulled out of the rail over the lanes
+      [
+        'Track headers',
+        () => press(control(page, 'Track headers')),
+        () => press(control(page, 'Put the track headers away')),
+      ],
       tab('Mixer'),
       tab('Piano Roll'),
       tab('Play'),

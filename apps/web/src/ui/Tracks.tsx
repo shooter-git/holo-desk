@@ -27,6 +27,8 @@ import {
   Mic,
   MousePointer2,
   Music,
+  PanelLeftClose,
+  PanelLeftOpen,
   Pencil,
   Piano,
   Plus,
@@ -36,6 +38,7 @@ import {
 } from 'lucide-react';
 import {
   memo,
+  type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
   useEffect,
   useLayoutEffect,
@@ -47,10 +50,13 @@ import {
   addAudioTrack,
   addTrack,
   apply,
+  beginGesture,
   createRegionAt,
   deleteSelection,
   deleteTrack,
+  endGesture,
   findRegion,
+  gestureChange,
   importAudio,
   liveTakes,
   locate,
@@ -80,6 +86,7 @@ import {
   pointAt,
   targetOf,
 } from './automation.ts';
+import { Fader, formatDb } from './controls.tsx';
 import { alpha, movePlayhead, prepare, roundRect, useFrame, useSize } from './frame.ts';
 import {
   capture,
@@ -93,6 +100,7 @@ import {
 } from './gesture.ts';
 import { type MenuEntry, openMenu, openMenuAt } from './menu.tsx';
 import { drawMiniNotes, pitchRange } from './mini-notes.ts';
+import { DRAWER, PEEK_SWIPE, pinchAxis as pinchAxisOf, pinchedRow, pulledOut, RAIL, railRow } from './rail.ts';
 import { pressToReorder, type ReorderList } from './reorder.ts';
 import { rulerHold } from './ruler.ts';
 import { DOUBLE_TAP_MS, gridStep, revealBy, TouchPan, Viewport, WHEEL_ZOOM, ZOOM } from './view.ts';
@@ -248,14 +256,27 @@ const LIST_TAIL = 60;
  * buttons (4 + 32), with room above and below so a row's buttons don't meet the next track's name.
  */
 const TOUCH_ROW = 78;
-/**
- * And on a phone held sideways, where height is what's short: the buttons sit beside the name (the
- * header is wider for them), so a row is as tall as its buttons and half again as many tracks show.
- */
-const TOUCH_ROW_SIDEWAYS = 52;
-/** A track's height as drawn: rows are taller under a finger. */
-const rowHeight = (h: number) =>
-  isTouch() ? Math.max(layoutNow() === 'phone-landscape' ? TOUCH_ROW_SIDEWAYS : TOUCH_ROW, h) : h;
+/** A rail cell this tall has room for its marks under the icon (shorter, they go beside it as dots). */
+const RAIL_CELL_TALL = 52;
+/** A track's height as drawn: rows are taller under a finger, and a phone's are the rail's (rail.ts). */
+const rowHeight = (h: number) => {
+  if (isPhone(layoutNow())) return railRow(h);
+  return isTouch() ? Math.max(TOUCH_ROW, h) : h;
+};
+
+/** The drawer opened or put away (and a track's buttons pulled out of the rail put back with it). */
+function setDrawer(open: boolean): void {
+  const s = store.get();
+  if (s.trackDrawer !== open || s.trackPeek) store.set({ trackDrawer: open, trackPeek: null });
+}
+
+/** A finger drawn `dx` to the right from a track's place on the rail: its buttons, then the drawer. */
+function pullOut(id: string, dx: number): void {
+  const s = store.get();
+  const what = pulledOut(dx);
+  if (what === 'drawer') setDrawer(true);
+  else if (what === 'buttons' && !s.trackDrawer && s.trackPeek !== id) store.set({ trackPeek: id });
+}
 /** The track list with every track in it. */
 const listHeight = (tracks: number, row: number) => tracks * row + LIST_TAIL;
 /** The track list on screen (there's one tracks area at a time), for spareTrackRoom. */
@@ -285,11 +306,13 @@ interface TrackRowProps {
   selected: boolean;
   /** Phones leave no room for the icon beside the name and its buttons. */
   phone: boolean;
+  /** A phone's header as a cell of the rail, or a row of the drawer pulled out over the lanes. */
+  fold: 'rail' | 'drawer' | null;
   /** How far the list can scroll (a finger dragging a header scrolls it). */
   maxScrollY: number;
 }
 
-const TrackRow = memo(function TrackRow({ track, top, height, selected, phone, maxScrollY }: TrackRowProps) {
+const TrackRow = memo(function TrackRow({ track, top, height, selected, phone, fold, maxScrollY }: TrackRowProps) {
   const [renaming, setRenaming] = useState(false);
   const automationView = useApp((s) => s.automationView);
   const show = useApp((s) => s.show);
@@ -323,7 +346,7 @@ const TrackRow = memo(function TrackRow({ track, top, height, selected, phone, m
   // a mouse selects on the press and drags the track to a new place; a finger scrolls the list,
   // selects on a tap, and when held opens the menu and can then drag the track
   const fingerDown = useRef(false);
-  const onDown = (e: ReactPointerEvent<HTMLDivElement>) => {
+  const onDown = (e: ReactPointerEvent<HTMLElement>) => {
     const row = e.currentTarget;
     const list: ReorderList = {
       item: row,
@@ -344,9 +367,21 @@ const TrackRow = memo(function TrackRow({ track, top, height, selected, phone, m
     // a finger that catches the list coasting from a flick stops it, and isn't a tap
     const caught = tracksView.stopFling();
     const pan = new TouchPan(tracksView, 'y', () => maxScrollY, e);
+    // on a phone's rail, a finger drawn to the right pulls this track's buttons out beside it, and
+    // drawn further, every track's header; in the drawer, drawn back to the left it puts them away.
+    // Up and down still scrolls the list: the way the finger first goes decides
+    const x0 = e.clientX;
+    const y0 = e.clientY;
+    let across: boolean | null = fold ? null : false;
     pressToReorder(e, {
       ...list,
-      onSwipe: (ev) => pan.move(ev),
+      onSwipe: (ev) => {
+        const dx = ev.clientX - x0;
+        if (across === null) across = Math.abs(dx) > Math.abs(ev.clientY - y0);
+        if (!across) pan.move(ev);
+        else if (fold === 'rail') pullOut(track.id, dx);
+        else if (dx <= -PEEK_SWIPE * 2) setDrawer(false);
+      },
       onTap: () => {
         if (!caught) selectTrack(track.id);
       },
@@ -360,21 +395,53 @@ const TrackRow = memo(function TrackRow({ track, top, height, selected, phone, m
       },
     });
   };
+  const onContextMenu = (e: ReactMouseEvent) => {
+    e.preventDefault();
+    // a finger's long press has its own menu (some browsers raise this event for it too)
+    if (!fingerDown.current) menu(e.clientX, e.clientY);
+  };
+  const swatch = (
+    <div
+      className="swatch"
+      style={{ background: track.color, boxShadow: selected ? `0 0 10px ${track.color}` : undefined }}
+    />
+  );
+  if (fold === 'rail') {
+    const on = [track.channel.mute && 'muted', track.channel.solo && 'soloed', track.armed && 'armed'];
+    return (
+      <button
+        type="button"
+        className={`track-row rail-cell${selected ? ' selected' : ''}${height < RAIL_CELL_TALL ? ' short' : ''}`}
+        style={{ top, height }}
+        title={track.name}
+        aria-label={[track.name, ...on.filter(Boolean)].join(', ')}
+        onPointerDown={onDown}
+        // (a press selects it already: the click that counts is the keyboard's, which has no pointer)
+        onClick={(e) => {
+          if (e.detail === 0) selectTrack(track.id);
+        }}
+        onContextMenu={onContextMenu}
+      >
+        {swatch}
+        <span className="rail-icon" style={{ color: track.color }}>
+          {track.kind === 'audio' ? <Mic /> : instrumentIcon(track.instrument)}
+        </span>
+        <span className="rail-marks" aria-hidden="true">
+          {track.channel.mute && <span className="mute">M</span>}
+          {track.channel.solo && <span className="solo">S</span>}
+          {track.armed && <span className="rec">R</span>}
+        </span>
+      </button>
+    );
+  }
   return (
     <div
       className={`track-row${selected ? ' selected' : ''}${show.trackIcons && !phone ? '' : ' no-icon'}`}
       style={{ top, height }}
       onPointerDown={onDown}
-      onContextMenu={(e) => {
-        e.preventDefault();
-        // a finger's long press has its own menu (some browsers raise this event for it too)
-        if (!fingerDown.current) menu(e.clientX, e.clientY);
-      }}
+      onContextMenu={onContextMenu}
     >
-      <div
-        className="swatch"
-        style={{ background: track.color, boxShadow: selected ? `0 0 10px ${track.color}` : undefined }}
-      />
+      {swatch}
       {show.trackIcons && !phone && (
         <div className="ico" style={{ color: track.color }}>
           {track.kind === 'audio' ? <Mic /> : instrumentIcon(track.instrument)}
@@ -423,65 +490,140 @@ const TrackRow = memo(function TrackRow({ track, top, height, selected, phone, m
       ) : !show.trackButtons ? (
         <span />
       ) : (
-        <div className="chips" onPointerDown={(e) => e.stopPropagation()}>
-          <button
-            type="button"
-            className={`chip mute${track.channel.mute ? ' on' : ''}`}
-            title="Mute (M)"
-            aria-pressed={track.channel.mute}
-            onClick={() => updateChannel(track.id, { mute: !track.channel.mute }, 'Mute')}
-          >
-            M
-          </button>
-          <button
-            type="button"
-            className={`chip solo${track.channel.solo ? ' on' : ''}`}
-            title="Solo (S)"
-            aria-pressed={track.channel.solo}
-            onClick={() => updateChannel(track.id, { solo: !track.channel.solo }, 'Solo')}
-          >
-            S
-          </button>
-          <button
-            type="button"
-            className={`chip rec${track.armed ? ' on' : ''}`}
-            title={
-              track.kind === 'audio'
-                ? 'Record-arm: the input is recorded here'
-                : 'Record-arm: live MIDI is recorded here'
-            }
-            aria-pressed={track.armed}
-            onClick={() => updateTrack(track.id, { armed: !track.armed }, 'Arm')}
-          >
-            R
-          </button>
-          {track.kind === 'audio' && (
-            <button
-              type="button"
-              className={`chip mon${track.audioInput?.monitor ? ' on' : ''}`}
-              title="Input monitoring: hear the input through the track (wear headphones)"
-              aria-pressed={!!track.audioInput?.monitor}
-              onClick={() =>
-                updateTrack(
-                  track.id,
-                  {
-                    audioInput: {
-                      ...(track.audioInput ?? { input: 0, channels: 1, monitor: false }),
-                      monitor: !track.audioInput?.monitor,
-                    },
-                  },
-                  'Input Monitoring',
-                )
-              }
-            >
-              <Headphones />
-            </button>
-          )}
-        </div>
+        <TrackButtons track={track} />
       )}
     </div>
   );
 });
+
+/** A track's mute, solo and record buttons (and an audio track's monitoring). */
+function TrackButtons({ track }: { track: Track }) {
+  return (
+    <div className="chips" onPointerDown={(e) => e.stopPropagation()}>
+      <button
+        type="button"
+        className={`chip mute${track.channel.mute ? ' on' : ''}`}
+        title="Mute (M)"
+        aria-pressed={track.channel.mute}
+        onClick={() => updateChannel(track.id, { mute: !track.channel.mute }, 'Mute')}
+      >
+        M
+      </button>
+      <button
+        type="button"
+        className={`chip solo${track.channel.solo ? ' on' : ''}`}
+        title="Solo (S)"
+        aria-pressed={track.channel.solo}
+        onClick={() => updateChannel(track.id, { solo: !track.channel.solo }, 'Solo')}
+      >
+        S
+      </button>
+      <button
+        type="button"
+        className={`chip rec${track.armed ? ' on' : ''}`}
+        title={
+          track.kind === 'audio' ? 'Record-arm: the input is recorded here' : 'Record-arm: live MIDI is recorded here'
+        }
+        aria-pressed={track.armed}
+        onClick={() => updateTrack(track.id, { armed: !track.armed }, 'Arm')}
+      >
+        R
+      </button>
+      {track.kind === 'audio' && (
+        <button
+          type="button"
+          className={`chip mon${track.audioInput?.monitor ? ' on' : ''}`}
+          title="Input monitoring: hear the input through the track (wear headphones)"
+          aria-pressed={!!track.audioInput?.monitor}
+          onClick={() =>
+            updateTrack(
+              track.id,
+              {
+                audioInput: {
+                  ...(track.audioInput ?? { input: 0, channels: 1, monitor: false }),
+                  monitor: !track.audioInput?.monitor,
+                },
+              },
+              'Input Monitoring',
+            )
+          }
+        >
+          <Headphones />
+        </button>
+      )}
+    </div>
+  );
+}
+
+/**
+ * A track's buttons pulled out of a phone's rail beside its lane, by a finger drawn to the right:
+ * mute or solo another track without selecting it (which would send the keyboard there too). A
+ * press anywhere else puts them back.
+ */
+function RailPeek({ track, top, height }: { track: Track; top: number; height: number }) {
+  return (
+    <>
+      <div
+        className="rail-peek-catch"
+        onPointerDown={(e) => {
+          e.preventDefault();
+          store.set({ trackPeek: null });
+        }}
+      />
+      <div
+        className="rail-peek"
+        style={{ ['--row-top' as string]: `${top}px`, height, ['--c' as string]: track.color }}
+        onPointerDown={(e) => {
+          // drawn back to the left, they go away
+          const x0 = e.clientX;
+          const back = (ev: PointerEvent) => {
+            if (x0 - ev.clientX > PEEK_SWIPE) store.set({ trackPeek: null });
+          };
+          window.addEventListener('pointermove', back);
+          window.addEventListener('pointerup', () => window.removeEventListener('pointermove', back), { once: true });
+        }}
+      >
+        <span className="name">{track.name}</span>
+        <TrackButtons track={track} />
+      </div>
+    </>
+  );
+}
+
+/**
+ * The selected track under the lanes, on a phone held upright: its buttons and its volume, at hand
+ * while the headers are folded to the rail (and as the track the keyboard plays, the one most used).
+ */
+function TrackDock({ track }: { track: Track }) {
+  const box = useRef<HTMLDivElement>(null);
+  const size = useSize(box);
+  return (
+    <section className="track-dock" aria-label={`${track.name}, the selected track`}>
+      <div className="swatch" style={{ background: track.color }} />
+      <div className="dock-name">
+        <div className="name" title={track.name}>
+          {track.name}
+        </div>
+        <div className="sub">{track.kind === 'audio' ? inputLabel(track) : instrumentLabel(track.instrument)}</div>
+      </div>
+      <TrackButtons track={track} />
+      <div className="dock-volume" ref={box}>
+        {size.w > 60 && (
+          <Fader
+            horizontal
+            length={size.w}
+            db={track.channel.volume}
+            label={`${track.name} volume`}
+            onBegin={() => beginGesture('Volume')}
+            onEnd={endGesture}
+            onChange={(volume) => gestureChange([{ op: 'updateChannel', target: track.id, patch: { volume } }])}
+          />
+        )}
+      </div>
+      <span className="db-readout">{formatDb(track.channel.volume)}</span>
+    </section>
+  );
+}
 
 // ---- drawing ----
 
@@ -498,6 +640,8 @@ interface Draw {
   drag: DragPreview | null;
   /** The automation view: each track's chosen setting, and a lane being dragged. */
   automation: { params: Record<string, string>; preview: LanePreview | null } | null;
+  /** A phone's rail has no room for the names: each lane carries its own (drawLaneNames). */
+  names: boolean;
 }
 
 interface RegionPreview {
@@ -623,6 +767,8 @@ function drawTimeline(ctx: CanvasRenderingContext2D, d: Draw): void {
     }
   });
 
+  if (d.names) drawLaneNames(ctx, project, trackHeight, w, h);
+
   if (d.automation) drawLanes(ctx, project, v, trackHeight, w, h, d.automation.params, d.automation.preview);
 
   if (d.drag?.marquee) {
@@ -638,6 +784,39 @@ function drawTimeline(ctx: CanvasRenderingContext2D, d: Draw): void {
       Math.abs(mq.y1 - mq.y0),
     );
   }
+}
+
+const NAME_FONT = '600 11.5px Inter Variable, system-ui, sans-serif';
+
+/**
+ * Each track's name on its lane, for a phone whose headers are folded to the rail: at the lane's
+ * left edge, under the regions' name bands, where it stays as the song scrolls by (a region's own
+ * name goes off the edge with the region's start). A muted track's lane is dimmed.
+ */
+function drawLaneNames(ctx: CanvasRenderingContext2D, project: Project, trackHeight: number, w: number, h: number) {
+  const v = tracksView;
+  const room = Math.min(220, w * 0.6);
+  const band = 2 + Math.min(15, (trackHeight - 5) * 0.32) + 2;
+  ctx.font = NAME_FONT;
+  ctx.textBaseline = 'middle';
+  project.tracks.forEach((t, i) => {
+    const y = i * trackHeight - v.y;
+    if (y > h || y + trackHeight < 0) return;
+    if (t.channel.mute) {
+      ctx.fillStyle = 'rgba(18, 20, 24, 0.62)';
+      ctx.fillRect(0, y, w, trackHeight - 1);
+    }
+    let name = t.name;
+    while (name.length > 1 && ctx.measureText(name).width > room) name = `${name.slice(0, -2)}…`;
+    const top = y + band;
+    ctx.fillStyle = 'rgba(11, 13, 16, 0.78)';
+    roundRect(ctx, 5, top, ctx.measureText(name).width + 14, 19, 5);
+    ctx.fill();
+    ctx.fillStyle = t.color;
+    ctx.fillRect(5, top, 3, 19);
+    ctx.fillStyle = t.channel.mute ? '#6d7584' : '#e4e8ef';
+    ctx.fillText(name, 13, top + 10);
+  });
 }
 
 /** What's being recorded right now, drawn on the overlay so the timeline needn't redraw per frame. */
@@ -872,6 +1051,17 @@ export function TracksArea() {
   const autoParam = useApp((s) => s.autoParam);
   const show = useApp((s) => s.show);
   const follow = useApp((s) => s.follow);
+  // a phone folds the headers to a rail, pulled out as a drawer (and one track's buttons beside it)
+  const drawer = useApp((s) => s.trackDrawer) && phone;
+  const peek = useApp((s) => (phone && !s.trackDrawer ? s.trackPeek : null));
+  const fold = phone ? (drawer ? 'drawer' : 'rail') : null;
+  // (a track's buttons pulled out of the rail are put back when the tracks go: another tab, say)
+  useEffect(
+    () => () => {
+      if (store.get().trackPeek) store.set({ trackPeek: null });
+    },
+    [],
+  );
   const lanePreview = useRef<LanePreview | null>(null);
   const laneTip = useRef<HTMLDivElement>(null);
 
@@ -895,6 +1085,10 @@ export function TracksArea() {
   /** What the next gesture does if it turns out to be a tap (a finger's second tap on a region), set as it starts. */
   const tapAt = useRef<(() => void) | null>(null);
   const pinch = useRef(new Pinch());
+  /** Which way two fingers on a phone went: across zooms in time, up and down sets the rows' height. */
+  const pinchAxis = useRef<'x' | 'y' | null>(null);
+  /** The rows' height and the fingers' span up and down as an up-and-down pinch began. */
+  const pinchRows = useRef<{ span: number; row: number } | null>(null);
   const lastTap = useRef(0);
   const zoomTimer = useRef(0);
   const playhead = useRef<HTMLDivElement>(null);
@@ -912,6 +1106,8 @@ export function TracksArea() {
   // everything the timeline and ruler read: a change to any of it redraws them. Of the song, that's
   // what's drawn (drawnOf): a fader, a knob or a mute moving redraws nothing here
   const drawnNow = project ? drawnOf(project, automationView) : [];
+  // (a phone's lanes show what's muted, dimmed)
+  if (phone && project && !automationView) for (const t of project.tracks) drawnNow.push(t.channel.mute);
   const drawnBefore = useRef<unknown[]>([]);
   if (drawnNow.length !== drawnBefore.current.length || drawnNow.some((x, i) => x !== drawnBefore.current[i])) {
     drawnBefore.current = drawnNow;
@@ -920,7 +1116,7 @@ export function TracksArea() {
   // biome-ignore lint/correctness/useExhaustiveDependencies: the list is what drawing reads, not what the effect touches
   useEffect(() => {
     dirty.current = true;
-  }, [selectedTrack, selectedRegions, trackHeight, show, automationView, autoParam, size, rulerSize]);
+  }, [selectedTrack, selectedRegions, trackHeight, show, automationView, autoParam, size, rulerSize, phone]);
 
   // waveforms arrive after the regions
   useEffect(
@@ -1018,6 +1214,7 @@ export function TracksArea() {
           h: size.h,
           drag: drag.current,
           automation: s.automationView ? { params: s.autoParam, preview: lanePreview.current } : null,
+          names: phone,
         });
       const rctx = prepare(rulerCanvas.current, rulerSize.w, rulerSize.h, true);
       if (rctx) drawRuler(rctx, p, cycle, s.show.markers, rulerSize.w, rulerSize.h);
@@ -1624,60 +1821,99 @@ export function TracksArea() {
     persistZoom();
   };
 
-  // (sideways, a phone's header holds the name and the buttons side by side)
-  const headerWidth = layout === 'phone-landscape' ? 244 : phone ? 176 : layout === 'tablet' ? 210 : 230;
+  /** Two fingers spread up and down `span` apart, `cy` down the lanes: the rows grow with them. */
+  const rowsBy = (span: number, cy: number) => {
+    const s = store.get();
+    if (!s.project) return;
+    if (!pinchRows.current) {
+      pinchRows.current = { span, row: rowHeight(s.trackHeight) };
+      return;
+    }
+    const old = rowHeight(s.trackHeight);
+    const row = pinchedRow(pinchRows.current.row, pinchRows.current.span, span);
+    if (row === old) return;
+    // the row between the fingers stays between them
+    const y = ((tracksView.y + cy) * row) / old - cy;
+    store.set({ trackHeight: row });
+    tracksView.scrollBy(0, y - tracksView.y, Math.max(0, listHeight(s.project.tracks.length, row) - size.h));
+  };
+
+  const headerWidth = phone ? RAIL : layout === 'tablet' ? 210 : 230;
   const listMax = maxScrollY(project);
+  const peekIndex = peek ? project.tracks.findIndex((t) => t.id === peek) : -1;
+  const peekTrack = project.tracks[peekIndex];
+  const docked = layout === 'phone-portrait' ? project.tracks.find((t) => t.id === selectedTrack) : undefined;
 
   return (
-    <div className="tracks" style={{ ['--headers' as string]: `${headerWidth}px` }}>
+    <div
+      className={`tracks${phone ? ' rail' : ''}${drawer ? ' drawer-open' : ''}${docked ? ' docked' : ''}`}
+      style={{ ['--headers' as string]: `${headerWidth}px`, ['--drawer' as string]: `${DRAWER}px` }}
+    >
       <div className="tracks-toolbar">
-        <button
-          type="button"
-          className="btn icon"
-          title="New track (Alt Ctrl N)"
-          onClick={(e) => openMenuAt(e.currentTarget, newTrackMenu())}
-        >
-          <Plus />
-        </button>
-        {!phone && (
-          <div className="seg tool-seg">
-            {(
-              [
-                ['pointer', <MousePointer2 key="p" />, 'Pointer'],
-                ['pencil', <Pencil key="c" />, 'Pencil: click to make a region'],
-                ['eraser', <Eraser key="e" />, 'Eraser'],
-              ] as const
-            ).map(([t, icon, title]) => (
-              <button
-                key={t}
-                type="button"
-                className={`btn icon${tool === t ? ' on' : ''}`}
-                title={title}
-                onClick={() => store.set({ tool: t })}
-              >
-                {icon}
-              </button>
-            ))}
-          </div>
+        {phone && (
+          <button
+            type="button"
+            className={`btn icon${drawer ? ' on' : ''}`}
+            title={drawer ? 'Put the track headers away' : 'Track headers: names, mute, solo and record'}
+            aria-expanded={drawer}
+            onClick={() => setDrawer(!drawer)}
+          >
+            {drawer ? <PanelLeftClose /> : <PanelLeftOpen />}
+          </button>
         )}
-        <button
-          type="button"
-          className={`btn icon${automationView ? ' on' : ''}`}
-          style={
-            automationView ? { background: 'linear-gradient(180deg, #ffe08a, #ffd166)', color: '#1c1505' } : undefined
-          }
-          title="Automation (A): draw how volume, pan, sends and plugins move"
-          onClick={() => store.set({ automationView: !automationView })}
-        >
-          <Activity />
-        </button>
-        <span className="grow" />
-        <button type="button" className="btn ghost icon" title="Zoom out (Ctrl wheel)" onClick={() => zoomBy(0.7)}>
-          <ZoomOut />
-        </button>
-        <button type="button" className="btn ghost icon" title="Zoom in" onClick={() => zoomBy(1.4)}>
-          <ZoomIn />
-        </button>
+        {(!phone || drawer) && (
+          <>
+            <button
+              type="button"
+              className="btn icon"
+              title="New track (Alt Ctrl N)"
+              onClick={(e) => openMenuAt(e.currentTarget, newTrackMenu())}
+            >
+              <Plus />
+            </button>
+            {!phone && (
+              <div className="seg tool-seg">
+                {(
+                  [
+                    ['pointer', <MousePointer2 key="p" />, 'Pointer'],
+                    ['pencil', <Pencil key="c" />, 'Pencil: click to make a region'],
+                    ['eraser', <Eraser key="e" />, 'Eraser'],
+                  ] as const
+                ).map(([t, icon, title]) => (
+                  <button
+                    key={t}
+                    type="button"
+                    className={`btn icon${tool === t ? ' on' : ''}`}
+                    title={title}
+                    onClick={() => store.set({ tool: t })}
+                  >
+                    {icon}
+                  </button>
+                ))}
+              </div>
+            )}
+            <button
+              type="button"
+              className={`btn icon${automationView ? ' on' : ''}`}
+              style={
+                automationView
+                  ? { background: 'linear-gradient(180deg, #ffe08a, #ffd166)', color: '#1c1505' }
+                  : undefined
+              }
+              title="Automation (A): draw how volume, pan, sends and plugins move"
+              onClick={() => store.set({ automationView: !automationView })}
+            >
+              <Activity />
+            </button>
+            <span className="grow" />
+            <button type="button" className="btn ghost icon" title="Zoom out (Ctrl wheel)" onClick={() => zoomBy(0.7)}>
+              <ZoomOut />
+            </button>
+            <button type="button" className="btn ghost icon" title="Zoom in" onClick={() => zoomBy(1.4)}>
+              <ZoomIn />
+            </button>
+          </>
+        )}
       </div>
       <div
         className="ruler"
@@ -1716,16 +1952,19 @@ export function TracksArea() {
               height={trackHeight}
               selected={t.id === selectedTrack}
               phone={phone}
+              fold={fold}
               maxScrollY={listMax}
             />
           ))}
           <button
             type="button"
-            className="btn ghost"
-            style={{ position: 'absolute', left: 8, top: project.tracks.length * trackHeight + 8 }}
+            className={`btn ghost new-track${fold === 'rail' ? ' on-rail' : ''}`}
+            title="New track"
+            aria-label={fold === 'rail' ? 'New track' : undefined}
+            style={{ top: project.tracks.length * trackHeight + 8 }}
             onClick={(e) => openMenuAt(e.currentTarget, newTrackMenu())}
           >
-            <Plus /> New track
+            <Plus /> {fold !== 'rail' && 'New track'}
           </button>
         </div>
       </div>
@@ -1745,7 +1984,11 @@ export function TracksArea() {
           const z = pinch.current.move(e);
           if (z) {
             const rect = e.currentTarget.getBoundingClientRect();
-            tracksView.zoomAt(z.factor, z.x - rect.left, ...ZOOM.tracks);
+            // on a phone, fingers one above the other set the rows' height (nothing on them needs
+            // them tall); side by side, as everywhere, they zoom in time
+            if (pinchAxis.current === null) pinchAxis.current = phone ? pinchAxisOf(z.dx, z.dy) : 'x';
+            if (pinchAxis.current === 'y') rowsBy(z.dy, z.y - rect.top);
+            else tracksView.zoomAt(z.factor, z.x - rect.left, ...ZOOM.tracks);
           } else if (e.pointerType !== 'touch') {
             const rect = e.currentTarget.getBoundingClientRect();
             const h = hit(e.clientX - rect.left, e.clientY - rect.top);
@@ -1765,11 +2008,17 @@ export function TracksArea() {
           if (pinch.current.up(e)) {
             // the fingers lifting are not a tap, and the zoom they settled on is kept
             lastTap.current = 0;
-            persistZoom();
+            if (pinchAxis.current === 'x') persistZoom();
+            pinchAxis.current = null;
+            pinchRows.current = null;
           }
         }}
         onPointerCancel={(e) => {
-          if (pinch.current.up(e)) lastTap.current = 0;
+          if (pinch.current.up(e)) {
+            lastTap.current = 0;
+            pinchAxis.current = null;
+            pinchRows.current = null;
+          }
         }}
         onContextMenu={(e) => e.preventDefault()}
         onDragOver={(e) => {
@@ -1789,6 +2038,16 @@ export function TracksArea() {
       >
         <canvas ref={canvas} />
         <canvas ref={overlay} style={{ pointerEvents: 'none' }} />
+        {drawer && (
+          // the lanes under the drawer: a press here puts it away, and goes no further
+          <div
+            className="drawer-scrim"
+            onPointerDown={(e) => {
+              e.stopPropagation();
+              setDrawer(false);
+            }}
+          />
+        )}
         <div ref={playhead} className="playhead" />
         <div ref={laneTip} className="lane-tip" />
         {project.tracks.every((t) => t.regions.length === 0) && (
@@ -1803,6 +2062,8 @@ export function TracksArea() {
           </div>
         )}
       </div>
+      {peekTrack && <RailPeek track={peekTrack} top={peekIndex * trackHeight - tracksView.y} height={trackHeight} />}
+      {docked && <TrackDock track={docked} />}
     </div>
   );
 }

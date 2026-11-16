@@ -461,7 +461,7 @@ export const Strip = memo(function Strip({ id, kind, name, color, channel, track
       <div className="strip-fader" ref={faderBox}>
         <Fader
           db={channel.volume}
-          height={faderHeight}
+          length={faderHeight}
           label={`${name} volume`}
           onBegin={() => beginGesture('Volume')}
           onEnd={endGesture}

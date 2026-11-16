@@ -105,6 +105,10 @@ export interface AppState {
   zoom: number;
   pianoZoom: number;
   trackHeight: number;
+  /** A phone's track headers pulled out over the lanes, from the rail they fold to. */
+  trackDrawer: boolean;
+  /** The track whose buttons a finger pulled out of the phone's rail, beside its lane. */
+  trackPeek: string | null;
   keyHeight: number;
   follow: boolean;
   /** Automation lanes over the tracks (Logic's A), and the setting each track shows. */
@@ -237,6 +241,8 @@ const initial: AppState = {
   zoom: 40,
   pianoZoom: 90,
   trackHeight: 56,
+  trackDrawer: false,
+  trackPeek: null,
   keyHeight: 14,
   follow: true,
   lane: 'velocity',
@@ -292,6 +298,7 @@ const REMEMBER: (keyof AppState)[] = [
   'zoom',
   'pianoZoom',
   'trackHeight',
+  'trackDrawer',
   'keyHeight',
   'follow',
   'metronome',

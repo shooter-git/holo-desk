@@ -710,7 +710,7 @@ function MixerTab() {
           <div className="fader-row">
             <Fader
               db={s.master.volume}
-              height={height}
+              length={height}
               onBegin={() => command('channel', { target: 'master', phase: 'begin' })}
               onChange={(volume) => command('channel', { target: 'master', phase: 'move', volume })}
               onEnd={() => command('channel', { target: 'master', phase: 'end' })}
@@ -738,7 +738,7 @@ function MiniStrip({ track, height, selected }: { track: StudioTrack; height: nu
       <div className="fader-row">
         <Fader
           db={db}
-          height={height}
+          length={height}
           onBegin={() => {
             hold.begin();
             command('channel', { target: track.id, phase: 'begin' });

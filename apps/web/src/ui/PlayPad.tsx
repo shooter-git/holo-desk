@@ -1,17 +1,19 @@
 /**
- * Play with your fingers: a keyboard (slide for glissandi, touch higher on a key to play harder)
- * and General MIDI drum pads. They send MIDI like any device, so they play, record and reach the AI
- * the same way.
+ * Play with your fingers: a keyboard (slide for glissandi, touch higher on a key to play harder; on
+ * a phone held upright, two rows of keys if you like) and General MIDI drum pads. They send MIDI
+ * like any device, so they play, record and reach the AI the same way.
  */
 import { type Instrument, type MiddleC, noteName } from '@holo/session';
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { Fragment, type PointerEvent as ReactPointerEvent, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { ensureAudio } from '../app/actions.ts';
+import { useLayout } from '../app/layout.ts';
 import { sendMidi } from '../app/live.ts';
 import { toast, useApp } from '../app/store.ts';
 import { midi } from '../audio/midi.ts';
 import { type InstrumentMap, instrumentManifest } from '../audio/pack-files.ts';
 import { useMedia, useSize } from './frame.ts';
 import { padManifestKey, padsFor, padTrack } from './pads.ts';
+import { BLACK, noteAt, topOctave, upperOctave, velocityAt, whiteKeys } from './play-keys.ts';
 
 const PORT = 'On-screen';
 /** The pads' channel (General MIDI's drums). */
@@ -20,16 +22,11 @@ const PAD_CHANNEL = 10;
 const WIDE_PADS = '(orientation: landscape) and (max-height: 540px)';
 /** The highest octave the chromatic pads start on (their sixteen notes stay within MIDI). */
 const PAD_TOP_OCTAVE = 8;
-const BLACK = [1, 3, 6, 8, 10];
-/** Semitones from C of the white keys in an octave. */
-const WHITES = [0, 2, 4, 5, 7, 9, 11];
-
-/** The highest octave whose keyboard of `whiteCount` keys stays within MIDI (G9 is note 127). */
-function topOctave(whiteCount: number): number {
-  const last = whiteCount - 1;
-  const span = 12 * Math.floor(last / 7) + (WHITES[last % 7] ?? 0);
-  return Math.min(7, Math.floor((127 - span) / 12) - 1);
-}
+/**
+ * The height two rows of keys need: each its octave (about 40 px) over 120 px of keys, the least a
+ * keyboard has (app.css).
+ */
+const TWO_ROWS_HEIGHT = 2 * (40 + 120);
 
 /** Where the pads and keys play: this device's own studio, or the studio open on another device. */
 let remote = (() => {
@@ -65,6 +62,15 @@ export function PlayPad({
   const [toStudio, setToStudio] = useState(remote);
   const others = useApp((s) => Math.max(0, s.peers.filter((p) => p.role === 'editor').length - 1));
   const [octave, setOctave] = useState(4);
+  /** The upper row's octave, once it's given one (until then, an octave above the lower row). */
+  const [upper, setUpper] = useState<number | null>(null);
+  const [twoRows, setTwoRows] = useState(() => {
+    try {
+      return localStorage.getItem('holo:play-rows') === '2';
+    } catch {
+      return false;
+    }
+  });
   const ownMiddleC = useApp((s) => s.middleC);
   const ownColor = useApp((s) => s.project?.tracks.find((t) => t.id === s.selectedTrack)?.color ?? '#5cb8ff');
   const middleC = middleCProp ?? ownMiddleC;
@@ -100,6 +106,12 @@ export function PlayPad({
     };
   }, [mapKey, instrument]);
   const wide = useMedia(WIDE_PADS);
+  // Held upright, a phone's keys are far taller than a finger needs: they can stack in two rows, the
+  // upper an octave above the lower until it's given an octave of its own. Each row has its octave
+  // over it there, as the bar has room for the rows switch but not for an octave beside it. (Where
+  // the keys have no height to spare, HO[LO] Remote's on a small phone, they stay as they were.)
+  const stacking = useLayout() === 'phone-portrait' && size.h >= TWO_ROWS_HEIGHT;
+  const two = stacking && twoRows;
 
   const whiteCount = size.w > 900 ? 21 : size.w > 560 ? 14 : 10;
   // a wide keyboard reaches further, so the top octave moves down with the width: a key past 127
@@ -111,27 +123,25 @@ export function PlayPad({
     octave: shownOctave,
     middleC,
   });
-  const whites: number[] = [];
-  for (let n = (shownOctave + 1) * 12; whites.length < whiteCount; n++) if (!BLACK.includes(n % 12)) whites.push(n);
-  const keyW = size.w / whiteCount;
-
-  const noteAt = (x: number, y: number): number | null => {
-    const h = size.h;
-    const wi = Math.floor(x / keyW);
-    const white = whites[wi];
-    if (white === undefined) return null;
-    if (y < h * 0.6) {
-      // a black key's zone takes the edges between white keys
-      const local = x - wi * keyW;
-      const left = white - 1;
-      const right = white + 1;
-      if (local < keyW * 0.3 && BLACK.includes(((left % 12) + 12) % 12)) return left;
-      if (local > keyW * 0.7 && BLACK.includes(right % 12)) return right;
-    }
-    return white;
+  const shownUpper = upperOctave(upper, shownOctave, top);
+  const lower: KeyRow = {
+    id: 'lower',
+    octave: shownOctave,
+    setOctave: (o) => {
+      // (an upper row still following this one stays where it is)
+      if (two && upper === null) setUpper(shownUpper);
+      setOctave(o);
+    },
   };
-
-  const velocityFor = (y: number) => Math.round(40 + 87 * Math.min(1, Math.max(0, 1 - y / size.h)) ** 0.8);
+  const rows: KeyRow[] = two ? [{ id: 'upper', octave: shownUpper, setOctave: setUpper }, lower] : [lower];
+  const pickRows = (on: boolean) => {
+    setTwoRows(on);
+    try {
+      localStorage.setItem('holo:play-rows', on ? '2' : '1');
+    } catch {
+      // remembered for this visit only
+    }
+  };
 
   const light = (n: number, on: boolean) => {
     for (const el of pad.current?.querySelectorAll(`[data-note="${n}"]`) ?? []) {
@@ -152,11 +162,37 @@ export function PlayPad({
     for (const n of lit.current) light(n, true);
   });
 
+  // a finger on the keys, of either row: the rows share what's held, so it's lit and let go alike
+  const fingers: Fingers = {
+    down(id, n, velocity) {
+      wake();
+      if (n === null) return;
+      touches.current.set(id, n);
+      update();
+      play(0x90, n, velocity);
+    },
+    move(id, n, velocity) {
+      const held = touches.current.get(id);
+      if (held === undefined || n === null || n === held) return;
+      play(0x80, held, 0);
+      touches.current.set(id, n);
+      update();
+      play(0x90, n, velocity);
+    },
+    up(id) {
+      const held = touches.current.get(id);
+      touches.current.delete(id);
+      update();
+      if (held !== undefined) play(0x80, held, 0);
+    },
+  };
+
   return (
     <div className="playpad" ref={pad} style={{ ['--pad-color' as string]: color }}>
       <div className="pane-bar">
         <div className="seg">
-          {/* short names: on a phone the bar holds these, where the notes go, and the octave */}
+          {/* short names: on a phone the bar holds these, where the notes go, and the octave (or held
+              upright, how many rows of keys) */}
           <button
             type="button"
             className={`btn${mode === 'keys' ? ' on' : ''}`}
@@ -194,26 +230,37 @@ export function PlayPad({
             {toStudio ? `To the studio${others ? ` (${others})` : ''}` : 'On this device'}
           </button>
         )}
-        <span className="grow" />
-        {(mode === 'keys' || grid.chromatic) && (
+        {mode === 'keys' && stacking ? (
+          <div className="seg rows" role="radiogroup" aria-label="Rows of keys">
+            {/* biome-ignore lint/a11y/useSemanticElements: the studio's segmented buttons, as a radio group */}
+            <button
+              type="button"
+              role="radio"
+              aria-checked={!twoRows}
+              className={`btn tight${twoRows ? '' : ' on'}`}
+              title="One row of keys, as tall as the screen"
+              onClick={() => pickRows(false)}
+            >
+              1 row
+            </button>
+            {/* biome-ignore lint/a11y/useSemanticElements: the studio's segmented buttons, as a radio group */}
+            <button
+              type="button"
+              role="radio"
+              aria-checked={twoRows}
+              className={`btn tight${twoRows ? ' on' : ''}`}
+              title="Two rows of keys, one over the other, each with its own octave"
+              onClick={() => pickRows(true)}
+            >
+              2 rows
+            </button>
+          </div>
+        ) : (
           <>
-            <button
-              type="button"
-              className="btn"
-              aria-label="An octave down"
-              onClick={() => setOctave(Math.max(0, shownOctave - 1))}
-            >
-              −
-            </button>
-            <span className="mono">{noteName((shownOctave + 1) * 12, middleC)}</span>
-            <button
-              type="button"
-              className="btn"
-              aria-label="An octave up"
-              onClick={() => setOctave(Math.min(top, shownOctave + 1))}
-            >
-              +
-            </button>
+            <span className="grow" />
+            {(mode === 'keys' || grid.chromatic) && (
+              <Octave octave={shownOctave} top={top} middleC={middleC} onChange={setOctave} />
+            )}
           </>
         )}
       </div>
@@ -273,72 +320,151 @@ export function PlayPad({
           ))}
         </div>
       ) : (
-        <div
-          ref={box}
-          className="keyboard"
-          onPointerDown={(e) => {
-            if (e.button !== 0) return;
-            e.currentTarget.setPointerCapture(e.pointerId);
-            wake();
-            const r = e.currentTarget.getBoundingClientRect();
-            const hit = noteAt(e.clientX - r.left, e.clientY - r.top);
-            if (hit === null) return;
-            touches.current.set(e.pointerId, hit);
-            update();
-            play(0x90, hit, velocityFor(e.clientY - r.top));
-          }}
-          onPointerMove={(e) => {
-            const held = touches.current.get(e.pointerId);
-            if (held === undefined) return;
-            const r = e.currentTarget.getBoundingClientRect();
-            const hit = noteAt(e.clientX - r.left, e.clientY - r.top);
-            if (hit === null || hit === held) return;
-            play(0x80, held, 0);
-            touches.current.set(e.pointerId, hit);
-            update();
-            play(0x90, hit, velocityFor(e.clientY - r.top));
-          }}
-          onPointerUp={(e) => {
-            const held = touches.current.get(e.pointerId);
-            touches.current.delete(e.pointerId);
-            update();
-            if (held !== undefined) play(0x80, held, 0);
-          }}
-          onPointerCancel={(e) => {
-            const held = touches.current.get(e.pointerId);
-            touches.current.delete(e.pointerId);
-            update();
-            if (held !== undefined) play(0x80, held, 0);
-          }}
-        >
-          {/* the keys are drawn, and named for a screen reader; the surface above takes the touches */}
-          {whites.map((n, i) => (
-            <button
-              key={n}
-              type="button"
-              tabIndex={-1}
-              aria-label={noteName(n, middleC)}
-              className="key white"
-              data-note={n}
-              style={{ left: i * keyW, width: keyW - 2 }}
-            >
-              {n % 12 === 0 ? noteName(n, middleC) : ''}
-            </button>
+        <div ref={box} className="keyboards">
+          {rows.map((row) => (
+            <Fragment key={row.id}>
+              {stacking && (
+                <div className="key-strip">
+                  {two && <span className="label">{row.id === 'upper' ? 'Upper row' : 'Lower row'}</span>}
+                  <span className="grow" />
+                  <Octave
+                    octave={row.octave}
+                    top={top}
+                    middleC={middleC}
+                    row={two ? row.id : undefined}
+                    onChange={row.setOctave}
+                  />
+                </div>
+              )}
+              <Keyboard octave={row.octave} count={whiteCount} width={size.w} middleC={middleC} fingers={fingers} />
+            </Fragment>
           ))}
-          {whites.map((n, i) =>
-            BLACK.includes((n + 1) % 12) && i < whites.length - 1 ? (
-              <button
-                key={`b${n}`}
-                type="button"
-                tabIndex={-1}
-                aria-label={noteName(n + 1, middleC)}
-                className="key black"
-                data-note={n + 1}
-                style={{ left: (i + 1) * keyW - keyW * 0.3, width: keyW * 0.6 }}
-              />
-            ) : null,
-          )}
         </div>
+      )}
+    </div>
+  );
+}
+
+/** A row of keys: which octave it starts on, and how it's changed. */
+interface KeyRow {
+  id: 'upper' | 'lower';
+  octave: number;
+  setOctave: (octave: number) => void;
+}
+
+/** An octave down and up, with the C it starts on between them: the bar's, or a row's own. */
+function Octave({
+  octave,
+  top,
+  middleC,
+  row,
+  onChange,
+}: {
+  octave: number;
+  /** The highest it goes. */
+  top: number;
+  middleC: MiddleC;
+  /** The row it's for, where there are two. */
+  row?: KeyRow['id'];
+  onChange: (octave: number) => void;
+}) {
+  return (
+    <>
+      <button
+        type="button"
+        className="btn"
+        aria-label={row ? `The ${row} row an octave down` : 'An octave down'}
+        onClick={() => onChange(Math.max(0, octave - 1))}
+      >
+        −
+      </button>
+      <span className="mono">{noteName((octave + 1) * 12, middleC)}</span>
+      <button
+        type="button"
+        className="btn"
+        aria-label={row ? `The ${row} row an octave up` : 'An octave up'}
+        onClick={() => onChange(Math.min(top, octave + 1))}
+      >
+        +
+      </button>
+    </>
+  );
+}
+
+/** What a finger does on the keys: comes down on a note (null: off the keys), slides to another, lifts. */
+interface Fingers {
+  down(id: number, note: number | null, velocity: number): void;
+  move(id: number, note: number | null, velocity: number): void;
+  up(id: number): void;
+}
+
+/**
+ * One keyboard: `count` white keys from the C of `octave`, across `width` px. It plays what a finger
+ * does on it, as hard as the finger is high on its own keys, so each of two rows plays as one.
+ */
+function Keyboard({
+  octave,
+  count,
+  width,
+  middleC,
+  fingers,
+}: {
+  octave: number;
+  count: number;
+  width: number;
+  middleC: MiddleC;
+  fingers: Fingers;
+}) {
+  const whites = whiteKeys(octave, count);
+  const keyW = width / count;
+  const at = (e: ReactPointerEvent<HTMLDivElement>) => {
+    const r = e.currentTarget.getBoundingClientRect();
+    const x = e.clientX - r.left;
+    const y = e.clientY - r.top;
+    return [noteAt(whites, x, y, r.width, r.height), velocityAt(y, r.height)] as const;
+  };
+  return (
+    <div
+      className="keyboard"
+      onPointerDown={(e) => {
+        if (e.button !== 0) return;
+        // (a finger keeps to the row it came down on: a glissando doesn't slide into the other)
+        e.currentTarget.setPointerCapture(e.pointerId);
+        fingers.down(e.pointerId, ...at(e));
+      }}
+      onPointerMove={(e) => {
+        // (a mouse passing over the keys plays nothing: only a pointer that came down on them)
+        if (e.currentTarget.hasPointerCapture(e.pointerId)) fingers.move(e.pointerId, ...at(e));
+      }}
+      onPointerUp={(e) => fingers.up(e.pointerId)}
+      onPointerCancel={(e) => fingers.up(e.pointerId)}
+    >
+      {/* the keys are drawn, and named for a screen reader; the surface above takes the touches */}
+      {whites.map((n, i) => (
+        <button
+          key={n}
+          type="button"
+          tabIndex={-1}
+          aria-label={noteName(n, middleC)}
+          className="key white"
+          data-note={n}
+          style={{ left: i * keyW, width: keyW - 2 }}
+        >
+          {n % 12 === 0 ? noteName(n, middleC) : ''}
+        </button>
+      ))}
+      {whites.map((n, i) =>
+        BLACK.includes((n + 1) % 12) && i < whites.length - 1 ? (
+          <button
+            key={`b${n}`}
+            type="button"
+            tabIndex={-1}
+            aria-label={noteName(n + 1, middleC)}
+            className="key black"
+            data-note={n + 1}
+            style={{ left: (i + 1) * keyW - keyW * 0.3, width: keyW * 0.6 }}
+          />
+        ) : null,
       )}
     </div>
   );

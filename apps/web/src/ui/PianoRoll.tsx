@@ -45,8 +45,9 @@ import {
   useWheel,
 } from './gesture.ts';
 import { drawKeys, drawLanes } from './keys.ts';
-import { openMenu } from './menu.tsx';
+import { type MenuEntry, openMenu, openMenuAt } from './menu.tsx';
 import { UndoRedo } from './UndoRedo.tsx';
+import { UprightBar } from './UprightBar.tsx';
 import { DOUBLE_TAP_MS, gridStep, TouchPan, Viewport, WHEEL_ZOOM, ZOOM } from './view.ts';
 
 export const rollView = new Viewport(store.get().pianoZoom);
@@ -1167,62 +1168,113 @@ export function PianoRollBar() {
     rollView.zoomAt(factor, 0, ...ZOOM.roll);
     store.set({ pianoZoom: rollView.zoom });
   };
+  const tools = (
+    <div className="seg">
+      {(
+        [
+          ['pointer', <MousePointer2 key="p" />, 'Pointer: select, move, stretch'],
+          ['pencil', <Pencil key="c" />, 'Pencil: draw notes and controllers'],
+          ['eraser', <Eraser key="e" />, 'Eraser'],
+        ] as const
+      ).map(([t, icon, title]) => (
+        <button
+          key={t}
+          type="button"
+          className={`btn icon${tool === t ? ' on' : ''}`}
+          title={title}
+          onClick={() => store.set({ tool: t })}
+        >
+          {icon}
+        </button>
+      ))}
+    </div>
+  );
+  const gridSelect = (
+    <select
+      className="select"
+      value={grid}
+      title="Grid and note length"
+      aria-label="Grid"
+      onChange={(e) => store.set({ grid: e.target.value as keyof typeof DIVISIONS })}
+    >
+      {Object.keys(DIVISIONS).map((d) => (
+        <option key={d} value={d}>
+          {d}
+        </option>
+      ))}
+    </select>
+  );
+  /** The selected notes' velocity: a set width, or (upright) the one the bar's style gives it. */
+  const velocitySlider = (width?: number) => (
+    <input
+      type="range"
+      min={1}
+      max={127}
+      value={vel ?? 100}
+      aria-label="Velocity of the selected notes"
+      style={width ? { width, flex: 'none', accentColor: '#5cb8ff' } : { accentColor: '#5cb8ff' }}
+      onChange={(e) => {
+        const v = Number(e.target.value);
+        replaceNotes(new Map(selectedNotes.map((n) => [n, { ...n, v }])), 'Velocity');
+      }}
+    />
+  );
+  if (layout === 'phone-portrait') {
+    // Upright, the selected notes' velocity takes the grid's place, and the grid waits behind ⋯ till
+    // they're let go: with both, the bar is wider than the phone. Its value has its name under it, as
+    // the position display's do, rather than beside it. Quantize and zoom are behind ⋯ too (two
+    // fingers zoom as well).
+    const grids = (): MenuEntry[] => [
+      { heading: 'Grid' },
+      ...Object.keys(DIVISIONS).map(
+        (d): MenuEntry => ({
+          label: d,
+          checked: d === grid,
+          focus: d === grid,
+          onSelect: () => store.set({ grid: d }),
+        }),
+      ),
+    ];
+    return (
+      <UprightBar
+        more={(at) => [
+          { label: 'Quantize', hint: 'Q', onSelect: quantizeSelection },
+          ...(vel === null ? [] : [{ label: 'Grid', hint: grid, onSelect: () => openMenuAt(at, grids()) }]),
+          'sep',
+          { label: 'Zoom in', onSelect: () => zoomBy(1.4) },
+          { label: 'Zoom out', onSelect: () => zoomBy(0.7) },
+        ]}
+      >
+        {tools}
+        {vel === null ? (
+          gridSelect
+        ) : (
+          <>
+            {velocitySlider()}
+            <span className="vel-readout">
+              <span className="mono">{vel}</span>
+              <span className="label">vel</span>
+            </span>
+          </>
+        )}
+      </UprightBar>
+    );
+  }
   return (
     <>
       {!phone && <span className="title view-title">Piano Roll</span>}
       <span className="muted" style={{ whiteSpace: 'nowrap' }}>
         {trackName}
       </span>
-      <div className="seg">
-        {(
-          [
-            ['pointer', <MousePointer2 key="p" />, 'Pointer: select, move, stretch'],
-            ['pencil', <Pencil key="c" />, 'Pencil: draw notes and controllers'],
-            ['eraser', <Eraser key="e" />, 'Eraser'],
-          ] as const
-        ).map(([t, icon, title]) => (
-          <button
-            key={t}
-            type="button"
-            className={`btn icon${tool === t ? ' on' : ''}`}
-            title={title}
-            onClick={() => store.set({ tool: t })}
-          >
-            {icon}
-          </button>
-        ))}
-      </div>
-      <select
-        className="select"
-        value={grid}
-        title="Grid and note length"
-        aria-label="Grid"
-        onChange={(e) => store.set({ grid: e.target.value as keyof typeof DIVISIONS })}
-      >
-        {Object.keys(DIVISIONS).map((d) => (
-          <option key={d} value={d}>
-            {d}
-          </option>
-        ))}
-      </select>
+      {tools}
+      {gridSelect}
       <button type="button" className="btn" title="Quantize the selection (Q)" onClick={quantizeSelection}>
         Q
       </button>
       {selectedNotes.length > 0 && (
         <>
           <span className="label">vel</span>
-          <input
-            type="range"
-            min={1}
-            max={127}
-            value={vel ?? 100}
-            aria-label="Velocity of the selected notes"
-            style={{ width: phone ? 64 : narrow ? 80 : 110, flex: 'none', accentColor: '#5cb8ff' }}
-            onChange={(e) => {
-              const v = Number(e.target.value);
-              replaceNotes(new Map(selectedNotes.map((n) => [n, { ...n, v }])), 'Velocity');
-            }}
-          />
+          {velocitySlider(phone ? 64 : narrow ? 80 : 110)}
           <span className="mono" style={{ minWidth: 24 }}>
             {vel}
           </span>

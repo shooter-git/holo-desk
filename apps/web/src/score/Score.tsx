@@ -18,6 +18,7 @@ import { engine } from '../audio/engine.ts';
 import { midi } from '../audio/midi.ts';
 import { useFrame, useSize } from '../ui/frame.ts';
 import { UndoRedo } from '../ui/UndoRedo.tsx';
+import { UprightBar } from '../ui/UprightBar.tsx';
 import { Entry } from './entry.ts';
 import { buildIndex, placeOf, type ScoreIndex, tickAt } from './layout-index.ts';
 import { Palette } from './Palette.tsx';
@@ -57,12 +58,77 @@ export function ScoreBar() {
   const selected = useApp((s) =>
     s.project?.tracks.some((t) => t.id === s.selectedTrack && t.kind === 'instrument') ? s.selectedTrack : null,
   );
-  const phone = isPhone(useLayout());
+  const layout = useLayout();
+  const phone = isPhone(layout);
   const concert = useApp((s) => !!s.project?.score?.concert);
   // (only a song with a transposing part has a choice to make)
   const transposes = useApp((s) => !!s.project && (concert || scoreOf(s.project).parts.some((p) => p.tr)));
   const zoomBy = (f: number) =>
     store.set({ scoreZoom: Math.round(Math.max(ZOOM_RANGE[0], Math.min(ZOOM_RANGE[1], zoom * f))) });
+  const print = () => store.set({ printView: { what: all ? 'score' : (selected ?? 'score') } });
+  const scan = () => store.set({ scanView: { id: null } });
+  const toggleConcert = () => {
+    const p = store.get().project;
+    if (!p) return;
+    const { concert: _, ...rest } = p.score ?? {};
+    const score = concert ? rest : { ...rest, concert: true };
+    apply(
+      [{ op: 'setProject', patch: { score: Object.keys(score).length ? score : null } }],
+      concert ? 'Score: transposed' : 'Score: concert pitch',
+    );
+  };
+  const parts = (
+    <div className="seg">
+      <button
+        type="button"
+        className={`btn${all ? '' : ' on'}`}
+        title="The selected track's part"
+        onClick={() => store.set({ scoreAll: false })}
+      >
+        Part
+      </button>
+      <button
+        type="button"
+        className={`btn${all ? ' on' : ''}`}
+        title="Every track, as a full score"
+        onClick={() => store.set({ scoreAll: true })}
+      >
+        Full score
+      </button>
+    </div>
+  );
+  const writeButton = (
+    <button
+      type="button"
+      className={`btn${write ? ' on' : ''}`}
+      title={
+        write ? 'Stop writing (Esc)' : 'Write notes: type letters, play a MIDI keyboard, or click on a staff (Shift N)'
+      }
+      aria-pressed={write}
+      onClick={() => store.set({ scoreWrite: !write })}
+    >
+      <PenLine />
+      {!phone && 'Write'}
+    </button>
+  );
+  if (layout === 'phone-portrait') {
+    // upright, the bar keeps the part and writing; printing, scanning, concert pitch and the size are behind ⋯
+    return (
+      <UprightBar
+        more={() => [
+          { label: 'Print…', onSelect: print },
+          { label: 'Scan…', onSelect: scan },
+          ...(transposes ? [{ label: 'Concert pitch', checked: concert, onSelect: toggleConcert }] : []),
+          'sep',
+          { label: 'Larger', onSelect: () => zoomBy(1 / 0.85) },
+          { label: 'Smaller', onSelect: () => zoomBy(0.85) },
+        ]}
+      >
+        {parts}
+        {writeButton}
+      </UprightBar>
+    );
+  }
   return (
     <>
       {!phone && <span className="title view-title">Score</span>}
@@ -71,53 +137,13 @@ export function ScoreBar() {
           {trackName}
         </span>
       )}
-      <div className="seg">
-        <button
-          type="button"
-          className={`btn${all ? '' : ' on'}`}
-          title="The selected track's part"
-          onClick={() => store.set({ scoreAll: false })}
-        >
-          Part
-        </button>
-        <button
-          type="button"
-          className={`btn${all ? ' on' : ''}`}
-          title="Every track, as a full score"
-          onClick={() => store.set({ scoreAll: true })}
-        >
-          Full score
-        </button>
-      </div>
-      <button
-        type="button"
-        className={`btn${write ? ' on' : ''}`}
-        title={
-          write
-            ? 'Stop writing (Esc)'
-            : 'Write notes: type letters, play a MIDI keyboard, or click on a staff (Shift N)'
-        }
-        aria-pressed={write}
-        onClick={() => store.set({ scoreWrite: !write })}
-      >
-        <PenLine />
-        {!phone && 'Write'}
-      </button>
-      <button
-        type="button"
-        className="btn"
-        title="Print the score or its parts, or save them as a PDF"
-        onClick={() => store.set({ printView: { what: all ? 'score' : (selected ?? 'score') } })}
-      >
+      {parts}
+      {writeButton}
+      <button type="button" className="btn" title="Print the score or its parts, or save them as a PDF" onClick={print}>
         <Printer />
         {!phone && 'Print'}
       </button>
-      <button
-        type="button"
-        className="btn"
-        title="Scan sheet music: photos or PDFs read into this song"
-        onClick={() => store.set({ scanView: { id: null } })}
-      >
+      <button type="button" className="btn" title="Scan sheet music: photos or PDFs read into this song" onClick={scan}>
         <ScanLine />
         {!phone && 'Scan'}
       </button>
@@ -131,16 +157,7 @@ export function ScoreBar() {
               : 'Transposed: each part as its player reads it. Click for concert pitch'
           }
           aria-pressed={concert}
-          onClick={() => {
-            const p = store.get().project;
-            if (!p) return;
-            const { concert: _, ...rest } = p.score ?? {};
-            const score = concert ? rest : { ...rest, concert: true };
-            apply(
-              [{ op: 'setProject', patch: { score: Object.keys(score).length ? score : null } }],
-              concert ? 'Score: transposed' : 'Score: concert pitch',
-            );
-          }}
+          onClick={toggleConcert}
         >
           {phone ? 'C' : 'Concert'}
         </button>

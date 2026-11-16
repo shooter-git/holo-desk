@@ -1607,19 +1607,22 @@ a.btn {
   scrollbar-width: none;
 }
 
-/* wider than its pane (a phone held upright), the bar scrolls sideways: the edge that has more
-   fades (data-before and data-after are kept by useScrollCue) */
-.pane-bar[data-after] {
+/* wider than its pane, the bar scrolls sideways (on a phone held upright, the tools between the
+   track and ⋯ do): the edge that has more fades (data-before and data-after are kept by useScrollCue) */
+.pane-bar[data-after],
+.upright-tools[data-after] {
   -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 32px), transparent);
   mask-image: linear-gradient(to right, #000 calc(100% - 32px), transparent);
 }
 
-.pane-bar[data-before] {
+.pane-bar[data-before],
+.upright-tools[data-before] {
   -webkit-mask-image: linear-gradient(to right, transparent, #000 32px);
   mask-image: linear-gradient(to right, transparent, #000 32px);
 }
 
-.pane-bar[data-before][data-after] {
+.pane-bar[data-before][data-after],
+.upright-tools[data-before][data-after] {
   -webkit-mask-image: linear-gradient(to right, transparent, #000 32px, #000 calc(100% - 32px), transparent);
   mask-image: linear-gradient(to right, transparent, #000 32px, #000 calc(100% - 32px), transparent);
 }
@@ -1673,6 +1676,103 @@ a.btn {
   .pane-bar .view-title {
     display: none;
   }
+}
+
+/* A phone held upright (UprightBar): the track's chip, the tools, ⋯ at the end. The tools are never
+   wider than what the chip's least and ⋯ leave them (they scroll past that); the chip has the rest,
+   its name cut short where it's too long for it. */
+.pane-bar {
+  --chip-least: 72px;
+}
+
+.pane-bar > .track-chip {
+  flex: 0 1 auto;
+  min-width: var(--chip-least);
+  justify-content: flex-start;
+  gap: 6px;
+  padding: 0 6px 0 7px;
+  font-weight: 600;
+}
+
+.track-chip .swatch {
+  flex: none;
+  width: 5px;
+  height: 18px;
+  border-radius: 3px;
+}
+
+.track-chip .name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.track-chip svg {
+  color: var(--text-2);
+}
+
+/* the narrowest phones (under 360 px): the chip is the track's color alone, so the tools fit beside it */
+@media (max-width: 359px) {
+  .pane-bar {
+    --chip-least: 44px;
+  }
+  .track-chip .name {
+    display: none;
+  }
+}
+
+/* (it reaches 3 px past its tools on either side, a focus ring's width, so the ring isn't clipped:
+   the margins give the room back to the bar's gaps) */
+.upright-tools {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  max-width: calc(100% - var(--chip-least) - var(--control) - 6px);
+  height: 100%;
+  margin: 0 -3px;
+  padding: 0 3px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+}
+
+.upright-tools > * {
+  flex: none;
+}
+
+/* the selected notes' velocity has the grid's place: the slider is as wide as leaves the track's
+   name whole on most phones, and gives way down to what a finger can still set it on; its value has
+   its name under it */
+.upright-tools > input[type="range"] {
+  flex: 0 1 auto;
+  width: 76px;
+  min-width: 56px;
+}
+
+.vel-readout {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  min-width: 26px;
+  line-height: 1.15;
+}
+
+.vel-readout .label {
+  font-size: 9.5px;
+}
+
+.pane-bar > .upright-more {
+  margin-left: auto;
+}
+
+/* the swatch of a track in a menu (the chip's list), as the track row draws it */
+.menu .item .swatch {
+  flex: none;
+  width: 5px;
+  height: 18px;
+  border-radius: 2px;
 }
 
 .roll {

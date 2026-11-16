@@ -17,6 +17,7 @@ import {
   warpOf,
 } from '@holo/session';
 import { describe, expect, it } from 'vitest';
+import { findClicks } from '../src/analysis/clicks.ts';
 import { fineTrack } from '../src/analysis/take.ts';
 import { compileClips, compileTempo } from '../src/compile.ts';
 import { editedPitch, formantShift, noteGain, pitchSpan, targetShift } from '../src/notes/curve.ts';
@@ -1506,5 +1507,53 @@ describe('a song with a line’s notes edited, rendered', () => {
     const again = await renderSession(song(notes), source, { sampleRate: SR, tail: 0.5, finish: false });
     expect(bytes(again.channels[0]).equals(bytes(withEdits.channels[0]))).toBe(true);
     expect(bytes(again.channels[1]).equals(bytes(withEdits.channels[1]))).toBe(true);
+  });
+});
+
+describe('a line’s notes edited, by the click measure (analysis/clicks.ts)', () => {
+  it('click nowhere the recording doesn’t: moved in pitch, glides, formant, level, in time, pasted', () => {
+    const edits: Edit[] = [
+      ['up a tone', alone, line([{ t: 0.5, d: 1, p: 57, to: 59 }])],
+      ['down a fifth', alone, line([{ t: 0.5, d: 1, p: 57, to: 52 }])],
+      ['in a legato line, up', legato, legatoNotes({ to: 62 })],
+      ['in a legato line, down', legato, legatoNotes({ to: 57 })],
+      // corrected note by note, each by its own few cents (the shift changing where they touch)
+      [
+        'each tuned its own way',
+        legato,
+        line([
+          { t: 0.3, d: 0.6, p: 57, to: 57.45 },
+          { t: 0.9, d: 0.6, p: 60, to: 60.12 },
+          { t: 1.5, d: 0.6, p: 59, to: 58.7 },
+        ]),
+      ],
+      ['its glide quicker, no drift, formant down', legato, legatoNotes({ to: 61, tr: 0.25, dr: 0, fo: -3 })],
+      ['no vibrato, formant up', alone, line([{ t: 0.5, d: 1, p: 57, mo: 0, fo: 4 }])],
+      ['6 dB down', legato, legatoNotes({ g: -6 })],
+      ['muted', legato, legatoNotes({ m: true })],
+      ...timeEdits(),
+      ...pastedStretched(2, 0),
+      ...pastedStretched(0.5, 2),
+    ];
+    for (const [name, base, notes] of edits) {
+      const { out } = edited([base], notes);
+      // the recording where it is, and where each frame's sound now comes from (a move, a paste)
+      const from = sourceOf(notes);
+      const moved = Float32Array.from(base, (_, i) => base[Math.round(from(i / SR) * SR)] ?? 0);
+      const clicks = findClicks(out[0] as Float32Array, SR, [base, moved]);
+      expect({ name, clicks }).toEqual({ name, clicks: [] });
+    }
+  });
+
+  it('finds a click put in one (a step, and a gap of a block)', () => {
+    const { out } = edited([legato], legatoNotes({ to: 62 }));
+    const o = (out[0] as Float32Array).slice();
+    const at = Math.round(1.2 * SR);
+    for (let i = at; i < o.length; i++) o[i] = (o[i] as number) + 0.05;
+    const gap = Math.round(1.6 * SR);
+    o.fill(0, gap, gap + 128);
+    const found = findClicks(o, SR, [legato]).map((c) => c.frame);
+    expect(found.some((f) => Math.abs(f - at) < 0.003 * SR)).toBe(true);
+    expect(found.some((f) => Math.abs(f - gap) < 0.004 * SR)).toBe(true);
   });
 });

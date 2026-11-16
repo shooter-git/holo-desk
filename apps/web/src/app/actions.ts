@@ -240,12 +240,20 @@ export function jobSteps(job: string): Step[] {
 /** Before and after under way: how to stop it (the song is put back as it is). */
 let comparing: { end: () => void } | null = null;
 
+/** What asks the patch renderer for the note edits of the passes about to play. */
+const PASSES = 'passes';
+
 /**
  * Stretches of a song played one after another, then stopped: each its own song (a version of it,
  * its cycle off) or the song as it is (`song` null), from a tick to a tick. Then the song as it is is
  * back, the playhead where the last began. Pressing Stop, another of these starting, or (while a
  * version plays) a change to the song ends it there; the song as it is plays on through edits, as
  * playback does. `ended` is called once it's over, however it ended.
+ *
+ * The note edits each pass plays in its bars are rendered before the first starts (a version's too,
+ * though the song as it is doesn't play them), so an A/B compares the edits from their first note,
+ * not the recording until they come: meanwhile the transport says it's waiting, as Play does, and
+ * the same button (or Stop) calls it off.
  */
 export function playPasses(passes: readonly Pass[], ended?: () => void): { ok: true } | { ok: false; error: string } {
   const s = store.get();
@@ -253,8 +261,35 @@ export function playPasses(passes: readonly Pass[], ended?: () => void): { ok: t
   if (!s.project) return { ok: false, error: 'No song is open in the studio' };
   if (!last) return { ok: false, error: 'Nothing to play' };
   comparing?.end();
+  cancelWaiting();
   if (s.playing) stop();
   const now = s.project;
+  const notes = passes.flatMap((p) => engine.patchesWithin(p.song ?? now, p.from, p.to));
+  engine.preparePatches(PASSES, notes);
+  const waiting = { end: () => cancelWaiting() };
+  comparing = waiting;
+  whenReady(
+    // (the song changed while they came: nothing to wait for, and nothing plays)
+    () => (store.get().project === now ? soundsComing() + engine.patchesComing(notes) : 0),
+    'play',
+    () => {
+      if (comparing !== waiting) return;
+      comparing = null;
+      engine.preparePatches(PASSES, null);
+      if (store.get().project !== now) ended?.();
+      else playNow(passes, now, last, ended);
+    },
+    () => {
+      if (comparing === waiting) comparing = null;
+      engine.preparePatches(PASSES, null);
+      ended?.();
+    },
+  );
+  return { ok: true };
+}
+
+/** The passes played, once what they play is in (playPasses). */
+function playNow(passes: readonly Pass[], now: Project, last: Pass, ended?: () => void): void {
   let timer = 0;
   const end = () => {
     window.clearInterval(timer);
@@ -286,10 +321,9 @@ export function playPasses(passes: readonly Pass[], ended?: () => void): { ok: t
   };
   comparing = { end };
   pass(0);
-  return { ok: true };
 }
 
-/** Whether playPasses is playing now. */
+/** Whether playPasses is playing now (or waiting for what it will play). */
 export const passesPlaying = (): boolean => comparing !== null;
 
 /** Stop what playPasses is playing, if it is. */
@@ -896,42 +930,78 @@ export async function togglePlay(): Promise<void> {
 const STALLED = 20_000;
 let waitingOff: (() => void) | null = null;
 
+/** How far past where Play starts its note edits are waited for (s): those after render as it plays. */
+const NOTES_AHEAD_S = 8;
+
+/** Where Play starts: the playhead, or the cycle's start when the cycle is on and the playhead is outside it. */
+function playStart(p: Project, record: boolean): number {
+  const from = Math.max(0, engine.positionTick());
+  return p.cycle.on && !record && (from < p.cycle.start || from >= p.cycle.end) ? p.cycle.start : from;
+}
+
 /**
- * Play (or record) once the song's sounds are in: at once if they are; else the transport says
- * it's waiting, and Play pressed again calls it off. A load that stops moving (a file that never
- * comes) doesn't hold it up for good: it plays anyway, and says so.
+ * `go` once what it will play is in (`coming`: how much is still on its way, asked again whenever the
+ * song's sounds or its note edits change): at once if it is; else the transport says it's waiting,
+ * and Play pressed again (or Stop) calls it off (`off`). A wait that stops moving (a file that never
+ * comes) doesn't hold it up for good: it goes anyway, and says so.
  */
-function playWhenLoaded(record: boolean): void {
-  if (!soundsComing()) {
-    play(record);
+function whenReady(coming: () => number, waiting: 'play' | 'record', go: () => void, off?: () => void): void {
+  if (!coming()) {
+    go();
     return;
   }
-  store.set({ playWaiting: record ? 'record' : 'play' });
-  let left = soundsComing();
+  store.set({ playWaiting: waiting });
+  let left = coming();
   let stall = window.setTimeout(stalled, STALLED);
   function stalled() {
     finish();
     toast('Some sounds are still loading: they come in as they arrive', 'info', 6000);
-    play(record);
+    go();
   }
-  const off = onSoundsComing(() => {
-    const now = soundsComing();
+  const check = () => {
+    const now = coming();
     if (now === 0) {
       finish();
-      play(record);
+      go();
     } else if (now !== left) {
       left = now;
       clearTimeout(stall);
       stall = window.setTimeout(stalled, STALLED);
     }
-  });
+  };
+  const offSounds = onSoundsComing(check);
+  const offNotes = engine.onPatches(check);
   function finish() {
     clearTimeout(stall);
-    off();
+    offSounds();
+    offNotes();
     waitingOff = null;
     store.set({ playWaiting: null });
   }
-  waitingOff = finish;
+  waitingOff = () => {
+    finish();
+    off?.();
+  };
+}
+
+/**
+ * Play (or record) once the song's sounds are in, and the note edits of its first seconds rendered
+ * (so a tuned note is heard tuned from the start, not the recording first): at once if they are; else
+ * the transport says it's waiting, as `whenReady` does.
+ */
+function playWhenLoaded(record: boolean): void {
+  const notesComing = () => {
+    const p = store.get().project;
+    if (!p) return 0;
+    const from = playStart(p, record);
+    const until = secondsToTick(p.tempo, tickToSeconds(p.tempo, from) + NOTES_AHEAD_S);
+    return engine.patchesComing(engine.patchesWithin(p, from, until));
+  };
+  whenReady(
+    () => soundsComing() + notesComing(),
+    record ? 'record' : 'play',
+    () => play(record),
+  );
 }
 
 /** Play no longer waiting for the song's sounds (pressed again, or Stop). */
@@ -943,8 +1013,7 @@ export function play(record: boolean): void {
   const s = store.get();
   const p = s.project;
   if (!p) return;
-  let from = Math.max(0, engine.positionTick());
-  if (p.cycle.on && !record && (from < p.cycle.start || from >= p.cycle.end)) from = p.cycle.start;
+  const from = playStart(p, record);
   engine.play(from, record, record ? s.countIn : 0);
   store.set({ playing: true, recording: record });
   if (record) startRecording();

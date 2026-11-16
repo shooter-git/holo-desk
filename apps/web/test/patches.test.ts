@@ -18,6 +18,8 @@ import {
   PatchRenderer,
   type PatchState,
   type PatchWorker,
+  patchesWithin,
+  patchSpans,
   planPatches,
   type ToPatchWorker,
 } from '../src/audio/patches.ts';
@@ -368,6 +370,81 @@ describe('a dragged note’s patches', () => {
     expect(r.has(s63.key)).toBe(true);
     expect(w.rendering(0)).toBe(s63.key);
     expect(renders(w)).toEqual([s63.key]);
+  });
+});
+
+describe('the patches some bars play', () => {
+  const p = song();
+  const segments = compileTempo(p, SR);
+  // at 120 bpm a bar is 2 s: the first region plays bars 1–2, the second bars 3–4
+  const bar = (n: number) => (n - 1) * 2 * SR;
+
+  it('places each patch where the song plays it', () => {
+    const spans = patchSpans(p, segments, SR);
+    expect(spans.size).toBe(4);
+    for (const key of keysOf(p, 'rgn_b')) {
+      const [from, to] = (spans.get(key)?.spans ?? [])[0] ?? [Number.NaN, Number.NaN];
+      // the second region starts at 4 s: its patches are past it
+      expect(from).toBeGreaterThanOrEqual(4 * SR);
+      expect(to).toBeLessThanOrEqual(8 * SR);
+    }
+  });
+
+  it('finds those within some bars, and none where nothing is edited', () => {
+    const second = keysOf(p, 'rgn_b');
+    expect(
+      patchesWithin(p, segments, SR, bar(3), bar(5))
+        .map((j) => j.key)
+        .sort(),
+    ).toEqual([...second].sort());
+    expect(patchesWithin(p, segments, SR, 0, bar(5))).toHaveLength(4);
+    // the second region's pitch move is at 1 s into it (5 s): bar 3's first half has none
+    const early = patchesWithin(p, segments, SR, bar(3), bar(3) + 0.6 * SR);
+    expect(early.every((j) => !second.includes(j.key) || j.spec.a < 0.6 * SR + 0.2 * SR)).toBe(true);
+    expect(patchesWithin(p, segments, SR, bar(5), bar(7))).toEqual([]);
+  });
+});
+
+describe('patches about to be played (a version an A/B plays)', () => {
+  const p = song();
+  const jobs = plan(p, fresh()).render;
+  // a version with the second region's pitch moved elsewhere: patches the song as it is doesn't play
+  const other = regionPatches(regionOf(song(65), 'rgn_b').audio as AudioClip, SR);
+
+  it('render after a drag’s and before the song’s, and stay when the song’s change', () => {
+    const w = pool();
+    const r = new PatchRenderer({ workers: 1, budget: 1e6, shared: true, make: w.make });
+    r.hold('aud_take', [new Float32Array(SR * 8)]);
+    r.want(jobs);
+    expect(w.rendering(0)).toBe(jobs[0]?.key);
+    r.ready('passes', other);
+    // the song's patches change: the version's are still wanted, and come first
+    r.want(jobs.slice(1));
+    w.answer(0);
+    expect(w.rendering(0)).toBe(other[0]?.key);
+    expect(r.over(other[0]?.key as string)).toBe(false);
+    w.answer(0);
+    expect(r.over(other[0]?.key as string)).toBe(true);
+  });
+
+  it('are dropped when no longer wanted, and nothing is rendered twice', () => {
+    const w = pool();
+    const r = new PatchRenderer({ workers: 1, budget: 1e6, shared: true, make: w.make });
+    r.hold('aud_take', [new Float32Array(SR * 8)]);
+    r.ready('passes', other);
+    expect(other.length).toBeGreaterThan(1);
+    expect(w.rendering(0)).toBe(other[0]?.key);
+    w.answer(0);
+    // asked again: the one rendered isn't wanted again; then no longer wanted at all
+    r.ready('passes', other);
+    r.ready('passes', null);
+    r.want(jobs);
+    // (one rendering when they were let go finishes, and is kept)
+    w.answer(0);
+    expect(w.rendering(0)).toBe(jobs[0]?.key);
+    const renders = w.workers[0]?.got.flatMap((m) => (m.type === 'render' ? [m.key] : [])) ?? [];
+    expect(renders.filter((k) => k === other[0]?.key)).toHaveLength(1);
+    expect(renders.filter((k) => other.slice(2).some((j) => j.key === k))).toEqual([]);
   });
 });
 

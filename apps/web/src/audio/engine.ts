@@ -81,7 +81,7 @@ import ImpulseWorker from './impulse.worker.ts?worker';
 import { OnceAFrame } from './once-a-frame.ts';
 import { instrumentManifest, sampleFile } from './pack-files.ts';
 import { PatchStore } from './patch-store.ts';
-import { PatchRenderer, type PatchWorker, planPatches, recordingOf } from './patches.ts';
+import { PatchRenderer, type PatchWorker, patchesWithin, planPatches, recordingOf } from './patches.ts';
 import processorUrl from './worklet/processor.ts?worker&url';
 
 export type LatencyMode = 'lowest' | 'balanced' | 'safe';
@@ -1034,6 +1034,32 @@ export class AudioEngine {
   private emitPatches(): void {
     this.patchVersion++;
     for (const fn of this.patchListeners) fn();
+  }
+
+  /**
+   * The note patches a song plays from one tick to another (the open song, or a version of it): what
+   * Play and an A/B wait for, so those bars are heard as they're edited from their first note.
+   */
+  patchesWithin(project: Project, fromTick: number, toTick: number): PatchJob[] {
+    const sr = this.sampleRate;
+    const segments = compileTempo(project, sr);
+    return patchesWithin(project, segments, sr, tickToFrame(segments, fromTick), tickToFrame(segments, toTick));
+  }
+
+  /**
+   * Patches about to be played that the song as it is doesn't play (a version an A/B plays), rendered
+   * before the song's own (`group`: what asks for them; null: no longer).
+   */
+  preparePatches(group: string, jobs: readonly PatchJob[] | null): void {
+    if (!jobs?.length && !this.patchRenderer) return;
+    this.patches().ready(group, jobs);
+  }
+
+  /** How many of these patches are still to come: neither with the engines nor rendered (nor given up on). */
+  patchesComing(jobs: readonly PatchJob[]): number {
+    let n = 0;
+    for (const j of jobs) if (!this.patchSent.has(j.key) && !this.patchRenderer?.over(j.key)) n++;
+    return n;
   }
 
   /** The Audio Editor shows a region (null: none): its patches are rendered first. */

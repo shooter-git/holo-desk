@@ -94,6 +94,34 @@ export function planPatches(
   const playhead = state.playhead ?? 0;
   // how far ahead of the playhead each first plays, in frames (Infinity: only behind it)
   const ahead = new Map<string, number>();
+  for (const [key, { spans }] of patchSpans(project, segments, sr))
+    for (const [from, to] of spans) {
+      const d = to <= playhead ? Number.POSITIVE_INFINITY : Math.max(0, from - playhead);
+      ahead.set(key, Math.min(ahead.get(key) ?? Number.POSITIVE_INFINITY, d));
+    }
+  const focus = new Set(state.focus ? regionPatches(state.focus, sr).map((j) => j.key) : []);
+  const distance = (j: PatchJob) => ahead.get(j.key) ?? Number.POSITIVE_INFINITY;
+  const rank = (j: PatchJob) => (focus.has(j.key) ? 0 : distance(j) < Number.POSITIVE_INFINITY ? 1 : 2);
+  const render = jobs
+    .filter((j) => !state.sent.has(j.key) && !state.rendered(j.key) && state.loaded(recordingOf(j)))
+    // (a stable sort: the rest in the song's order)
+    .sort((x, y) => rank(x) - rank(y) || order(distance(x), distance(y)));
+  const send = jobs.filter((j) => !state.sent.has(j.key) && state.rendered(j.key)).map((j) => j.key);
+  const forget = [...state.sent].filter((key) => !wanted.has(key));
+  return { wanted, render, send, forget };
+}
+
+/**
+ * Where each patch the song plays is heard: song frames from and to (the song's tempo compiled at the
+ * engines' rate), once for each region playing it, by key.
+ */
+export function patchSpans(
+  project: Project,
+  segments: readonly TempoSegment[],
+  sr: number,
+): Map<string, { job: PatchJob; spans: [number, number][] }> {
+  const wanted = new Set(songPatches(project, sr).map((j) => j.key));
+  const out = new Map<string, { job: PatchJob; spans: [number, number][] }>();
   for (const t of project.tracks) {
     if (t.kind !== 'audio') continue;
     for (const r of t.regions) {
@@ -107,21 +135,27 @@ export function planPatches(
         const from = Math.max(start, start + job.spec.a - source);
         const to = Math.min(end, start + job.spec.b - source);
         if (to <= from) continue;
-        const d = to <= playhead ? Number.POSITIVE_INFINITY : Math.max(0, from - playhead);
-        ahead.set(job.key, Math.min(ahead.get(job.key) ?? Number.POSITIVE_INFINITY, d));
+        const at = out.get(job.key);
+        if (at) at.spans.push([from, to]);
+        else out.set(job.key, { job, spans: [[from, to]] });
       }
     }
   }
-  const focus = new Set(state.focus ? regionPatches(state.focus, sr).map((j) => j.key) : []);
-  const distance = (j: PatchJob) => ahead.get(j.key) ?? Number.POSITIVE_INFINITY;
-  const rank = (j: PatchJob) => (focus.has(j.key) ? 0 : distance(j) < Number.POSITIVE_INFINITY ? 1 : 2);
-  const render = jobs
-    .filter((j) => !state.sent.has(j.key) && !state.rendered(j.key) && state.loaded(recordingOf(j)))
-    // (a stable sort: the rest in the song's order)
-    .sort((x, y) => rank(x) - rank(y) || order(distance(x), distance(y)));
-  const send = jobs.filter((j) => !state.sent.has(j.key) && state.rendered(j.key)).map((j) => j.key);
-  const forget = [...state.sent].filter((key) => !wanted.has(key));
-  return { wanted, render, send, forget };
+  return out;
+}
+
+/** The patches a song plays between two of its frames (to hear those bars as they're edited). */
+export function patchesWithin(
+  project: Project,
+  segments: readonly TempoSegment[],
+  sr: number,
+  from: number,
+  to: number,
+): PatchJob[] {
+  const out: PatchJob[] = [];
+  for (const { job, spans } of patchSpans(project, segments, sr).values())
+    if (spans.some(([a, b]) => b > from && a < to)) out.push(job);
+  return out;
 }
 
 /** Nearer first, those only behind the playhead (Infinity) last, in the order they came. */
@@ -233,6 +267,8 @@ export class PatchRenderer {
    */
   private readonly previews = new Map<string, PatchJob[]>();
   private readonly previewing = new Map<string, string>();
+  /** Patches about to be played besides the song's own (a version an A/B plays), by what asks for them. */
+  private readonly readied = new Map<string, PatchJob[]>();
   private waitingStore = false;
   /** Patches the device has (read from it, or given to it). */
   private readonly onDevice = new Set<string>();
@@ -304,6 +340,25 @@ export class PatchRenderer {
     if (todo.length) this.previews.set(group, todo);
     else this.previews.delete(group);
     this.pump();
+  }
+
+  /**
+   * Patches about to be played that aren't the song's own (`group`: what asks for them, a version an
+   * A/B is about to play): rendered after a drag's and before the song's, and not let go when the
+   * song's patches change. None (or null): no longer wanted.
+   */
+  ready(group: string, jobs: readonly PatchJob[] | null): void {
+    const todo = (jobs ?? []).filter(
+      (j) => !this.cache.has(j.key) && !this.failed.has(j.key) && this.holds(recordingOf(j)),
+    );
+    if (todo.length) this.readied.set(group, todo);
+    else this.readied.delete(group);
+    this.pump();
+  }
+
+  /** Whether a patch is as done as it will be: rendered, or not to be had. */
+  over(key: string): boolean {
+    return this.cache.has(key) || this.failed.has(key);
   }
 
   /**
@@ -393,7 +448,7 @@ export class PatchRenderer {
       return;
     }
     if (store) {
-      for (const jobs of this.previews.values())
+      for (const jobs of [...this.previews.values(), ...this.readied.values()])
         for (const j of jobs) if (store.has(j.key) && !this.running.has(j.key)) this.read(j, store);
       this.queue = this.queue.filter((j) => {
         if (!store.has(j.key)) return true;
@@ -404,7 +459,7 @@ export class PatchRenderer {
     for (const w of this.workers) {
       if (w.job) continue;
       const preview = this.takePreview();
-      const job = preview ?? this.takeQueued();
+      const job = preview ?? this.takeReadied() ?? this.takeQueued();
       if (!job) return;
       const id = ++this.nextId;
       w.job = { id, key: job.key };
@@ -444,6 +499,17 @@ export class PatchRenderer {
       if (!job) continue;
       this.previewing.set(group, job.key);
       return job;
+    }
+    return null;
+  }
+
+  /** A patch about to be played to render next, of the first group with one still to come. */
+  private takeReadied(): PatchJob | null {
+    for (const [group, jobs] of this.readied) {
+      let job = jobs.shift();
+      while (job && this.settled(job.key)) job = jobs.shift();
+      if (!jobs.length) this.readied.delete(group);
+      if (job) return job;
     }
     return null;
   }

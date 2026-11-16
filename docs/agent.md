@@ -540,7 +540,9 @@ Words are plain text, drawn as text.
 between the reply and a brief, drawn with the studio's own buttons, switches, rows and canvases. It's
 checked again before it's drawn. A click does only what the user could do themselves:
 - A version plays through the A/B's player (`playPasses` in `actions.ts`) and stops if the song changes;
-  the song as it is plays as playback does, so a slider moved while it plays is heard.
+  the song as it is plays as playback does, so a slider moved while it plays is heard. A recording's
+  note edits in the bars it plays are rendered first (a version's too), the transport waiting as Play
+  waits for sounds, so an A/B is heard edited from its first note.
 - A slider's drag (or a burst of keys) is one undo step, as a fader's; a `set` or a toggle is one too,
   named for the setting ("Vocal: Volume").
 - `keep` replaces the song with the version, under its own id, as one undo step ("Keep “Lower”",

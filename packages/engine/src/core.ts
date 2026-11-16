@@ -2507,6 +2507,10 @@ export class EngineCore implements Host {
   get isPlaying(): boolean {
     return this.playing;
   }
+  /** Whether what was playing is still fading out where the song stopped or jumped (the transport's tail). */
+  get fading(): boolean {
+    return this.tailLeft > 0;
+  }
 
   /**
    * Something a plugin was waiting for has arrived (a hall's response, a kit's samples): each plugin

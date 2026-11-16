@@ -4695,8 +4695,38 @@ html[data-layout="phone-landscape"] .bar .field input {
   color: var(--bg-0);
 }
 
+/* (the rows switch ends the bar, pushed there by its margin: a spacer's gap is more than a 360 px
+   phone has to spare) */
+.playpad .pane-bar > .seg.rows {
+  margin-left: auto;
+}
+
+/* the keyboard, or on a phone held upright one or two rows of keys, each under its own octave */
+.keyboards {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+/* a row's octave, over its keys: the bar of a phone held upright has room for the rows switch but
+   not for an octave beside it. Slimmer than the bar, its buttons still a finger's width */
+.key-strip {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px;
+  border-bottom: 1px solid var(--line);
+  background: var(--bg-2);
+}
+
+.key-strip .btn {
+  height: min(var(--control), 32px);
+}
+
 .keyboard {
   position: relative;
+  flex: 1 1 0;
   height: 100%;
   min-height: 120px;
   touch-action: none;

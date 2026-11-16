@@ -207,7 +207,12 @@ function foundNotes(project: Project, region: Region, clip: AudioClip, state: No
  * The notes a region's edits start from: its own (with its edits on: an edit is made to be heard),
  * else those found in its recording as its first edit keeps them; null while they're still being found.
  */
-function editableNotes(project: Project, region: Region, clip: AudioClip, state: NotesState | null): NoteList | null {
+export function editableNotes(
+  project: Project,
+  region: Region,
+  clip: AudioClip,
+  state: NotesState | null,
+): NoteList | null {
   const own = clip.notes;
   if (own) {
     if (!own.off) return own;

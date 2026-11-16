@@ -1,4 +1,4 @@
-import { newPlugin } from '@holo/session';
+import { newAudioTrack, newPlugin, newRegion } from '@holo/session';
 import { describe, expect, it } from 'vitest';
 import { FAKE_COMMANDS } from '../src/api.ts';
 import type { Block, Go } from '../src/view.ts';
@@ -30,6 +30,7 @@ describe('versions of the song, for a reply’s view', () => {
   it('refuses the names every turn has, one used already, and more than eight', async () => {
     const api = setup();
     expect(await refused(api, 'version', { name: 'before' })).toMatch(/there anyway/);
+    expect(await refused(api, 'version', { name: 'previous' })).toMatch(/there anyway/);
     await call(api, 'version', { name: 'Hall' });
     expect(await refused(api, 'version', { name: 'Hall' })).toMatch(/already/);
     for (let i = 2; i <= 8; i++) await call(api, 'version', { name: `Take ${i}` });
@@ -88,6 +89,51 @@ describe('finish, with what the reply shows', () => {
     });
   });
 
+  it("goes to a recording's notes in the Audio Editor's Notes view, and draws them", async () => {
+    const api = setup();
+    const vocal = { ...newAudioTrack('Vocal'), id: 'trk_vocal' };
+    vocal.regions.push({
+      ...newRegion(0, 3840 * 8, 'Take'),
+      id: 'rgn_take',
+      audio: { file: 'aud_1', offset: 0, gain: 0, fadeIn: 0, fadeOut: 0, stretch: 1 },
+    });
+    api.project.tracks.push(vocal);
+    await call(api, 'finish', {
+      label: 'Read the take',
+      reply: 'Bar 3 is flat.',
+      view: [
+        { notes: { track: 'Vocal', from: 1, to: 5 } },
+        {
+          list: [
+            {
+              text: 'Bar 3',
+              do: { go: { track: 'Vocal', notes: { from: '3', to: '4', pitch: 'E4' }, view: 'notes' } },
+            },
+          ],
+        },
+      ],
+      go: { track: 'Vocal', region: 'Take', view: 'notes' },
+    });
+    expect(sent(api)).toEqual({
+      view: [
+        { notes: { track: 'trk_vocal', from: 1, to: 5 } },
+        {
+          list: [
+            {
+              text: 'Bar 3',
+              do: { go: { track: 'trk_vocal', notes: { from: '3', to: '4', pitch: 64 }, view: 'notes' } },
+            },
+          ],
+        },
+      ],
+      go: { track: 'trk_vocal', region: 'rgn_take', view: 'notes' },
+    });
+    // a waveform is still only a recording's
+    expect(
+      await refused(api, 'finish', { label: 'x', reply: 'y', view: [{ wave: { track: 'Strings', from: 1, to: 2 } }] }),
+    ).toMatch(/show it with notes/);
+  });
+
   it('says what to fix', async () => {
     const api = withReverb();
     const finish = (view: unknown) => refused(api, 'finish', { label: 'x', reply: 'y', view });
@@ -110,6 +156,20 @@ describe('finish, with what the reply shows', () => {
     expect(await finish([{ banner: 'Hi' }])).toMatch(/view\[0\]: the kinds/);
     // nothing was sent
     expect(api.calls.some((c) => c.method === 'finish')).toBe(false);
+  });
+
+  it('compares an earlier change with "previous", the song before the previous request', async () => {
+    const api = setup();
+    const view = [
+      {
+        choice: [
+          { label: 'Untuned', do: { play: { from: 1, to: 5, version: 'previous' } } },
+          { label: 'Tuned', do: { play: { from: 1, to: 5, version: 'before' } } },
+        ],
+      },
+    ];
+    await call(api, 'finish', { label: 'Showed the tuning', reply: 'Here it is.', view });
+    expect(sent(api).view).toEqual(view);
   });
 
   it('finishes as before without one', async () => {

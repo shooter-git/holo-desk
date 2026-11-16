@@ -31,7 +31,13 @@ describe('what a reply shows under it', () => {
     const { job, token: jobToken } = await start({ project: s.id, text: 'The strings a half step down, to compare' });
     const before = services.store.history(s.id)[0]?.revision as number;
 
-    // the song as the agent changed it, then kept as a version: the studio saves first
+    // the agent's change (through its tools), then the song kept as a version: the studio saves first
+    const changed1 = await tool(job, jobToken, 'POST', '/ops', {
+      ops: [{ op: 'setProject', patch: { title: 'Lower' } }],
+      label: 'Lower',
+      batch: 'b1',
+    });
+    expect(changed1.statusCode, changed1.body).toBe(200);
     const lower = await save({ ...(services.store.get(s.id) as Project), title: 'Lower' });
     const flushes = desk.got('agent-flush').length;
     const kept = await tool(job, jobToken, 'POST', '/version', { name: 'Lower' });
@@ -94,6 +100,68 @@ describe('what a reply shows under it', () => {
       versions: {},
     });
     expect(services.store.history(s.id)).toHaveLength(kept);
+  });
+});
+
+describe('comparing an earlier change', () => {
+  it('offers the song before the previous request, and refuses an A/B of two of the same song', async () => {
+    const { start, tool, s, desk, run, status, services, save } = await setup();
+    const first = await start({ project: s.id, text: 'Tune the vocal' });
+    const firstBefore = services.store.history(s.id)[0]?.revision as number;
+    // the conversation's first request has no "previous"
+    const none = await tool(first.job, first.token, 'POST', '/finish', {
+      label: 'x',
+      reply: 'y',
+      view: [{ button: 'Earlier', do: { play: { from: 1, to: 2, version: 'previous' } } }],
+    });
+    expect(none.statusCode).toBe(400);
+    expect(none.json().error).toMatch(/no earlier request/);
+    await tool(first.job, first.token, 'POST', '/ops', {
+      ops: [{ op: 'setProject', patch: { title: 'Tuned' } }],
+      label: 'Tuned',
+      batch: 'b1',
+    });
+    // (the studio applies the change and saves it, as a real one does)
+    await save({ ...(services.store.get(s.id) as Project), title: 'Tuned' });
+    await tool(first.job, first.token, 'POST', '/finish', { label: 'Tuned', reply: 'Tuned.' });
+    run.say({ type: 'agent-done', job: first.job });
+    await waitFor(() => status(desk, first.job)?.state === 'done');
+
+    // the next request changes nothing: "before" and "after" are the same song
+    const second = await start({ project: s.id, text: 'Show me what the tuning changed' });
+    const same = await tool(second.job, second.token, 'POST', '/finish', {
+      label: 'Showed',
+      reply: 'Here.',
+      view: [
+        {
+          choice: [
+            { label: 'Before', do: { play: { from: 1, to: 2, version: 'before' } } },
+            { label: 'After', do: { play: { from: 1, to: 2, version: 'after' } } },
+          ],
+        },
+      ],
+    });
+    expect(same.statusCode).toBe(400);
+    expect(same.json().error).toMatch(/Nothing changed in this request.*"previous"/);
+    // "previous" against "before" compares the tuning
+    const compared = await tool(second.job, second.token, 'POST', '/finish', {
+      label: 'Showed',
+      reply: 'Here.',
+      view: [
+        {
+          choice: [
+            { label: 'Untuned', do: { play: { from: 1, to: 2, version: 'previous' } } },
+            { label: 'Tuned', do: { play: { from: 1, to: 2, version: 'before' } } },
+          ],
+        },
+      ],
+    });
+    expect(compared.statusCode, compared.body).toBe(200);
+    run.say({ type: 'agent-done', job: second.job });
+    await waitFor(() => status(desk, second.job)?.state === 'done');
+    const versions = (status(desk, second.job)?.view as { versions: Record<string, number> } | undefined)?.versions;
+    expect(versions?.previous).toBe(firstBefore);
+    expect(versions?.before).toBeGreaterThan(firstBefore);
   });
 });
 

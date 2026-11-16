@@ -16,6 +16,7 @@ import {
   checkView,
   type Go,
   mapRefs,
+  PREVIOUS,
   viewCommands,
 } from '../view.ts';
 import { barTick, channelRef, position, type ToolContext, ToolError, trackRef } from './common.ts';
@@ -107,7 +108,6 @@ function goOf(refs: Refs, g: Go): Go {
   if (g.region !== undefined) out.region = regionId(project, g.region, track);
   if (g.notes) {
     if (!track) throw new ToolError(`Notes are a track's: "${g.track}" is a bus or the master`);
-    if (track.kind === 'audio') throw new ToolError(`${track.name} is an audio track: it has no notes to go to`);
     const from = position(project, String(g.notes.from), 'notes "from"');
     const to = position(project, String(g.notes.to), 'notes "to"');
     if (to <= from) throw new ToolError('The notes\' "to" comes after "from"');
@@ -139,7 +139,6 @@ function checkBlock(refs: Refs, b: Block): void {
   const span = (track: string, from: number, kind: 'notes' | 'wave') => {
     barTick(project, from);
     const t = project.tracks.find((x) => x.id === track) as Track;
-    if (kind === 'notes' && t.kind === 'audio') throw new ToolError(`${t.name} is a recording: show it with wave`);
     if (kind === 'wave' && t.kind !== 'audio')
       throw new ToolError(`${t.name} has notes, not a recording: show it with notes`);
   };
@@ -213,9 +212,9 @@ export async function resolvePresentation(
       },
       go: (g) => goOf(refs, g),
       version: (v) => {
-        if (v === BEFORE || v === AFTER || refs.versions.includes(v)) return v;
+        if (v === BEFORE || v === AFTER || v === PREVIOUS || refs.versions.includes(v)) return v;
         throw new ToolError(
-          `No version "${v}": the versions are "before", "after"${refs.versions.map((x) => `, "${x}"`).join('')} (the version tool names the song as it is)`,
+          `No version "${v}": the versions are "before", "after", "previous"${refs.versions.map((x) => `, "${x}"`).join('')} (the version tool names the song as it is)`,
         );
       },
       command: (id) => {

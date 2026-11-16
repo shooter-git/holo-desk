@@ -17,7 +17,8 @@ import { type Channel, formatParam, type Op, type ParamDef, type Plugin, type Pr
 // ---- the format ----
 
 /** The studio's views a go can bring in front. */
-export const VIEW_NAMES = ['tracks', 'editor', 'mixer', 'score'] as const;
+/** `notes`: a recording's notes in the Audio Editor's Notes view (a MIDI track's in the Piano Roll). */
+export const VIEW_NAMES = ['tracks', 'editor', 'notes', 'mixer', 'score'] as const;
 export type ViewName = (typeof VIEW_NAMES)[number];
 
 /**
@@ -29,7 +30,10 @@ export interface Go {
   /** A track's id (resolved), or a bus's or "master" for a plugin or the mixer. */
   track?: string;
   region?: string;
-  /** Notes of `track` from one position to another ("12", "12.3"), of one pitch (MIDI) or all. */
+  /**
+   * Notes of `track` from one position to another ("12", "12.3"), of one pitch (MIDI) or all: a MIDI
+   * track's selected in the Piano Roll, a recording's in the Audio Editor's Notes view.
+   */
   notes?: { from: number | string; to: number | string; pitch?: number | string };
   view?: ViewName;
   /** A plugin of `track`'s (its id, resolved): its window opens. */
@@ -109,9 +113,13 @@ export interface View {
   versions: Record<string, number>;
 }
 
-/** The versions every turn has: the song before the request, and as the reply left it. */
+/**
+ * The versions every turn has: the song before the request, and as the reply left it; and, after the
+ * conversation's first request, the song before the previous request (to compare an earlier change).
+ */
 export const BEFORE = 'before';
 export const AFTER = 'after';
+export const PREVIOUS = 'previous';
 
 export const KINDS = [
   'text',
@@ -225,7 +233,8 @@ export function checkView(input: unknown, strict = false): ViewCheck {
   };
   const version = (at: string, v: unknown): string => {
     const s = text(at, v, 40, 'version');
-    if (s !== BEFORE && s !== AFTER && !VERSION_NAME.test(s)) fail(at, `"${s}" isn't a version's name`);
+    if (s !== BEFORE && s !== AFTER && s !== PREVIOUS && !VERSION_NAME.test(s))
+      fail(at, `"${s}" isn't a version's name`);
     return s;
   };
 

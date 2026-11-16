@@ -111,6 +111,11 @@ describe('a reply’s view, checked', () => {
 
   it('checks a go on its own', () => {
     expect(checkGo({ bar: 12 })).toEqual({ ok: true, go: { bar: 12 } });
+    expect(checkGo({ track: 'trk_1', region: 'rgn_1', view: 'notes' }, true)).toMatchObject({ ok: true });
+    expect(checkGo({ view: 'piano' })).toMatchObject({
+      ok: false,
+      error: expect.stringMatching(/tracks, editor, notes/),
+    });
     expect(checkGo({ notes: { from: 1, to: 2 } })).toEqual({ ok: false, error: 'go: say the "track" of the notes' });
     expect(checkGo({})).toMatchObject({ ok: false });
   });

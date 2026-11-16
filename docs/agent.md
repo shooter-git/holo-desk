@@ -514,11 +514,13 @@ server and the studio, and importing only `@holo/session`.
 (a label and a `do`), `choice` (a switch of two to six options: the one clicked stays lit), `slider` and
 `toggle` (bound to a setting), `chart` (points `{y, x?, label?, go?}`, as a `line`, `bars` or `dots`,
 with a `unit`, `min`, `max` and a `ref` line), `notes` and `wave` (a few bars of a track's notes, or its
-recording, as the song is or as a version had it).
+recording, as the song is or as a version had it). A recording's `notes` are its sung notes where they play
+now, faint where they were sung when an edit moved them, so a shifted or tuned take shows its edit.
 
 **Actions** (`do`): `play` (bars `from` to `to` of a version, or of the song as it is, with some tracks
 `solo`; clicked again it stops), `go` (a bar, a track, a region, a track's `notes` from one position to
-another of one pitch, a view, a plugin's window), `set` (a setting to a value), `keep` (a version made the
+another of one pitch, a view, a plugin's window: a recording's notes are selected in the Audio Editor's Notes
+view, numbered as it numbers them, and the `notes` view opens that view), `set` (a setting to a value), `keep` (a version made the
 song again), `command` (one of the bar's commands, by id: the agent reads the list in `song_status`,
 and a command added to the bar is the agent's to use too) and `ask` (a next request, sent when clicked).
 
@@ -529,7 +531,9 @@ The agent names them as `TYPE[#N].PARAM` and `TYPE.on`; `finish` resolves its na
 
 **Versions.** `before` is the restore point taken as the job starts; `version` keeps more as the agent
 makes them (`POST …/version`); `after`, the song as the turn left it, is kept at the turn's end when the
-view names it. Each is a revision in the song's history (`GET /api/projects/:id/history/:rev`, 200 kept),
+view names it; `previous` is the previous request's `before` (each turn keeps its own in `extra`), to
+compare an earlier change, and is refused on a conversation's first request. A view that plays both
+`before` and `after` is refused when the job's tools changed nothing: they'd be the same song. Each is a revision in the song's history (`GET /api/projects/:id/history/:rev`, 200 kept),
 so a view still plays after a reload, and a version that has aged out says so.
 
 **Limits:** 24 blocks at the top, 80 pieces in all (list items and table rows count), three deep, 10,000

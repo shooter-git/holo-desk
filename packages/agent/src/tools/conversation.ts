@@ -7,7 +7,7 @@
  */
 import { type MiddleC, noteName, PPQ, tickToBarBeat } from '@holo/session';
 import type { PermissionKind } from '../api.ts';
-import { AFTER, BEFORE, LIMITS, VERSION_NAME } from '../view.ts';
+import { AFTER, BEFORE, LIMITS, PREVIOUS, VERSION_NAME } from '../view.ts';
 import { getAttachment, need, plural, str, type Tool, ToolError } from './common.ts';
 import { playedText, recordedNotes } from './play.ts';
 import { PARAMS_TEXT, resolvePresentation } from './present.ts';
@@ -242,22 +242,22 @@ const VIEW_GRAMMAR = [
   '{"slider": setting, "label"?, "min"?, "max"?} live while dragged, one undo step a drag',
   '{"toggle": setting, "label"?} on or off',
   '{"chart": [{"y", "x"?, "label"?, "go"?} or numbers], "kind"?: "line"|"bars"|"dots", "unit"?, "min"?, "max"?, "ref"?} a click on a point goes to its "go"',
-  '{"notes": {"track", "from", "to", "version"?}} bars of a track\'s notes drawn small; {"wave": …} a recording\'s waveform; a click goes there.',
+  '{"notes": {"track", "from", "to", "version"?}} bars of a track\'s notes drawn small (a recording\'s as sung, and where edits moved them); {"wave": …} a recording\'s waveform; a click goes there.',
   'Actions ("do"):',
   '{"play": {"from": bar, "to": bar (not played), "version"?, "solo"?: [tracks]}} clicked again it stops',
-  '{"go": {"bar"?, "track"?, "region"?, "notes"?: {"from", "to", "pitch"?}, "view"?: "tracks"|"editor"|"mixer"|"score", "plugin"?}} selects, opens and moves the playhead there',
+  '{"go": {"bar"?, "track"?, "region"?, "notes"?: {"from", "to", "pitch"?}, "view"?: "tracks"|"editor"|"notes"|"mixer"|"score", "plugin"?}} selects, opens and moves the playhead there ("notes": a recording\'s notes in the Audio Editor; notes of a recording are selected there)',
   '{"set": setting, "value": n}',
   '{"keep": version} makes it the song (one undo step)',
   '{"command": id} one of the studio\'s commands, as song_status lists them',
   '{"ask": "…"} a next request, sent when clicked.',
   `A setting is {"track": a track, bus or "master", "param": ${PARAMS_TEXT}}.`,
-  `A version is "before" (the song before this request), "after" (as you leave it) or a name you gave the version tool. Plain text only, no markdown. At most ${LIMITS.top} blocks at the top, ${LIMITS.pieces} in all, ${LIMITS.depth} deep.`,
+  `A version is "before" (the song before this request), "after" (as you leave it), "previous" (the song before your previous request: to compare an earlier change, play "previous" against "before") or a name you gave the version tool. Plain text only, no markdown. At most ${LIMITS.top} blocks at the top, ${LIMITS.pieces} in all, ${LIMITS.depth} deep.`,
 ].join(' ');
 
 export const version: Tool = {
   name: 'version',
   kind: 'change',
-  summary: `Keep the song as it is now as a version, named in a few words ("Half step down", "Hall reverb"), so the reply's view can play it ({"play": {…, "version": name}}) or keep it ({"keep": name}) beside the others. "before" (the song before this request) and "after" (as you leave it) are there anyway. Name each alternative as you make it, then change the song for the next. At most ${LIMITS.versions} a turn.`,
+  summary: `Keep the song as it is now as a version, named in a few words ("Half step down", "Hall reverb"), so the reply's view can play it ({"play": {…, "version": name}}) or keep it ({"keep": name}) beside the others. "before" (the song before this request), "after" (as you leave it) and "previous" (before your previous request) are there anyway. Name each alternative as you make it, then change the song for the next. At most ${LIMITS.versions} a turn.`,
   args: [
     {
       name: 'name',
@@ -269,7 +269,7 @@ export const version: Tool = {
   ],
   async run(ctx, args) {
     const name = need(args, 'name');
-    if (name === BEFORE || name === AFTER)
+    if (name === BEFORE || name === AFTER || name === PREVIOUS)
       throw new ToolError(`"${name}" is there anyway: name this version something else`);
     if (!VERSION_NAME.test(name)) throw new ToolError('Name it in a few words, letters and numbers first');
     if (ctx.memory.versions.includes(name))

@@ -156,16 +156,3 @@ export function notesLevels(notes: readonly AudioNote[], curve: LevelCurve): (nu
   levelsKept.set(notes, { curve, levels });
   return levels;
 }
-
-/** The mean of the levels known among some notes (null when none is), for where a target starts. */
-export function meanLevel(levels: readonly (number | null)[], indices: readonly number[]): number | null {
-  let sum = 0;
-  let count = 0;
-  for (const i of indices) {
-    const l = levels[i];
-    if (typeof l !== 'number') continue;
-    sum += l;
-    count++;
-  }
-  return count ? sum / count : null;
-}

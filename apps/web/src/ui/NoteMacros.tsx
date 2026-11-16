@@ -16,6 +16,7 @@
  */
 import {
   type AudioClip,
+  levelGoal,
   type NoteEdit,
   type NoteEditContext,
   type NoteEditStep,
@@ -32,7 +33,6 @@ import {
   macroArgs,
   macroControls,
   macroValues,
-  meanLevel,
   NOTE_MACROS,
   valueText,
 } from './note-macros.ts';
@@ -171,7 +171,8 @@ export function NoteMacros({
     (m): m is (typeof NOTE_MACROS)[number] & { def: NoteEdit } => !!m.def,
   );
   const [controls] = useState(() => {
-    const mean = levels ? meanLevel(levels, session.indices) : null;
+    // (where Level goes with no target, so ticking Target alone changes nothing)
+    const mean = levels ? levelGoal(session.base, session.indices, levels) : null;
     return Object.fromEntries(
       macros.map((m) => [m.edit, macroControls(m.def, mean === null ? {} : { target: Math.round(mean * 2) / 2 })]),
     );

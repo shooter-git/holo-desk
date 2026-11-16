@@ -1,14 +1,6 @@
 import { type AudioNote, type AudioNotes, NOTE_EDITS, type NoteEdit, noteEdit } from '@holo/session';
 import { describe, expect, it } from 'vitest';
-import {
-  macroArgs,
-  macroControls,
-  macroValues,
-  meanLevel,
-  NOTE_MACROS,
-  notesLevels,
-  valueText,
-} from '../src/ui/note-macros.ts';
+import { macroArgs, macroControls, macroValues, NOTE_MACROS, notesLevels, valueText } from '../src/ui/note-macros.ts';
 
 const edit = (name: string) => noteEdit(name) as NoteEdit;
 
@@ -138,7 +130,5 @@ describe('the notes’ levels, read from the curve they were found with', () => 
     const levels = notesLevels(notes, curve);
     expect(levels).toEqual([-20, -13.98, null]);
     expect(notesLevels(notes, curve)).toBe(levels);
-    expect(meanLevel(levels, [0, 1, 2])).toBeCloseTo(-16.99, 2);
-    expect(meanLevel(levels, [2])).toBeNull();
   });
 });

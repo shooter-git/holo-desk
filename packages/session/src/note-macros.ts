@@ -111,11 +111,49 @@ export function quantizeNotes(
 }
 
 /**
- * Notes' levels brought toward one level: their mean as they play (each its level as recorded,
- * `levels` by index in dB, with its gain), or `target` (dB) when given; `amount` 1 all the way. A
- * note muted, or whose level isn't known, is left as it is and isn't counted. So is a note with no
- * pitch (a breath, a lone consonant), unless `breaths` asks for them or they're all that's chosen:
- * levelled with the sung notes, a breath would come up as loud as a word. Levels are taken to
+ * The notes `level` counts, of those chosen: each muted, or whose level isn't known, is left out, and
+ * so is a note with no pitch (a breath, a lone consonant) unless `breaths` asks for them or they're
+ * all that's chosen: levelled with the sung notes, a breath would come up as loud as a word.
+ */
+function levelled(
+  notes: AudioNotes,
+  indices: readonly number[],
+  levels: readonly (number | null | undefined)[],
+  breaths: boolean,
+): number[] {
+  const known = noteIndices(notes, indices).filter((i) => {
+    const level = levels[i];
+    return !notes.n[i]?.m && typeof level === 'number' && Number.isFinite(level);
+  });
+  const sung = known.filter((i) => notes.n[i]?.p !== null);
+  return breaths || !sung.length ? known : sung;
+}
+
+/** A note's level as it plays: as recorded (`levels`, dB, to a hundredth) with its gain. */
+const playing = (notes: AudioNotes, levels: readonly (number | null | undefined)[], i: number) =>
+  roundAmount(levels[i] as number) + ((notes.n[i] as AudioNote).g ?? 0);
+
+/**
+ * Where `level` brings notes without a `target`: the mean of the levels, as they play, of the notes it
+ * counts (dB, to a hundredth), or null when it counts none. The Macros dialog starts its target here.
+ */
+export function levelGoal(
+  notes: AudioNotes,
+  indices: readonly number[],
+  levels: readonly (number | null | undefined)[],
+  breaths = false,
+): number | null {
+  const idx = levelled(notes, indices, levels, breaths);
+  if (!idx.length) return null;
+  let sum = 0;
+  for (const i of idx) sum += playing(notes, levels, i);
+  return roundAmount(sum / idx.length);
+}
+
+/**
+ * Notes' levels brought toward one level: their mean as they play (`levelGoal`), or `target` (dB)
+ * when given; `amount` 1 all the way. The notes it counts are `levelGoal`'s: not muted, with a known
+ * level, and with a pitch unless `breaths` is on or none chosen has one. Levels are taken to
  * hundredths of a dB, so all the way they come out the same and a second time changes nothing.
  */
 export function levelNotes(
@@ -127,20 +165,13 @@ export function levelNotes(
   breaths = false,
 ): AudioNotes {
   const share = clamp(Number.isFinite(amount) ? amount : 0, 0, 1);
-  const known = noteIndices(notes, indices).filter((i) => {
-    const level = levels[i];
-    return !notes.n[i]?.m && typeof level === 'number' && Number.isFinite(level);
-  });
-  const sung = known.filter((i) => notes.n[i]?.p !== null);
-  const idx = breaths || !sung.length ? known : sung;
+  const idx = levelled(notes, indices, levels, breaths);
   if (!share || !idx.length) return notes;
-  const now = (i: number) => roundAmount(levels[i] as number) + ((notes.n[i] as AudioNote).g ?? 0);
-  let goal: number;
-  if (target !== undefined && Number.isFinite(target)) goal = roundAmount(target);
-  else {
-    let sum = 0;
-    for (const i of idx) sum += now(i);
-    goal = roundAmount(sum / idx.length);
-  }
-  return editEachNote(notes, idx, (n, i) => ({ g: roundAmount((n.g ?? 0) + share * (goal - now(i))) }));
+  const goal =
+    target !== undefined && Number.isFinite(target)
+      ? roundAmount(target)
+      : (levelGoal(notes, indices, levels, breaths) as number);
+  return editEachNote(notes, idx, (n, i) => ({
+    g: roundAmount((n.g ?? 0) + share * (goal - playing(notes, levels, i))),
+  }));
 }

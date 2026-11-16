@@ -10,6 +10,7 @@ import {
   DIVISIONS,
   fileToTick,
   fileToTicks,
+  levelGoal,
   MAX_MOVE_S,
   MIDI_LOUDEST_VELOCITY,
   MIDI_NOTE_VELOCITY,
@@ -278,6 +279,16 @@ describe('level', () => {
     const alone = run({ target: -50 }, LEVELS, LINE, [3]);
     expect(alone.n[3]?.g).toBe(-10);
     expect(alone.n.filter((_, i) => i !== 3).every((n) => n.g === undefined)).toBe(true);
+  });
+
+  it('says where it goes without a target: the mean of the notes it counts, as they play', () => {
+    expect(levelGoal(LINE, all(LINE), LEVELS)).toBe(-20.5);
+    expect(levelGoal(LINE, all(LINE), LEVELS, true)).toBe(-24.4);
+    expect(levelGoal(LINE, [3], LEVELS)).toBe(-40);
+    expect(levelGoal(LINE, all(LINE), [null, null, null, null, null])).toBeNull();
+    // the same place the macro brings them to: a target there changes nothing more
+    const out = run({}, LEVELS);
+    expect(run({ target: levelGoal(LINE, all(LINE), LEVELS) as number }, LEVELS).n).toEqual(out.n);
   });
 
   it('goes to a level given instead', () => {

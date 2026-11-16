@@ -9,8 +9,12 @@ import { type AudioClip, type AudioNotes, type Region, type Track, warpAt, warpO
 
 /** How long before a note's start its audition starts, seconds. */
 export const AUDITION_LEAD_S = 0.03;
-/** An audition's own fades, seconds: in at its start, out at the note's end. */
-const FADE_IN_S = 0.003;
+/**
+ * An audition's own fades, seconds: in at its start, out at the note's end. Its start is often in the
+ * middle of a sound (the note before, sung through): faded in over a few ms, that's a click; over 10,
+ * it isn't, and it's done well before the note itself starts.
+ */
+const FADE_IN_S = 0.01;
 const FADE_OUT_S = 0.01;
 
 /**

@@ -72,8 +72,10 @@ wraps `EngineCore` from `@holo/engine`):
   up to three workers, from the recording in shared memory (`apps/web/src/audio/patches.ts`): the
   region shown in the Audio Editor first, then what the playhead comes to next. Until a patch is
   ready, the recording plays there as it was. Once it is, the track's clips are sent again with a
-  `fade`: the audio thread plays the old and new lists together for 256 frames, crossfading, with
-  nothing allocated. Patches are kept by the memory they take (256 MB, 96 MB on a phone), so an undo
+  `fade`: the engine plays the old and new lists together for 20 ms, crossfading, with nothing
+  allocated. The two are one voice at two pitches, so the crossfade starts where they agree best
+  within the next 250 ms (where they're out of phase, a crossfade dips), and one that comes while
+  another is under way waits for it to end. Patches are kept by the memory they take (256 MB, 96 MB on a phone), so an undo
   or a redo is heard at once. They're kept on the device too (`patch-store.ts`, in the browser's cache
   under the engine that rendered them, 512 MB, 128 MB on a phone, and no more than a quarter of what
   the device allows, the least lately used going first): a patch's key says everything its sound
@@ -102,13 +104,16 @@ wraps `EngineCore` from `@holo/engine`):
   a press plays the note through its track's channel, as edited, from 30 ms before it starts to its
   end (`audio/audition.ts`): an `audition` message gives the engine the pieces to play, cut as the
   song cuts them (the recording, or a patch where one is rendered; the recording there while it
-  isn't, and nothing waits for it). The core plays them once on a voice each track has from the
-  start, nothing allocated, a new one taking over from the last; the audio thread plays it (a twin,
-  where a worker renders the track ahead), and so does HO[LO] Engine. Never while the song plays.
-  While a note is dragged, the patches of where the drag has got to are rendered before anything
-  else, one at a time for the region and only the latest wanted after it, and the note is heard
-  again as they come in; they're the patches the song plays once it's let go, under the same keys,
-  so its sound is usually there already. Hearing and the device's patches are listening aids, not
+  isn't, and nothing waits for it). It fades in over 10 ms (its start is often in the middle of the
+  note before) and out over 10 ms at the note's end. The core plays them once on a voice each track
+  has from the start, nothing allocated, a new one taking over from the last, which fades out over
+  10 ms (a held note cut over a ms or two clicks); the audio thread plays it (a twin, where a worker
+  renders the track ahead), and so does HO[LO] Engine. Never while the song plays. While a note is
+  dragged, the patches of where the drag has got to are rendered before anything else, one at a time
+  for the region and only the latest wanted after it, and the note goes on as they come in, from
+  where it has got to, crossfaded into its new sound (from the top once it has ended); they're the
+  patches the song plays once it's let go, under the same keys, so its sound is usually there
+  already. The engine's click measure (`analysis/clicks.ts`) is what the tests hold these to. Hearing and the device's patches are listening aids, not
   note edits: the agent and `holo notes` hear an edit through `measure take`, and need neither.
 - **Convolution is spread over the period.** A hall's long partitions take their forward transform,
   the sum over the spectrum and the inverse transform in about-equal pieces, one or two per block,

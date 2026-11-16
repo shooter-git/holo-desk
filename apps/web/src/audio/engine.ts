@@ -113,8 +113,13 @@ function impulseWorkersFor(cores: number): number {
 /** How long an instrument no track plays keeps its samples (an undo often brings it back). */
 const FORGET_AFTER = 30_000;
 
-/** Frames a track's clips crossfade over when a note edit's patch comes in or goes (about 5 ms). */
-const PATCH_FADE = 256;
+/**
+ * Seconds a track's clips crossfade over when a note edit's patch comes in or goes while the song
+ * plays (A/B, an edit's sound arriving, an edit undone). The two sides are one voice at two pitches:
+ * over 5 ms, where they were out of phase, the sound dipped by as much as 6 dB at once; over 20 ms,
+ * started where they agree (the engine finds where), it's a quick blend.
+ */
+const PATCH_FADE_S = 0.02;
 /** How long the engines keep a patch the song no longer plays, ms (the crossfade away from it, and the workers' lead). */
 const PATCH_FORGET_AFTER = 1000;
 /** How long past an audition's end the patches it plays are kept with the engines, ms (rendering ahead, messages arrive a few blocks late). */
@@ -269,10 +274,12 @@ export class AudioEngine {
   /** Goes up whenever the patches' state does (what the Notes view reads). */
   patchVersion = 0;
   /**
-   * The audition last sent (hearNote): the patches it plays, kept with the engines till it's over, and
-   * its clips as text (the same again, as a drag's patch comes in, isn't sent again).
+   * The audition last sent (hearNote): the patches it plays, kept with the engines till it's over, its
+   * clips as text (the same again, as a drag's patch comes in, isn't sent again), and the note it's of
+   * (its track, its number and where it starts: a drag's next follows it).
    */
-  private heard: { keys: Set<string>; until: number; text: string } | null = null;
+  private heard: { keys: Set<string>; until: number; text: string; track: string; index: number; from: number } | null =
+    null;
   /**
    * A note being dragged in the Notes view (previewNote): its track and region, the region's recording
    * as the drag leaves its notes, the note, and the patches its audition plays. `released`: the drag is
@@ -1017,7 +1024,7 @@ export class AudioEngine {
     const ready = this.readyPatches(t);
     const was = this.clipsReady.get(t.id);
     const clips = compileClips(t, this.segments, this.sampleRate, (key) => this.patchSent.has(key));
-    const fade = was !== undefined && was !== ready ? { fade: PATCH_FADE } : {};
+    const fade = was !== undefined && was !== ready ? { fade: Math.round(PATCH_FADE_S * this.sampleRate) } : {};
     this.post({ type: 'clips', num: this.numOf(t.id), clips, ...fade });
     this.clipsReady.set(t.id, ready);
   }
@@ -1121,7 +1128,9 @@ export class AudioEngine {
 
   /**
    * An audition of a note to the engines, as `clip` plays it: its pieces cut where the patches the
-   * engines have start and end. Not sent when it's the one last sent, unless `again`.
+   * engines have start and end. Not sent when it's the one last sent, unless `again`. Not `again` (a
+   * drag's patches come in) and the same note from the same place, it follows the one sounding: it
+   * goes on from where that has got to, edited, instead of from the top.
    */
   private sendAudition(trackId: string, clip: AudioClip, index: number, again: boolean): void {
     const track = this.project?.tracks.find((t) => t.id === trackId);
@@ -1132,12 +1141,17 @@ export class AudioEngine {
     const text = JSON.stringify(clips);
     if (!again && text === this.heard?.text) return;
     const frames = clips.reduce((n, c) => Math.max(n, c.end), 0);
+    const last = this.heard;
+    const follow = !again && last?.track === trackId && last.index === index && last.from === range[0];
     this.heard = {
       keys: new Set(clips.flatMap((c) => (c.base === undefined ? [] : [c.key]))),
       until: performance.now() + (frames / sr) * 1000 + AUDITION_KEEP,
       text,
+      track: trackId,
+      index,
+      from: range[0],
     };
-    this.post({ type: 'audition', num: this.numOf(trackId), clips });
+    this.post({ type: 'audition', num: this.numOf(trackId), clips, ...(follow ? { follow } : {}) });
   }
 
   /** The recording a region plays, held by the patch workers while the Notes view shows it (a drag renders from it). */

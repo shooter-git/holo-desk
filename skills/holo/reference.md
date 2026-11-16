@@ -128,8 +128,9 @@ semitone; never its timing or sound). The macros, on many notes at once: `correc
 [--tolerance CENTS]` (each centre that share of the way to its nearest semitone or note of the key,
 that share of its drift taken out, notes within the tolerance left alone; 100% twice is the same as
 once), `quantize-time [--amount %] [--grid 1/16]` (each note's beat, after its consonant, toward the
-grid: 1/1 to 1/32, 1/8T, 1/16. …), `level [--amount %] [--target DB]` (the notes' levels as they play
-toward their mean, or the target, dB of full scale; it reads each note's level from the recording).
+grid: 1/1 to 1/32, 1/8T, 1/16. …), `level [--amount %] [--target DB] [--breaths on]` (the notes' levels as they
+play toward their mean, or the target, dB of full scale; it reads each note's level from the recording;
+breaths and other notes with no pitch are left alone unless `--breaths on`, or they're all that's chosen).
 `midi` adds a MIDI track named after the audio track ("Vocal notes"), just below it, playing the notes
 as they play: each where its beat plays, at the nearest semitone, velocities from their levels
 (breaths and muted notes left out). Time edits (move, resize, attack, join, boundary, transition,

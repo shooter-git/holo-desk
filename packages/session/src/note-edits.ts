@@ -636,10 +636,23 @@ const DEFS: Def[] = [
         max: 0,
         help: 'The level they go to, dB of full scale (their mean when left out)',
       },
+      {
+        name: 'breaths',
+        kind: 'boolean',
+        default: false,
+        help: 'Level notes with no pitch too (breaths, lone consonants); else they’re left alone, unless they’re all that’s chosen',
+      },
     ],
     run: (notes, idx, a, ctx) =>
       ctx.levels
-        ? levelNotes(notes, idx, ctx.levels, pct(a, 'amount'), typeof a.target === 'number' ? a.target : undefined)
+        ? levelNotes(
+            notes,
+            idx,
+            ctx.levels,
+            pct(a, 'amount'),
+            typeof a.target === 'number' ? a.target : undefined,
+            a.breaths === true,
+          )
         : notes,
   },
 ];

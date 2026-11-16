@@ -1850,7 +1850,10 @@ function NoteTools({ phone, more }: { phone: boolean; more: MenuEntry[] }) {
           title="More tools, where a dragged pitch lands, the macros, and the notes as MIDI"
           aria-label="More tools"
           onClick={(e) =>
+            // (the macros, MIDI and the toggles first: below the tools and snaps they'd be past a phone's fold)
             openMenuAt(e.currentTarget, [
+              ...more,
+              ...(more.length ? (['sep'] as const) : []),
               { heading: 'Tool' },
               ...NOTE_TOOLS.map(
                 (t): MenuEntry => ({
@@ -1864,8 +1867,6 @@ function NoteTools({ phone, more }: { phone: boolean; more: MenuEntry[] }) {
               ...PITCH_SNAPS.map(
                 (v): MenuEntry => ({ label: PITCH_SNAP_NAMES[v], checked: v === snap, onSelect: () => setSnap(v) }),
               ),
-              'sep',
-              ...more,
             ])
           }
         >

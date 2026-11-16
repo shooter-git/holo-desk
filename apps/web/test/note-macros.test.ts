@@ -59,9 +59,11 @@ describe('the Macros dialog, from the note edits', () => {
     // (with nothing to start from: the middle of its range)
     expect(macroControls(edit('level'))[1]).toMatchObject({ start: -30 });
     const values = macroValues(level);
-    expect(values).toEqual({ amount: 100, target: null });
-    expect(macroArgs(values)).toEqual({ amount: 100 });
-    expect(macroArgs({ ...values, target: -12 })).toEqual({ amount: 100, target: -12 });
+    expect(values).toEqual({ amount: 100, target: null, breaths: false });
+    expect(macroArgs(values)).toEqual({ amount: 100, breaths: false });
+    expect(macroArgs({ ...values, target: -12 })).toEqual({ amount: 100, target: -12, breaths: false });
+    // breaths: a switch, off unless it's turned on
+    expect(level[2]).toMatchObject({ arg: 'breaths', kind: 'switch', start: false });
   });
 
   it('gives a new argument a control by itself', () => {

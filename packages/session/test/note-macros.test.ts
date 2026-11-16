@@ -252,23 +252,38 @@ describe('level', () => {
   /** Each note's level as it plays: as recorded, with its gain. */
   const playing = (out: AudioNotes, levels = LEVELS) => out.n.map((n, i) => (levels[i] as number) + (n.g ?? 0));
 
-  it('brings the notes’ levels to their mean all the way, halfway at 50%', () => {
+  it('brings the sung notes’ levels to their mean all the way, halfway at 50%, and leaves a breath alone', () => {
     const out = run({}, LEVELS);
     expectCanonical(out);
-    const mean = (-20 - 14 - 31 - 40 - 17) / 5;
-    for (const level of playing(out)) expect(level).toBeCloseTo(mean, 1);
-    expect(out.n.map((n) => n.g)).toEqual([-4.4, -10.4, 6.6, 15.6, -7.4]);
-    // a breath takes a level too
+    // the breath (note 4, no pitch) isn't counted, and keeps its level
     expect(out.n[3]?.p).toBeNull();
+    expect(out.n[3]?.g).toBeUndefined();
+    const mean = (-20 - 14 - 31 - 17) / 4;
+    for (const i of [0, 1, 2, 4]) expect(playing(out)[i]).toBeCloseTo(mean, 1);
+    expect(out.n.map((n) => n.g)).toEqual([-0.5, -6.5, 10.5, undefined, -3.5]);
     // a second time, nothing changes
     expect(run({}, LEVELS, out)).toBe(out);
     const half = playing(run({ amount: 50 }, LEVELS));
     const spread = (xs: number[]) => Math.max(...xs) - Math.min(...xs);
-    expect(spread(half)).toBeCloseTo(spread(playing(LINE)) / 2, 1);
+    const sung = (xs: number[]) => xs.filter((_, i) => i !== 3);
+    expect(spread(sung(half))).toBeCloseTo(spread(sung(playing(LINE))) / 2, 1);
+  });
+
+  it('levels a breath with the rest when asked, or when breaths are all that’s chosen', () => {
+    const out = run({ breaths: true }, LEVELS);
+    const mean = (-20 - 14 - 31 - 40 - 17) / 5;
+    for (const level of playing(out)) expect(level).toBeCloseTo(mean, 1);
+    expect(out.n.map((n) => n.g)).toEqual([-4.4, -10.4, 6.6, 15.6, -7.4]);
+    // the breath chosen alone, to a level given
+    const alone = run({ target: -50 }, LEVELS, LINE, [3]);
+    expect(alone.n[3]?.g).toBe(-10);
+    expect(alone.n.filter((_, i) => i !== 3).every((n) => n.g === undefined)).toBe(true);
   });
 
   it('goes to a level given instead', () => {
-    for (const level of playing(run({ target: -18 }, LEVELS))) expect(level).toBeCloseTo(-18, 1);
+    const out = run({ target: -18 }, LEVELS);
+    for (const i of [0, 1, 2, 4]) expect(playing(out)[i]).toBeCloseTo(-18, 1);
+    expect(out.n[3]).toBe(LINE.n[3]);
   });
 
   it('counts the notes as they play: their gain in, muted ones and ones without a level left out', () => {
@@ -276,7 +291,8 @@ describe('level', () => {
       ...LINE,
       n: LINE.n.map((n, i) => (i === 1 ? { ...n, g: -6 } : i === 4 ? { ...n, m: true as const } : n)),
     };
-    const out = run({}, [-20, -14, null, -32, -17], edited);
+    // (the breath, note 4, counted as asked: the arithmetic here is the gain's and the mutes')
+    const out = run({ breaths: true }, [-20, -14, null, -32, -17], edited);
     // -20, -20 (as it plays) and -32: the mean is -24
     expect(out.n.map((n) => n.g)).toEqual([-4, -10, undefined, 8, undefined]);
     expect(out.n[2]).toBe(edited.n[2]);

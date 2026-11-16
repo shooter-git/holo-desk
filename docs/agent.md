@@ -657,7 +657,8 @@ parity test (`packages/cli/test/parity.test.ts`) fails if either lacks one.
   nothing); `quantize-time` (a line's notes) moves each note's beat, after its consonant, `amount` %
   of the way to the `grid` (the piano roll's note values), each note whole, through the same moves as
   `move`, so the warp stays valid and no move goes past 4 s; `level` brings the notes' levels as they
-  play toward their mean (or `target` dB), `amount` % of the way. A note's level isn't in the song:
+  play toward their mean (or `target` dB), `amount` % of the way, leaving notes with no pitch (breaths)
+  alone unless `breaths` is on or they're all that's chosen. A note's level isn't in the song:
   `level` (an entry with `needsLevels`) reads it from the notes measurement's `levels`, matched to the
   region's notes by start and length (a note split or added since has none), waiting while
   they're being found and refusing, saying why, when none can be read.

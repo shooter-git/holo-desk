@@ -113,7 +113,9 @@ export function quantizeNotes(
 /**
  * Notes' levels brought toward one level: their mean as they play (each its level as recorded,
  * `levels` by index in dB, with its gain), or `target` (dB) when given; `amount` 1 all the way. A
- * note muted, or whose level isn't known, is left as it is and isn't counted. Levels are taken to
+ * note muted, or whose level isn't known, is left as it is and isn't counted. So is a note with no
+ * pitch (a breath, a lone consonant), unless `breaths` asks for them or they're all that's chosen:
+ * levelled with the sung notes, a breath would come up as loud as a word. Levels are taken to
  * hundredths of a dB, so all the way they come out the same and a second time changes nothing.
  */
 export function levelNotes(
@@ -122,12 +124,15 @@ export function levelNotes(
   levels: readonly (number | null | undefined)[],
   amount: number,
   target?: number,
+  breaths = false,
 ): AudioNotes {
   const share = clamp(Number.isFinite(amount) ? amount : 0, 0, 1);
-  const idx = noteIndices(notes, indices).filter((i) => {
+  const known = noteIndices(notes, indices).filter((i) => {
     const level = levels[i];
     return !notes.n[i]?.m && typeof level === 'number' && Number.isFinite(level);
   });
+  const sung = known.filter((i) => notes.n[i]?.p !== null);
+  const idx = breaths || !sung.length ? known : sung;
   if (!share || !idx.length) return notes;
   const now = (i: number) => roundAmount(levels[i] as number) + ((notes.n[i] as AudioNote).g ?? 0);
   let goal: number;

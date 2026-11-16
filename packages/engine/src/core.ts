@@ -89,6 +89,15 @@ const SWAP_LOOK_S = 0.25;
 const SWAP_READ_S = 0.03;
 /** They agree enough here to start at once (energy through the crossfade's middle: (1 + this) / 2 of theirs). */
 const SWAP_AGREE = 0.9;
+/**
+ * Played live, where the song jumps (stopped, located while it plays, around a cycle), what it was
+ * playing goes on from where it was this long, fading out, and what it plays from the new place (a
+ * recording already under way there) fades in over the same, seconds. Cut at once, a held note or a
+ * recording's sound clicks.
+ */
+const TRANSPORT_FADE_S = 0.015;
+/** No voices (what a track's transport tail holds when it has none). */
+const NO_VOICES: Sounding[] = [];
 const METER_FALL = 0.9939; // about 20 dB a second at 48 kHz, 128-frame blocks
 
 /**
@@ -796,6 +805,17 @@ class TrackNode extends Strip {
   nextClips: ClipSpec[] | null = null;
   nextFade = 0;
   /**
+   * What it last played of the song (its clips, its planned part's voices), and what goes on fading
+   * out where the song jumps (the engine's transport tail; null and none: nothing), with the place
+   * in those clips it has got to.
+   */
+  heardClips: ClipSpec[] | null = null;
+  heardVoices: Sounding[] = NO_VOICES;
+  tailClips: ClipSpec[] | null = null;
+  tailVoices: Sounding[] = NO_VOICES;
+  tailCursor = 0;
+  tailFrom = Number.NEGATIVE_INFINITY;
+  /**
    * An audition ('audition'): pieces of held audio heard once, laid out from its own frame 0, and the
    * frame it has got to and ends at (null: none sounding). The one it took over from fades out over
    * the engine's audition fade from where it was (`auditionFading` frames of it left); one that
@@ -880,6 +900,27 @@ export class EngineCore implements Host {
    * through, to the same numbers as ever.
    */
   rest = false;
+  /**
+   * Where the song jumps (stopped, located while it plays, around a cycle), what was playing fades
+   * out over TRANSPORT_FADE_S from where it was, and a recording under way where it lands fades in:
+   * for playing live, set by whoever runs the engine live (as `rest`). A bounce or a headless render
+   * leaves it off: it never stops part way, and a loop's jump is the music's own.
+   */
+  transportFades = false;
+  /**
+   * The transport's tail: the song frame what was playing goes on from, the frames of its fade left
+   * (0: none) and its length, and where in this block it starts (a cycle's jump is part way in).
+   */
+  private tailSong = 0;
+  private tailLeft = 0;
+  private tailOut = 0;
+  private readonly transportFade: number;
+  /** A recording under way where the song landed fades in from this song frame, until the engine's frame `enterEnd`. */
+  private enterSong = 0;
+  private enterEnd = Number.NEGATIVE_INFINITY;
+  /** What a tail's planned voices play into before their fade (made once). */
+  private readonly tailL = new Float32Array(MAX_BLOCK);
+  private readonly tailR = new Float32Array(MAX_BLOCK);
   /** Blocks played (what a strip's rest is counted in). */
   private tick = 0;
   /** Frames an audition fades out over when another takes over (and one following it fades in over). */
@@ -957,6 +998,7 @@ export class EngineCore implements Host {
     this.sr = sr;
     this.send = post;
     this.auditionFade = Math.max(DECLICK, Math.round(AUDITION_FADE_S * sr));
+    this.transportFade = Math.max(DECLICK, Math.round(TRANSPORT_FADE_S * sr));
     const ahead = Math.ceil((SWAP_LOOK_S + SWAP_READ_S) * sr);
     this.swapFrom = new Float32Array(ahead);
     this.swapTo = new Float32Array(ahead);
@@ -1220,6 +1262,9 @@ export class EngineCore implements Host {
         break;
       case 'play':
         this.lastCmd = msg.cmd ?? this.lastCmd;
+        // (playing on from elsewhere: what was playing fades out; whatever plays there fades in)
+        if (this.playing && msg.frame - msg.countIn !== this.pos) this.jumped(this.pos, 0, true);
+        this.entered(msg.frame, this.frames + msg.countIn);
         this.pos = msg.frame - msg.countIn;
         // (from the song's start the count-in is before it; from further in, it's the bar before)
         this.countInTo = msg.countIn > 0 ? msg.frame : 0;
@@ -1240,6 +1285,8 @@ export class EngineCore implements Host {
         break;
       case 'stop':
         this.lastCmd = msg.cmd ?? this.lastCmd;
+        // what was playing fades out from where it was (the take, if recording, ends here all the same)
+        if (this.playing) this.jumped(this.pos, 0, true);
         this.playing = false;
         this.recording = false;
         this.countInTo = 0;
@@ -1251,6 +1298,10 @@ export class EngineCore implements Host {
         break;
       case 'locate':
         this.lastCmd = msg.cmd ?? this.lastCmd;
+        if (this.playing && msg.frame !== this.pos) {
+          this.jumped(this.pos, 0, true);
+          this.entered(msg.frame, this.frames);
+        }
         for (const t of this.trackOrder) {
           if (this.playsSong(t)) this.endSeqNotes(t, 0);
           this.seek(t, msg.frame);
@@ -1289,6 +1340,8 @@ export class EngineCore implements Host {
         break;
       }
       case 'panic':
+        // (a tail still fading stops too: at once)
+        this.endTail();
         for (const t of this.trackOrder) {
           for (const inst of t.instruments) inst?.allNotesOff(true);
           for (const m of t.midiFx) m.fx.reset();
@@ -1516,6 +1569,7 @@ export class EngineCore implements Host {
         part.voices = keep;
       }
       part.until = song + count;
+      t.heardVoices = part.voices;
       for (const v of part.voices) v.play(t.l, t.r, out, count);
       while (part.next < part.entries.length) {
         const e = part.entries[part.next] as PartRuntime['entries'][number];
@@ -1725,12 +1779,82 @@ export class EngineCore implements Host {
         old = t.oldClips;
       }
     }
+    t.heardClips = t.clips;
     if (!old) {
       this.playClipList(t, t.clips, false, 0);
       return;
     }
     this.playClipList(t, t.clips, false, 1);
     this.playClipList(t, old, true, -1);
+  }
+
+  /**
+   * The song jumps (from the song frame `from`, `out` frames into this block): played live, what each
+   * track last played goes on from there, fading out over the transport's fade (`voices`: its
+   * planned part's voices too, which a stop or a locate lets go of; around a cycle they ring on).
+   * One under way gives way to it. A stop or a locate also ends a clips crossfade there and then
+   * (clips that came for one are played at once): what played fades out anyway, from where it was,
+   * and a version of the song played from a new place (an A/B's next pass) starts there as it is.
+   */
+  private jumped(from: number, out: number, voices: boolean): void {
+    if (!this.transportFades) return;
+    this.endTail();
+    this.tailSong = from;
+    this.tailLeft = this.transportFade;
+    this.tailOut = out;
+    for (const t of this.trackOrder) {
+      if (!this.playsSong(t)) continue;
+      t.tailClips = t.heardClips;
+      t.tailCursor = 0;
+      t.tailFrom = Number.NEGATIVE_INFINITY;
+      if (!voices) continue;
+      t.tailVoices = t.heardVoices;
+      t.oldClips = null;
+      if (t.nextClips) {
+        this.swapClips(t, t.nextClips, 0, this.frames, from);
+        t.nextClips = null;
+      }
+    }
+  }
+
+  /** Played live, the song lands on the song frame `at` at the engine's frame `frame`: a recording under way there fades in. */
+  private entered(at: number, frame: number): void {
+    if (!this.transportFades) return;
+    this.enterSong = at;
+    this.enterEnd = frame + this.transportFade;
+  }
+
+  /** The transport's tail, let go of. */
+  private endTail(): void {
+    this.tailLeft = 0;
+    for (const t of this.trackOrder) {
+      t.tailClips = null;
+      t.tailVoices = NO_VOICES;
+    }
+  }
+
+  /**
+   * A track's transport tail over this block: its clips from the song frame the tail has got to, and
+   * its planned voices, fading out together from the frame the tail starts at in this block.
+   */
+  private playTail(t: TrackNode, n: number): void {
+    const out = this.tailOut;
+    const count = Math.min(n - out, this.tailLeft);
+    if (count <= 0) return;
+    const clips = t.tailClips;
+    if (clips?.length) this.clipSpan(t, clips, 2, out, this.tailSong, count, 0);
+    const voices = t.tailVoices;
+    if (!voices.length) return;
+    const { tailL, tailR } = this;
+    tailL.fill(0, 0, count);
+    tailR.fill(0, 0, count);
+    for (const v of voices) if (!v.done) v.play(tailL, tailR, 0, count);
+    const done = this.transportFade - this.tailLeft;
+    for (let i = 0; i < count; i++) {
+      const g = 1 - (done + i + 1) / this.transportFade;
+      t.l[out + i] = (t.l[out + i] as number) + (tailL[i] as number) * g;
+      t.r[out + i] = (t.r[out + i] as number) + (tailR[i] as number) * g;
+    }
   }
 
   /**
@@ -1821,61 +1945,96 @@ export class EngineCore implements Host {
    * from. `fade`: 1 fading in, -1 fading out, 0 neither.
    */
   private playClipList(t: TrackNode, clips: ClipSpec[], old: boolean, fade: number): void {
-    for (let s = 0; s < this.spanCount; s++) {
-      const out = this.spans[s * 3] as number;
-      const song = this.spans[s * 3 + 1] as number;
-      const count = this.spans[s * 3 + 2] as number;
-      const songEnd = song + count;
-      // from the first clip not yet past (from the first of all, when the song has gone back)
-      let c = song < (old ? t.oldFrom : t.clipFrom) ? 0 : old ? t.oldCursor : t.clipCursor;
-      while (c < clips.length && (clips[c] as ClipSpec).end <= song) c++;
-      if (old) {
-        t.oldFrom = song;
-        t.oldCursor = c;
-      } else {
-        t.clipFrom = song;
-        t.clipCursor = c;
-      }
-      for (let i = c; i < clips.length; i++) {
-        const clip = clips[i] as ClipSpec;
-        if (clip.start >= songEnd) break;
-        if (clip.end <= song) continue;
-        const data = this.audio.get(clip.key);
-        const L = data?.[0];
-        if (!L) continue;
-        const R = data[1] ?? L;
-        const f0 = Math.max(song, clip.start);
-        const f1 = Math.min(songEnd, clip.end);
-        // a ramp where it cuts into its recording (a patch's: where the recording itself would be cut),
-        // none where it meets the next piece of the same region
-        const whole = clip.base === undefined ? L : this.audio.get(clip.base)?.[0];
-        const from = clip.base === undefined ? clip.source : (clip.at as number);
-        const cutIn = !clip.seamIn && from > 0;
-        const cutOut = !clip.seamOut && (!whole || from + (clip.end - clip.start) < whole.length);
-        for (let f = f0; f < f1; f++) {
-          const i = clip.source + (f - clip.start);
-          if (i < 0 || i >= L.length) continue;
-          let g = clip.gain;
-          // the region's fades, then a short ramp wherever this piece starts or stops
-          const fromStart = f - clip.regionStart;
-          const toEnd = clip.regionEnd - f;
-          if (fromStart < clip.fadeIn) g *= fromStart / clip.fadeIn;
-          if (toEnd < clip.fadeOut) g *= toEnd / clip.fadeOut;
-          const a = f - clip.start;
-          const b = clip.end - f;
-          if (cutIn && a < DECLICK) g *= a / DECLICK;
-          if (cutOut && b < DECLICK) g *= b / DECLICK;
-          const o = out + (f - song);
-          if (fade !== 0) {
-            // linear across the crossfade: the new list's share from its first frame on
-            // (none of it before the crossfade starts)
-            const k = this.blockFrame + o - t.fadeStart + 1;
-            const x = k <= 0 ? 0 : k >= t.fadeLength ? 1 : k / t.fadeLength;
-            g *= fade > 0 ? x : 1 - x;
-          }
-          t.l[o] = (t.l[o] as number) + (L[i] as number) * g;
-          t.r[o] = (t.r[o] as number) + (R[i] as number) * g;
+    for (let s = 0; s < this.spanCount; s++)
+      this.clipSpan(
+        t,
+        clips,
+        old ? 1 : 0,
+        this.spans[s * 3] as number,
+        this.spans[s * 3 + 1] as number,
+        this.spans[s * 3 + 2] as number,
+        fade,
+      );
+  }
+
+  /**
+   * A list of a track's clips from the song frame `song`, `count` frames, into the block from `out`.
+   * `slot`: whose place in the list it keeps (0 the clips it plays, 1 those a crossfade fades out from,
+   * 2 the transport's tail, which fades out); `fade` as playClipList's. The list it plays fades in
+   * where the song has landed (entered) on a recording already under way there.
+   */
+  private clipSpan(
+    t: TrackNode,
+    clips: ClipSpec[],
+    slot: number,
+    out: number,
+    song: number,
+    count: number,
+    fade: number,
+  ): void {
+    const songEnd = song + count;
+    // from the first clip not yet past (from the first of all, when the song has gone back)
+    const seen = slot === 0 ? t.clipFrom : slot === 1 ? t.oldFrom : t.tailFrom;
+    let c = song < seen ? 0 : slot === 0 ? t.clipCursor : slot === 1 ? t.oldCursor : t.tailCursor;
+    while (c < clips.length && (clips[c] as ClipSpec).end <= song) c++;
+    if (slot === 0) {
+      t.clipFrom = song;
+      t.clipCursor = c;
+    } else if (slot === 1) {
+      t.oldFrom = song;
+      t.oldCursor = c;
+    } else {
+      t.tailFrom = song;
+      t.tailCursor = c;
+    }
+    // the transport's: its tail's fade so far (slot 2), and where the song landed (the rest)
+    const tailDone = slot === 2 ? this.transportFade - this.tailLeft : 0;
+    const entering = slot !== 2 && this.blockFrame + out < this.enterEnd;
+    for (let i = c; i < clips.length; i++) {
+      const clip = clips[i] as ClipSpec;
+      if (clip.start >= songEnd) break;
+      if (clip.end <= song) continue;
+      const data = this.audio.get(clip.key);
+      const L = data?.[0];
+      if (!L) continue;
+      const R = data[1] ?? L;
+      const f0 = Math.max(song, clip.start);
+      const f1 = Math.min(songEnd, clip.end);
+      // a ramp where it cuts into its recording (a patch's: where the recording itself would be cut),
+      // none where it meets the next piece of the same region
+      const whole = clip.base === undefined ? L : this.audio.get(clip.base)?.[0];
+      const from = clip.base === undefined ? clip.source : (clip.at as number);
+      const cutIn = !clip.seamIn && from > 0;
+      const cutOut = !clip.seamOut && (!whole || from + (clip.end - clip.start) < whole.length);
+      for (let f = f0; f < f1; f++) {
+        const i = clip.source + (f - clip.start);
+        if (i < 0 || i >= L.length) continue;
+        let g = clip.gain;
+        // the region's fades, then a short ramp wherever this piece starts or stops
+        const fromStart = f - clip.regionStart;
+        const toEnd = clip.regionEnd - f;
+        if (fromStart < clip.fadeIn) g *= fromStart / clip.fadeIn;
+        if (toEnd < clip.fadeOut) g *= toEnd / clip.fadeOut;
+        const a = f - clip.start;
+        const b = clip.end - f;
+        if (cutIn && a < DECLICK) g *= a / DECLICK;
+        if (cutOut && b < DECLICK) g *= b / DECLICK;
+        const o = out + (f - song);
+        if (fade !== 0) {
+          // linear across the crossfade: the new list's share from its first frame on
+          // (none of it before the crossfade starts)
+          const k = this.blockFrame + o - t.fadeStart + 1;
+          const x = k <= 0 ? 0 : k >= t.fadeLength ? 1 : k / t.fadeLength;
+          g *= fade > 0 ? x : 1 - x;
         }
+        if (slot === 2) g *= 1 - (tailDone + (f - song) + 1) / this.transportFade;
+        else if (entering && clip.start < this.enterSong && f >= this.enterSong) {
+          // (a recording already under way where the song landed: in over the transport's fade)
+          const k = f - this.enterSong + 1;
+          if (k < this.transportFade && this.blockFrame + o < this.enterEnd) g *= k / this.transportFade;
+        }
+        t.l[o] = (t.l[o] as number) + (L[i] as number) * g;
+        t.r[o] = (t.r[o] as number) + (R[i] as number) * g;
       }
     }
   }
@@ -2023,8 +2182,11 @@ export class EngineCore implements Host {
     t.events.clear();
     t.work.clear();
     if ((t.clips.length || t.oldClips) && this.playing && song) this.playClips(t);
+    else t.heardClips = null;
+    if (this.tailLeft > 0 && song && (t.tailClips || t.tailVoices.length)) this.playTail(t, n);
     if (t.audition || t.auditionOld || t.auditionWaiting) this.playAudition(t, n);
     if (t.part && this.playing && song) this.playPart(t, t.part);
+    else t.heardVoices = NO_VOICES;
     if (t.input && this.inputOf(t, input)) {
       const { inA, inB } = this;
       if (t.capture) this.record(t, inA, inB, n);
@@ -2160,6 +2322,7 @@ export class EngineCore implements Host {
    */
   private trackBusy(t: TrackNode): boolean {
     if (t.events.count > 0 || t.input || t.capture || t.audition || t.auditionOld || t.auditionWaiting) return true;
+    if (this.tailLeft > 0 && (t.tailClips || t.tailVoices.length)) return true;
     for (const inst of t.instruments) if (inst && inst.active > 0) return true;
     for (const m of t.midiFx) if (!m.bypass && m.fx.busy?.()) return true;
     return this.playing && (t.part !== null || (t.clips.length > 0 && this.clipsAhead(t)));
@@ -2877,6 +3040,8 @@ export class EngineCore implements Host {
     const cyc = this.cycle;
     if (this.playing && cyc.on && cyc.end > cyc.start && this.pos === cyc.end) {
       // the last block ended right on the cycle's end: around to its start before this one plays
+      this.jumped(cyc.end, 0, false);
+      this.entered(cyc.start, this.blockFrame);
       for (const t of this.trackOrder) {
         if (!cyc.wrap && this.playsSong(t)) this.endSeqNotes(t, 0);
         this.seek(t, cyc.start, false);
@@ -2898,6 +3063,9 @@ export class EngineCore implements Host {
           const first = c.end - this.pos;
           this.span(0, 0, this.pos, first);
           this.span(1, first, c.start, n - first);
+          // what plays past the end goes on a moment, fading, as the start fades in
+          this.jumped(c.end, first, false);
+          this.entered(c.start, this.blockFrame + first);
           for (const t of this.trackOrder) if (this.playsSong(t)) this.gather(t, this.pos, c.end, 0);
           for (const t of this.trackOrder) {
             const song = this.playsSong(t);
@@ -2966,6 +3134,13 @@ export class EngineCore implements Host {
 
   /** The playhead past this block (around the cycle), and the transport as it now stands. */
   private advance(startPos: number, n: number): void {
+    if (this.tailLeft > 0) {
+      const count = Math.max(0, Math.min(n - this.tailOut, this.tailLeft));
+      this.tailSong += count;
+      this.tailLeft -= count;
+      this.tailOut = 0;
+      if (this.tailLeft <= 0) this.endTail();
+    }
     if (this.playing) {
       this.pos = startPos + n;
       const c = this.cycle;

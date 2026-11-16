@@ -598,8 +598,9 @@ export class Renderer {
     });
     core.clock = () => performance.now();
     core.fineClock = true;
-    // (playing live: a strip with nothing to play rests)
+    // (playing live: a strip with nothing to play rests, and the song fades where it stops or jumps)
     core.rest = true;
+    core.transportFades = true;
     this.core = core;
     // (a studio starting again says whether it's rendered ahead)
     this.player = null;

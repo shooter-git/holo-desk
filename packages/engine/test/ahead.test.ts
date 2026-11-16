@@ -411,11 +411,13 @@ function one(
   blocks: number,
   rest = false,
   each?: (k: number, core: EngineCore) => void,
+  fades = false,
 ): Float32Array[] {
   const core = new EngineCore(SR, (m) => {
     if (m.type === 'error') throw new Error(m.message);
   });
   core.rest = rest;
+  core.transportFades = fades;
   core.receive({ type: 'init', ring: null, meters: null, transport: null });
   return run(blocks, (k, l, r) => {
     for (const m of batches.get(k) ?? []) core.receive(structuredClone(m));
@@ -448,6 +450,7 @@ function split(
   owners: number[],
   live?: (k: number, core: EngineCore) => void,
   rest = false,
+  fades = false,
 ): Float32Array[] {
   const control = aheadControl();
   const room = 256;
@@ -459,6 +462,7 @@ function split(
       if (m.type === 'error') throw new Error(m.message);
     });
     core.rest = rest;
+    core.transportFades = fades;
     core.receive({
       type: 'init',
       ring: null,
@@ -606,6 +610,33 @@ describe('rendering ahead', () => {
     const out = await threaded(going, BLOCKS, 3, shuffled, 12);
     expect(out.played.some((b, k) => b > k)).toBe(true);
     expect(same(out.channels, replayed(out, all))).toBe(true);
+  }, 60_000);
+});
+
+describe('rendering ahead, the song fading where it stops and jumps (as played live)', () => {
+  const p = song();
+  const nums = numbering();
+  const batches = edits(p, nums);
+  batches.set(0, setup(p, nums));
+  const graph = graphOf(p, nums);
+  const BLOCKS = 900;
+  const reference = one(batches, BLOCKS, false, undefined, true);
+
+  it('fades a recording and a planned part where it jumps, stops and starts: not what it played without', () => {
+    expect(same(reference, one(batches, BLOCKS))).toBe(false);
+  });
+
+  for (const workers of [1, 3]) {
+    it(`plays the same numbers as one engine, split ${workers} way${workers > 1 ? 's' : ''}`, () => {
+      const owners = aheadOwners(graph, workers, () => 0.1);
+      expect(same(split(batches, BLOCKS, workers, owners, undefined, false, true), reference)).toBe(true);
+    }, 60_000);
+  }
+
+  it('rests the same split as on one engine', () => {
+    const owners = aheadOwners(graph, 2, () => 0.1);
+    const rested = one(batches, BLOCKS, true, undefined, true);
+    expect(same(split(batches, BLOCKS, 2, owners, undefined, true, true), rested)).toBe(true);
   }, 60_000);
 });
 

@@ -1141,6 +1141,334 @@ a.btn {
   }
 }
 
+/* ---------- a phone's tracks: the headers fold to a rail ---------- */
+
+/* On a phone the headers fold to a rail (each track's color, what it plays, and M, S or R while
+   they're on), the names go on the lanes, and the headers come out over the lanes as a drawer. Each
+   part has its own place in the grid, so the drawer can leave its column and lie over the lanes. */
+.tracks.rail {
+  position: relative;
+}
+
+/* (each with its end line too: one lying over the lanes would otherwise reach the box's foot) */
+.tracks.rail > .tracks-toolbar {
+  grid-row: 1 / 2;
+  grid-column: 1;
+}
+
+.tracks.rail > .ruler {
+  grid-row: 1;
+  grid-column: 2;
+}
+
+.tracks.rail > .track-list {
+  grid-row: 2 / 3;
+  grid-column: 1;
+}
+
+.tracks.rail > .timeline {
+  grid-row: 2;
+  grid-column: 2;
+}
+
+.tracks.rail:not(.drawer-open) > .tracks-toolbar {
+  justify-content: center;
+  padding: 0;
+}
+
+.track-row.rail-cell {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  width: 100%;
+  padding: 0 0 0 4px;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.track-row.rail-cell:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.track-row.rail-cell .swatch {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 4px;
+}
+
+.rail-icon {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border-radius: var(--radius);
+  background: var(--bg-0);
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.6);
+}
+
+.rail-icon svg {
+  width: 17px;
+  height: 17px;
+}
+
+.rail-marks {
+  display: flex;
+  gap: 2px;
+  min-height: 12px;
+}
+
+.rail-marks span {
+  padding: 0 3px;
+  border-radius: 3px;
+  color: #0b0d10;
+  font: 750 9px / 12px var(--font);
+}
+
+.rail-marks .mute {
+  background: var(--mute);
+}
+
+.rail-marks .solo {
+  background: var(--solo);
+}
+
+.rail-marks .rec {
+  background: var(--rec);
+}
+
+/* a short row has no room under the icon: the marks are dots down the cell's right edge */
+.track-row.rail-cell.short .rail-icon {
+  width: 26px;
+  height: 26px;
+}
+
+.track-row.rail-cell.short .rail-marks {
+  position: absolute;
+  top: 50%;
+  right: 3px;
+  flex-direction: column;
+  gap: 3px;
+  min-height: 0;
+  transform: translateY(-50%);
+}
+
+.track-row.rail-cell.short .rail-marks span {
+  width: 5px;
+  height: 5px;
+  padding: 0;
+  border-radius: 50%;
+  font-size: 0;
+}
+
+.track-list-inner > .new-track {
+  position: absolute;
+  left: 8px;
+}
+
+/* on the rail, New track is a + in the rail's width, under the last track */
+.track-list-inner > .new-track.on-rail {
+  left: 9px;
+  width: 34px;
+  min-width: 0;
+  height: 34px;
+  padding: 0;
+  border: 1px dashed var(--line-3);
+  color: var(--text-2);
+}
+
+.track-list-inner > .new-track.on-rail svg {
+  width: 18px;
+  height: 18px;
+}
+
+/* the drawer: the toolbar and the headers over the lanes, from the rail's edge across */
+.tracks.drawer-open > .tracks-toolbar,
+.tracks.drawer-open > .track-list {
+  position: absolute;
+  inset: 0 auto 0 0;
+  grid-column: 1 / -1;
+  width: min(var(--drawer), calc(100% - 44px));
+  border-right: 1px solid var(--line-3);
+  box-shadow: 18px 0 40px rgba(0, 0, 0, 0.55);
+  animation: drawer-out 0.16s ease-out;
+}
+
+.tracks.drawer-open > .tracks-toolbar {
+  z-index: 7;
+}
+
+.tracks.drawer-open > .track-list {
+  z-index: 6;
+}
+
+@keyframes drawer-out {
+  from {
+    transform: translateX(calc(var(--headers) - 100%));
+  }
+}
+
+/* its headers have the width a phone on its side gives them: the buttons beside the name */
+.tracks.drawer-open .track-row,
+.tracks.drawer-open .track-row.no-icon {
+  grid-template-columns: 5px minmax(0, 1fr) auto;
+  grid-template-rows: auto;
+}
+
+.tracks.drawer-open .track-row .swatch {
+  grid-row: auto;
+}
+
+.tracks.drawer-open .track-row .chips,
+.tracks.drawer-open .track-row.no-icon .chips {
+  grid-column: auto;
+  flex-wrap: nowrap;
+}
+
+.tracks.drawer-open .track-row .chips .lane-select {
+  flex: none;
+  width: 132px;
+}
+
+.drawer-scrim {
+  position: absolute;
+  inset: 0;
+  z-index: 4;
+  background: rgba(5, 6, 8, 0.55);
+  animation: scrim-in 0.16s ease-out;
+}
+
+@keyframes scrim-in {
+  from {
+    opacity: 0;
+  }
+}
+
+/* one track's buttons, drawn out of the rail beside its lane; a press anywhere else puts them back */
+.rail-peek-catch {
+  position: absolute;
+  inset: 0;
+  z-index: 8;
+}
+
+.rail-peek {
+  position: absolute;
+  top: calc(var(--control) + 4px + var(--row-top));
+  left: var(--headers);
+  z-index: 9;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 8px 0 10px;
+  border: 1px solid var(--line-3);
+  border-left: 3px solid var(--c);
+  border-radius: 0 var(--radius) var(--radius) 0;
+  background: linear-gradient(180deg, #29303a, #242a33);
+  box-shadow: 10px 6px 28px rgba(0, 0, 0, 0.6);
+  animation: peek-out 0.14s ease-out;
+}
+
+.rail-peek .name {
+  max-width: 110px;
+  overflow: hidden;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@keyframes peek-out {
+  from {
+    opacity: 0;
+    transform: translateX(-24px);
+  }
+}
+
+/* the selected track's buttons and volume, under the lanes of a phone held upright */
+.tracks.docked {
+  grid-template-rows: calc(var(--control) + 4px) minmax(0, 1fr) auto;
+}
+
+.track-dock {
+  grid-row: 3;
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 56px;
+  padding-right: 8px;
+  border-top: 1px solid var(--line);
+  background: linear-gradient(180deg, #23272e, #1c2026);
+  box-shadow: inset 0 1px 0 var(--hi);
+}
+
+.track-dock .swatch {
+  flex: none;
+  align-self: stretch;
+  width: 5px;
+}
+
+/* (the name and buttons give up a little width, so the fader has the most travel it can) */
+.track-dock .dock-name {
+  flex: 0 1 72px;
+  min-width: 0;
+}
+
+.track-dock .name,
+.track-dock .sub {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.track-dock .name {
+  font-weight: 600;
+}
+
+.track-dock .sub {
+  color: var(--text-3);
+  font-size: 10.5px;
+}
+
+.track-dock .chips {
+  display: flex;
+  flex: none;
+  gap: 3px;
+}
+
+.track-dock .chip {
+  min-width: 32px;
+}
+
+/* (on the narrowest phones the name gives way before the fader does) */
+.track-dock .dock-volume {
+  display: flex;
+  flex: 1 1 0;
+  align-items: center;
+  min-width: 80px;
+}
+
+.track-dock .db-readout {
+  flex: none;
+  width: 42px;
+  text-align: center;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tracks.drawer-open > .tracks-toolbar,
+  .tracks.drawer-open > .track-list,
+  .drawer-scrim,
+  .rail-peek {
+    animation: none;
+  }
+}
+
 .timeline {
   position: relative;
   min-width: 0;
@@ -1969,6 +2297,49 @@ a.btn {
   top: 9px;
   height: 1px;
   background: #e8edf3;
+}
+
+/* on its side (a phone's track dock): louder to the right, the cap stood up */
+.fader.horizontal {
+  width: auto;
+  height: 30px;
+  cursor: ew-resize;
+}
+
+.fader.horizontal .fader-slot {
+  top: 13px;
+  right: 13px;
+  bottom: auto;
+  left: 13px;
+  width: auto;
+  height: 4px;
+}
+
+.fader.horizontal .fader-tick {
+  top: 0;
+  width: 1px;
+  height: 8px;
+}
+
+.fader.horizontal .fader-tick.zero {
+  width: 1px;
+  height: 30px;
+}
+
+.fader.horizontal .fader-cap {
+  top: 3px;
+  left: 0;
+  width: 20px;
+  height: 24px;
+}
+
+.fader.horizontal .fader-cap-line {
+  top: 3px;
+  right: auto;
+  bottom: 3px;
+  left: 9px;
+  width: 1px;
+  height: auto;
 }
 
 .meter-canvas {

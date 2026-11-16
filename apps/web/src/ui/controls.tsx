@@ -469,16 +469,19 @@ interface FaderProps {
   onChange: (db: number) => void;
   onBegin?: () => void;
   onEnd?: () => void;
-  height: number;
+  /** How long it is along its travel: its height, or its width when it lies on its side. */
+  length: number;
   label?: string;
+  /** On its side, louder to the right: a row has the width a strip has the height for. */
+  horizontal?: boolean;
 }
 
 const SCALE = [6, 0, -6, -12, -24, -48];
 
-export function Fader({ db, onChange, onBegin, onEnd, height, label = 'Volume' }: FaderProps) {
+export function Fader({ db, onChange, onBegin, onEnd, length, label = 'Volume', horizontal = false }: FaderProps) {
   const root = useRef<HTMLDivElement>(null);
   const pos = dbToFader(db);
-  const travel = height - 26;
+  const travel = length - 26;
   const p = useRef(pos);
   const burst = useBurst(onBegin, onEnd);
   const step = (by: number) => onChange(Math.max(-144, Math.min(6, Math.round((db + by) * 10) / 10)));
@@ -486,16 +489,16 @@ export function Fader({ db, onChange, onBegin, onEnd, height, label = 'Volume' }
   return (
     <div
       ref={root}
-      className="fader"
+      className={`fader${horizontal ? ' horizontal' : ''}`}
       role="slider"
       tabIndex={0}
       aria-label={label}
-      aria-orientation="vertical"
+      aria-orientation={horizontal ? 'horizontal' : 'vertical'}
       aria-valuemin={-144}
       aria-valuemax={6}
       aria-valuenow={Math.round(db * 10) / 10}
       aria-valuetext={`${formatDb(db)} dB`}
-      style={{ height }}
+      style={horizontal ? { width: length } : { height: length }}
       title={`${formatDb(db)} dB (double-click: 0 dB)`}
       onPointerDown={(e) => {
         if (e.button !== 0) return;
@@ -506,8 +509,9 @@ export function Fader({ db, onChange, onBegin, onEnd, height, label = 'Volume' }
         const rise = pastSlop();
         startDrag(e, {
           onStart: onBegin,
-          onMove: (_dx, dy, ev) => {
-            const by = upDown ? rise(dy) : dy;
+          onMove: (dx, dy, ev) => {
+            // (on its side, a move to the right is a move up)
+            const by = horizontal ? -dx : upDown ? rise(dy) : dy;
             if (by === 0) return;
             p.current = Math.max(0, Math.min(1, p.current - by / travel / (ev.shiftKey ? 6 : 1)));
             const v = faderToDb(p.current);
@@ -538,11 +542,18 @@ export function Fader({ db, onChange, onBegin, onEnd, height, label = 'Volume' }
         <div
           key={d}
           className={`fader-tick${d === 0 ? ' zero' : ''}`}
-          style={{ top: 13 + (1 - dbToFader(d)) * travel - 0.5 }}
+          style={
+            horizontal ? { left: 13 + dbToFader(d) * travel - 0.5 } : { top: 13 + (1 - dbToFader(d)) * travel - 0.5 }
+          }
         />
       ))}
       {/* (moved by a transform: a fader dragged lays nothing out) */}
-      <div className="fader-cap" style={{ transform: `translateY(${(1 - pos) * travel + 3}px)` }}>
+      <div
+        className="fader-cap"
+        style={{
+          transform: horizontal ? `translateX(${pos * travel + 3}px)` : `translateY(${(1 - pos) * travel + 3}px)`,
+        }}
+      >
         <div className="fader-cap-line" />
       </div>
     </div>

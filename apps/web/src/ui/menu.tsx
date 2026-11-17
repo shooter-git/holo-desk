@@ -27,6 +27,8 @@ interface Open {
 let open: Open | null = null;
 /** What had the keyboard when the menu opened: it gets it back when the menu closes. */
 let opener: Element | null = null;
+/** The button the menu opened under: pressed again, it closes the menu (and doesn't open it again). */
+let anchor: Element | null = null;
 const listeners = new Set<() => void>();
 const emit = () => {
   for (const l of listeners) l();
@@ -35,6 +37,7 @@ const emit = () => {
 export function openMenu(x: number, y: number, items: MenuEntry[]): void {
   if (!open) opener = document.activeElement;
   open = { x, y, items };
+  anchor = null;
   emit();
 }
 
@@ -42,11 +45,36 @@ export function openMenu(x: number, y: number, items: MenuEntry[]): void {
 export function openMenuAt(el: Element, items: MenuEntry[]): void {
   const r = el.getBoundingClientRect();
   openMenu(r.left, r.bottom + 4, items);
+  anchor = el;
+}
+
+/**
+ * The click that ends a press is let go by: the press closed the menu from its own button. A
+ * finger's tap clicks whatever is under it once the menu has gone, which is that button, and its
+ * click would open the menu again. (A mouse's press doesn't click there, so the next press, or a
+ * moment, ends the wait.)
+ */
+function swallowClick(): void {
+  const stop = (e: MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    done();
+  };
+  const done = () => {
+    window.clearTimeout(timer);
+    window.removeEventListener('click', stop, true);
+    window.removeEventListener('pointerdown', done, true);
+  };
+  const timer = window.setTimeout(done, 800);
+  window.addEventListener('click', stop, true);
+  // (added after this press's own listeners have run: it's the next press that ends the wait)
+  window.setTimeout(() => window.addEventListener('pointerdown', done, true));
 }
 
 export function closeMenu(): void {
   if (!open) return;
   open = null;
+  anchor = null;
   emit();
   const back = opener;
   opener = null;
@@ -89,6 +117,10 @@ export function MenuHost() {
       // a press outside closes the menu and goes no further: the control under it isn't pressed as well
       e.preventDefault();
       e.stopPropagation();
+      // (and on the menu's own button it's a toggle's second press: it closes the menu, and that's all)
+      const r = anchor?.getBoundingClientRect();
+      if (r && e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom)
+        swallowClick();
       closeMenu();
     };
     const key = (e: KeyboardEvent) => {

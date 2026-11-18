@@ -58,6 +58,8 @@ export const SYNTH_PRESETS = [
   'Frame Drum',
   'Opera Gongs',
   'Anvil',
+  'Shimmer Bell',
+  'Kalimba',
   'Drum Synth',
   'Analog Machine',
   'Punch Machine',
@@ -101,7 +103,7 @@ export const SYNTH_FAMILIES: { name: string; presets: readonly string[] }[] = [
       'Morph Bass',
     ],
   },
-  { name: 'Bells and glass', presets: ['Glass Bells', 'FM Bells', 'Glass Harmonica'] },
+  { name: 'Bells and glass', presets: ['Glass Bells', 'FM Bells', 'Glass Harmonica', 'Shimmer Bell'] },
   { name: 'Textures', presets: ['Ethereal Pad', 'Drone Field', 'Drone Metal', 'Drone Breath', 'Drone Glass'] },
   { name: 'Voices', presets: ['Choir Ahh', 'Male Choir', 'Morph Choir'] },
   {
@@ -118,6 +120,7 @@ export const SYNTH_FAMILIES: { name: string; presets: readonly string[] }[] = [
       'Pipa',
       'Sitar',
       'Tanpura',
+      'Kalimba',
     ],
   },
   {
@@ -444,6 +447,8 @@ SYNTH_MACROS['War Drums'] = struck({ tune: 0, decay: 1, hardness: 0.45, tone: 0.
 SYNTH_MACROS['Frame Drum'] = struck({ tune: 0, decay: 1, hardness: 0.4, tone: 0.55, ensemble: 0, space: 0.35 });
 SYNTH_MACROS['Opera Gongs'] = struck({ tune: 0, decay: 1, hardness: 0.5, tone: 0.6, ensemble: 0, space: 0.4 });
 SYNTH_MACROS.Anvil = struck({ tune: 0, decay: 1, hardness: 0.8, tone: 0.75, ensemble: 0, space: 0.3 });
+SYNTH_MACROS['Shimmer Bell'] = struck({ tune: 0, decay: 1, hardness: 0.55, tone: 0.6, ensemble: 0.5, space: 0.3 });
+SYNTH_MACROS.Kalimba = struck({ tune: 0, decay: 1, hardness: 0.45, tone: 0.5, ensemble: 0, space: 0.2 });
 
 /** What each synth with knobs is, for its window. */
 export const SYNTH_NOTES: Record<string, string> = {
@@ -528,6 +533,9 @@ export const SYNTH_NOTES: Record<string, string> = {
   'Frame Drum': 'A shallow skin drum: more skin than boom.',
   'Opera Gongs': 'Hand gongs whose pitch slides after the strike: down for the low ones, up for the high ones.',
   Anvil: 'A struck steel block: a hard, high, ringing clang.',
+  'Shimmer Bell':
+    'A small glassy bell: its bright partial a third above the note and a hum below. Ensemble spreads it into a shimmer.',
+  Kalimba: "A thumb piano's steel tines: near-pure plucked tones and the thumb's soft thump; high notes ring shorter.",
 };
 
 /** A synth's knob at its value in the instrument's params (its preset's default where it has none), kept in range. */

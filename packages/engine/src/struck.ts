@@ -11,6 +11,10 @@
  * - Opera Gongs: hand gongs whose pitch slides after the strike: down for the low gongs, up for the
  *   small high ones, as the opera's gongs do.
  * - Anvil: a struck steel block: a hard ring of high inharmonic modes.
+ * - Shimmer Bell: a small glassy bell heard at the key's pitch, its loudest partial a major third above
+ *   it, a hum below and a high partial two octaves up; Ensemble spreads it into a shimmer.
+ * - Kalimba: a thumb piano's steel tines: a near-pure tone with a faint octave and the tine's high
+ *   bending mode, the thumb's thump, and higher tines ringing shorter.
  *
  * Every key plays the instrument at that pitch. Its six knobs (SYNTH_MACROS) move while it plays.
  */
@@ -42,6 +46,9 @@ interface StruckParams {
   /** The stick's slap: noise level and its band (hertz). */
   slap: number;
   slapBand: number;
+  /** How much shorter higher keys ring: the ring halves every 1/keyRing octaves above middle C (and
+   * doubles as far below). 0: every key rings as long. */
+  keyRing?: number;
   level: number;
 }
 
@@ -109,6 +116,31 @@ const PRESETS: Record<string, Preset> = {
     slap: 0.5,
     slapBand: 6000,
     level: 0.1,
+  },
+  'Shimmer Bell': {
+    ratios: [0.605, 1, 1.25, 1.51, 1.95, 2.55, 3.1, 4.05],
+    amps: [0.22, 0.05, 1, 0.04, 0.22, 0.05, 0.04, 1.1],
+    ring: 2.5,
+    damping: 0.6,
+    glide: 0,
+    glideTime: 0.1,
+    glideByKey: 0,
+    slap: 0.1,
+    slapBand: 6000,
+    level: 0.12,
+  },
+  Kalimba: {
+    ratios: [1, 2, 6.4, 1.33, 4, 13, 0.75, 17.6],
+    amps: [1, 0.3, 0.9, 0.03, 0.04, 0.08, 0.02, 0.03],
+    ring: 0.9,
+    damping: 2,
+    glide: 0,
+    glideTime: 0.1,
+    glideByKey: 0,
+    slap: 1.6,
+    slapBand: 1500,
+    keyRing: 0.3,
+    level: 0.2,
   },
 };
 
@@ -185,7 +217,8 @@ class StruckVoice implements Voice {
         const k = j * MODES + m;
         const ratio = p.ratios[m] ?? m + 1;
         const f = Math.min(base * ratio * (this.detune[j] as number), sr * 0.45);
-        const t60 = (p.ring * p.decay) / ratio ** (p.damping * 0.5);
+        const t60 =
+          ((p.ring * p.decay) / ratio ** (p.damping * 0.5)) * 2 ** ((-(p.keyRing ?? 0) * (this.key - 60)) / 12);
         const r = Math.exp(-6.91 / Math.max(1, t60 * sr));
         this.rr[k] = r * r;
         this.c[k] = 2 * r * Math.cos((TAU * f) / sr);

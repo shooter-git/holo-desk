@@ -546,8 +546,9 @@ function HarnessRow({ harness: h, current }: { harness: HarnessInfo; current: bo
 /**
  * The model and effort the agent runs the harness with: the harness's own lists, as the runner last
  * read them; one saved that it no longer offers shows as such (a run uses its default instead). Each
- * default names what it is when the harness has said, and Runs with says what a run uses now. A
+ * default names what it is when the harness has said, and Requests use says what a run uses now. A
  * harness that lists no defaults (Claude Code) has none to pick: both are chosen, or it doesn't run.
+ * Only what needs saying is said: no line under a picker unless what's saved is no longer offered.
  */
 function HarnessRows({ harness: h, model, effort }: { harness: HarnessInfo; model: string; effort: string }) {
   const [typed, setTyped] = useState(model);
@@ -562,7 +563,7 @@ function HarnessRows({ harness: h, model, effort }: { harness: HarnessInfo; mode
   const effortDefault = must ? 'Choose an effort' : defaultLabel(h, runsWith(h, model, '').effort);
   const gone = must
     ? `${h.name} no longer offers it: choose another`
-    : `${h.name} no longer offers it: it runs with its default`;
+    : `${h.name} no longer offers it, so it uses its default`;
   return (
     <>
       <span className="agent-key">Model</span>
@@ -587,7 +588,7 @@ function HarnessRows({ harness: h, model, effort }: { harness: HarnessInfo; mode
           <input
             className="input agent-select"
             aria-label="Model"
-            placeholder={modelDefault}
+            placeholder={must ? 'Type a model’s name' : modelDefault}
             value={typed}
             onChange={(e) => setTyped(e.target.value)}
             onBlur={() => {
@@ -601,17 +602,7 @@ function HarnessRows({ harness: h, model, effort }: { harness: HarnessInfo; mode
             }}
           />
         )}
-        <span className="muted">
-          {modelGone
-            ? gone
-            : h.models?.length
-              ? must
-                ? `${h.name}’s names for its latest models`
-                : `${h.name}’s names, or its default`
-              : must
-                ? 'A model’s name'
-                : 'A model’s name, or empty for the default'}
-        </span>
+        {modelGone && <span className="muted">{gone}</span>}
       </div>
       {h.efforts?.length || effortGone ? (
         <>
@@ -632,16 +623,16 @@ function HarnessRows({ harness: h, model, effort }: { harness: HarnessInfo; mode
                 </option>
               ))}
             </select>
-            <span className="muted">{effortGone ? gone : (h.efforts ?? []).join(', ')}</span>
+            {effortGone && <span className="muted">{gone}</span>}
           </div>
         </>
       ) : h.efforts ? (
         <>
           <span className="agent-key">Effort</span>
-          <span className="muted">Part of the model with {h.name}: a model’s name says its effort</span>
+          <span className="muted">Comes with the model</span>
         </>
       ) : null}
-      <span className="agent-key">Runs with</span>
+      <span className="agent-key">Requests use</span>
       <span aria-live="polite" className={toChoose(h, model, effort) ? 'agent-attention' : undefined}>
         {runsWithText(h, model, effort)}
       </span>

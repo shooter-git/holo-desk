@@ -294,14 +294,19 @@ describe('what a run uses, as Settings › Agent says it', () => {
   const ranClaude: HarnessInfo = { ...claude, aliases: { opus: 'claude-opus-test' } };
 
   it('names the harness’s defaults when it lists them, each model with its own effort', () => {
-    expect(runsWithText(codex, '', '')).toBe('gpt-6.1-sol at low effort');
-    expect(runsWithText(codex, 'gpt-6-astra', '')).toBe('gpt-6-astra at medium effort');
-    expect(runsWithText(codex, 'gpt-6-astra', 'high')).toBe('gpt-6-astra at high effort');
-    expect(defaultLabel(codex, codex.defaultModel ?? null)).toBe('Codex’s default (Gpt-6.1-sol)');
-    expect(defaultLabel(codex, runsWith(codex, 'gpt-6-astra', '').effort)).toBe('Codex’s default (Medium)');
-    // Cursor's model names carry their effort
-    expect(runsWithText(cursor, '', '')).toBe('auto');
-    expect(runsWithText(cursor, 'composer-2.5', 'high')).toBe('composer-2.5');
+    expect(runsWithText(codex, '', '')).toBe('Gpt-6.1-sol at low effort');
+    expect(runsWithText(codex, 'gpt-6-astra', '')).toBe('Gpt-6-astra at medium effort');
+    expect(runsWithText(codex, 'gpt-6-astra', 'high')).toBe('Gpt-6-astra at high effort');
+    expect(defaultLabel(codex, codex.defaultModel ?? null)).toBe('Gpt-6.1-sol (Codex’s default)');
+    expect(defaultLabel(codex, runsWith(codex, 'gpt-6-astra', '').effort)).toBe('Medium (Codex’s default)');
+    expect(defaultLabel(codex, null)).toBe('Codex’s default');
+    // Cursor's model names carry their effort; its default, Auto, is Cursor choosing for itself
+    expect(runsWithText(cursor, '', '')).toBe('Auto: Cursor chooses the model');
+    expect(runsWithText(cursor, 'auto', '')).toBe('Auto: Cursor chooses the model');
+    expect(runsWithText(cursor, 'composer-2.5', 'high')).toBe('Composer-2.5');
+    // one that doesn't say its default
+    expect(runsWithText({ ...codex, defaultModel: undefined }, '', '')).toBe('Codex’s default model and effort');
+    expect(runsWithText({ ...cursor, defaultModel: undefined }, '', '')).toBe('Cursor’s default model');
   });
 
   it('runs with the default when what’s saved is no longer offered, as the adapter does', () => {
@@ -318,22 +323,22 @@ describe('what a run uses, as Settings › Agent says it', () => {
 
   it('asks for Claude Code’s model and effort until both are chosen: it has no defaults', () => {
     expect(toChoose(claude, '', '')).toBe('a model and an effort');
-    expect(runsWithText(claude, '', '')).toBe('Choose a model and an effort: Claude Code doesn’t run without them');
-    expect(runsWithText(claude, 'sonnet', '')).toBe('Choose an effort: Claude Code doesn’t run without one');
-    expect(runsWithText(claude, '', 'high')).toBe('Choose a model: Claude Code doesn’t run without one');
+    expect(runsWithText(claude, '', '')).toBe('Choose a model and an effort first');
+    expect(runsWithText(claude, 'sonnet', '')).toBe('Choose an effort first');
+    expect(runsWithText(claude, '', 'high')).toBe('Choose a model first');
     // one saved that it no longer offers is as good as none, as the server and the runner take it
     expect(toChoose(claude, 'opus-4', 'ultra')).toBe('a model and an effort');
     expect(toChoose(claude, 'sonnet', 'high')).toBeNull();
-    expect(runsWithText(claude, 'sonnet', 'high')).toBe('sonnet at high effort');
+    expect(runsWithText(claude, 'sonnet', 'high')).toBe('Sonnet at high effort');
     // the harnesses with defaults have nothing to choose
     expect(toChoose(codex, '', '')).toBeNull();
     expect(toChoose(cursor, '', '')).toBeNull();
   });
 
   it('says what an alias last ran as (opus moves on with each new Opus)', () => {
-    expect(runsWithText(ranClaude, 'opus', 'high')).toBe('opus (last ran as claude-opus-test) at high effort');
+    expect(runsWithText(ranClaude, 'opus', 'high')).toBe('Opus at high effort (last ran as claude-opus-test)');
     // a name not run yet: nothing from a run
-    expect(runsWithText(ranClaude, 'sonnet', 'high')).toBe('sonnet at high effort');
+    expect(runsWithText(ranClaude, 'sonnet', 'high')).toBe('Sonnet at high effort');
   });
 });
 

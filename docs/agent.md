@@ -55,7 +55,7 @@ The in-app agent lives in `packages/agent` (`@holo/agent`): the runner's side (`
   that play or compare versions, switches, sliders, lists of places to go. It doesn't start playback or
   move the user's view, selection or playhead itself, unless the request was to see or hear something
   now (`go` on `finish`, the transport).
-- **One request, one undo step.** It's labelled "Agent: …". Its changes reach only the requesting
+- **One request, one undo step.** It's labeled "Agent: …". Its changes reach only the requesting
   device's studio. They're applied on the server only for a scan preset whose studio no longer has the
   song open.
 - **Off by default.** With the agent off, `GET /api/agent` answers `{enabled:false, …}`, the studio shows
@@ -186,18 +186,18 @@ hour old or more (`POST …/harnesses/look`): the lists show at once as they wer
 new `harnesses` report comes (as `agent-settings`). Nothing is asked while nobody opens it, and nothing
 is polled.
 
-**Model and Effort** list the harness's own names. A saved model or effort the harness no longer
-offers stays selected, labelled "(no longer offered)", and a run uses the harness's default instead of
-failing (the adapter drops it before the run). Cursor has no Effort list: its model names carry their
-effort, and the row says so.
+**Model and Effort** list the harness's own names, with no line under them unless one saved is no
+longer offered. Such a model or effort stays selected, labeled "(no longer offered)", with a line saying
+so, and a run uses the harness's default instead of failing (the adapter drops it before the run).
+Cursor has no Effort list: its model names carry their effort, and the row says "Comes with the model".
 
-Each picker's empty choice names the default: "Codex's default (Gpt-6.1-sol)", and for Effort the
-default of the model a run uses. Claude Code has no defaults to name, so its pickers have no empty
-choice: "Choose a model" and "Choose an effort" until both are chosen, and one it no longer offers
-says to choose another. **Runs with**, under them, says what a run with these settings uses, as the
-adapter decides it: "gpt-6.1-sol at low effort", "auto" for Cursor, "opus (last ran as <its full
-name>) at high effort" for Claude Code once a run has said what the alias stands for, or, in the warning
-color, what's left to choose ("Choose an effort: Claude Code doesn't run without one"). The choice is
+Each picker's empty choice names the default, value first: "Gpt-6.1-sol (Codex's default)", and for
+Effort the default of the model a run uses. Claude Code has no defaults to name, so its pickers have no
+empty choice: "Choose a model" and "Choose an effort" until both are chosen, and one it no longer offers
+says to choose another. **Requests use**, under them, says what a run with these settings uses, as the
+adapter decides it, in the menus' names: "Gpt-6.1-sol at low effort", "Auto: Cursor chooses the model",
+"Opus at high effort (last ran as <its full name>)" for Claude Code once a run has said what the alias
+stands for, or, in the warning color, what's left to choose ("Choose an effort first"). The choice is
 the host's, shared by every allowed device, so a request from a phone runs as one from the desktop. A
 run that says something new of an alias sends the harness list again at once (the runner's
 `harnesses` message), so the row follows without a look.
@@ -507,10 +507,10 @@ of the stretch `played` asked for); `length` is ms (null while still held).
   re-applied. A refused one may be tried again.
 - **Merging:** if the job is running and the top undo step is the job's, the ops merge into it (any
   redo is dropped), and the step keeps the song from before the job. Otherwise a new step is pushed,
-  labelled "Agent: <the batch's label>".
+  labeled "Agent: <the batch's label>".
 - **No toasts.** The bar says what the agent is doing.
 - **Finishing:** when `agent-status` says the job ended with a label, its steps, undone or not, are
-  relabelled "Agent: <label>".
+  relabeled "Agent: <label>".
 - **Undo and redo** keep `job`, and are reported as `history`.
 - **A reload** brings the history back as this device kept it (`kept-history.ts`; docs/architecture.md,
   "Sessions and operations"), `job` and all. A running job's next batch still merges into its step,

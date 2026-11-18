@@ -6,7 +6,15 @@
 import { beforeAll, describe, expect, it, vi } from 'vitest';
 import type * as AgentModule from '../src/app/agent.ts';
 import type { HarnessEvent, HarnessId, HarnessInfo } from '../src/app/agent.ts';
-import { choices, harnessRow, installQuestion } from '../src/ui/harness-row.ts';
+import {
+  choices,
+  defaultLabel,
+  harnessRow,
+  installQuestion,
+  runsWith,
+  runsWithText,
+  toChoose,
+} from '../src/ui/harness-row.ts';
 
 class Storage {
   items = new Map<string, string>();
@@ -253,6 +261,79 @@ describe('the model and effort pickers', () => {
       { value: 'fable', label: 'Fable (no longer offered)', gone: true },
     ]);
     expect(choices(['low', 'high'], '')).toHaveLength(2);
+  });
+});
+
+describe('what a run uses, as Settings › Agent says it', () => {
+  const base = { found: true, sealed: true } as const;
+  const codex: HarnessInfo = {
+    ...base,
+    id: 'codex',
+    name: 'Codex',
+    models: ['gpt-6.1-sol', 'gpt-6-astra'],
+    efforts: ['low', 'medium', 'high'],
+    defaultModel: 'gpt-6.1-sol',
+    defaultEfforts: { 'gpt-6.1-sol': 'low', 'gpt-6-astra': 'medium' },
+  };
+  const cursor: HarnessInfo = {
+    ...base,
+    id: 'cursor',
+    name: 'Cursor',
+    models: ['auto', 'composer-2.5'],
+    efforts: [],
+    defaultModel: 'auto',
+  };
+  const claude: HarnessInfo = {
+    ...base,
+    id: 'claude',
+    name: 'Claude Code',
+    models: ['opus', 'sonnet'],
+    efforts: ['low', 'medium', 'high'],
+    mustChoose: true,
+  };
+  const ranClaude: HarnessInfo = { ...claude, aliases: { opus: 'claude-opus-test' } };
+
+  it('names the harness’s defaults when it lists them, each model with its own effort', () => {
+    expect(runsWithText(codex, '', '')).toBe('gpt-6.1-sol at low effort');
+    expect(runsWithText(codex, 'gpt-6-astra', '')).toBe('gpt-6-astra at medium effort');
+    expect(runsWithText(codex, 'gpt-6-astra', 'high')).toBe('gpt-6-astra at high effort');
+    expect(defaultLabel(codex, codex.defaultModel ?? null)).toBe('Codex’s default (Gpt-6.1-sol)');
+    expect(defaultLabel(codex, runsWith(codex, 'gpt-6-astra', '').effort)).toBe('Codex’s default (Medium)');
+    // Cursor's model names carry their effort
+    expect(runsWithText(cursor, '', '')).toBe('auto');
+    expect(runsWithText(cursor, 'composer-2.5', 'high')).toBe('composer-2.5');
+  });
+
+  it('runs with the default when what’s saved is no longer offered, as the adapter does', () => {
+    expect(runsWith(codex, 'gpt-4', 'ultra')).toEqual({
+      model: 'gpt-6.1-sol',
+      effort: 'low',
+      effortInModel: false,
+      defaultModel: true,
+      defaultEffort: true,
+    });
+    // an empty list says nothing: a typed model is passed on
+    expect(runsWith({ ...codex, models: [] }, 'gpt-4', '').model).toBe('gpt-4');
+  });
+
+  it('asks for Claude Code’s model and effort until both are chosen: it has no defaults', () => {
+    expect(toChoose(claude, '', '')).toBe('a model and an effort');
+    expect(runsWithText(claude, '', '')).toBe('Choose a model and an effort: Claude Code doesn’t run without them');
+    expect(runsWithText(claude, 'sonnet', '')).toBe('Choose an effort: Claude Code doesn’t run without one');
+    expect(runsWithText(claude, '', 'high')).toBe('Choose a model: Claude Code doesn’t run without one');
+    // one saved that it no longer offers is as good as none, as the server and the runner take it
+    expect(toChoose(claude, 'opus-4', 'ultra')).toBe('a model and an effort');
+    expect(toChoose(claude, 'sonnet', 'high')).toBeNull();
+    expect(runsWithText(claude, 'sonnet', 'high')).toBe('sonnet at high effort');
+    // the harnesses with defaults have nothing to choose
+    expect(toChoose(codex, '', '')).toBeNull();
+    expect(toChoose(cursor, '', '')).toBeNull();
+  });
+
+  it('says what an alias last ran as (opus moves on with each new Opus)', () => {
+    expect(runsWithText(ranClaude, 'opus', 'high')).toBe('opus (last ran as claude-opus-test) at high effort');
+    // a name not run yet: nothing from a run
+    expect(runsWithText(ranClaude, 'sonnet', 'high')).toBe('sonnet at high effort');
   });
 });
 

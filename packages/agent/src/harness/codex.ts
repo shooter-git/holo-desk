@@ -192,6 +192,10 @@ export function parseCodexLogin(text: string): { url?: string; code?: string } {
 export interface CodexModel {
   slug: string;
   efforts: string[];
+  /** The effort a run with it has when none is given (`default_reasoning_level`). */
+  effort?: string;
+  /** Its place in the catalog: the lowest is Codex's default model. */
+  priority?: number;
 }
 
 /** `codex debug models`: the models offered (visibility "list"), each with the efforts it takes. */
@@ -206,12 +210,29 @@ export function parseCodexModels(stdout: string): CodexModel[] {
       const efforts = levels
         .map((l) => (isObject(l) ? l.effort : l))
         .filter((x): x is string => typeof x === 'string' && !NOT_OFFERED.has(x));
-      out.push({ slug: m.slug, efforts });
+      const model: CodexModel = { slug: m.slug, efforts };
+      if (typeof m.default_reasoning_level === 'string') model.effort = m.default_reasoning_level;
+      if (typeof m.priority === 'number' && Number.isFinite(m.priority)) model.priority = m.priority;
+      out.push(model);
     }
     return out;
   } catch {
     return [];
   }
+}
+
+/**
+ * What a run uses when it's given no model or effort: the listed model first in the catalog's order
+ * (lowest `priority`; Codex's app server marks the same one `isDefault`, whatever config.toml says,
+ * and a run ignores config.toml), and each model's `default_reasoning_level`.
+ */
+export function codexDefaults(models: readonly CodexModel[]): { model?: string; efforts: Record<string, string> } {
+  let first: CodexModel | undefined;
+  for (const m of models)
+    if (!first || (m.priority ?? Number.POSITIVE_INFINITY) < (first.priority ?? Number.POSITIVE_INFINITY)) first = m;
+  const efforts: Record<string, string> = {};
+  for (const m of models) if (m.effort) efforts[m.slug] = m.effort;
+  return { ...(first ? { model: first.slug } : {}), efforts };
 }
 
 /**
@@ -337,6 +358,9 @@ export function codexSpec(): Spec {
       if (one) return one.efforts;
       const all = [...new Set(list.flatMap((m) => m.efforts))];
       return all.length ? all : [...FALLBACK_EFFORTS];
+    },
+    async defaults(ctx) {
+      return codexDefaults(await models(ctx));
     },
     async latest(ctx) {
       const d = JSON.parse(await ctx.fetchText('https://registry.npmjs.org/@openai/codex/latest')) as {

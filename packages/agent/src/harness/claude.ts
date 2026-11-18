@@ -21,7 +21,7 @@ import {
 } from './adapter.ts';
 import { CLAUDE_ENV, harnessEnv } from './env.ts';
 import { candidates, capture, findBinary, home, plain } from './process.ts';
-import type { Harness, Job } from './types.ts';
+import { type Harness, type Job, MODEL } from './types.ts';
 import { claudeFiles, privateDir } from './workspace.ts';
 
 /** The efforts when `--help` doesn't list them (it does: "--effort <level> … (low, medium, …)"). */
@@ -83,6 +83,7 @@ export function claudeReader(): Reader {
       if (e.type === 'system' && e.subtype === 'init') {
         init = true;
         if (typeof e.session_id === 'string') out.push({ kind: 'session', id: e.session_id });
+        if (typeof e.model === 'string' && MODEL.test(e.model)) out.push({ kind: 'model', model: e.model });
         const tools = Array.isArray(e.tools) ? e.tools : [];
         const other = tools.find((t) => typeof t !== 'string' || !t.startsWith(PREFIX));
         offered = new Set(tools.filter((t): t is string => typeof t === 'string'));
@@ -255,6 +256,9 @@ export function claudeSpec(): Spec {
     async efforts(ctx) {
       return claudeEfforts(await helpText(ctx));
     },
+    // it lists no defaults (they follow the account, and Anthropic's own list): a run is given both,
+    // and each run's `init` says what its alias stood for
+    mustChoose: true,
     async latest(ctx) {
       // an npm install updates from npm; the native one from Anthropic's release channels. The stable
       // channel is the one read: an install on either channel can reach what it names, so Update never

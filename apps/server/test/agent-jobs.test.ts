@@ -1,6 +1,6 @@
 import { describeChanges, type Project } from '@holo/session';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { briefWarnings, LOOK_EVERY_MS, parseHarnesses } from '../src/agent/jobs.ts';
+import { briefWarnings, chooseText, LOOK_EVERY_MS, parseHarnesses } from '../src/agent/jobs.ts';
 import { agentApp, agentWorld, auth, CLAUDE, type Msg, settle, waitFor } from './agent-fakes.ts';
 
 let close: (() => Promise<void>) | null = null;
@@ -114,6 +114,56 @@ describe('a request', () => {
     bare.close();
     t.runner([{ ...CLAUDE, signedIn: false }], 'third');
     expect((await ask()).json()).toMatchObject({ reason: 'signed-out' });
+  });
+
+  it('asks for a model and an effort first when the harness lists no defaults', async () => {
+    const t = await agentApp();
+    close = t.close;
+    const r = t.runner([{ ...CLAUDE, models: ['opus', 'sonnet'], efforts: ['low', 'high'], mustChoose: true }]);
+    const { token } = await t.pair(r);
+    const s = await t.song();
+    t.studio(token, s.id);
+    const ask = () =>
+      t.app.inject({
+        method: 'POST',
+        url: '/api/agent/requests',
+        headers: auth(token),
+        payload: { project: s.id, text: 'hi' },
+      });
+    const set = (payload: Record<string, string>) =>
+      t.app.inject({ method: 'PUT', url: '/api/agent/settings', headers: auth(token), payload });
+    const none = await ask();
+    expect(none.statusCode).toBe(409);
+    expect(none.json()).toEqual({
+      error: 'Choose a model and an effort for Claude Code in Settings › Agent',
+      reason: 'choose',
+    });
+    await set({ model: 'opus' });
+    expect((await ask()).json()).toMatchObject({ reason: 'choose', error: expect.stringContaining('an effort') });
+    // nothing reached the runner, and no restore point was taken
+    expect(r.got('agent-run')).toHaveLength(0);
+    await set({ effort: 'high' });
+    expect((await ask()).statusCode).toBe(200);
+    expect(r.got('agent-run')[0]).toMatchObject({ model: 'opus', effort: 'high' });
+  });
+
+  it('says what’s left to choose, and what was chosen and is no longer offered', () => {
+    const claude = { id: 'claude', name: 'Claude Code', found: true, sealed: true, mustChoose: true } as const;
+    const offers = { ...claude, models: ['opus'], efforts: ['high'] };
+    expect(chooseText('Claude Code', offers, 'opus', 'high')).toBeNull();
+    expect(chooseText('Claude Code', offers, '', '')).toBe(
+      'Choose a model and an effort for Claude Code in Settings › Agent',
+    );
+    expect(chooseText('Claude Code', offers, 'opus-4', 'high')).toBe(
+      'Claude Code no longer offers “opus-4”: choose a model for Claude Code in Settings › Agent',
+    );
+    expect(chooseText('Claude Code', offers, 'opus', 'ultra')).toBe(
+      'Claude Code no longer offers “ultra” effort: choose an effort for Claude Code in Settings › Agent',
+    );
+    // lists it couldn't read say nothing: what's chosen is passed on
+    expect(chooseText('Claude Code', claude, 'opus-4', 'ultra')).toBeNull();
+    // a harness with defaults of its own runs with them
+    expect(chooseText('Codex', { ...offers, id: 'codex', name: 'Codex', mustChoose: false }, '', '')).toBeNull();
   });
 });
 
@@ -599,6 +649,23 @@ describe('harnesses', () => {
       list: [{ id: 'claude', name: 'Claude Code', found: true, sealed: true, signedIn: true, version: '2.1.0' }],
     });
     vi.setSystemTime(Date.now() + LOOK_EVERY_MS - 1);
+    // the list said again after a run said what an alias stood for isn't a look: the clock stays
+    run.say({
+      type: 'harnesses',
+      from: 'run',
+      list: [
+        {
+          id: 'claude',
+          name: 'Claude Code',
+          found: true,
+          sealed: true,
+          signedIn: true,
+          version: '2.1.0',
+          aliases: { opus: 'claude-opus-test' },
+          mustChoose: true,
+        },
+      ],
+    });
     expect(await look()).toBe(0);
     vi.setSystemTime(Date.now() + 1);
     expect(await look()).toBe(1);
@@ -652,6 +719,39 @@ describe('harnesses', () => {
     expect(claude?.sealUnknown).toBeUndefined();
     expect(cursor).toMatchObject({ sealUnknown: true, signedIn: false });
     expect(cursor?.host).toBeUndefined();
+  });
+
+  it('keeps a harness’s defaults as settings check models and efforts, and nothing that isn’t one', () => {
+    const [claude, codex] = parseHarnesses([
+      {
+        id: 'claude',
+        name: 'Claude Code',
+        found: true,
+        sealed: true,
+        defaultModel: 'claude-opus-test',
+        defaultEfforts: { 'claude-opus-test': 'medium', 'bad; rm': 'high', 'claude-sonnet-test': 'rm -rf ~', x: 3 },
+        aliases: { opus: 'claude-opus-test', '': 'claude-opus-test' },
+        mustChoose: true,
+      },
+      {
+        id: 'codex',
+        name: 'Codex',
+        found: true,
+        sealed: true,
+        defaultModel: '$(reboot)',
+        defaultEfforts: ['low'],
+        aliases: null,
+        mustChoose: 'yes',
+      },
+    ]);
+    expect(claude).toMatchObject({
+      defaultModel: 'claude-opus-test',
+      defaultEfforts: { 'claude-opus-test': 'medium' },
+      aliases: { opus: 'claude-opus-test' },
+      mustChoose: true,
+    });
+    for (const key of ['defaultModel', 'defaultEfforts', 'aliases', 'mustChoose'] as const)
+      expect(codex?.[key], key).toBeUndefined();
   });
 
   it('says a harness whose seal waits on its sign-in is signed out, not unsealed', async () => {

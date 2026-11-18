@@ -30,6 +30,14 @@ export interface HarnessInfo {
   reason?: string;
   models?: string[];
   efforts?: string[];
+  /** What a run uses when Model is left empty: the harness's own default, as it lists it. */
+  defaultModel?: string;
+  /** By model: the effort a run uses when Effort is left empty. */
+  defaultEfforts?: Record<string, string>;
+  /** By alias: the model it stood for at its last run (Claude Code's `opus`). */
+  aliases?: Record<string, string>;
+  /** It lists no defaults (Claude Code): it runs only with a model and an effort chosen. */
+  mustChoose?: boolean;
   /** The computer it's on (the runner's). */
   host?: string;
   /** Not installed: the official installer Install runs there. */

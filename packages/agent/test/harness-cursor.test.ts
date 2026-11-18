@@ -10,6 +10,7 @@ import {
   cursorWantsSignIn,
   parseCursorAbout,
   parseCursorAuth,
+  parseCursorDefault,
   parseCursorModels,
 } from '../src/harness/cursor.ts';
 import { GIT_ENV, harnessEnv, harnessPath } from '../src/harness/env.ts';
@@ -122,6 +123,8 @@ describe('Cursor: finding it', () => {
       models: ['auto', 'composer-2.5', 'composer-2.5[fast=true]', 'claude-opus-5-5-low'],
       // effort is part of the model id
       efforts: [],
+      // the one `models` marks "(default)"
+      defaultModel: 'auto',
       update: { available: true, latest: '2026.11.12-aaaaaaa' },
     });
     const env = readFileSync(join(s.rec, 'status-env'), 'utf8').split('\0');
@@ -216,6 +219,11 @@ describe('Cursor: finding it', () => {
     expect(parseCursorAuth(STATUS_IN)).toEqual({ signedIn: true, account: 'user@example.com' });
     expect(parseCursorAuth(STATUS_OUT)).toEqual({ signedIn: false });
     expect(parseCursorModels(MODELS)).toContain('composer-2.5');
+    expect(parseCursorDefault(MODELS)).toBe('auto');
+    // marked with something else too; a name with its own parentheses is no default
+    expect(parseCursorDefault('composer-2.5 - Composer 2.5 (current, default)')).toBe('composer-2.5');
+    expect(parseCursorDefault('claude-fable-5-2-low - Claude Fable 5.2 1M Low (NO ZDR)\nauto - Auto')).toBeUndefined();
+    expect(parseCursorDefault('')).toBeUndefined();
     expect(parseCursorAbout(ABOUT)).toEqual({ latest: '2026.11.12-aaaaaaa', available: true });
     expect(cursorFlagsWork(PROBE)).toBe(true);
     expect(cursorFlagsWork('Invalid --allowed-tools value(s): x. Expected one of: shell_tool_call')).toBe(false);
@@ -374,6 +382,21 @@ ${replay('cursor-normal')}`,
     await runToEnd(h, job(s));
     expect(recorded(s, 2).argv).toContain('--sandbox=disabled');
     expect(existsSync(join(s.rec, 'argv3'))).toBe(false);
+  });
+
+  it('starts a run given no model without the model a run before saved, so it has Cursor’s default', async () => {
+    s = sandbox();
+    const h = fake({ signedIn: true });
+    const j = job(s, { model: 'composer-2.5' });
+    // Cursor keeps a run's --model as the thread's own default
+    const saved = join(j.workspace, 'home', '.cursor', 'cli-config.json');
+    mkdirSync(join(j.workspace, 'home', '.cursor'), { recursive: true });
+    writeFileSync(saved, JSON.stringify({ model: { modelId: 'composer-2.5' }, hasChangedDefaultModel: true }));
+    await runToEnd(h, j);
+    expect(existsSync(saved)).toBe(true);
+    await runToEnd(h, { ...j, model: '' });
+    expect(existsSync(saved)).toBe(false);
+    expect(recorded(s, 1).argv.some((a) => a.startsWith('--model'))).toBe(false);
   });
 
   it('ignores an effort: it is part of the model id', async () => {

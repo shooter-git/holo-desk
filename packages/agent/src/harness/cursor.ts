@@ -10,6 +10,7 @@
  * Tripwire: any tool call other than HO[LO]'s MCP calls (and the meta-tool that looks them up), and
  * any MCP call refused. Its worker daemon outlives a run, so the process group goes after every run.
  */
+import { rmSync } from 'node:fs';
 import { join } from 'node:path';
 import {
   type AdapterOptions,
@@ -146,6 +147,15 @@ export function parseCursorModels(stdout: string): string[] {
   return out;
 }
 
+/** The model `models` marks as the default: "auto - Auto (default)" (or "(current, default)"). */
+export function parseCursorDefault(stdout: string): string | undefined {
+  for (const line of stdout.split('\n')) {
+    const m = /^([A-Za-z0-9][\w.:\-[\]=]*) - .*\(([^()]*)\)$/.exec(line.trim());
+    if (m?.[1] && m[2]?.split(',').some((w) => w.trim().toLowerCase() === 'default')) return m[1];
+  }
+  return undefined;
+}
+
 /** `about --format json`: the version out, and whether it's newer. */
 export function parseCursorAbout(stdout: string): { latest: string; available: boolean } | null {
   try {
@@ -183,6 +193,9 @@ export function cursorWantsSignIn(output: string): boolean {
  */
 const PROBE = 2;
 
+/** How long one `models` answer serves (a look asks for the models and the default at once). */
+const LISTING_TTL = 10_000;
+
 export function cursorSpec(): Spec {
   const probeHome = (ctx: Context) => {
     const h = privateDir(join(ctx.root, '.cursor-home'));
@@ -195,6 +208,14 @@ export function cursorSpec(): Spec {
     env: harnessEnv('cursor', cursorEnv(probeHome(ctx), ctx.env), ctx.env, ctx.platform),
   });
   const sandboxKey = 'sandbox:cursor';
+  // models() and defaults() read the same list, asked for together at each look: one `models` serves both
+  let listing: { version: string | null; at: number; out: Promise<string> } | null = null;
+  const modelList = (ctx: Context): Promise<string> => {
+    if (listing && listing.version === ctx.version && Date.now() - listing.at < LISTING_TTL) return listing.out;
+    const out = capture(ctx.bin, ['models'], { ...probe(ctx), timeoutMs: 20_000 }).then((r) => r.stdout);
+    listing = { version: ctx.version, at: Date.now(), out };
+    return out;
+  };
 
   return {
     id: 'cursor',
@@ -272,12 +293,17 @@ export function cursorSpec(): Spec {
       return result;
     },
     async models(ctx) {
-      const out = await capture(ctx.bin, ['models'], { ...probe(ctx), timeoutMs: 20_000 });
-      return parseCursorModels(out.stdout);
+      return parseCursorModels(await modelList(ctx));
     },
     // effort is part of the model id
     async efforts() {
       return [];
+    },
+    // listed with the private home a run has too (no cli-config.json of the user's): what a run without
+    // --model uses
+    async defaults(ctx) {
+      const model = parseCursorDefault(await modelList(ctx));
+      return model ? { model } : {};
     },
     async latest(ctx) {
       const out = await capture(ctx.bin, ['about', '--format', 'json'], { ...probe(ctx), timeoutMs: 20_000 });
@@ -294,6 +320,9 @@ export function cursorSpec(): Spec {
     installer: 'curl https://cursor.com/install -fsS | bash',
     prepare(ctx, job) {
       const { home: privateHome } = cursorFiles(job.workspace, serverFor(ctx, job), job.instructions);
+      // Cursor keeps a run's --model as the thread's own default (its cli-config.json): a run given none
+      // starts without it, as a new thread does, so it has Cursor's default as Settings says
+      if (!job.model) rmSync(join(privateHome, '.cursor', 'cli-config.json'), { force: true });
       const known = remember(ctx.root).get<{ version: string | null; works: boolean }>(sandboxKey);
       const sandbox = known && known.version === ctx.version && !known.works ? 'disabled' : 'enabled';
       return { args: cursorArgs(job, sandbox), env: cursorEnv(privateHome, ctx.env) };

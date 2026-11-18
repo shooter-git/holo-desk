@@ -99,6 +99,14 @@ export interface HarnessInfo {
   reason?: string;
   models?: string[];
   efforts?: string[];
+  /** What a run given no model uses, as the harness lists it. */
+  defaultModel?: string;
+  /** By model: the effort a run given none uses. */
+  defaultEfforts?: Record<string, string>;
+  /** By alias: the model it stood for at its last run. */
+  aliases?: Record<string, string>;
+  /** It lists no defaults (Claude Code): a request needs a model and an effort chosen (`chooseText`). */
+  mustChoose?: boolean;
   /** The runner's computer. */
   host?: string;
   /** Not found: the official installer Install would run there. */
@@ -276,6 +284,25 @@ const isLive = (job: AgentJob) => LIVE.has(job.view.state);
 const HARNESS_NAMES: Record<HarnessId, string> = { claude: 'Claude Code', codex: 'Codex', cursor: 'Cursor' };
 
 /**
+ * Why a harness that lists no defaults (`mustChoose`) won't run with this model and effort: what's
+ * left to choose, and what was chosen and is no longer offered (an empty list says nothing, as the
+ * runner takes it). Null when it will, or when the harness has defaults of its own.
+ */
+export function chooseText(name: string, info: HarnessInfo, model: string, effort: string): string | null {
+  if (!info.mustChoose) return null;
+  const offered = (list: string[] | undefined, value: string) => !!value && (!list?.length || list.includes(value));
+  const keptModel = offered(info.models, model);
+  const keptEffort = offered(info.efforts, effort);
+  if (keptModel && keptEffort) return null;
+  const what = !keptModel && !keptEffort ? 'a model and an effort' : !keptModel ? 'a model' : 'an effort';
+  const gone = [model && !keptModel ? `“${model}”` : null, effort && !keptEffort ? `“${effort}” effort` : null].filter(
+    Boolean,
+  );
+  const choose = `${what} for ${name} in Settings › Agent`;
+  return gone.length ? `${name} no longer offers ${gone.join(' or ')}: choose ${choose}` : `Choose ${choose}`;
+}
+
+/**
  * Why no runner takes the agent's jobs, said to an allowed device: none connected, or the one that is
  * from before keys, can't read the key, or has another HO[LO]'s.
  */
@@ -378,8 +405,8 @@ export class Jobs implements AgentHooks {
     return found;
   }
 
-  /** The harness a request runs with, and its runner; or why there's none. */
-  private pick(wanted: HarnessId | null): { harness: HarnessId; runner: LiveClient } {
+  /** The harness a request runs with, its runner and what it reported; or why there's none. */
+  private pick(wanted: HarnessId | null): { harness: HarnessId; runner: LiveClient; info: HarnessInfo } {
     if (!this.o.live.agentRunners().length) throw new Refusal(409, noRunnerText(this.o.live.runners()), 'no-runner');
     // none chosen: the first that can be sealed, else the first found (whose refusal then says why)
     const sealed = HARNESSES.filter((id) => this.runnerFor(id)?.info.sealed);
@@ -405,7 +432,14 @@ export class Jobs implements AgentHooks {
       );
     if (found.info.signedIn === false)
       throw new Refusal(409, `${HARNESS_NAMES[harness]} is signed out: sign in in Settings › Agent`, 'signed-out');
-    return { harness, runner: found.runner };
+    return { harness, runner: found.runner, info: found.info };
+  }
+
+  /** A harness that lists no defaults runs only with a model and an effort chosen (409 `choose`). */
+  private chosen(harness: HarnessId, info: HarnessInfo): void {
+    const { model, effort } = this.o.agentStore.settings();
+    const why = chooseText(HARNESS_NAMES[harness], info, model, effort);
+    if (why) throw new Refusal(409, why, 'choose');
   }
 
   /**
@@ -484,7 +518,8 @@ export class Jobs implements AgentHooks {
     }
     const attachments = this.attachments(device, req.project, req.attachments);
     const settings = this.o.agentStore.settings();
-    const { harness, runner } = this.pick(settings.harness);
+    const { harness, runner, info } = this.pick(settings.harness);
+    this.chosen(harness, info);
     const thread = this.o.threads.forRequest(req.project, harness);
     const request = req.preset ? presetTitle(req.preset) : req.text;
     return this.begin(device, req.project, thread, runner, request, req.preset, req.attachments, async (now) =>
@@ -697,6 +732,7 @@ export class Jobs implements AgentHooks {
     this.free(job.view.project);
     const found = this.runnerFor(thread.harness);
     if (!found) throw new Refusal(409, `${HARNESS_NAMES[thread.harness]} isn’t available now`, 'no-harness');
+    this.chosen(thread.harness, found.info);
     const next = await this.begin(
       device,
       job.view.project,
@@ -854,7 +890,8 @@ export class Jobs implements AgentHooks {
     if (client.role !== 'runner' || !client.keyed) return;
     if (msg.type === 'harnesses') {
       this.reported.set(client, parseHarnesses(msg.list));
-      this.looked.set(client, Date.now());
+      // the list said again after a run learned a harness's defaults: no look was made
+      if (msg.from !== 'run') this.looked.set(client, Date.now());
       // Settings › Agent shows them as they are now
       if (client.caps?.agent) this.announce(false);
       return;
@@ -1637,6 +1674,20 @@ export function parseHarnesses(list: unknown): HarnessInfo[] {
           .filter((m): m is string => typeof m === 'string' && MODEL.test(m))
           .slice(0, most);
     }
+    if (typeof h.defaultModel === 'string' && MODEL.test(h.defaultModel)) info.defaultModel = h.defaultModel;
+    // a model's name to a model's name or an effort, as settings check them
+    for (const [key, most] of [
+      ['defaultEfforts', 500],
+      ['aliases', 50],
+    ] as const) {
+      const map = h[key];
+      if (typeof map !== 'object' || map === null || Array.isArray(map)) continue;
+      const kept = Object.entries(map)
+        .filter((e): e is [string, string] => MODEL.test(e[0]) && typeof e[1] === 'string' && MODEL.test(e[1]))
+        .slice(0, most);
+      if (kept.length) info[key] = Object.fromEntries(kept);
+    }
+    if (h.mustChoose === true) info.mustChoose = true;
     out.push(info);
   }
   return out;

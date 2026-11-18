@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   CODEX_DISABLED,
+  codexDefaults,
   codexHarness,
   codexReader,
   codexSealedTools,
@@ -35,15 +36,26 @@ const MODELS = JSON.stringify({
     {
       slug: 'gpt-6-sol',
       visibility: 'list',
+      priority: 4,
+      default_reasoning_level: 'medium',
       supported_reasoning_levels: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'].map((effort) => ({ effort })),
     },
     {
       slug: 'gpt-6-luna',
       visibility: 'list',
+      // first in the catalog's order, though not in its list: Codex's default
+      priority: 2,
+      default_reasoning_level: 'low',
       supported_reasoning_levels: ['low', 'medium', 'high', 'xhigh', 'max'].map((effort) => ({ effort })),
     },
     { slug: 'gpt-5.5', visibility: 'list', supported_reasoning_levels: [{ effort: 'low' }, { effort: 'medium' }] },
-    { slug: 'codex-auto-review', visibility: 'hide', supported_reasoning_levels: [{ effort: 'low' }] },
+    {
+      slug: 'codex-auto-review',
+      visibility: 'hide',
+      priority: 1,
+      default_reasoning_level: 'low',
+      supported_reasoning_levels: [{ effort: 'low' }],
+    },
   ],
 });
 
@@ -113,6 +125,9 @@ describe('Codex: finding it', () => {
       models: ['gpt-6-sol', 'gpt-6-luna', 'gpt-5.5'],
       // "ultra" delegates to sub-agents, which a sealed run doesn't have
       efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
+      // what a run given none uses: the listed model first in the catalog's order, and each one's own effort
+      defaultModel: 'gpt-6-luna',
+      defaultEfforts: { 'gpt-6-sol': 'medium', 'gpt-6-luna': 'low' },
       update: { available: true, latest: '0.170.0' },
     });
   });
@@ -148,6 +163,24 @@ describe('Codex: finding it', () => {
     expect(parseCodexAuth('Logged in using ChatGPT\n')).toEqual({ signedIn: true, account: 'ChatGPT' });
     expect(parseCodexAuth('Not logged in\n')).toEqual({ signedIn: false });
     expect(parseCodexModels(MODELS).map((m) => m.slug)).toEqual(['gpt-6-sol', 'gpt-6-luna', 'gpt-5.5']);
+    // the lowest priority is the default; without priorities, the first listed; a tie keeps the list's order
+    expect(
+      codexDefaults([
+        { slug: 'a', efforts: [] },
+        { slug: 'b', efforts: [], effort: 'low' },
+      ]),
+    ).toEqual({
+      model: 'a',
+      efforts: { b: 'low' },
+    });
+    expect(
+      codexDefaults([
+        { slug: 'a', efforts: [], priority: 3 },
+        { slug: 'b', efforts: [], priority: 2 },
+        { slug: 'c', efforts: [], priority: 2 },
+      ]).model,
+    ).toBe('b');
+    expect(codexDefaults([])).toEqual({ efforts: {} });
     expect(parseCodexLogin(DEVICE)).toEqual({ url: 'https://auth.openai.com/codex/device', code: 'ABCD-12345' });
   });
 });

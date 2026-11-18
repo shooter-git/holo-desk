@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
@@ -11,12 +11,13 @@ import {
   parseClaudeAuth,
 } from '../src/harness/claude.ts';
 import { allowed, GIT_ENV } from '../src/harness/env.ts';
+import type { Job } from '../src/harness/types.ts';
 import {
   alive,
+  job as anyJob,
   collect,
   fakeBinary,
   fixtureEvents,
-  job,
   PROMPT_MARK,
   q,
   REPO,
@@ -56,6 +57,9 @@ const SIGNED_OUT = JSON.stringify({ loggedIn: false, authMethod: 'none' });
 
 let s: Sandbox;
 afterEach(() => s?.cleanup());
+
+/** A job with a model and an effort chosen, as Claude Code needs (it lists no defaults). */
+const job = (sb: Sandbox, over: Partial<Job> = {}): Job => anyJob(sb, { model: 'haiku', effort: 'low', ...over });
 
 interface Fake {
   run?: string;
@@ -182,6 +186,8 @@ describe('Claude Code: finding it', () => {
       sealed: true,
       models: ['fable', 'opus', 'sonnet', 'haiku'],
       efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
+      // it lists no defaults: a run needs both chosen
+      mustChoose: true,
       update: { available: true, latest: '2.1.400' },
     });
   });
@@ -246,6 +252,8 @@ describe('Claude Code: a sealed run', () => {
     expect(events).toEqual([
       { type: 'session', session: 'c58564bc-c9a7-4e0d-ad72-6461accd9689' },
       { type: 'progress', line: 'Working' },
+      // what `haiku` stood for, as its init said
+      { type: 'aliases', aliases: { haiku: 'claude-haiku-5-5' } },
       { type: 'done', reply: "Echoed: spike-42. Picture's main colour: blue." },
     ]);
     const r = recorded(s);
@@ -345,22 +353,59 @@ ${replay('claude-normal')}`,
     expect(events.at(-1)?.type).toBe('done');
   });
 
-  it('runs at the default with a model or an effort it no longer offers, rather than failing', async () => {
+  it('doesn’t run without a model and an effort it offers: it has no default to fall back on', async () => {
     s = sandbox();
     const h = fake({ signedIn: true });
     await h.info();
-    // a model saved when an earlier version offered it, and an effort none takes now
-    const events = await runToEnd(h, job(s, { model: 'gone-model', effort: 'xhigh' }));
-    expect(events.at(-1)?.type).toBe('done');
-    expect(recorded(s, 0).argv.some((a) => a.startsWith('--model'))).toBe(false);
+    const choose = 'for Claude Code in Settings › Agent';
+    expect(await runToEnd(h, job(s, { model: '', effort: '' }))).toEqual([
+      { type: 'failed', error: `Choose a model and an effort ${choose}` },
+    ]);
+    expect(await runToEnd(h, job(s, { effort: '' }))).toEqual([
+      { type: 'failed', error: `Choose an effort ${choose}` },
+    ]);
+    // one saved when an earlier version offered it
+    expect(await runToEnd(h, job(s, { model: 'gone-model' }))).toEqual([
+      { type: 'failed', error: `Claude Code no longer offers “gone-model”: choose a model ${choose}` },
+    ]);
+    expect(await runToEnd(h, job(s, { model: 'gone-model', effort: 'ultra' }))).toEqual([
+      {
+        type: 'failed',
+        error: `Claude Code no longer offers “gone-model” or “ultra” effort: choose a model and an effort ${choose}`,
+      },
+    ]);
+    expect(existsSync(join(s.rec, 'argv0'))).toBe(false);
+    // both offered: passed on
+    await runToEnd(h, job(s, { model: 'fable', effort: 'xhigh' }));
+    expect(recorded(s, 0).argv).toContain('--model=fable');
     expect(recorded(s, 0).argv).toContain('--effort=xhigh');
-    // one still offered is passed on
-    await runToEnd(h, job(s, { model: 'fable', effort: 'gone-effort' }));
-    expect(recorded(s, 1).argv).toContain('--model=fable');
-    expect(recorded(s, 1).argv.some((a) => a.startsWith('--effort'))).toBe(false);
   });
 
-  it('refuses a model or effort that reads as more than a value, and drops an effort it doesn’t take', async () => {
+  it('remembers what an alias stood for at its last run, and says so when that’s news', async () => {
+    s = sandbox();
+    const h = fake({ signedIn: true });
+    expect((await h.info()).aliases).toBeUndefined();
+    const events = await runToEnd(h, job(s));
+    expect(events.filter((e) => e.type === 'aliases')).toEqual([
+      { type: 'aliases', aliases: { haiku: 'claude-haiku-5-5' } },
+    ]);
+    expect(events.at(-1)?.type).toBe('done');
+    expect((await h.info()).aliases).toEqual({ haiku: 'claude-haiku-5-5' });
+    // the same again: nothing new to say
+    expect((await runToEnd(h, job(s))).some((e) => e.type === 'aliases')).toBe(false);
+  });
+
+  it('forgets what another account’s runs said (another plan may have other models)', async () => {
+    s = sandbox();
+    mkdirSync(s.root, { recursive: true });
+    writeFileSync(
+      join(s.root, '.harnesses.json'),
+      JSON.stringify({ 'aliases:claude': { account: 'someone@example.com', aliases: { opus: 'claude-opus-test' } } }),
+    );
+    expect((await fake({ signedIn: true }).info()).aliases).toBeUndefined();
+  });
+
+  it('refuses a model or effort that reads as more than a value, or an effort it doesn’t take', async () => {
     s = sandbox();
     const h = fake({ signedIn: true });
     expect(await runToEnd(h, job(s, { model: 'haiku --dangerously-skip-permissions' }))).toEqual([
@@ -369,9 +414,13 @@ ${replay('claude-normal')}`,
     expect(await runToEnd(h, job(s, { effort: '--tools=Bash' }))).toEqual([
       { type: 'failed', error: '“--tools=Bash” isn’t an effort' },
     ]);
+    expect(await runToEnd(h, job(s, { effort: 'ultra' }))).toEqual([
+      {
+        type: 'failed',
+        error: 'Claude Code no longer offers “ultra” effort: choose an effort for Claude Code in Settings › Agent',
+      },
+    ]);
     expect(existsSync(join(s.rec, 'argv0'))).toBe(false);
-    await runToEnd(h, job(s, { effort: 'ultra' }));
-    expect(recorded(s).argv.some((a) => a.startsWith('--effort'))).toBe(false);
   });
 
   it('stops at the tripwire (a tool that isn’t HO[LO]’s) and ends the whole process group', async () => {
@@ -439,6 +488,7 @@ sleep 300`,
     };
     expect(read('claude-normal')).toEqual([
       { kind: 'session', id: 'c58564bc-c9a7-4e0d-ad72-6461accd9689' },
+      { kind: 'model', model: 'claude-haiku-5-5' },
       { kind: 'tool', name: 'echo' },
       { kind: 'tool', name: 'image' },
       { kind: 'text', text: "Echoed: spike-42. Picture's main colour: blue." },

@@ -42,6 +42,20 @@ export interface HarnessInfo {
   reason?: string;
   models?: string[];
   efforts?: string[];
+  /**
+   * The model a run uses when the agent's Model is left empty, as the harness lists it (Codex's
+   * catalog, Cursor's "(default)").
+   */
+  defaultModel?: string;
+  /** The effort a run uses with a model when Effort is left empty, by model (Codex's catalog). */
+  defaultEfforts?: Record<string, string>;
+  /** The model each alias stood for at its last run (Claude Code's `opus` → the full name its `init` gave). */
+  aliases?: Record<string, string>;
+  /**
+   * It lists no defaults (Claude Code: they follow the account and Anthropic's own list), so a run
+   * needs a model and an effort chosen: none is guessed.
+   */
+  mustChoose?: boolean;
   /** The computer the runner that reports it is on (its host name). */
   host?: string;
   /** Not found: the official installer Install runs there (fixed in the adapter, never from input). */
@@ -75,10 +89,15 @@ export interface Job {
   middleC: 'C3' | 'C4';
 }
 
-/** What a run reports, in order: progress lines, its session, then exactly one of done or failed. */
+/**
+ * What a run reports, in order: progress lines, its session, then exactly one of done or failed.
+ * `aliases` comes before the end when the run said its model under another name than it was given
+ * (Claude Code's `opus` ran under its full name): every alias the harness's runs have said so far.
+ */
 export type RunEvent =
   | { type: 'progress'; line: string }
   | { type: 'session'; session: string }
+  | { type: 'aliases'; aliases: Record<string, string> }
   | { type: 'done'; reply?: string }
   | { type: 'failed'; error: string };
 

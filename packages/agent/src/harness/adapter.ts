@@ -27,6 +27,8 @@ import { mcpServer, privateDir } from './workspace.ts';
 /** What reading one event (or one line of stderr) found. */
 export type Seen =
   | { kind: 'session'; id: string }
+  /** The model the harness says the run uses (Claude Code's `init`). */
+  | { kind: 'model'; model: string }
   /** One of HO[LO]'s tools was called (its name, without any prefix). */
   | { kind: 'tool'; name: string }
   /** The agent said something (the last one is its reply). */
@@ -75,6 +77,16 @@ export interface Spec {
   sealed(ctx: Context): Promise<Sealed>;
   models(ctx: Context): Promise<string[]>;
   efforts(ctx: Context, model?: string): Promise<string[]>;
+  /**
+   * What a run uses when it's given no model or no effort, as the harness lists it: its default model,
+   * and each model's own effort.
+   */
+  defaults?(ctx: Context): Promise<{ model?: string; efforts?: Record<string, string> }>;
+  /**
+   * It lists no defaults (Claude Code): a job without a model and an effort is refused, rather than run
+   * with whatever the harness picks (`HarnessInfo.mustChoose`).
+   */
+  mustChoose?: boolean;
   /** The newest version out, from where its installer gets it; null when unknown. */
   latest(ctx: Context): Promise<{ latest: string; available?: boolean } | null>;
   login: { args: string[]; asksCode: boolean; parse(text: string): { url?: string; code?: string } };
@@ -109,6 +121,17 @@ export interface Sealed {
   reason?: string;
   signedOut?: boolean;
 }
+
+/** What a harness's runs said its aliases stood for, kept between runs (`aliases:<id>` in the runner's notes). */
+interface Said {
+  /** The account signed in when it was learned. */
+  account?: string;
+  /** By the model a run was given: the model it said it ran. */
+  aliases: Record<string, string>;
+}
+
+/** The most aliases remembered from runs. */
+const ALIASES_MOST = 50;
 
 export const HOUR = 3_600_000;
 const UPDATE_TTL = 6 * HOUR;
@@ -260,6 +283,43 @@ export function defineHarness(spec: Spec, o: AdapterOptions): Harness {
     const cached = memory.get<{ sealed?: boolean }>(sealKey);
     if (cached && cached.sealed !== true) memory.set(sealKey, undefined);
   };
+  /** The defaults the last look listed (`spec.defaults`), and the account it was signed in with. */
+  let listed: { model?: string; efforts?: Record<string, string> } | null = null;
+  let account: string | undefined;
+  const saidKey = `aliases:${spec.id}`;
+
+  /** The aliases the harness's runs said, for the account signed in now (another's may differ: another plan). */
+  function aliasesSaid(): Record<string, string> {
+    const known = memory.get<Said>(saidKey);
+    if (!known || typeof known !== 'object' || (account && known.account && known.account !== account)) return {};
+    return Object.fromEntries(
+      Object.entries(known.aliases ?? {}).filter(([name, model]) => MODEL.test(name) && MODEL.test(model)),
+    );
+  }
+
+  /** Remember that a run given `given` said it ran `ran`; true when that's new. */
+  function learn(given: string, ran: string): boolean {
+    if (!given || given === ran || !MODEL.test(ran)) return false;
+    const aliases = aliasesSaid();
+    if (aliases[given] === ran && memory.get<Said>(saidKey)?.account === account) return false;
+    if (!(given in aliases) && Object.keys(aliases).length >= ALIASES_MOST) return false;
+    aliases[given] = ran;
+    memory.set(saidKey, { ...(account ? { account } : {}), aliases } satisfies Said);
+    return true;
+  }
+
+  /** The harness's defaults as it lists them, and what its aliases stood for. */
+  function defaults(): Pick<HarnessInfo, 'defaultModel' | 'defaultEfforts' | 'aliases'> {
+    const out: Pick<HarnessInfo, 'defaultModel' | 'defaultEfforts' | 'aliases'> = {};
+    if (listed?.model) out.defaultModel = listed.model;
+    const efforts = Object.fromEntries(
+      Object.entries(listed?.efforts ?? {}).filter(([m, e]) => MODEL.test(m) && MODEL.test(e)),
+    );
+    if (Object.keys(efforts).length) out.defaultEfforts = efforts;
+    const aliases = aliasesSaid();
+    if (Object.keys(aliases).length) out.aliases = aliases;
+    return out;
+  }
 
   const context = (bin: Binary, version: string | null): Context => ({
     bin,
@@ -390,7 +450,7 @@ export function defineHarness(spec: Spec, o: AdapterOptions): Harness {
         }
         const info: HarnessInfo = { ...base, found: true };
         if (ctx.version) info.version = ctx.version;
-        const [auth, sealed, models, efforts, update] = await Promise.all([
+        const [auth, sealed, models, efforts, update, given] = await Promise.all([
           spec.auth(ctx).catch(() => null),
           spec.sealed(ctx).catch(
             (err: unknown): Sealed => ({
@@ -401,11 +461,16 @@ export function defineHarness(spec: Spec, o: AdapterOptions): Harness {
           spec.models(ctx).catch(() => []),
           spec.efforts(ctx).catch(() => []),
           checkUpdate(ctx),
+          spec.defaults ? spec.defaults(ctx).catch(() => null) : null,
         ]);
         if (auth) {
           info.signedIn = auth.signedIn;
-          if (auth.account) info.account = auth.account;
+          if (auth.account) {
+            info.account = auth.account;
+            account = auth.account;
+          }
         }
+        listed = given;
         info.sealed = sealed.sealed;
         if (sealed.reason) info.reason = sealed.reason;
         if (sealed.signedOut) {
@@ -420,6 +485,8 @@ export function defineHarness(spec: Spec, o: AdapterOptions): Harness {
         offered = { version: ctx.version, models: okModels };
         if (okModels.length) info.models = okModels;
         info.efforts = efforts.filter((e) => MODEL.test(e));
+        Object.assign(info, defaults());
+        if (spec.mustChoose) info.mustChoose = true;
         if (update) info.update = update;
         return info;
       } catch (err) {
@@ -605,6 +672,7 @@ export function defineHarness(spec: Spec, o: AdapterOptions): Harness {
       const stderrTail: string[] = [];
       const output: string[] = [];
       let session: string | null = null;
+      let model: string | null = null;
       let tripped: string | null = null;
       let failure: string | null = null;
       let note: string | null = null;
@@ -623,6 +691,9 @@ export function defineHarness(spec: Spec, o: AdapterOptions): Harness {
                 session = s.id;
                 report({ type: 'session', session: s.id });
               }
+              break;
+            case 'model':
+              model = s.model;
               break;
             case 'tool': {
               busy = true;
@@ -704,6 +775,8 @@ export function defineHarness(spec: Spec, o: AdapterOptions): Harness {
           report({ type: 'failed', error: cleanError(`${spec.name} couldn’t start: ${spawnError}`, secrets) });
           return resolve({});
         }
+        // the model its alias stood for, when that's news (Settings shows it)
+        if (model && learn(job.model, model)) report({ type: 'aliases', aliases: aliasesSaid() });
         const said = [...output, ...stderrTail].join('\n');
         const early = code !== 0 && !timedOut && !session && !busy;
         if (early && spec.retry?.(ctx, job, said)) return resolve({ again: 'same' });
@@ -733,8 +806,10 @@ export function defineHarness(spec: Spec, o: AdapterOptions): Harness {
  * A job's model and effort, checked before anything starts: anything that could read as more than a
  * value is refused. A model the harness no longer offers (its last look listed others) is dropped, and
  * so is an effort it doesn't take with the model (one no longer offered, or a setting left from
- * another harness): the run uses the harness's default rather than failing. `models` is what the last
- * look listed for this version (null: not looked at yet, so they're asked for now).
+ * another harness): the run uses the harness's default rather than failing. A harness that lists no
+ * defaults (`mustChoose`) is refused instead: it runs only with a model and an effort it offers.
+ * `models` is what the last look listed for this version (null: not looked at yet, so they're asked
+ * for now).
  */
 async function checkJob(
   spec: Spec,
@@ -752,9 +827,22 @@ async function checkJob(
   }
   if (out.effort) {
     const efforts: string[] = await spec.efforts(ctx, out.model || undefined).catch(() => []);
-    if (!efforts.includes(out.effort)) out = { ...out, effort: '' };
+    // with no defaults, an empty list says nothing (it couldn't be read): the effort is passed on
+    if (!efforts.includes(out.effort) && !(spec.mustChoose && !efforts.length)) out = { ...out, effort: '' };
   }
+  if (spec.mustChoose && (!out.model || !out.effort)) return { error: chooseText(spec.name, job, out) };
   return { job: out };
+}
+
+/** Why a harness that lists no defaults won't run: what's to be chosen, and what was and has gone. */
+function chooseText(name: string, given: Pick<Job, 'model' | 'effort'>, kept: Pick<Job, 'model' | 'effort'>): string {
+  const what = !kept.model && !kept.effort ? 'a model and an effort' : !kept.model ? 'a model' : 'an effort';
+  const gone = [
+    given.model && !kept.model ? `“${given.model}”` : null,
+    given.effort && !kept.effort ? `“${given.effort}” effort` : null,
+  ].filter(Boolean);
+  const choose = `${what} for ${name} in Settings › Agent`;
+  return gone.length ? `${name} no longer offers ${gone.join(' or ')}: choose ${choose}` : `Choose ${choose}`;
 }
 
 /** The MCP server for a job, as the adapters put it in their config. */

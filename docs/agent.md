@@ -84,7 +84,9 @@ A request with no `Origin` (the CLI, the runner, curl) passes the Origin check.
 
 The routes marked **open** answer any device. All others need a device token, and answer 401 without
 one. A refusal is `{error, reason?}`. The reasons the studio acts on are `off`, `busy`, `not-open`,
-`no-runner`, `no-harness`, `not-sealed` and `signed-out`, all with 409. Other refusals carry no reason.
+`no-runner`, `no-harness`, `not-sealed`, `signed-out` and `choose` (a harness with no defaults, Claude
+Code, has no model or effort chosen, or one it no longer offers), all with 409. Other refusals carry no
+reason.
 
 **With the agent off**, only these answer (under `/api/agent`): `GET /api/agent`, `POST /pairing`,
 `POST /pair`, `GET /devices/requests/:id`, `GET|PUT /settings`, `GET /devices` and
@@ -102,7 +104,7 @@ Turning the agent off cancels every job, so the job-scoped routes answer 403.
 | `POST /api/agent/devices/requests/:id/approve` and `/deny` | | `{ok}`; 404 if none of that id is waiting. |
 | `DELETE /api/agent/devices/:id` | | `{ok}`; 404. It takes effect at once: the device's studios get `agent-removed` and lose agent access, its jobs (running or waiting for a click) are cancelled, and allowed devices get `agent-devices`. |
 | `GET /api/agent/settings` | | `{enabled, harness, model, effort, harnesses:[HarnessInfo], relays:[…]}`. `relays` are the sign-ins, updates and installs under way, each as its runner last told it (its `agent-harness` message, less `type`), for a studio that opens Settings later or reloads; one is let go when it ends, after 15 minutes, or when its runner goes. |
-| `PUT /api/agent/settings` | `{enabled?, harness?, model?, effort?}` | The settings, as GET. `harness` is an id or null (the first that can be sealed). `model` and `effort` must match `^[A-Za-z0-9][\w.:\-\[\]=]{0,79}$` or be empty (the harness's own). Off stops every job; on sends `agent-on` to the runners; any change is announced as `agent-settings`. |
+| `PUT /api/agent/settings` | `{enabled?, harness?, model?, effort?}` | The settings, as GET. `harness` is an id or null (the first that can be sealed). `model` and `effort` must match `^[A-Za-z0-9][\w.:\-\[\]=]{0,79}$` or be empty (the harness's own default; Claude Code has none, and refuses requests until both are set). Off stops every job; on sends `agent-on` to the runners; any change is announced as `agent-settings`. |
 | `POST /api/agent/harnesses/refresh` | | `{ok}`. **Look again**: the runners look again (`agent-refresh`), a seal check that failed for a version included. 409 `no-runner`. |
 | `POST /api/agent/harnesses/look` | | `{ok, asked}`. Settings › Agent was opened: each runner whose last look (its last `harnesses`, or the last time it was asked) is an hour old or more is sent `agent-refresh {light:true}`; `asked` is how many. At most once an hour per runner, and only when a studio asks. |
 | `POST /api/agent/harnesses/:id/login` | | `{ok}`. Sent to the runner that has it; progress arrives as `agent-harness` live messages. 404 for an unknown harness; 409 `no-harness`, `busy` (a job runs on it), or no reason when it's signed in already (HO[LO] never signs out or switches accounts). |
@@ -131,7 +133,7 @@ server). Scan's own Read in, which needs no agent, uses `GET /api/scans/:id/engi
 step. That isn't an agent route.
 
 **`HarnessInfo`** is:
-`{id:'claude'|'codex'|'cursor', name, found, version?, signedIn?, account?, update?:{available, latest?}, sealed, sealUnknown?, reason?, models?:string[], efforts?:string[], host?, installer?}`.
+`{id:'claude'|'codex'|'cursor', name, found, version?, signedIn?, account?, update?:{available, latest?}, sealed, sealUnknown?, reason?, models?:string[], efforts?:string[], defaultModel?, defaultEfforts?:{[model]:effort}, aliases?:{[alias]:model}, mustChoose?, host?, installer?}`.
 - The runner reports all three, found or not.
 - `sealed: false` means the harness can't be locked down to HO[LO]'s tools. The studio shows it as
   unavailable, with `reason`.
@@ -148,6 +150,13 @@ step. That isn't an agent route.
 - At most 500 `models` and 50 `efforts` are kept, each checked as settings check them. They're the
   harness's own lists, read on the host (docs/agent-harnesses.md, "Models and efforts"): HO[LO]'s server
   never asks a vendor for them, it keeps what the runner reports.
+- `defaultModel` is what a run uses when the agent's Model is empty, and `defaultEfforts` the effort
+  each model runs at when Effort is empty (docs/agent-harnesses.md, "Defaults"), as Codex and Cursor
+  list them. Claude Code lists none (`mustChoose: true`): a request needs a model and an effort chosen,
+  and is refused without (409 `choose`), by the server and again by the runner, rather than run with
+  whatever it picks. `aliases` say what each alias stood for at its last run (`opus` → the
+  full name its `init` gave). Up to 500 `defaultEfforts` and 50 `aliases` are kept, names and
+  efforts checked as settings check them.
 
 ### Settings › Agent
 
@@ -181,6 +190,17 @@ is polled.
 offers stays selected, labelled "(no longer offered)", and a run uses the harness's default instead of
 failing (the adapter drops it before the run). Cursor has no Effort list: its model names carry their
 effort, and the row says so.
+
+Each picker's empty choice names the default: "Codex's default (Gpt-6.1-sol)", and for Effort the
+default of the model a run uses. Claude Code has no defaults to name, so its pickers have no empty
+choice: "Choose a model" and "Choose an effort" until both are chosen, and one it no longer offers
+says to choose another. **Runs with**, under them, says what a run with these settings uses, as the
+adapter decides it: "gpt-6.1-sol at low effort", "auto" for Cursor, "opus (last ran as <its full
+name>) at high effort" for Claude Code once a run has said what the alias stands for, or, in the warning
+color, what's left to choose ("Choose an effort: Claude Code doesn't run without one"). The choice is
+the host's, shared by every allowed device, so a request from a phone runs as one from the desktop. A
+run that says something new of an alias sends the harness list again at once (the runner's
+`harnesses` message), so the row follows without a look.
 
 ## REST: `/api/agent/jobs/:job/*`
 
@@ -319,7 +339,9 @@ agent's other traffic uses the existing `state`, `played`, `ack`, `transport`, `
 - `hello {role:'runner', name, key?, caps:{render, agent}}`. `caps.render` is unchanged; `caps.agent:
   true` means it runs agent jobs. Only a keyed runner with `caps.agent` is handed jobs, sign-ins and
   `agent-on`.
-- `harnesses {list:[HarnessInfo]}`. Allowed devices hear the result as `agent-settings`.
+- `harnesses {list:[HarnessInfo], from?:'run'}`. Allowed devices hear the result as `agent-settings`.
+  `from:'run'`: said again because a run said what an alias stood for (Claude Code's), the rest as its
+  last look found it; it doesn't count as a look (`…/harnesses/look`).
 - `agent-progress {job, line}`
 - `agent-session {job, session}`
 - `agent-done {job, reply?}`. `reply` (one line, ≤ 600) stands as the reply only when the agent never

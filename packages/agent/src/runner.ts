@@ -158,8 +158,9 @@ export function startAgentRunner(o: AgentRunnerOptions): AgentRunner {
 
   const harnessBusy = (id: HarnessId) => [...running.values()].some((r) => r.run.harness === id);
 
-  function report(list: HarnessInfo[]): void {
-    o.send({ type: 'harnesses', list: list.map((h) => ({ ...h, host })) });
+  /** Say what's known of the harnesses; `from: 'run'` when a run, not a look, changed it (its aliases). */
+  function report(list: HarnessInfo[], from?: 'run'): void {
+    o.send({ type: 'harnesses', list: list.map((h) => ({ ...h, host })), ...(from ? { from } : {}) });
   }
 
   /** Look for the harnesses (one look at a time), and tell the server what was found. */
@@ -226,6 +227,13 @@ export function startAgentRunner(o: AgentRunnerOptions): AgentRunner {
             break;
           case 'session':
             o.send({ type: 'agent-session', job: run.job, session: e.session });
+            break;
+          case 'aliases':
+            // the run said what its alias stood for (Claude Code's `opus`): Settings shows it now
+            if (known) {
+              known = known.map((h) => (h.id === run.harness ? { ...h, aliases: e.aliases } : h));
+              report(known, 'run');
+            }
             break;
           case 'done':
             log(`${tag} done in ${Math.round((Date.now() - started) / 1000)} s`);

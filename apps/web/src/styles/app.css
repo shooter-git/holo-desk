@@ -3876,6 +3876,11 @@ html[data-layout="phone-landscape"] .bar .field input {
   min-width: 220px;
 }
 
+/* Runs with, when there's something left to choose before it runs (Claude Code's model or effort) */
+.agent-grid .agent-attention {
+  color: var(--warn);
+}
+
 /* a harness a row: its name and version, then its sign-in, its update and whether it's in use, each in
    a column of its own so the rows line up; what's under way (a sign-in, an update) or why it can't be
    used goes under it, full width */

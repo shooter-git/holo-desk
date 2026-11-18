@@ -34,6 +34,7 @@ server of ours as its only tools. The adapters in `packages/agent/src/harness/` 
 | Check for an update without installing | the `stable` channel file on downloads.claude.ai | npm registry / GitHub releases | `cursor-agent about --format json` |
 | Official installer (Install) | `curl -fsSL https://claude.ai/install.sh \| bash` | `curl -fsSL https://chatgpt.com/codex/install.sh \| sh` | `curl https://cursor.com/install -fsS \| bash` |
 | Models / efforts from | `--help` (aliases; `--effort`'s choices), per version | `codex debug models`, per version and hourly | `cursor-agent models` at each look; effort is in the model id |
+| Defaults from | none listed: a run needs both chosen | the same catalog: lowest `priority`, `default_reasoning_level` | `models`' "(default)" |
 | Updates itself during a run | not with `DISABLE_AUTOUPDATER=1` | not seen | **yes, unless `--disable-auto-update`** |
 | Startup to first event | 0.3–0.5 s | 0.06–0.5 s | 3–7 s warm, 15–34 s cold |
 | Stop | process-group SIGTERM: all gone | same | same; also needed after a normal exit (worker daemon) |
@@ -118,7 +119,38 @@ When the runner looks:
 
 A saved model or effort the harness no longer offers isn't an error: the adapter drops it before the
 run (the model when the last look listed others; the effort when the harness doesn't take it with that
-model), and the run uses the harness's default. The picker shows it as "(no longer offered)".
+model), and the run uses the harness's default. The picker shows it as "(no longer offered)". Claude
+Code has no default to fall back on, so it's refused instead (below).
+
+### Defaults
+
+Settings › Agent says what a run uses when Model or Effort is left empty (`HarnessInfo.defaultModel`,
+`defaultEfforts`), so the model and effort in use can always be read there.
+
+| Harness | Default model | Default effort |
+|---|---|---|
+| Claude Code | none: a model must be chosen | none: an effort must be chosen |
+| Codex | the visible model with the lowest `priority` in `codex debug models` | the model's `default_reasoning_level` in the same catalog |
+| Cursor | the one `cursor-agent models` marks "(default)" (`auto`) | none: the model id carries it |
+
+- **Codex.** Its app server (`codex app-server`, `model/list`) marks the lowest-priority model
+  `isDefault`, and keeps marking it with `-c model=…` set: it's the built-in default, which a run has,
+  since a run ignores config.toml. Its `defaultReasoningEffort` is the catalog's
+  `default_reasoning_level`. Checked 2026-11-17 with Codex 0.169.0: `gpt-6.1-sol`, `low`.
+- **Cursor.** `models` runs with the probe's private home, as a run has its own: neither reads the user's
+  cli-config.json. A run's `--model` is saved as its thread's default (the workspace home's
+  cli-config.json, "Cursor" below), so a run given no model starts without that file, as a new thread
+  does, and gets Cursor's default rather than the model an earlier run of the thread had.
+- **Claude Code.** Its default model follows the account (its plan) and its default effort a per-model
+  list Anthropic serves, so neither can be read before a run, and nothing it prints says the effort
+  (only its private transcript does). So it has none here (`mustChoose`): Settings asks for both, and a
+  request without them, or with one `--help` no longer lists, is refused (409 `choose`) by the server
+  and again by the adapter. The names it offers are its own aliases (`opus`, `sonnet`, `haiku`, and
+  what `--help` names), each the latest model of its kind the account has, so the list follows new
+  models and plans without a change here. Every alias takes every effort `--help` lists (checked
+  2026-11-17 with 2.1.322: `haiku` at `max` runs). A run's `init` names the full model (`model`); the
+  adapter keeps what each alias stood for in the runner's notes (`.harnesses.json`, `aliases:claude`),
+  forgotten when another account signs in, and Settings shows it.
 
 ## Claude Code
 

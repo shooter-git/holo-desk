@@ -101,9 +101,71 @@ export function installQuestion(h: HarnessInfo): { text: string; command: string
 /** A model's or an effort's name as a menu shows it ("opus" is "Opus"). */
 export const shown = (name: string) => name.charAt(0).toUpperCase() + name.slice(1);
 
+/** The model and effort a run uses now, from the agent's Model and Effort and what the harness says. */
+export interface RunsWith {
+  /** The model chosen (what its alias stood for at its last run), or the harness's default; null: not said. */
+  model: string | null;
+  /** The effort chosen, or the model's own default; null: not said, or carried in the model's name. */
+  effort: string | null;
+  /** The model's name carries its effort (Cursor): there's no Effort to choose. */
+  effortInModel: boolean;
+  /** Each is the harness's default: nothing chosen, or the one chosen is no longer offered. */
+  defaultModel: boolean;
+  defaultEffort: boolean;
+}
+
+/**
+ * What a run uses with these settings, as the adapter decides it: a model or an effort the harness no
+ * longer offers is dropped (an empty list says nothing: what's typed is passed on), and then the
+ * harness's own default applies (or, when it lists none, it doesn't run).
+ */
+export function runsWith(h: HarnessInfo, model: string, effort: string): RunsWith {
+  const chosen = model && (!h.models?.length || h.models.includes(model)) ? model : '';
+  const resolved = chosen ? (h.aliases?.[chosen] ?? chosen) : (h.defaultModel ?? null);
+  const effortInModel = h.efforts?.length === 0;
+  const picked = !effortInModel && effort && (!h.efforts || h.efforts.includes(effort)) ? effort : '';
+  const effortNow = effortInModel ? null : picked || (resolved && h.defaultEfforts?.[resolved]) || null;
+  return { model: resolved, effort: effortNow, effortInModel, defaultModel: !chosen, defaultEffort: !picked };
+}
+
+/** What a harness that lists no defaults still needs chosen to run: null when nothing. */
+export function toChoose(h: HarnessInfo, model: string, effort: string): string | null {
+  if (!h.mustChoose) return null;
+  const r = runsWith(h, model, effort);
+  const effortToo = r.defaultEffort && !r.effortInModel;
+  return r.defaultModel && effortToo
+    ? 'a model and an effort'
+    : r.defaultModel
+      ? 'a model'
+      : effortToo
+        ? 'an effort'
+        : null;
+}
+
+/**
+ * What Settings › Agent says a run uses: "gpt-6.1-sol at low effort", "opus (last ran as <its full
+ * name>) at high effort", the harness's default when it doesn't say what that is, or what's left to
+ * choose when it has no defaults.
+ */
+export function runsWithText(h: HarnessInfo, model: string, effort: string): string {
+  const missing = toChoose(h, model, effort);
+  if (missing) return `Choose ${missing}: ${h.name} doesn’t run without ${missing.includes(' and ') ? 'them' : 'one'}`;
+  const r = runsWith(h, model, effort);
+  if (!r.model) return `${h.name}’s ${r.effortInModel ? 'default model' : 'default model and effort'}`;
+  // an alias moves on with each new model (Claude Code's opus): what it last ran as
+  const name = !r.defaultModel && r.model !== model ? `${model} (last ran as ${r.model})` : r.model;
+  if (r.effortInModel) return name;
+  return r.effort ? `${name} at ${r.effort} effort` : `${name} at ${h.name}’s default effort`;
+}
+
+/** The label of a picker's empty choice: the harness's default, and what it is when that's known. */
+export function defaultLabel(h: HarnessInfo, value: string | null): string {
+  return value ? `${h.name}’s default (${shown(value)})` : `${h.name}’s default`;
+}
+
 /**
  * A picker's choices: the harness's own, and the one saved when it's no longer among them (it's kept
- * as it is, said so; a run uses the harness's default instead).
+ * as it is, said so; a run uses the harness's default instead, or doesn't run when it lists none).
  */
 export function choices(list: readonly string[], saved: string): { value: string; label: string; gone?: true }[] {
   const out: { value: string; label: string; gone?: true }[] = list.map((v) => ({ value: v, label: shown(v) }));

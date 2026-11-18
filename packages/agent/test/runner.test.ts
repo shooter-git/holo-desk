@@ -193,6 +193,31 @@ describe('the agent runner', () => {
     expect(logs.join('\n')).not.toContain(SECRET_WORDS);
   });
 
+  it('says the list again at once when a run said what an alias stood for, with no second look', async () => {
+    s = sandbox();
+    const { r, sent, claude } = runner();
+    r.handle({ type: 'agent-on' });
+    await until(() => sent.some((m) => m.type === 'harnesses'));
+    r.handle(run(1));
+    await until(() => claude.runs.length === 1);
+    const { on, finish } = claude.runs[0] as (typeof claude.runs)[0];
+    const aliases = { opus: 'claude-opus-test' };
+    on({ type: 'aliases', aliases });
+    on({ type: 'done' });
+    finish();
+    await until(() => r.busy().running === 0);
+    const reports = sent.filter((m) => m.type === 'harnesses');
+    const lists = reports.map((m) => m.list as HarnessInfo[]);
+    expect(lists).toHaveLength(2);
+    // said again, not looked at again: the server keeps its clock for the next look
+    expect(reports.map((m) => m.from)).toEqual([undefined, 'run']);
+    expect(lists[1]?.[0]).toEqual({ ...lists[0]?.[0], aliases });
+    expect(lists[1]?.slice(1)).toEqual(lists[0]?.slice(1));
+    expect(claude.infoCalls()).toBe(1);
+    // nothing about it goes to the job's thread
+    expect(sent.filter((m) => m.type !== 'harnesses')).toEqual([{ type: 'agent-done', job: 'agj_000000000001' }]);
+  });
+
   it('refuses a job HO[LO] couldn’t have made', () => {
     s = sandbox();
     const { r, sent, claude } = runner();

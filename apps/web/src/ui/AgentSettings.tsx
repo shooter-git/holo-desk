@@ -33,7 +33,7 @@ import {
 } from '../app/agent.ts';
 import { device } from '../app/live.ts';
 import { takePairCode } from '../app/pair-link.ts';
-import { choices, harnessRow, installQuestion } from './harness-row.ts';
+import { choices, defaultLabel, harnessRow, installQuestion, runsWith, runsWithText, toChoose } from './harness-row.ts';
 
 /**
  * Where turning it on has got to, on a device not allowed yet. `code`: a code from the host is asked for
@@ -545,7 +545,9 @@ function HarnessRow({ harness: h, current }: { harness: HarnessInfo; current: bo
 
 /**
  * The model and effort the agent runs the harness with: the harness's own lists, as the runner last
- * read them; one saved that it no longer offers shows as such (a run uses its default instead).
+ * read them; one saved that it no longer offers shows as such (a run uses its default instead). Each
+ * default names what it is when the harness has said, and Runs with says what a run uses now. A
+ * harness that lists no defaults (Claude Code) has none to pick: both are chosen, or it doesn't run.
  */
 function HarnessRows({ harness: h, model, effort }: { harness: HarnessInfo; model: string; effort: string }) {
   const [typed, setTyped] = useState(model);
@@ -554,6 +556,13 @@ function HarnessRows({ harness: h, model, effort }: { harness: HarnessInfo; mode
   const efforts = choices(h.efforts ?? [], effort);
   const modelGone = models.some((c) => c.gone);
   const effortGone = efforts.some((c) => c.gone);
+  const must = !!h.mustChoose;
+  const modelDefault = must ? 'Choose a model' : defaultLabel(h, h.defaultModel ?? null);
+  // the default effort of the model a run uses
+  const effortDefault = must ? 'Choose an effort' : defaultLabel(h, runsWith(h, model, '').effort);
+  const gone = must
+    ? `${h.name} no longer offers it: choose another`
+    : `${h.name} no longer offers it: it runs with its default`;
   return (
     <>
       <span className="agent-key">Model</span>
@@ -565,7 +574,9 @@ function HarnessRows({ harness: h, model, effort }: { harness: HarnessInfo; mode
             value={model}
             onChange={(e) => void setSettings({ model: e.target.value }).catch(() => undefined)}
           >
-            <option value="">{h.name}’s default</option>
+            <option value="" disabled={must}>
+              {modelDefault}
+            </option>
             {models.map((c) => (
               <option key={c.value} value={c.value}>
                 {c.label}
@@ -576,7 +587,7 @@ function HarnessRows({ harness: h, model, effort }: { harness: HarnessInfo; mode
           <input
             className="input agent-select"
             aria-label="Model"
-            placeholder={`${h.name}’s default`}
+            placeholder={modelDefault}
             value={typed}
             onChange={(e) => setTyped(e.target.value)}
             onBlur={() => {
@@ -592,10 +603,14 @@ function HarnessRows({ harness: h, model, effort }: { harness: HarnessInfo; mode
         )}
         <span className="muted">
           {modelGone
-            ? `${h.name} no longer offers it: it runs with its default`
+            ? gone
             : h.models?.length
-              ? `${h.name}’s names, or its default`
-              : 'A model’s name, or empty for the default'}
+              ? must
+                ? `${h.name}’s names for its latest models`
+                : `${h.name}’s names, or its default`
+              : must
+                ? 'A model’s name'
+                : 'A model’s name, or empty for the default'}
         </span>
       </div>
       {h.efforts?.length || effortGone ? (
@@ -608,16 +623,16 @@ function HarnessRows({ harness: h, model, effort }: { harness: HarnessInfo; mode
               value={effort}
               onChange={(e) => void setSettings({ effort: e.target.value }).catch(() => undefined)}
             >
-              <option value="">{h.name}’s default</option>
+              <option value="" disabled={must}>
+                {effortDefault}
+              </option>
               {efforts.map((c) => (
                 <option key={c.value} value={c.value}>
                   {c.label}
                 </option>
               ))}
             </select>
-            <span className="muted">
-              {effortGone ? `${h.name} no longer offers it: it runs with its default` : (h.efforts ?? []).join(', ')}
-            </span>
+            <span className="muted">{effortGone ? gone : (h.efforts ?? []).join(', ')}</span>
           </div>
         </>
       ) : h.efforts ? (
@@ -626,6 +641,10 @@ function HarnessRows({ harness: h, model, effort }: { harness: HarnessInfo; mode
           <span className="muted">Part of the model with {h.name}: a model’s name says its effort</span>
         </>
       ) : null}
+      <span className="agent-key">Runs with</span>
+      <span aria-live="polite" className={toChoose(h, model, effort) ? 'agent-attention' : undefined}>
+        {runsWithText(h, model, effort)}
+      </span>
     </>
   );
 }

@@ -312,15 +312,18 @@ codex exec --json --skip-git-repo-check --ignore-user-config --ignore-rules
   -c sandbox_mode="read-only" -c approval_policy="never" -c web_search="disabled"
   -c features.multi_agent_v2.disable_native_tools=true
   -c check_for_update_on_startup=false -c project_root_markers=[]
+  -c features.shell_tool=false -c features.unified_exec=false -c features.apps=false
+  -c features.plugins=false -c features.remote_plugin=false -c features.browser_use=false
+  -c features.browser_use_external=false -c features.in_app_browser=false -c features.computer_use=false
+  -c features.image_generation=false -c features.multi_agent=false -c features.hooks=false
+  -c features.goals=false -c features.view_image=false -c features.tool_suggest=false
+  -c features.skill_search=false -c features.skill_mcp_dependency_install=false
+  -c features.workspace_dependencies=false -c features.shell_snapshot=false
+  -c features.plugin_discovery_prefetch=false -c features.sleep_tool=false
   -c mcp_servers.holo.command="<node>" -c mcp_servers.holo.args=["<mcp.ts>"]
   -c mcp_servers.holo.env={NAME="value"}
   -c mcp_servers.holo.tool_timeout_sec=240 -c mcp_servers.holo.startup_timeout_sec=20
   -c mcp_servers.holo.default_tools_approval_mode="approve"
-  --disable shell_tool --disable unified_exec --disable apps --disable plugins --disable remote_plugin
-  --disable browser_use --disable browser_use_external --disable in_app_browser --disable computer_use
-  --disable image_generation --disable multi_agent --disable hooks --disable goals --disable view_image
-  --disable tool_suggest --disable skill_search --disable skill_mcp_dependency_install
-  --disable workspace_dependencies --disable shell_snapshot --disable plugin_discovery_prefetch --disable sleep_tool
   --sandbox=read-only --cd=<ws> -
 ```
 
@@ -334,7 +337,7 @@ codex exec resume <the same options, without --sandbox and --cd> <thread id> -
 Values given with `-c` show in `ps`: never put the job token there. Our server reads it from `.holo-job`.
 
 **Why each switch** (all seen):
-- **Inspecting without spending.** `codex debug prompt-input -c … --disable … "hi"` prints the tools and
+- **Inspecting without spending.** `codex debug prompt-input -c … "hi"` prints the tools and
   instructions the model would get, without a model call. The session record
   (`~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl`) shows the rest.
 - **Code mode.** Every model in `codex debug models` has `tool_mode: code_mode_only`. The model's one real tool
@@ -351,7 +354,14 @@ Values given with `-c` show in `ps`: never put the job token there. Our server r
   development" feature, off; in 0.169.1 `--disable send_message_to_user_async` is accepted but the tool is
   still offered, so the seal allows it rather than refusing Codex.
 - **`features.multi_agent_v2.disable_native_tools=true`** removes the `collaboration.*` sub-agent tools
-  (`spawn_agent`…). `--disable multi_agent` alone only does that for v1 models such as `gpt-5.6-luna`.
+  (`spawn_agent`…). `features.multi_agent=false` alone only does that for v1 models such as `gpt-5.6-luna`.
+- **Features are switched off as settings** (`-c features.<name>=false`), not with `--disable <name>`. Codex's
+  help calls the two equivalent, and they are for a name it knows. For one it doesn't, `--disable` stops Codex
+  with `Error: Unknown feature flag: <name>`, so a release that renamed or dropped a feature on the list would
+  stop every run (and the seal check). The setting is ignored instead, and the seal check still refuses a Codex
+  that leaves the model a renamed feature's tools (checked 2026-11-18 on 0.169.0: sealed with the settings and
+  an unknown name among them, and without them `exec_command`, `view_image`, `write_stdin` and `sleep` were
+  back). `codex features list` shows each feature's stage (`removed` ones too) and whether it's on.
 - **`default_tools_approval_mode="approve"`.** Without it every MCP call failed with
   `MCP tool call requires approval, but approval policy is never`. The valid values are `auto`, `prompt`,
   `writes` and `approve`. It's set on our server only (`mcp_servers.holo.…`).
@@ -455,7 +465,7 @@ write tool left, `apply_patch`, is refused. The caveats:
 **In the adapter** (`packages/agent/src/harness/codex.ts`):
 - The agent's instructions are the workspace's `AGENTS.md` (mode 0600).
 - **The seal is checked once per version**, remembered in `<root>/.harnesses.json`: `codex debug prompt-input`
-  with the run's `-c` settings and `--disable` list, in an empty `CODEX_HOME` of its own (`<root>/.codex-probe`,
+  with the run's `-c` settings, in an empty `CODEX_HOME` of its own (`<root>/.codex-probe`,
   so none of the user's config or MCP servers is read or started). Codex is offered only when the model's tools
   are code mode's own (`exec`, `wait`, `request_user_input`, `request_user_input_async`,
   `send_message_to_user_async`) and, reached through `exec`, `apply_patch`, `clock__curr_time`, the three MCP

@@ -87,12 +87,21 @@ export function codexSettings(effort: string): string[] {
     'sandbox_mode="read-only"',
     'approval_policy="never"',
     'web_search="disabled"',
-    // the collaboration.* sub-agent tools (--disable multi_agent covers only v1 models)
+    // the collaboration.* sub-agent tools (features.multi_agent=false covers only v1 models)
     'features.multi_agent_v2.disable_native_tools=true',
     'check_for_update_on_startup=false',
     // only the workspace's AGENTS.md: none from the folders above it
     'project_root_markers=[]',
+    // as settings, not `--disable`: Codex refuses a `--disable` name it doesn't know ("Unknown feature flag"),
+    // but ignores such a setting, so a feature a later Codex renames or drops doesn't stop every run (the seal
+    // check still finds any tool it leaves the model)
+    ...CODEX_DISABLED.map((f) => `features.${f}=false`),
   ];
+}
+
+/** `codex debug prompt-input` with a run's switches: the model's tools, listed without calling a model. */
+export function codexProbeArgs(): string[] {
+  return ['debug', 'prompt-input', ...codexSettings('').flatMap((kv) => ['-c', kv]), 'hi'];
 }
 
 export function codexArgs(
@@ -118,7 +127,6 @@ export function codexArgs(
     '--ignore-rules',
     ...(job.model ? [`--model=${job.model}`] : []),
     ...c.flatMap((kv) => ['-c', kv]),
-    ...CODEX_DISABLED.flatMap((f) => ['--disable', f]),
   ];
   // `exec resume` takes neither --sandbox nor --cd: -c sandbox_mode and the working folder cover them
   return job.session
@@ -350,14 +358,7 @@ export function codexSpec(): Spec {
         return known.reason ? { sealed: known.sealed, reason: known.reason } : { sealed: known.sealed };
       // an empty CODEX_HOME of its own: none of the user's config or MCP servers is read (or started)
       const codexHome = privateDir(join(ctx.root, '.codex-probe'));
-      const args = [
-        'debug',
-        'prompt-input',
-        ...codexSettings('').flatMap((kv) => ['-c', kv]),
-        ...CODEX_DISABLED.flatMap((f) => ['--disable', f]),
-        'hi',
-      ];
-      const out = await capture(ctx.bin, args, {
+      const out = await capture(ctx.bin, codexProbeArgs(), {
         cwd: probeDir(ctx),
         env: envFor(ctx, { CODEX_HOME: codexHome }),
         timeoutMs: 30_000,

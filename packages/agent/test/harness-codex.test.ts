@@ -136,7 +136,9 @@ describe('Codex: finding it', () => {
     s = sandbox();
     await fake().info();
     const args = readFileSync(join(s.rec, 'probe-args'), 'utf8');
-    for (const f of CODEX_DISABLED) expect(args).toContain(`--disable ${f}`);
+    for (const f of CODEX_DISABLED) expect(args).toContain(`-c features.${f}=false`);
+    // never as --disable, which stops Codex on a name it no longer has
+    expect(args).not.toContain('--disable');
     expect(args).toContain('features.multi_agent_v2.disable_native_tools=true');
     const env = readFileSync(join(s.rec, 'probe-env'), 'utf8').split('\0');
     expect(env).toContain(`CODEX_HOME=${join(s.root, '.codex-probe')}`);
@@ -261,6 +263,7 @@ describe('Codex: a sealed run', () => {
       'check_for_update_on_startup=false',
       '-c',
       'project_root_markers=[]',
+      ...CODEX_DISABLED.flatMap((f) => ['-c', `features.${f}=false`]),
       '-c',
       `mcp_servers.holo.command=${JSON.stringify(server.command)}`,
       '-c',
@@ -273,7 +276,6 @@ describe('Codex: a sealed run', () => {
       'mcp_servers.holo.startup_timeout_sec=20',
       '-c',
       'mcp_servers.holo.default_tools_approval_mode="approve"',
-      ...CODEX_DISABLED.flatMap((f) => ['--disable', f]),
       '--sandbox=read-only',
       `--cd=${j.workspace}`,
       '-',

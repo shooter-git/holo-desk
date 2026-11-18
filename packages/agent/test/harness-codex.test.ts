@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
@@ -136,7 +136,9 @@ describe('Codex: finding it', () => {
     s = sandbox();
     await fake().info();
     const args = readFileSync(join(s.rec, 'probe-args'), 'utf8');
-    for (const f of CODEX_DISABLED) expect(args).toContain(`--disable ${f}`);
+    for (const f of CODEX_DISABLED) expect(args).toContain(`-c features.${f}=false`);
+    // never as --disable, which stops Codex on a name it no longer has
+    expect(args).not.toContain('--disable');
     expect(args).toContain('features.multi_agent_v2.disable_native_tools=true');
     const env = readFileSync(join(s.rec, 'probe-env'), 'utf8').split('\0');
     expect(env).toContain(`CODEX_HOME=${join(s.root, '.codex-probe')}`);
@@ -152,6 +154,42 @@ describe('Codex: finding it', () => {
     const info = await fake({ sealed: 'loose' }).info();
     expect(info.sealed).toBe(false);
     expect(info.reason).toContain('exec_command');
+  });
+
+  it('takes the message tool Codex 0.169.1 gives the model, and nothing else new', () => {
+    const items = JSON.parse(readFileSync(join(FIXTURES, 'codex-prompt-input-sealed.json'), 'utf8')) as {
+      type: string;
+      tools?: object[];
+    }[];
+    const withTool = (name: string) =>
+      JSON.stringify(
+        items.map((i) =>
+          i.type === 'additional_tools' ? { ...i, tools: [...(i.tools ?? []), { type: 'function', name }] } : i,
+        ),
+      );
+    // it only talks to the user, as request_user_input_async does; its feature switch doesn't remove it
+    expect(codexSealedTools(withTool('send_message_to_user_async'))).toEqual({ sealed: true });
+    expect(codexSealedTools(withTool('send_files_somewhere'))).toEqual({
+      sealed: false,
+      reason: 'This Codex gives the model tools HO[LO] can’t turn off (send_files_somewhere)',
+    });
+  });
+
+  it('checks the seal again when what it remembers was checked under other rules', async () => {
+    s = sandbox();
+    mkdirSync(s.root, { recursive: true });
+    // what an older runner found for this version, before it allowed a tool
+    const notes = join(s.root, '.harnesses.json');
+    writeFileSync(
+      notes,
+      JSON.stringify({ 'sealed:codex': { version: '0.167.1', sealed: false, reason: 'old rules' } }),
+    );
+    expect(await fake().info()).toMatchObject({ sealed: true });
+    expect(existsSync(join(s.rec, 'probe-args'))).toBe(true);
+    // checked under these rules: remembered, not probed again
+    rmSync(join(s.rec, 'probe-args'));
+    expect(await fake().info()).toMatchObject({ sealed: true });
+    expect(existsSync(join(s.rec, 'probe-args'))).toBe(false);
   });
 
   it('reads the recorded tool lists, status, models and the device sign-in', () => {
@@ -225,6 +263,7 @@ describe('Codex: a sealed run', () => {
       'check_for_update_on_startup=false',
       '-c',
       'project_root_markers=[]',
+      ...CODEX_DISABLED.flatMap((f) => ['-c', `features.${f}=false`]),
       '-c',
       `mcp_servers.holo.command=${JSON.stringify(server.command)}`,
       '-c',
@@ -237,7 +276,6 @@ describe('Codex: a sealed run', () => {
       'mcp_servers.holo.startup_timeout_sec=20',
       '-c',
       'mcp_servers.holo.default_tools_approval_mode="approve"',
-      ...CODEX_DISABLED.flatMap((f) => ['--disable', f]),
       '--sandbox=read-only',
       `--cd=${j.workspace}`,
       '-',

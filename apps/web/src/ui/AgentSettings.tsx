@@ -553,7 +553,7 @@ function HarnessRow({ harness: h, current }: { harness: HarnessInfo; current: bo
 function HarnessRows({ harness: h, model, effort }: { harness: HarnessInfo; model: string; effort: string }) {
   const [typed, setTyped] = useState(model);
   useEffect(() => setTyped(model), [model]);
-  const models = choices(h.models ?? [], model);
+  const models = choices(h.models ?? [], model, h.aliases);
   const efforts = choices(h.efforts ?? [], effort);
   const modelGone = models.some((c) => c.gone);
   const effortGone = efforts.some((c) => c.gone);

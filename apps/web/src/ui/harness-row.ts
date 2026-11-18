@@ -101,6 +101,22 @@ export function installQuestion(h: HarnessInfo): { text: string; command: string
 /** A model's or an effort's name as a menu shows it ("opus" is "Opus"). */
 export const shown = (name: string) => name.charAt(0).toUpperCase() + name.slice(1);
 
+/**
+ * A Claude model's full name as people say it, with its version: "claude-opus-9-1" is "Opus 9.1", and a
+ * dated one ("claude-sonnet-9-20990101") drops its date. Any other name stays as it is.
+ */
+export function modelName(full: string): string {
+  const m = /^claude-([a-z]+)-(\d+)(?:-(\d{1,2}))?(?:-\d{8})?$/.exec(full);
+  return m?.[1] && m[2] ? `${shown(m[1])} ${m[2]}${m[3] ? `.${m[3]}` : ''}` : full;
+}
+
+/** An alias in its menu once a run has said what it stands for: "Opus (9.1)", its version alone when it's its own family. */
+function aliasLabel(alias: string, full: string): string {
+  const name = shown(alias);
+  const said = modelName(full);
+  return `${name} (${said.startsWith(`${name} `) ? said.slice(name.length + 1) : said})`;
+}
+
 /** The model and effort a run uses now, from the agent's Model and Effort and what the harness says. */
 export interface RunsWith {
   /** The model chosen (what its alias stood for at its last run), or the harness's default; null: not said. */
@@ -144,7 +160,7 @@ export function toChoose(h: HarnessInfo, model: string, effort: string): string 
 
 /**
  * What Settings › Agent says a request uses, in the menus' own names: "Gpt-6.1-sol at low effort",
- * "Opus at high effort (last ran as <its full name>)", "Auto: Cursor chooses the model", the harness's
+ * "Opus at high effort (last ran as Opus 9.1)", "Auto: Cursor chooses the model", the harness's
  * default when it doesn't say what that is, or what's left to choose when it has no defaults.
  */
 export function runsWithText(h: HarnessInfo, model: string, effort: string): string {
@@ -162,7 +178,7 @@ export function runsWithText(h: HarnessInfo, model: string, effort: string): str
     : r.effort
       ? `${name} at ${r.effort} effort`
       : `${name} at ${h.name}’s default effort`;
-  return alias ? `${said} (last ran as ${r.model})` : said;
+  return alias ? `${said} (last ran as ${modelName(r.model)})` : said;
 }
 
 /** The label of a picker's empty choice: what the harness's default is when that's known, then whose. */
@@ -171,11 +187,19 @@ export function defaultLabel(h: HarnessInfo, value: string | null): string {
 }
 
 /**
- * A picker's choices: the harness's own, and the one saved when it's no longer among them (it's kept
- * as it is, said so; a run uses the harness's default instead, or doesn't run when it lists none).
+ * A picker's choices: the harness's own, each alias with the version it last ran as, and the one saved
+ * when it's no longer among them (it's kept as it is, said so; a run uses the harness's default
+ * instead, or doesn't run when it lists none).
  */
-export function choices(list: readonly string[], saved: string): { value: string; label: string; gone?: true }[] {
-  const out: { value: string; label: string; gone?: true }[] = list.map((v) => ({ value: v, label: shown(v) }));
+export function choices(
+  list: readonly string[],
+  saved: string,
+  aliases: Readonly<Record<string, string>> = {},
+): { value: string; label: string; gone?: true }[] {
+  const out: { value: string; label: string; gone?: true }[] = list.map((v) => {
+    const full = aliases[v];
+    return { value: v, label: full && full !== v ? aliasLabel(v, full) : shown(v) };
+  });
   if (saved && !list.includes(saved))
     out.push({ value: saved, label: `${shown(saved)} (no longer offered)`, gone: true });
   return out;

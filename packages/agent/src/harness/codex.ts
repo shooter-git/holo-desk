@@ -255,17 +255,17 @@ export function codexDefaults(models: readonly CodexModel[]): { model?: string; 
 }
 
 /**
- * Whether `codex debug prompt-input` (the model's tools, with the run's switches) shows only what a
- * sealed run may have: code mode's own tools, and nested ones from the allowed list and HO[LO].
+ * The tools `codex debug prompt-input` shows that a sealed run may not have (none: only code mode's own,
+ * and nested ones from the allowed list and HO[LO]'s), or null when it didn't list the model's tools.
  */
-export function codexSealedTools(stdout: string): { sealed: boolean; reason?: string } {
+export function codexExtraTools(stdout: string): string[] | null {
   let items: unknown;
   try {
     items = JSON.parse(stdout);
   } catch {
-    return { sealed: false, reason: 'Codex didn’t list its tools' };
+    return null;
   }
-  if (!Array.isArray(items)) return { sealed: false, reason: 'Codex didn’t list its tools' };
+  if (!Array.isArray(items)) return null;
   const extra = new Set<string>();
   const walk = (tools: unknown[]) => {
     for (const t of tools.filter(isObject)) {
@@ -287,11 +287,17 @@ export function codexSealedTools(stdout: string): { sealed: boolean; reason?: st
       walk(item.tools);
     }
   }
-  if (!listed) return { sealed: false, reason: 'Codex didn’t list its tools' };
-  return extra.size
+  return listed ? [...extra] : null;
+}
+
+/** Whether `codex debug prompt-input` (the model's tools, with the run's switches) shows only what a sealed run may have. */
+export function codexSealedTools(stdout: string): { sealed: boolean; reason?: string } {
+  const extra = codexExtraTools(stdout);
+  if (!extra) return { sealed: false, reason: 'Codex didn’t list its tools' };
+  return extra.length
     ? {
         sealed: false,
-        reason: `This Codex gives the model tools HO[LO] can’t turn off (${[...extra].slice(0, 5).join(', ')})`,
+        reason: `This Codex gives the model tools HO[LO] can’t turn off (${extra.slice(0, 5).join(', ')})`,
       }
     : { sealed: true };
 }

@@ -471,6 +471,14 @@ write tool left, `apply_patch`, is refused. The caveats:
   `send_message_to_user_async`) and, reached through `exec`, `apply_patch`, `clock__curr_time`, the three MCP
   resource tools and `mcp__holo__*`. The result is remembered with a short hash of the switches and the allowed
   tools (`rules`), so a runner whose rules changed checks the same version again.
+- **Checked every day on GitHub, before users update.** `.github/workflows/codex-check.yml` runs
+  `tools/codex-check.mjs` against Codex's newest release and its newest test build (`-alpha`, when it's
+  ahead): the same `codex debug prompt-input` with the same switches, in an empty `CODEX_HOME`, so nothing
+  signs in and no model is called. When HO[LO] would refuse one, the scheduled run opens an issue named after
+  the finding (the unknown tools, or what Codex said when it stopped), and adds each later version that has it
+  to that issue rather than opening another. It also notes switched-off features a Codex has removed or
+  doesn't know, which are harmless but can leave the list. It runs on pull requests that change the Codex
+  adapter, and by hand for one version (Actions › Codex check › Run workflow).
 - Models: those `codex debug models` lists as visible (`--bundled` when it can't fetch them), each with its
   efforts, read once per version and again once the list is an hour old. `ultra` isn't offered: it hands work
   to sub-agents, which a sealed run doesn't have.

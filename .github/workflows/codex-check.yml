@@ -1,0 +1,101 @@
+name: Codex check
+
+# Whether HO[LO] can still seal Codex's newest release and newest test build (tools/codex-check.mjs): the
+# runner's own seal check, without signing in or calling a model. Codex ships several releases a week, and
+# a runner refuses one that gives the model a tool HO[LO] doesn't know. This looks every day, so such a
+# release is found before users update to it, and opens an issue for it (one per finding).
+
+on:
+  schedule:
+    - cron: '23 14 * * *'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: A Codex version to check (empty for the newest release and test build)
+        required: false
+  pull_request:
+    paths:
+      - packages/agent/src/harness/codex.ts
+      - tools/codex-check.mjs
+      - .github/workflows/codex-check.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: codex-check-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  versions:
+    runs-on: ubuntu-24.04
+    outputs:
+      list: ${{ steps.pick.outputs.list }}
+    steps:
+      - name: Which Codex versions to check
+        id: pick
+        env:
+          ASKED: ${{ inputs.version }}
+        run: |
+          if [ -n "$ASKED" ]; then
+            [[ "$ASKED" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]] || { echo "Not a version: $ASKED"; exit 1; }
+            list=$(jq -cn --arg v "$ASKED" '[{version: $v, channel: "asked for"}]')
+          else
+            release=$(npm view @openai/codex@latest version)
+            list=$(jq -cn --arg v "$release" '[{version: $v, channel: "release"}]')
+            # the newest test build, when it's ahead of the release
+            test=$(npm view @openai/codex versions --json | jq -r '.[]' \
+              | grep -E '^[0-9]+\.[0-9]+\.[0-9]+-alpha\.[0-9.]+$' | sort -V | tail -n 1)
+            base=${test%%-*}
+            if [ -n "$test" ] && [ "$base" != "$release" ] \
+              && [ "$(printf '%s\n%s\n' "$release" "$base" | sort -V | tail -n 1)" = "$base" ]; then
+              list=$(jq -c --arg v "$test" '. + [{version: $v, channel: "test build"}]' <<<"$list")
+            fi
+          fi
+          echo "$list"
+          echo "list=$list" >> "$GITHUB_OUTPUT"
+
+  check:
+    needs: versions
+    name: Codex ${{ matrix.codex.version }} (${{ matrix.codex.channel }})
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      issues: write
+    strategy:
+      fail-fast: false
+      matrix:
+        codex: ${{ fromJSON(needs.versions.outputs.list) }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+      - name: Install that Codex (without running its install scripts)
+        env:
+          VERSION: ${{ matrix.codex.version }}
+        run: npm install --no-save --no-audit --no-fund --ignore-scripts --prefix "$RUNNER_TEMP/codex" "@openai/codex@$VERSION"
+      - name: Can HO[LO] seal it?
+        id: check
+        # a scheduled run reports through an issue (below) rather than failing every day until it's fixed
+        continue-on-error: ${{ github.event_name == 'schedule' }}
+        env:
+          CHANNEL: ${{ matrix.codex.channel }}
+        run: node tools/codex-check.mjs "$RUNNER_TEMP/codex/node_modules/.bin/codex" "$CHANNEL"
+      - name: An issue for what it found (one per finding, with each version that has it)
+        if: github.event_name == 'schedule' && steps.check.outcome == 'failure' && steps.check.outputs.title != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TITLE: ${{ steps.check.outputs.title }}
+          BODY: ${{ steps.check.outputs.body }}
+          VERSION: ${{ steps.check.outputs.version }}
+        run: |
+          n=$(gh issue list --state open --limit 200 --json number,title \
+            | jq -r --arg t "$TITLE" 'map(select(.title == $t))[0].number // empty')
+          if [ -z "$n" ]; then
+            gh issue create --title "$TITLE" --body "$BODY"
+          elif ! gh issue view "$n" --json body,comments --jq '[.body] + [.comments[].body] | join("\n")' \
+            | grep -qF "Codex $VERSION ("; then
+            gh issue comment "$n" --body "$BODY"
+          fi

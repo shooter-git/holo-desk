@@ -162,6 +162,36 @@ describe('what each one does', () => {
     expect((one as unknown as { voices: { players: number }[] }).voices[0]?.players).toBe(1);
   });
 
+  it("a kalimba's high tines ring shorter than its low ones", () => {
+    const tail = (key: number) => {
+      const s = new StruckSynth(SR, 'Kalimba', { space: 0 });
+      s.noteOn(key, 100);
+      const { l } = play(s, 1.5);
+      return peak(l.subarray(Math.round(SR * 0.6), Math.round(SR * 0.7))) / peak(l);
+    };
+    expect(tail(84)).toBeLessThan(tail(48) * 0.5);
+  });
+
+  it("the shimmer bell's loudest partial is a major third above the key, over a hum below it", () => {
+    const s = new StruckSynth(SR, 'Shimmer Bell', { ensemble: 0, space: 0 });
+    s.noteOn(67, 100);
+    const { l } = play(s, 0.6);
+    const f = 440 * 2 ** ((67 - 69) / 12);
+    // level of a tone at `hz` (a single-bin DFT over the first half second)
+    const at = (hz: number) => {
+      let re = 0;
+      let im = 0;
+      for (let i = 0; i < SR * 0.5; i++) {
+        const w = (2 * Math.PI * hz * i) / SR;
+        re += (l[i] as number) * Math.cos(w);
+        im += (l[i] as number) * Math.sin(w);
+      }
+      return Math.hypot(re, im);
+    };
+    expect(at(f * 1.25)).toBeGreaterThan(at(f) * 4);
+    expect(at(f * 0.605)).toBeGreaterThan(at(f));
+  });
+
   it('the choir changes vowel as the knob turns', () => {
     const centroid = (vowel: number) => {
       const s = new ChoirSynth(SR, 'Choir Ahh', { vowel, space: 0, vibrato: 0 });

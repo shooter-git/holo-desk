@@ -188,7 +188,7 @@ says which and what to do. The
 harness, its model and effort, its install, its sign-in and its updates are there too. An install or
 an update runs only when you click it and confirm, and it's the same harness your terminal uses. The
 models and efforts are the harness's own, as it lists them on the host, and they're looked at again
-when you open Settings › Agent an hour or more after the last look. Runs with, under them, says which
+when you open Settings › Agent an hour or more after the last look. Requests use, under them, says which
 model and effort a request uses. Codex and Cursor run with their own defaults when you choose none, and
 it names them; Claude Code has none it can say, so choose its model and effort there before its first
 request. The choice is kept on the host, so every device you use runs the agent the same way.

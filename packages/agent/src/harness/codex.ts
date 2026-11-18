@@ -10,6 +10,7 @@
  * error, which stops the run too. Whether a version can be sealed at all is checked once per version
  * with `codex debug prompt-input`, which lists the model's tools without calling a model.
  */
+import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import {
   type AdapterOptions,
@@ -52,8 +53,18 @@ export const CODEX_DISABLED = [
   'sleep_tool',
 ] as const;
 
-/** What the model may have in a sealed run (docs/agent-harnesses.md): code mode's own, and these. */
-const TOP_TOOLS = new Set(['exec', 'wait', 'request_user_input', 'request_user_input_async']);
+/**
+ * What the model may have in a sealed run (docs/agent-harnesses.md): code mode's own, and these. The
+ * user-input pair only talks to the user: `send_message_to_user_async` (0.169.1) takes one message,
+ * and its feature switch doesn't take it away.
+ */
+const TOP_TOOLS = new Set([
+  'exec',
+  'wait',
+  'request_user_input',
+  'request_user_input_async',
+  'send_message_to_user_async',
+]);
 const NESTED_TOOLS = new Set([
   'apply_patch',
   'clock__curr_time',
@@ -277,6 +288,12 @@ export function codexSealedTools(stdout: string): { sealed: boolean; reason?: st
     : { sealed: true };
 }
 
+/** What a seal check checks (its switches and what it allows), short: a remembered result holds only under the same. */
+const SEAL_RULES = createHash('sha256')
+  .update(JSON.stringify([codexSettings(''), CODEX_DISABLED, [...TOP_TOOLS], [...NESTED_TOOLS]]))
+  .digest('hex')
+  .slice(0, 12);
+
 /** How long the catalog's models are taken as they are (a look in Settings › Agent comes at most hourly). */
 const CATALOG_TTL = 3_600_000;
 
@@ -327,8 +344,9 @@ export function codexSpec(): Spec {
     },
     async sealed(ctx) {
       const memory = remember(ctx.root);
-      const known = memory.get<{ version: string; sealed: boolean; reason?: string }>('sealed:codex');
-      if (known && ctx.version && known.version === ctx.version)
+      const known = memory.get<{ version: string; rules?: string; sealed: boolean; reason?: string }>('sealed:codex');
+      // what's remembered holds for this version, checked by these rules (a runner with others checks again)
+      if (known && ctx.version && known.version === ctx.version && known.rules === SEAL_RULES)
         return known.reason ? { sealed: known.sealed, reason: known.reason } : { sealed: known.sealed };
       // an empty CODEX_HOME of its own: none of the user's config or MCP servers is read (or started)
       const codexHome = privateDir(join(ctx.root, '.codex-probe'));
@@ -346,7 +364,8 @@ export function codexSpec(): Spec {
       });
       const result =
         out.code === 0 ? codexSealedTools(out.stdout) : { sealed: false, reason: 'Codex couldn’t list its tools' };
-      if (ctx.version && out.code === 0) memory.set('sealed:codex', { version: ctx.version, ...result });
+      if (ctx.version && out.code === 0)
+        memory.set('sealed:codex', { version: ctx.version, rules: SEAL_RULES, ...result });
       return result;
     },
     async models(ctx) {

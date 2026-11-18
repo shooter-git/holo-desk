@@ -346,6 +346,10 @@ Values given with `-c` show in `ps`: never put the job token there. Our server r
 - **With them**, the model has `exec`, `wait`, `request_user_input` and `request_user_input_async`. `ALL_TOOLS`
   is `apply_patch`, `clock__curr_time`, `list_mcp_resources`, `list_mcp_resource_templates`,
   `read_mcp_resource` and `mcp__holo__*`.
+- **`send_message_to_user_async`** joins them from 0.169.1 (checked 2026-11-18 on a host with it). It's the
+  user-input pair's sibling: one argument, the message, and nothing else. In 0.169.0 it was an "under
+  development" feature, off; in 0.169.1 `--disable send_message_to_user_async` is accepted but the tool is
+  still offered, so the seal allows it rather than refusing Codex.
 - **`features.multi_agent_v2.disable_native_tools=true`** removes the `collaboration.*` sub-agent tools
   (`spawn_agent`…). `--disable multi_agent` alone only does that for v1 models such as `gpt-5.6-luna`.
 - **`default_tools_approval_mode="approve"`.** Without it every MCP call failed with
@@ -453,8 +457,10 @@ write tool left, `apply_patch`, is refused. The caveats:
 - **The seal is checked once per version**, remembered in `<root>/.harnesses.json`: `codex debug prompt-input`
   with the run's `-c` settings and `--disable` list, in an empty `CODEX_HOME` of its own (`<root>/.codex-probe`,
   so none of the user's config or MCP servers is read or started). Codex is offered only when the model's tools
-  are code mode's own (`exec`, `wait`, `request_user_input`, `request_user_input_async`) and, reached through
-  `exec`, `apply_patch`, `clock__curr_time`, the three MCP resource tools and `mcp__holo__*`.
+  are code mode's own (`exec`, `wait`, `request_user_input`, `request_user_input_async`,
+  `send_message_to_user_async`) and, reached through `exec`, `apply_patch`, `clock__curr_time`, the three MCP
+  resource tools and `mcp__holo__*`. The result is remembered with a short hash of the switches and the allowed
+  tools (`rules`), so a runner whose rules changed checks the same version again.
 - Models: those `codex debug models` lists as visible (`--bundled` when it can't fetch them), each with its
   efforts, read once per version and again once the list is an hour old. `ultra` isn't offered: it hands work
   to sub-agents, which a sealed run doesn't have.

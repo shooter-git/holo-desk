@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
@@ -152,6 +152,42 @@ describe('Codex: finding it', () => {
     const info = await fake({ sealed: 'loose' }).info();
     expect(info.sealed).toBe(false);
     expect(info.reason).toContain('exec_command');
+  });
+
+  it('takes the message tool Codex 0.169.1 gives the model, and nothing else new', () => {
+    const items = JSON.parse(readFileSync(join(FIXTURES, 'codex-prompt-input-sealed.json'), 'utf8')) as {
+      type: string;
+      tools?: object[];
+    }[];
+    const withTool = (name: string) =>
+      JSON.stringify(
+        items.map((i) =>
+          i.type === 'additional_tools' ? { ...i, tools: [...(i.tools ?? []), { type: 'function', name }] } : i,
+        ),
+      );
+    // it only talks to the user, as request_user_input_async does; its feature switch doesn't remove it
+    expect(codexSealedTools(withTool('send_message_to_user_async'))).toEqual({ sealed: true });
+    expect(codexSealedTools(withTool('send_files_somewhere'))).toEqual({
+      sealed: false,
+      reason: 'This Codex gives the model tools HO[LO] can’t turn off (send_files_somewhere)',
+    });
+  });
+
+  it('checks the seal again when what it remembers was checked under other rules', async () => {
+    s = sandbox();
+    mkdirSync(s.root, { recursive: true });
+    // what an older runner found for this version, before it allowed a tool
+    const notes = join(s.root, '.harnesses.json');
+    writeFileSync(
+      notes,
+      JSON.stringify({ 'sealed:codex': { version: '0.167.1', sealed: false, reason: 'old rules' } }),
+    );
+    expect(await fake().info()).toMatchObject({ sealed: true });
+    expect(existsSync(join(s.rec, 'probe-args'))).toBe(true);
+    // checked under these rules: remembered, not probed again
+    rmSync(join(s.rec, 'probe-args'));
+    expect(await fake().info()).toMatchObject({ sealed: true });
+    expect(existsSync(join(s.rec, 'probe-args'))).toBe(false);
   });
 
   it('reads the recorded tool lists, status, models and the device sign-in', () => {

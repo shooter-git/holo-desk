@@ -16,6 +16,7 @@ import { DrumSynth } from './drums.ts';
 import { Biquad, dbToGain, Smooth } from './dsp.ts';
 import { ETHEREAL_PRESETS, EtherealSynth } from './ethereal.ts';
 import { FM_PRESETS, FmSynth } from './fm.ts';
+import { FM6_PRESETS, Fm6Synth } from './fm6.ts';
 import { createEffect, type Effect, type Host } from './fx.ts';
 import { GlassLineVoice, GlassVoice } from './glass.ts';
 import type { Instrument } from './instrument.ts';
@@ -1446,6 +1447,7 @@ export class EngineCore implements Host {
         if (ORGAN_PRESETS.includes(spec.preset)) return new TonewheelOrgan(this.sr, spec.preset, spec.params);
         if (KEYS_PRESETS.includes(spec.preset)) return new ElectricKeys(this.sr, spec.preset, spec.params);
         if (FM_PRESETS.includes(spec.preset)) return new FmSynth(this.sr, spec.preset, spec.params);
+        if (FM6_PRESETS.includes(spec.preset)) return new Fm6Synth(this.sr, spec.preset, spec.params);
         if (MORPH_PRESETS.includes(spec.preset)) return new MorphSynth(this.sr, spec.preset, spec.params);
         if (DRONE_PRESETS.includes(spec.preset)) return new DroneSynth(this.sr, spec.preset, spec.params);
         if (MACHINE_PRESETS.includes(spec.preset)) return new DrumMachine(this.sr, spec.preset, spec.params);

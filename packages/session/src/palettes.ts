@@ -7,7 +7,7 @@
  */
 
 import { newBus, newPlugin, newTrack } from './defaults.ts';
-import { SYNTH_MACROS, SYNTH_PRESETS } from './instruments.ts';
+import { SYNTH_PRESETS, synthParam } from './instruments.ts';
 import type { Op } from './ops.ts';
 import { pluginDef } from './plugins.ts';
 import type { Bus, Instrument, Plugin, Project, Track } from './types.ts';
@@ -106,11 +106,11 @@ export interface SoundCheck {
 function checkParams(
   what: string,
   params: Record<string, number> | undefined,
-  defs: { id: string; min: number; max: number }[],
+  defs: { id: string; min: number; max: number }[] | ((id: string) => { min: number; max: number } | null),
   problems: string[],
 ): void {
   for (const [id, v] of Object.entries(params ?? {})) {
-    const def = defs.find((d) => d.id === id);
+    const def = typeof defs === 'function' ? defs(id) : defs.find((d) => d.id === id);
     if (!def) problems.push(`${what} has no "${id}"`);
     else if (typeof v !== 'number' || !Number.isFinite(v) || v < def.min || v > def.max)
       problems.push(`${what}'s ${id} is ${v}, outside ${def.min}…${def.max}`);
@@ -136,7 +136,8 @@ export function checkSound(sound: PackSound): SoundCheck {
   }>;
   if (inst?.synth !== undefined) {
     if (!(SYNTH_PRESETS as readonly string[]).includes(inst.synth)) missing.push(`the ${inst.synth} synth`);
-    else checkParams(`the ${inst.synth} synth`, inst.params, SYNTH_MACROS[inst.synth] ?? [], problems);
+    // (each a knob, or a key of a whole patch where the synth takes one)
+    else checkParams(`the ${inst.synth} synth`, inst.params, (id) => synthParam(inst.synth as string, id), problems);
   } else if (!inst?.pack || !inst.name) problems.push('its instrument is neither a pack instrument nor a synth');
   const effect = (fx: SoundEffect, where: string) => {
     const def = pluginDef(fx.type);

@@ -9,6 +9,7 @@ export * from './core.ts';
 export * from './drone.ts';
 export * from './ethereal.ts';
 export * from './fm.ts';
+export * from './fm6.ts';
 export * from './glass.ts';
 export * from './keys.ts';
 export * from './machine.ts';

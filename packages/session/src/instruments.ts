@@ -1,3 +1,4 @@
+import { fm6Key } from './fm6.ts';
 import type { ParamDef } from './plugins.ts';
 
 /** The built-in synthesizer's presets: always there, before any sample pack is installed. */
@@ -28,6 +29,19 @@ export const SYNTH_PRESETS = [
   'FM Brass',
   'FM Pluck',
   'FM Pad',
+  'Bright Tines',
+  'Velvet Tines',
+  'Glass Keys',
+  'Crystal Bells',
+  'Music Box',
+  'Solid Bass',
+  'Rubber Bass',
+  'Silk Pad',
+  'Halo Pad',
+  'Wire Lead',
+  'Hollow Lead',
+  'Harp Pluck',
+  'Spark Pluck',
   'Morph Pad',
   'Morph Lead',
   'Morph Pluck',
@@ -76,7 +90,18 @@ export type SynthPreset = (typeof SYNTH_PRESETS)[number];
 export const SYNTH_FAMILIES: { name: string; presets: readonly string[] }[] = [
   {
     name: 'Keys',
-    presets: ['Soft Keys', 'Electric Piano', 'Tine Piano', 'Reed Piano', 'Clav Keys', 'FM Keys', 'Ethereal Keys'],
+    presets: [
+      'Soft Keys',
+      'Electric Piano',
+      'Tine Piano',
+      'Reed Piano',
+      'Clav Keys',
+      'FM Keys',
+      'Bright Tines',
+      'Velvet Tines',
+      'Glass Keys',
+      'Ethereal Keys',
+    ],
   },
   {
     name: 'Organs and reeds',
@@ -97,13 +122,24 @@ export const SYNTH_FAMILIES: { name: string; presets: readonly string[] }[] = [
       'FM Brass',
       'FM Pluck',
       'FM Pad',
+      'Solid Bass',
+      'Rubber Bass',
+      'Wire Lead',
+      'Hollow Lead',
+      'Harp Pluck',
+      'Spark Pluck',
+      'Silk Pad',
+      'Halo Pad',
       'Morph Pad',
       'Morph Lead',
       'Morph Pluck',
       'Morph Bass',
     ],
   },
-  { name: 'Bells and glass', presets: ['Glass Bells', 'FM Bells', 'Glass Harmonica', 'Shimmer Bell'] },
+  {
+    name: 'Bells and glass',
+    presets: ['Glass Bells', 'FM Bells', 'Crystal Bells', 'Music Box', 'Glass Harmonica', 'Shimmer Bell'],
+  },
   { name: 'Textures', presets: ['Ethereal Pad', 'Drone Field', 'Drone Metal', 'Drone Breath', 'Drone Glass'] },
   { name: 'Voices', presets: ['Choir Ahh', 'Male Choir', 'Morph Choir'] },
   {
@@ -288,6 +324,37 @@ SYNTH_MACROS['FM Bass'] = fm({ brightness: 1, ratio: 1, feedback: 0.35, attack: 
 SYNTH_MACROS['FM Brass'] = fm({ brightness: 1, ratio: 1, feedback: 0.25, attack: 0.06, decay: 1, release: 0.25 });
 SYNTH_MACROS['FM Pluck'] = fm({ brightness: 1, ratio: 2, feedback: 0.1, attack: 0.002, decay: 0.9, release: 0.25 });
 SYNTH_MACROS['FM Pad'] = fm({ brightness: 1, ratio: 2, feedback: 0, attack: 0.9, decay: 3, release: 2.5 });
+
+/**
+ * The six-operator FM synth's sounds. Their knobs are the same for each, and each starts at 1×: they
+ * work on whatever patch is playing (a preset's, or a whole one a sound brings, see fm6.ts), so a
+ * patch sounds as written until they move.
+ */
+export const FM6_SOUNDS: readonly string[] = [
+  'Bright Tines',
+  'Velvet Tines',
+  'Glass Keys',
+  'Crystal Bells',
+  'Music Box',
+  'Solid Bass',
+  'Rubber Bass',
+  'Silk Pad',
+  'Halo Pad',
+  'Wire Lead',
+  'Hollow Lead',
+  'Harp Pluck',
+  'Spark Pluck',
+];
+const times = { unit: '×', scale: 'log' } as const;
+for (const name of FM6_SOUNDS)
+  SYNTH_MACROS[name] = [
+    { id: 'brightness', name: 'Brightness', min: 0, max: 2, default: 1, unit: '×' },
+    { id: 'velocity', name: 'Velocity', min: 0, max: 2, default: 1, unit: '×' },
+    { id: 'attack', name: 'Attack', min: 0.1, max: 10, default: 1, ...times },
+    { id: 'decay', name: 'Decay', min: 0.1, max: 10, default: 1, ...times },
+    { id: 'release', name: 'Release', min: 0.1, max: 10, default: 1, ...times },
+    { id: 'chorus', name: 'Chorus', min: 0, max: 2, default: 1, unit: '×' },
+  ];
 
 const morph = (d: Record<'morph' | 'brightness' | 'motion' | 'texture' | 'release' | 'space', number>): ParamDef[] => [
   { id: 'morph', name: 'Morph', min: 0, max: 1, default: d.morph },
@@ -484,6 +551,28 @@ export const SYNTH_NOTES: Record<string, string> = {
     'FM brass: the modulators swell in with the note, so it blares as it opens up. Attack sets how slowly it speaks.',
   'FM Pluck': 'A bright, short FM pluck, made for arpeggios and sequences.',
   'FM Pad': 'A slow, wide FM pad from two detuned pairs, one on each side, brightening as it swells.',
+  'Bright Tines':
+    'Six-operator FM electric piano: a bright tine that rings out on the attack over two warm bodies a little apart, growling when hit hard. Brightness is how much tine and growl; Velocity how much harder playing brings them.',
+  'Velvet Tines':
+    'A mellow six-operator FM electric piano: round and soft, the tine only showing when you dig in, with a gentle tremolo and chorus.',
+  'Glass Keys':
+    'Glassy FM keys: bell-like overtones from inharmonic ratios over a sine body, held while the key is down. Lovely for slow chords.',
+  'Crystal Bells':
+    'Long, clear FM bells from inharmonic ratios, with a low hum under them and echoes trailing behind. Decay is how long they ring.',
+  'Music Box': 'A small, bright music box: short metal tines that ring shorter up high, with a soft echo.',
+  'Solid Bass':
+    'A punchy FM bass: a snap on the attack that settles into a round, solid tone with a little grit from feedback.',
+  'Rubber Bass':
+    'A bouncy bass: FM tones through two resonant filters whose envelope snaps them open on every note. Play harder for more snap.',
+  'Silk Pad':
+    'A slow, wide FM pad: three detuned voices to a note through a soft filter that drifts open and closed. Attack sets how slowly it swells.',
+  'Halo Pad': 'An airy FM pad whose overtones rise and fall on their own while you hold it, wide, with long echoes.',
+  'Wire Lead': 'A bright, buzzy FM lead with feedback, two voices wide; the mod wheel adds vibrato.',
+  'Hollow Lead':
+    "A hollow, reedy FM lead (odd harmonics, like a clarinet's) with a vibrato that arrives once the note settles.",
+  'Harp Pluck':
+    'A soft, round FM pluck, like a harp: the brightness falls away at once and the note rings on, shorter up high.',
+  'Spark Pluck': 'A bright, short FM pluck with a ping-pong echo, made for arpeggios and sequences.',
   'Morph Pad':
     'A wavetable pad gliding between a soft tone and glassy partials: Morph sets where, Motion sways it slowly, Texture breathes air into it, Space is its hall.',
   'Morph Lead': 'A wavetable lead between a saw and a narrow pulse, the filter snapping open on each note.',
@@ -544,6 +633,17 @@ export function macroValue(preset: string, params: Record<string, number> | unde
   if (!def) return params?.[id] ?? 0;
   const v = params?.[id] ?? def.default;
   return Math.min(def.max, Math.max(def.min, v));
+}
+
+/**
+ * A synth's param `id`: one of its knobs, or (for the six-operator synth's sounds) a key of a whole
+ * patch, with its range; null when it has no such param.
+ */
+export function synthParam(preset: string, id: string): { id: string; min: number; max: number } | null {
+  const knob = SYNTH_MACROS[preset]?.find((p) => p.id === id);
+  if (knob) return knob;
+  const key = FM6_SOUNDS.includes(preset) ? fm6Key(id) : null;
+  return key ? { id, min: key.min, max: key.max } : null;
 }
 
 /** Every knob of a synth at its value (the preset's defaults filled in). */

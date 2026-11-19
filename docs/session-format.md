@@ -37,8 +37,10 @@ in what's missing.
                 // semitones; decay in percent of each hit's ring; see samplerKnobs in packages/session)
                 // or { "type": "synth", "preset": "Warm Pad", "params": {…} } (the synths with knobs,
                 // "Fat Mono", "Tonewheel Jazz", "FM Keys" and most others, take them there:
-                // { "cutoff": 450, … }, see SYNTH_MACROS in packages/session), a Performance or Glass
-                // instrument (below), or { "type": "none" }
+                // { "cutoff": 450, … }, see SYNTH_MACROS in packages/session; the six-operator FM
+                // sounds, "Bright Tines" and the others in FM6_SOUNDS, may also carry a whole patch
+                // there: { "patch:blank": 1, "op1:ratio": 2, "mod:2>1": 1.5, … }, see fm6.ts in
+                // packages/session), a Performance or Glass instrument (below), or { "type": "none" }
   "articulations": [{ "id": "pizz", "name": "Pizzicato", "instrument": { … } }],
   "input": { "port": "*", "channel": 0 },        // live MIDI: a port name or "*", channel 1-16 or 0 for all
   "armed": false,

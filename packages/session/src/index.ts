@@ -6,6 +6,7 @@ export * from './automation.ts';
 export * from './defaults.ts';
 export * from './diff.ts';
 export * from './drummer.ts';
+export * from './fm6.ts';
 // (form.ts's cut helpers stay inside the package)
 export {
   type Pass,

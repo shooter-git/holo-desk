@@ -155,7 +155,7 @@ describe('listening', () => {
     expect((await tool(job, jobToken, 'POST', '/listen', { maxMs: 50_000, quietMs: 1000 })).statusCode).toBe(400);
     expect((await tool(job, jobToken, 'POST', '/listen', { maxMs: 10_000, quietMs: 100 })).statusCode).toBe(400);
 
-    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
     const heard = pending(tool(job, jobToken, 'POST', '/listen', { maxMs: 45_000, quietMs: 1000 }));
     await until(() => desk.got('agent-listen').length > 0);
     expect(desk.got('agent-listen')).toEqual([{ type: 'agent-listen', job, state: 'on' }]);
@@ -211,7 +211,7 @@ describe('listening', () => {
   it('comes back at maxMs not done, keeps showing it listens between parts, and Done in between ends the next', async () => {
     const { start, tool, s, token, desk, app } = await setup();
     const { job, token: jobToken } = await start({ project: s.id, text: 'Listen' });
-    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
     const part = () => pending(tool(job, jobToken, 'POST', '/listen', { maxMs: 2000, quietMs: 1000 }));
 
     const first = await part();
@@ -444,7 +444,7 @@ describe('what was just played', () => {
     expect(none.statusCode).toBe(409);
     expect(none.json()).toEqual({ error: 'No memory' });
     desk.answer = (msg) => (msg.type === 'agent-played' ? null : { ok: true });
-    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
     const silent = pending(tool(job, jobToken, 'GET', '/played?seconds=5'));
     await until(() => desk.got('agent-played').length === 3);
     await vi.advanceTimersByTimeAsync(3000);
@@ -483,7 +483,7 @@ describe('the studio that asked, away a moment', () => {
     const { job, token: jobToken } = await start({ project: s.id, text: 'Play it' });
     await tool(job, jobToken, 'POST', '/progress', { line: 'Writing the bass' });
 
-    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
     desk.close();
     const played = pending(tool(job, jobToken, 'POST', '/transport', { action: 'play' }));
     // the other devices with the song open see why it waits
@@ -510,7 +510,7 @@ describe('the studio that asked, away a moment', () => {
     const phone = await admit(token);
     const phoneStudio = studio(phone.token, s.id, 'phone');
     const { job, token: jobToken } = await start({ project: s.id, text: 'Change it' });
-    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
     desk.close();
     const waiting = () => status(phoneStudio, job)?.line === 'Waiting for the studio that asked to come back';
     const ops = [{ op: 'setProject', patch: { title: 'Later' } }];
@@ -553,7 +553,7 @@ describe('the studio that asked, away a moment', () => {
     const phone = await admit(token);
     const phoneStudio = studio(phone.token, s.id, 'phone');
     const { job, token: jobToken } = await start({ project: s.id, text: 'What key is it in?' });
-    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
     desk.close();
     const read = pending(tool(job, jobToken, 'GET', '/song'));
     await until(() => status(phoneStudio, job)?.line === 'Waiting for the studio that asked to come back');

@@ -71,8 +71,7 @@
  *   LFO goes from its bottom to its top), lfo:amp 0…1 (tremolo)
  *   voice:transpose ±48 semitones, voice:tune ±100 cents, voice:poly 1…64 (how many oscillator
  *   voices sound at once, unison voices each counted), voice:level 0…4, voice:drift 0…50 cents
- *   (each unison voice a little out, its own way), voice:longest 0…600 s (no envelope stretch
- *   lasts longer: what it was owed carries into the stretch after it; 0: no limit)
+ *   (each unison voice a little out, its own way)
  *   uni:voices 1…8 per note, uni:detune 0…100 cents between neighbors, uni:pan 0…1 (spread)
  *
  * The chorus/delay, after the voices: four taps on a delay line, two reading the left and two the
@@ -174,7 +173,7 @@ const PLAIN: Record<string, Record<string, Range>> = {
     cutoff: [-96, 96],
     amp: [0, 1],
   },
-  voice: { transpose: [-48, 48], tune: [-100, 100], poly: [1, 64], level: [0, 4], drift: [0, 50], longest: [0, 600] },
+  voice: { transpose: [-48, 48], tune: [-100, 100], poly: [1, 64], level: [0, 4], drift: [0, 50] },
   uni: { voices: [1, 8], detune: [0, 100], pan: [0, 1] },
   fx: {
     dry: [0, 2],

@@ -5,10 +5,13 @@
 import {
   type ChannelPatch,
   type Instrument,
+  type KitPad,
+  kitPadKnobs,
   macroValues,
   newTrack,
   type Op,
   type PackSound,
+  padLines,
   SYNTH_FAMILIES,
   SYNTH_MACROS,
   SYNTH_NOTES,
@@ -270,7 +273,7 @@ export const kitSet: Tool = {
   name: 'kit_set',
   kind: 'change',
   summary:
-    'A sampled kit\'s (or multi-microphone instrument\'s) own knobs on a track: each microphone\'s level ("mic:room", "mic:overheads", in dB; -60 is off), "tune" (semitones) and "decay" (% of each hit\'s ring kept). Without "knobs" it lists them; with "knobs" ({"mic:room": -6, "tune": -1, "decay": 70}) it sets them.',
+    'A sampled kit\'s (or multi-microphone instrument\'s) own knobs on a track: each microphone\'s level ("mic:room", "mic:overheads", in dB; -60 is off), "tune" (semitones) and "decay" (% of each hit\'s ring kept); and each pad\'s own, "pad:KEY:ID": level (dB), tune (semitones), pan (-1 to 1), drive (saturator, 0-100 %), character (0 soft, 1 hard), output (dB), curve (velocity: 0 dB, 1 cubic, 2 linear), range (dB, for dB), intensity (%, for cubic and linear), pitchEnv (semitones), pitchDecay (s), filter (0 off, 1 low-pass, 2 high-pass), cutoff (Hz), resonance (%), filterVelocity (%), play (0 one-shot, 1 gated). Without "knobs" it lists them (and the pads that sound their own way); with "knobs" ({"mic:room": -6, "decay": 70, "pad:38:drive": 40}) it sets them.',
   args: [
     { name: 'track', type: 'string', describe: 'The track: its name (or the start of it) or id', required: true },
     { name: 'knobs', type: 'object', describe: 'Knob values by id, e.g. {"mic:room": -6, "decay": 70}' },
@@ -284,16 +287,26 @@ export const kitSet: Tool = {
     if (!m.pads?.length && m.pitched !== false && !m.mics?.length)
       throw new ToolError(`${inst.pack}/${inst.name} isn't a kit and has no microphones of its own`);
     const defs = samplerKnobs(m.mics);
+    const kit = { velocityRange: Number(m.velocityRange ?? 0), oneShot: m.oneShot !== false };
+    const pads = (m.pads ?? []) as KitPad[];
     const knobs = obj(args, 'knobs');
     if (!knobs || !Object.keys(knobs).length) {
+      const own = padLines(kit, pads, inst.params);
       return {
         text: [
           `${track.name}: ${inst.pack}/${inst.name}`,
           ...knobLines(defs, (id) => samplerKnobValue(defs, inst.params, id)),
+          ...(pads.length
+            ? [
+                own.length ? 'Pads with their own sound:' : 'Every pad plays as the kit does.',
+                ...own,
+                `Pads: ${pads.map((p) => `${p.key} ${p.name}`).join(', ')}`,
+              ]
+            : []),
         ].join('\n'),
       };
     }
-    const params = knobValues(knobs, defs, `${inst.pack}/${inst.name}`);
+    const params = knobValues(knobs, [...defs, ...kitPadKnobs(kit, pads)], `${inst.pack}/${inst.name}`);
     const label = `${track.name}'s kit: ${Object.entries(params)
       .map(([k, v]) => `${k}=${v}`)
       .join(' ')}`;

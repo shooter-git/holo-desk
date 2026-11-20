@@ -5,6 +5,9 @@
  */
 import {
   type AudioClip,
+  cleanPad,
+  type KitPad,
+  type KitPadSettings,
   type Project,
   performed,
   playedAt,
@@ -99,6 +102,8 @@ export interface PlayingManifest {
   releaseVelocityRange?: number;
   /** A multi-microphone instrument's microphones (see SamplerSpec). */
   mics?: SampleMic[];
+  /** A kit's pads, every piece once, in rows of four: the key each plays, what sounds there, and its own settings. */
+  pads?: KitPad[];
 }
 
 /** The zone's and the instrument's optional settings, as the sampler takes them (only those the pack has). */
@@ -154,8 +159,11 @@ export function partialZone(z: ZoneManifest, bytes: Uint8Array): SampleZone | nu
   };
 }
 
-export function playingExtras(m: PlayingManifest): PlayingManifest {
-  const out: PlayingManifest = {};
+/** What a played instrument asks of the sampler, as the sampler takes it (its pads only those with settings). */
+export type PlayingExtras = Omit<PlayingManifest, 'pads'> & { pads?: KitPadSettings[] };
+
+export function playingExtras(m: PlayingManifest): PlayingExtras {
+  const out: PlayingExtras = {};
   if (m.polyphony) out.polyphony = m.polyphony;
   if (m.notePolyphony) out.notePolyphony = m.notePolyphony;
   if (m.offTime !== undefined) out.offTime = m.offTime;
@@ -173,6 +181,11 @@ export function playingExtras(m: PlayingManifest): PlayingManifest {
           ? { pan: Math.max(-1, Math.min(1, x.pan)) }
           : {}),
       }));
+  }
+  // only the pads with settings of their own (their names are the screen's)
+  if (Array.isArray(m.pads)) {
+    const pads = m.pads.map(cleanPad).filter((p): p is KitPadSettings => p !== null);
+    if (pads.length) out.pads = pads;
   }
   return out;
 }

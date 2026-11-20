@@ -621,7 +621,7 @@ change may also post a line under the bar (`…/progress`).
 | `track_add` | change | Add a track: a built-in synth, a pack's instrument, or a palette's sound. |
 | `track_set` | change | A track's name, fader, pan, mute, solo, arm, instrument, place and sends. |
 | `synth_set` | change | List or set a built-in synth's knobs. |
-| `kit_set` | change | List or set a sampled kit's microphones, tune and decay. |
+| `kit_set` | change | List or set a sampled kit's microphones, tune and decay, and each pad's own sound. |
 | `instruments` | see | What can play a track: the synths and the installed packs' instruments. |
 | `plugins` | see | The stock plugins, and one's parameters. |
 | `fx` | change | Show, add, set, move (reorder) or remove plugins on a track, a bus or the master; a plugin with a key and scale is added in the song's key (an audio effect's automation follows its key changes). |

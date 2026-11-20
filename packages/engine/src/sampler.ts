@@ -17,9 +17,27 @@
  * key's limit count hits, not microphones. Its knobs (each microphone's level, the kit's tune and
  * decay) move while it plays: a level glides over a block, tune takes the next hit, decay shortens
  * what's ringing.
+ *
+ * Pads: a kit's pad may have settings of its own (packages/session/src/kit-pads.ts), from its pack
+ * and the song's knobs. Its level, tune, pan, velocity curve and whether it plays to its end are
+ * taken as a hit starts, so its hits play as any other. Only a saturator, a pitch envelope or a
+ * filter asks for work at every frame, and only on the hits of the pads that have one: a pad without
+ * settings (every pad of a kit before them) is played exactly as it always was.
  */
 
-import { MIC_OFF, micParam } from '@holo/session';
+import {
+  type KitPadSettings,
+  MIC_OFF,
+  micParam,
+  type PadKit,
+  type PadValues,
+  type ParamDef,
+  padIsPlain,
+  padKnobs,
+  padValues,
+  padVelocityGain,
+  parsePadParam,
+} from '@holo/session';
 import { type Controls, Envelope, Instrument, type Voice } from './instrument.ts';
 import { type SampleFrames, type SamplerSpec, type SampleZone, sampleScale } from './protocol.ts';
 
@@ -38,6 +56,74 @@ class SamplerState {
   env = new Float64Array(128);
   constructor(mics: number) {
     this.mic = new Float64Array(mics).fill(1);
+  }
+}
+
+/** A pad's settings as its hits take them (the pack's, under the song's knobs): one for each pad that has any. */
+class PadSound {
+  /** Its level (linear), its tune (a ratio), and where it moves each sample (-1 to 1, added to the sample's place). */
+  level = 1;
+  tune = 1;
+  pan = 0;
+  /** Its velocity curve (0 dB, 1 cubic, 2 linear), the dB curve's range and the others' intensity (0 to 1). */
+  curve = 0;
+  range = 0;
+  intensity = 1;
+  /** Its hits play to their end whatever the key does. */
+  oneShot = true;
+  /** The saturator: its drive (0 to 4; 0: off), its character and its output (linear). */
+  drive = 0;
+  hard = false;
+  output = 1;
+  /** The pitch envelope: semitones a hit starts away, and how much of that is left after each frame. */
+  sweep = 0;
+  sweepCoef = 0;
+  /**
+   * The filter (0 none, 1 low-pass, 2 high-pass), its cutoff (Hz), damping (2: no resonance) and how
+   * far velocity moves it (1: the softest hit four octaves lower).
+   */
+  filter = 0;
+  cutoff = 2000;
+  damping = 2;
+  filterVelocity = 0;
+  /** Its hits need work at every frame: a saturator, a pitch envelope or a filter. */
+  fx = false;
+}
+
+/** A pad's work at every frame on one microphone of a hit: its saturator, pitch envelope and filter, and where they are. */
+class LayerFx {
+  /** The sample's gain into the saturator: full scale, at the level the pack set it to. */
+  readonly pre: number;
+  readonly drive: number;
+  readonly hard: boolean;
+  /** Semitones the pitch is still away, and how much of that is left after each frame. */
+  sweep: number;
+  readonly sweepCoef: number;
+  /** The filter (0 none, 1 low-pass, 2 high-pass): a state-variable filter's coefficients and its two states a side. */
+  readonly mode: number;
+  readonly a1: number;
+  readonly a2: number;
+  readonly a3: number;
+  readonly k: number;
+  s1l = 0;
+  s2l = 0;
+  s1r = 0;
+  s2r = 0;
+
+  constructor(pad: PadSound, pre: number, velocity: number, sr: number) {
+    this.pre = pre;
+    this.drive = pad.drive;
+    this.hard = pad.hard;
+    this.sweep = pad.sweep;
+    this.sweepCoef = pad.sweepCoef;
+    this.mode = pad.filter;
+    // the cutoff a hit this hard has (lower for softer hits, at a positive velocity amount)
+    const fc = pad.cutoff * 2 ** (-pad.filterVelocity * 4 * (1 - velocity / 127));
+    const g = Math.tan((Math.PI * Math.min(0.45 * sr, Math.max(20, fc))) / sr);
+    this.k = pad.damping;
+    this.a1 = 1 / (1 + g * (g + this.k));
+    this.a2 = g * this.a1;
+    this.a3 = g * this.a2;
   }
 }
 
@@ -64,14 +150,29 @@ class SampleLayer {
   private m: number;
   /** The sample read() made. */
   private y = 0;
+  /** A pad's work at every frame (a saturator, a pitch envelope, a filter), or null: none. */
+  readonly fx: LayerFx | null;
 
-  constructor(zone: SampleZone, mic: number, pan: number, baseRatio: number, gain: number, micGain: number) {
+  /**
+   * `gain`: the level it's heard at. With a pad's work at every frame (`fx`), that's after it: the
+   * sample's own level and full scale go into the saturator (fx.pre).
+   */
+  constructor(
+    zone: SampleZone,
+    mic: number,
+    pan: number,
+    baseRatio: number,
+    gain: number,
+    micGain: number,
+    fx: LayerFx | null = null,
+  ) {
     this.zone = zone;
     this.mic = mic;
     this.baseRatio = baseRatio;
     this.m = micGain;
+    this.fx = fx;
     // (16-bit frames come to full scale by the gain: floats are played by exactly the gain they always were)
-    const g = gain * sampleScale(zone.left);
+    const g = fx ? gain : gain * sampleScale(zone.left);
     if (pan === 0) {
       this.gl = g;
       this.gr = g;
@@ -214,6 +315,10 @@ class SampleLayer {
     looped: boolean,
     micGain: number,
   ): void {
+    if (this.fx !== null) {
+      this.renderFx(l, r, start, n, env, ctl, looped, micGain, this.fx);
+      return;
+    }
     const z = this.zone;
     const left = z.left;
     const right = z.right ?? z.left;
@@ -267,6 +372,144 @@ class SampleLayer {
       this.pos += ratio;
       if (loops && this.pos >= loopEnd) this.pos -= loopLen;
     }
+    this.m = micGain;
+  }
+
+  /**
+   * render() on a pad's hit with work at every frame: each sample read is saturated (at the level the
+   * pack set it to), filtered and then given its level, the read stepping on at the pitch the pitch
+   * envelope has reached. Written out in the loop, as read() is called: a call V8 doesn't inline would
+   * box every double it passes.
+   */
+  private renderFx(
+    l: Float32Array,
+    r: Float32Array,
+    start: number,
+    n: number,
+    env: Float64Array,
+    ctl: Controls,
+    looped: boolean,
+    micGain: number,
+    fx: LayerFx,
+  ): void {
+    const z = this.zone;
+    const left = z.left;
+    const right = z.right ?? z.left;
+    const stereo = right !== left;
+    const bent = this.baseRatio * 2 ** (ctl.bend / 12);
+    const gl = this.gl * ctl.expression;
+    const gr = this.gr * ctl.expression;
+    const len = left.length;
+    const loopLen = this.loopLen;
+    const loopEnd = this.loopEnd;
+    const loops = looped && loopLen > 0;
+    this.wrap = loops;
+    const xf = this.xf;
+    const fadeFrom = loopEnd - xf;
+    const fading = loops && xf > 0;
+    let m = this.m;
+    const ramp = m !== micGain && n > 0;
+    const dm = ramp ? (micGain - m) / n : 0;
+    let kl = gl * m;
+    let kr = gr * m;
+    // the saturator: below a drive of 1 its curve is mixed in, above it the sound goes in that much louder
+    const pre = fx.pre;
+    const drive = fx.drive;
+    const hard = fx.hard;
+    const into = (drive > 1 ? drive : 1) * (hard ? 2 : 1);
+    const wet = drive < 1 ? drive : 1;
+    const dry = 1 - wet;
+    const mode = fx.mode;
+    const a1 = fx.a1;
+    const a2 = fx.a2;
+    const a3 = fx.a3;
+    const k2 = fx.k;
+    let s1l = fx.s1l;
+    let s2l = fx.s2l;
+    let s1r = fx.s1r;
+    let s2r = fx.s2r;
+    let sweep = fx.sweep;
+    const sweepCoef = fx.sweepCoef;
+    let ratio = sweep !== 0 ? bent * 2 ** (sweep / 12) : bent;
+    for (let k = 0; k < n; k++) {
+      const e = env[k] as number;
+      // (a loop that ends at the last frame goes around before it gets there)
+      if (this.pos >= len - 1 && !(loops && this.pos < loopEnd)) {
+        this.ended = true;
+        break;
+      }
+      this.read(left, false);
+      let sl = this.y;
+      let sr = sl;
+      if (stereo) {
+        this.read(right, false);
+        sr = this.y;
+      }
+      if (fading && this.pos > fadeFrom) {
+        // cross-fade into the loop's start so the seam never clicks
+        const a = (this.pos - fadeFrom) / xf;
+        this.read(left, true);
+        sl = sl * (1 - a) + this.y * a;
+        if (stereo) this.read(right, true);
+        sr = sr * (1 - a) + this.y * a;
+      }
+      sl *= pre;
+      if (drive > 0) {
+        let y = (sl < 0 ? -sl : sl) * into;
+        if (y > 1) y = 1;
+        if (!hard) y = 2 * y - y * y;
+        sl = wet * (sl < 0 ? -y : y) + dry * sl;
+      }
+      if (mode !== 0) {
+        // a state-variable filter, trapezoidal (it keeps its tune and resonance up to the top)
+        const v3 = sl - s2l;
+        const v1 = a1 * s1l + a2 * v3;
+        const v2 = s2l + a2 * s1l + a3 * v3;
+        s1l = 2 * v1 - s1l;
+        s2l = 2 * v2 - s2l;
+        sl = mode === 1 ? v2 : sl - k2 * v1 - v2;
+      }
+      if (stereo) {
+        sr *= pre;
+        if (drive > 0) {
+          let y = (sr < 0 ? -sr : sr) * into;
+          if (y > 1) y = 1;
+          if (!hard) y = 2 * y - y * y;
+          sr = wet * (sr < 0 ? -y : y) + dry * sr;
+        }
+        if (mode !== 0) {
+          const v3 = sr - s2r;
+          const v1 = a1 * s1r + a2 * v3;
+          const v2 = s2r + a2 * s1r + a3 * v3;
+          s1r = 2 * v1 - s1r;
+          s2r = 2 * v2 - s2r;
+          sr = mode === 1 ? v2 : sr - k2 * v1 - v2;
+        }
+      } else sr = sl;
+      if (ramp) {
+        m += dm;
+        kl = gl * m;
+        kr = gr * m;
+      }
+      const i = start + k;
+      l[i] = (l[i] as number) + sl * e * kl;
+      r[i] = (r[i] as number) + sr * e * kr;
+      this.pos += ratio;
+      if (sweep !== 0) {
+        sweep *= sweepCoef;
+        if (sweep < 1e-3 && sweep > -1e-3) {
+          sweep = 0;
+          ratio = bent;
+        } else ratio = bent * 2 ** (sweep / 12);
+      }
+      if (loops && this.pos >= loopEnd) this.pos -= loopLen;
+    }
+    // (a filter's states fallen to nothing are nothing: numbers that small are slow to work with)
+    fx.s1l = Math.abs(s1l) < 1e-20 ? 0 : s1l;
+    fx.s2l = Math.abs(s2l) < 1e-20 ? 0 : s2l;
+    fx.s1r = Math.abs(s1r) < 1e-20 ? 0 : s1r;
+    fx.s2r = Math.abs(s2r) < 1e-20 ? 0 : s2r;
+    fx.sweep = sweep;
     this.m = micGain;
   }
 }
@@ -392,7 +635,7 @@ class SampleVoice implements Voice {
     const looped = !this.released;
     const layers = this.layers;
     const first = layers[0] as SampleLayer;
-    if (layers.length === 1 && (first.mic < 0 || first.level === state.mic[first.mic])) {
+    if (layers.length === 1 && first.fx === null && (first.mic < 0 || first.level === state.mic[first.mic])) {
       // one sample at a level that isn't moving (as every hit of a pack without microphones is)
       first.renderAlone(l, r, start, end, this, ctl);
       if (this.over || first.ended) this.done = true;
@@ -593,6 +836,12 @@ export class Sampler extends Instrument {
   /** Each microphone's index by id, and where its mono samples sit. */
   private readonly micIndex: Map<string, number>;
   private readonly micPans: Float64Array;
+  /** The pack's settings for its pads, by key; the kit's own that a pad's defaults follow; its knobs (made when first needed). */
+  private readonly packPads: Map<number, KitPadSettings>;
+  private readonly padKit: PadKit;
+  private padDefs: ParamDef[] | null = null;
+  /** Each key's pad settings (null: none, it plays as the kit does), or null for a kit none of whose pads has any. */
+  private padSounds: (PadSound | null)[] | null = null;
 
   private readonly spec: SamplerSpec;
   constructor(sr: number, spec: SamplerSpec, params?: Record<string, number>) {
@@ -625,6 +874,8 @@ export class Sampler extends Instrument {
     this.endedPitch = new Float64Array(keys);
     this.endedVelocity = new Float64Array(keys);
     this.endedBorn = new Float64Array(keys);
+    this.packPads = new Map((spec.pads ?? []).map((p) => [p.key, p]));
+    this.padKit = { velocityRange: spec.velocityRange, oneShot: spec.oneShot };
     this.update(params);
   }
 
@@ -648,6 +899,68 @@ export class Sampler extends Instrument {
     state.tune = Number.isFinite(tune) ? 2 ** (Math.max(-12, Math.min(12, tune)) / 12) : 1;
     const decay = params?.decay ?? 100;
     state.decay = Number.isFinite(decay) ? Math.max(0.05, Math.min(1, decay / 100)) : 1;
+    this.updatePads(params);
+  }
+
+  /** Each pad's settings, from its pack's and the song's knobs (`pad:KEY:ID`): taken by the hits that start after. */
+  private updatePads(params?: Record<string, number>): void {
+    const keys = new Set(this.packPads.keys());
+    if (params)
+      for (const id in params) {
+        const at = parsePadParam(id);
+        if (at) keys.add(at.key);
+      }
+    if (!keys.size) {
+      this.padSounds = null;
+      return;
+    }
+    const kit = this.padKit;
+    this.padDefs ??= padKnobs(kit);
+    let sounds: (PadSound | null)[] | null = null;
+    for (const key of keys) {
+      const v = padValues(kit, this.packPads.get(key), params, key, this.padDefs);
+      if (padIsPlain(kit, v)) continue;
+      sounds ??= new Array<PadSound | null>(128).fill(null);
+      sounds[key] = this.padSound(v);
+    }
+    this.padSounds = sounds;
+  }
+
+  /** A pad's settings as its hits take them. */
+  private padSound(v: PadValues): PadSound {
+    const c = new PadSound();
+    c.level = v.level <= -60 ? 0 : 10 ** (v.level / 20);
+    c.tune = 2 ** (v.tune / 12);
+    c.pan = v.pan;
+    c.curve = v.curve;
+    c.range = v.range;
+    c.intensity = v.intensity / 100;
+    c.oneShot = v.play === 0;
+    // (drive in percent: at 25 % the curve is all in, at 100 % the sound goes four times into it)
+    c.drive = v.drive / 25;
+    c.hard = v.character === 1;
+    c.output = 10 ** (v.output / 20);
+    c.sweep = v.pitchEnv;
+    c.sweepCoef = Math.exp(-6.9 / Math.max(1, v.pitchDecay * this.sr));
+    c.filter = v.filter;
+    c.cutoff = v.cutoff;
+    c.damping = 2 * (1 - 0.97 * (v.resonance / 100));
+    c.filterVelocity = v.filterVelocity / 100;
+    c.fx = c.drive > 0 || c.sweep !== 0 || c.filter !== 0;
+    return c;
+  }
+
+  /** A key's pad settings, or null when it has none. */
+  private padAt(key: number): PadSound | null {
+    const sounds = this.padSounds;
+    if (sounds === null) return null;
+    const k = Math.round(key);
+    return k >= 0 && k < 128 ? (sounds[k] ?? null) : null;
+  }
+
+  /** Whether a key's hits play to their end whatever the key does: its pad's say, else the kit's. */
+  private oneShotAt(key: number): boolean {
+    return this.padAt(key)?.oneShot ?? this.spec.oneShot;
   }
 
   /** The gain a velocity adds over `range` dB: the layers already differ in timbre; this is a smooth curve. */
@@ -662,6 +975,20 @@ export class Sampler extends Instrument {
     const pan = zone.pan ?? (mic >= 0 ? (this.micPans[mic] as number) : 0);
     const ratio = (this.spec.pitched ? 2 ** ((key - zone.root) / 12) : 1) * this.state.tune;
     return new SampleLayer(zone, mic, pan, ratio, gain, mic >= 0 ? (this.state.mic[mic] as number) : 1);
+  }
+
+  /** One microphone's sample of a hit on a pad with settings: its curve, level, tune and place, and its work at every frame. */
+  private padLayer(zone: SampleZone, key: number, velocity: number, pad: PadSound): SampleLayer {
+    const mic = zone.mic !== undefined ? (this.micIndex.get(zone.mic) ?? -1) : -1;
+    const at = zone.pan ?? (mic >= 0 ? (this.micPans[mic] as number) : 0);
+    const pan = pad.pan === 0 ? at : Math.max(-1, Math.min(1, at + pad.pan));
+    const ratio = (this.spec.pitched ? 2 ** ((key - zone.root) / 12) : 1) * this.state.tune * pad.tune;
+    const level = padVelocityGain(pad.curve, pad.range, pad.intensity, velocity) * pad.level;
+    const micGain = mic >= 0 ? (this.state.mic[mic] as number) : 1;
+    if (!pad.fx) return new SampleLayer(zone, mic, pan, ratio, zone.gain * level, micGain);
+    // the sample at the level the pack set it to goes into the saturator; what comes out gets the hit's level
+    const fx = new LayerFx(pad, zone.gain * sampleScale(zone.left), velocity, this.sr);
+    return new SampleLayer(zone, mic, pan, ratio, level * (pad.drive > 0 ? pad.output : 1), micGain, fx);
   }
 
   protected startVoice(key: number, velocity: number): Voice | null {
@@ -695,10 +1022,13 @@ export class Sampler extends Instrument {
       }
     }
     const damped = spec.undamped === undefined || key < spec.undamped;
+    const pad = this.padAt(key);
     const layers: SampleLayer[] = [];
     for (let i = 0; i < count; i++) {
       const z = set.out[i] as SampleZone;
-      layers.push(this.layer(z, key, z.gain * this.velocityGain(velocity)));
+      layers.push(
+        pad ? this.padLayer(z, key, velocity, pad) : this.layer(z, key, z.gain * this.velocityGain(velocity)),
+      );
     }
     return new SampleVoice(layers, key, this.sr, spec, this.state, velocity, this.frames, damped);
   }
@@ -769,7 +1099,7 @@ export class Sampler extends Instrument {
   }
 
   override noteOff(key: number): void {
-    if (this.spec.oneShot) return;
+    if (this.oneShotAt(key)) return;
     super.noteOff(key);
     this.releaseSamples();
     if (this.endedState.length) this.letGoEnded(1, key);

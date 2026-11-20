@@ -28,7 +28,23 @@ export * from './peq.ts';
 export * from './performance.ts';
 export * from './plucked.ts';
 export * from './prism.ts';
-export { type Partial, type PartialSet, readPartials, writePartials } from './prism-sources.ts';
+export { bend } from './prism-mod.ts';
+export {
+  ampSpread,
+  builtInPartials,
+  builtInRecording,
+  builtInWave,
+  customWave,
+  type Mips,
+  type Partial,
+  type PartialSet,
+  panSpread,
+  pitchSpread,
+  type Recording,
+  readPartials,
+  TABLE,
+  writePartials,
+} from './prism-sources.ts';
 export * from './protocol.ts';
 export * from './random.ts';
 export * from './reeds.ts';

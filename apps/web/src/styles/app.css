@@ -4453,6 +4453,234 @@ html[data-layout="phone-landscape"] .bar .field input {
   cursor: default;
 }
 
+/* Prism's window: its six knobs big along the top, the four sources around the morph pad under
+   them, and the patch one level down, behind four tabs */
+.prism-macros {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 10px 6px;
+  padding: 16px 14px 6px;
+}
+
+@media (max-width: 700px) {
+  .prism-macros {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+.prism-macros .knob .knob-label {
+  color: var(--text);
+  font-size: 11.5px;
+  font-weight: 600;
+}
+
+.plugin-window .display.prism-display {
+  padding: 1px;
+  background: none;
+  border: none;
+  box-shadow: none;
+}
+
+.prism-overview {
+  cursor: pointer;
+}
+
+.prism-tabs {
+  display: flex;
+  justify-content: center;
+  padding: 12px 14px 2px;
+}
+
+.prism-tabs.inner {
+  padding-top: 10px;
+}
+
+.prism-tabs .seg {
+  max-width: 100%;
+}
+
+.prism-tabs .seg .btn {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.prism-page {
+  display: flex;
+  flex-direction: column;
+  padding-bottom: 8px;
+}
+
+.prism-section {
+  display: flex;
+  flex-direction: column;
+  margin-top: 12px;
+  border-top: 1px solid var(--line-2);
+}
+
+.prism-section-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: calc(var(--control) + 4px);
+  padding: 10px 14px 0;
+}
+
+.prism-section-head .label {
+  flex: 1;
+}
+
+.prism-section-head .knob.choice .knob-label:empty {
+  display: none;
+}
+
+.prism-switches {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+
+.plugin-window .face.prism-face {
+  grid-template-columns: repeat(auto-fill, minmax(78px, 1fr));
+  padding: 12px 14px 4px;
+}
+
+/* the four sources, each in its own color: the one open is lit */
+.prism-sources {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px;
+  padding: 12px 14px 0;
+}
+
+@media (max-width: 520px) {
+  .prism-sources {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+.prism-source {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: rgba(0, 0, 0, 0.22);
+  color: var(--text-2);
+  cursor: pointer;
+  text-align: left;
+}
+
+.prism-source:hover {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.prism-source.on {
+  border-color: var(--src);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--src) 35%, transparent);
+  background: color-mix(in srgb, var(--src) 12%, transparent);
+  color: var(--text);
+}
+
+.prism-source.off {
+  color: var(--text-3);
+}
+
+.prism-source-n {
+  color: var(--src);
+  font-weight: 700;
+  font-size: 12px;
+}
+
+.prism-source.off .prism-source-n {
+  color: var(--text-3);
+}
+
+.prism-source-what {
+  overflow: hidden;
+  font-size: 11px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/* a family's modulators by number: the open one lit, those the matrix uses marked */
+.prism-picks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 10px 14px 8px;
+}
+
+.prism-pick {
+  position: relative;
+  min-width: 30px;
+  height: 26px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: rgba(0, 0, 0, 0.22);
+  color: var(--text-3);
+  font-weight: 600;
+  font-size: 11.5px;
+  cursor: pointer;
+}
+
+.prism-pick.used {
+  color: var(--text);
+}
+
+.prism-pick.used::after {
+  content: "";
+  position: absolute;
+  right: 3px;
+  bottom: 3px;
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--mod);
+}
+
+.prism-pick.on {
+  border-color: var(--mod);
+  background: color-mix(in srgb, var(--mod) 14%, transparent);
+  color: var(--text);
+}
+
+.plugin-window .display.prism-mod-display,
+.plugin-window .display.prism-links {
+  margin: 0 14px;
+  padding: 1px;
+  background: none;
+  border: none;
+  box-shadow: none;
+}
+
+.prism-links canvas {
+  cursor: pointer;
+}
+
+.prism-link-edit {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px 0;
+}
+
+.prism-link-edit .choice-menu {
+  min-width: 140px;
+  max-width: 100%;
+}
+
+.prism-add {
+  display: flex;
+  justify-content: center;
+  padding: 12px 14px 4px;
+}
+
 .stage-distance {
   display: flex;
   align-items: center;

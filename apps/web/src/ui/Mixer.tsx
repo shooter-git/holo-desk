@@ -15,6 +15,7 @@ import {
   PLUGINS,
   type Plugin,
   type PluginDef,
+  PRISM_SOUNDS,
   paramValue,
   pluginDef,
   type Seat,
@@ -53,6 +54,7 @@ import { prepare, useFrame, useSize } from './frame.ts';
 import { isMenuPress } from './gesture.ts';
 import { KitPads, kitPadGrid, useInstrumentMap } from './KitPads.tsx';
 import { openMenu, openMenuAt } from './menu.tsx';
+import { PrismPackWindow, PrismWindow } from './PrismWindow.tsx';
 import { pressToReorder, useNoScrollWhileDragging } from './reorder.ts';
 import { useScrollCue } from './scroll-cue.ts';
 import { pastSlop, upDownOnly } from './slop.ts';
@@ -1330,7 +1332,13 @@ export function PluginWindow() {
 /** Whether an instrument has knobs of its own: a synth with them, or a kit (its microphones, tune and decay). */
 function hasKnobs(i: Instrument, packs: PackSummary[]): boolean {
   if (i.type === 'synth') return Boolean(SYNTH_MACROS[i.preset]);
-  return samplerKnobDefs(i, packs) !== null;
+  return samplerKnobDefs(i, packs) !== null || playsThroughSynth(i, packs);
+}
+
+/** A pack instrument that plays through a built-in synth (Prism): that synth's window. */
+function playsThroughSynth(i: Instrument, packs: PackSummary[]): boolean {
+  if (i.type !== 'sampler') return false;
+  return Boolean(packs.find((p) => p.id === i.pack)?.instruments.find((x) => x.name === i.name)?.synth);
 }
 
 /** What a kit's knobs do, for its window. */
@@ -1353,9 +1361,15 @@ export function SynthWindow() {
   if (!id || !project) return null;
   const track = project.tracks.find((t) => t.id === id);
   const inst = track?.instrument;
-  if (track && inst?.type === 'sampler') return <KitWindow track={track} inst={inst} packs={packs} />;
+  if (track && inst?.type === 'sampler')
+    return playsThroughSynth(inst, packs) ? (
+      <PrismPackWindow track={track} inst={inst} />
+    ) : (
+      <KitWindow track={track} inst={inst} packs={packs} />
+    );
   if (!track || inst?.type !== 'synth') return null;
   if (FM6_SOUNDS.includes(inst.preset)) return <Fm6Window track={track} inst={inst} />;
+  if (PRISM_SOUNDS.includes(inst.preset)) return <PrismWindow track={track} inst={inst} />;
   const defs = SYNTH_MACROS[inst.preset];
   if (!defs) return null;
   const close = () => store.set({ synth: null });

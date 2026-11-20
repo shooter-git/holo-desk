@@ -235,7 +235,18 @@ const dbOf = (amp: number) => (amp > 0 ? r1(20 * Math.log10(amp)) : null);
 const BLOCK = 128;
 
 /** The plugins measured by their response to an impulse: what they do is the same at any level. */
-const LINEAR = new Set(['eq', 'peq', 'studioeq', 'reverb', 'roomreverb', 'smoothhall', 'space', 'delay', 'dualdelay', 'width']);
+const LINEAR = new Set([
+  'eq',
+  'peq',
+  'studioeq',
+  'reverb',
+  'roomreverb',
+  'smoothhall',
+  'space',
+  'delay',
+  'dualdelay',
+  'width',
+]);
 /** Of those, the ones that ring on (measured over seconds, with their decay), and the echoes. */
 const REVERBS = new Set(['reverb', 'roomreverb', 'smoothhall', 'space']);
 const DELAYS = new Set(['delay', 'dualdelay']);

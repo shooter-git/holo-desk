@@ -34,7 +34,10 @@ in what's missing.
   "instrument": { "type": "sampler", "pack": "meatbass", "name": "upright" },
                 // a kit keeps its knobs where they're turned: { …, "params": { "mic:room": -6,
                 // "tune": -1, "decay": 70 } } (each microphone's level in dB, -60 is off; tune in
-                // semitones; decay in percent of each hit's ring; see samplerKnobs in packages/session)
+                // semitones; decay in percent of each hit's ring; see samplerKnobs in packages/session),
+                // and each pad's own as "pad:KEY:ID" ("pad:38:drive": 40, "pad:36:curve": 1: level,
+                // tune, pan, saturator, velocity curve, pitch envelope, filter, one-shot or gated,
+                // over what its pack set; see packages/session/src/kit-pads.ts)
                 // or { "type": "synth", "preset": "Warm Pad", "params": {…} } (the synths with knobs,
                 // "Fat Mono", "Tonewheel Jazz", "FM Keys" and most others, take them there:
                 // { "cutoff": 450, … }, see SYNTH_MACROS in packages/session; the six-operator FM

@@ -31,6 +31,9 @@ export interface Zone {
   /** The microphone it was recorded with (one of its instrument's `mics`), and where it sits if mono. */
   mic?: string;
   pan?: number;
+  /** For an instrument that plays through a synth: the synth's source it's for, and whether it's a partial set. */
+  source?: number;
+  partials?: boolean;
 }
 
 export interface PackInstrument {
@@ -53,6 +56,12 @@ export interface PackInstrument {
   pads?: { key: number; name: string }[];
   /** A multi-microphone instrument's microphones: every one's zone for a hit sounds together. */
   mics?: SampleMic[];
+  /**
+   * A built-in synth it plays through instead of the sampler (one of Prism's sounds), and its patch:
+   * its zones are then that synth's samples and partial sets, each for the source it names.
+   */
+  synth?: string;
+  params?: Record<string, number>;
   size?: number;
 }
 
@@ -157,6 +166,8 @@ export class Packs {
         // its knobs' window: a kit's tune and decay, and a level for each microphone
         ...(i.pads?.length || i.pitched === false ? { kit: true } : {}),
         ...(i.mics?.length ? { mics: i.mics } : {}),
+        // it plays through a synth: that synth's window
+        ...(i.synth ? { synth: i.synth } : {}),
       })),
       impulses: (pack.impulses ?? []).map((i) => ({
         name: i.name,

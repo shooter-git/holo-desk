@@ -16,7 +16,7 @@ import {
   warpAt,
   warpOf,
 } from '@holo/session';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { findClicks } from '../src/analysis/clicks.ts';
 import { fineTrack } from '../src/analysis/take.ts';
 import { compileClips, compileTempo } from '../src/compile.ts';
@@ -27,6 +27,9 @@ import { renderSession } from '../src/render.ts';
 import { resample } from '../src/resample.ts';
 import { stretchAudio } from '../src/stretch.ts';
 import { encodeWav } from '../src/wav.ts';
+
+// these render and measure seconds of sung audio: on a busy runner some take longer than the default 5 s
+vi.setConfig({ testTimeout: 30_000 });
 
 const SR = 48000;
 

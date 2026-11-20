@@ -259,6 +259,11 @@ export interface Track {
   input: TrackInput;
   /** Record-armed: live MIDI is recorded here. */
   armed: boolean;
+  /**
+   * Switched off (Make Inactive): kept in the song, still editable, but not played, loaded or
+   * recorded, so its instrument, plugins, sends and recordings cost nothing. Only `true` is kept.
+   */
+  inactive?: boolean;
   /** MIDI effects (arpeggiator, harmonizer…), before the instrument. */
   midiFx: Plugin[];
   regions: Region[];

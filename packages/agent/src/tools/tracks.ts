@@ -128,7 +128,7 @@ export const trackSet: Tool = {
   name: 'track_set',
   kind: 'change',
   summary:
-    'Change a track: its name, fader (volume in dB, 0 is unity), pan (-1 left … 1 right), mute, solo, record arm, instrument ("synth:PRESET" or "pack/name"), its place in the track list (1 is the top), or its sends to buses ({"Reverb": -12}, in dB; -144 or less is off). Example: {"track": "Strings", "volume": -4, "pan": -0.3}.',
+    'Change a track: its name, fader (volume in dB, 0 is unity), pan (-1 left … 1 right), mute, solo, record arm, instrument ("synth:PRESET" or "pack/name"), its place in the track list (1 is the top), its sends to buses ({"Reverb": -12}, in dB; -144 or less is off), or whether it\'s inactive (switched off: kept and still editable, but not played, loaded or recorded, which frees its CPU and memory; it\'s disarmed too). Example: {"track": "Strings", "volume": -4, "pan": -0.3}.',
   args: [
     { name: 'track', type: 'string', describe: 'The track: its name (or the start of it) or id', required: true },
     { name: 'name', type: 'string', describe: 'A new name', maxLength: 60 },
@@ -140,6 +140,11 @@ export const trackSet: Tool = {
     { name: 'instrument', type: 'string', describe: 'synth:PRESET or pack/name' },
     { name: 'index', type: 'integer', describe: 'Its place in the track list, 1 at the top', min: 1 },
     { name: 'sends', type: 'object', describe: 'Send levels by bus name, in dB, e.g. {"Reverb": -12}' },
+    {
+      name: 'inactive',
+      type: 'boolean',
+      describe: 'true switches it off (kept, not heard or loaded); false turns it on again',
+    },
   ],
   async run(ctx, args) {
     const project = await ctx.api.song();
@@ -191,9 +196,20 @@ export const trackSet: Tool = {
       done.push(`renamed ${name}`);
     }
     const armed = bool(args, 'armed');
+    const inactive = bool(args, 'inactive');
+    if (armed && (inactive ?? track.inactive))
+      throw new ToolError(`${track.name} is inactive: it records nothing (turn it on with "inactive": false)`);
     if (armed !== undefined) {
       tp.armed = armed;
       done.push(armed ? 'armed' : 'disarmed');
+    }
+    if (inactive !== undefined && inactive !== !!track.inactive) {
+      tp.inactive = inactive;
+      done.push(inactive ? 'made inactive' : 'made active');
+      if (inactive) {
+        tp.armed = false;
+        if (track.audioInput?.monitor) tp.audioInput = { ...track.audioInput, monitor: false };
+      }
     }
     const spec = str(args, 'instrument');
     if (spec) {
@@ -208,7 +224,11 @@ export const trackSet: Tool = {
       done.push(`moved to place ${index}`);
     }
     if (!ops.length)
-      throw new ToolError('Say what to change: name, volume, pan, mute, solo, armed, instrument, index or sends');
+      throw new ToolError(
+        inactive !== undefined
+          ? `${track.name} is ${track.inactive ? 'inactive' : 'active'} already`
+          : 'Say what to change: name, volume, pan, mute, solo, armed, instrument, index, sends or inactive',
+      );
     const label = `${track.name}: ${done.join(', ')}`;
     await change(ctx, project, ops, label);
     return { text: `${label}.`, progress: label };

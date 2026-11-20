@@ -98,6 +98,7 @@ export function describeProject(project: Project): string {
         }`
       : 'empty';
     const flags = [
+      t.inactive && 'inactive (not heard)',
       t.channel.mute && 'muted',
       t.channel.solo && 'solo',
       t.armed && 'armed',

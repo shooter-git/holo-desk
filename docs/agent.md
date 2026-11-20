@@ -619,7 +619,7 @@ change may also post a line under the bar (`…/progress`).
 | `regions` | change | Show, split (chop), delete (with `confirm`), copy, move, repeat, trim, gain, fade, stretch, mute, rename audio and MIDI regions; quantize and transpose MIDI; write a MIDI region's controller and pitch-bend lanes. A region by id, name or "selected". |
 | `audio_notes` | change | A recording's notes, note by note, as the Audio Editor's Notes edits them: show, detect, one action for each of the session's note edits (`NOTE_EDITS`): pitch, drift, vibrato, glide, formant, level, mute, timing, split, join, octave, add, remove, reset, a note's sound or edits pasted onto others (`paste`, `copy-settings`), and the macros (correct pitch, quantize time, level); and `midi`, the notes as a new MIDI track (below). Any edit can be `linked`: made in every region playing the same recording too. |
 | `track_add` | change | Add a track: a built-in synth, a pack's instrument, or a palette's sound. |
-| `track_set` | change | A track's name, fader, pan, mute, solo, arm, instrument, place and sends. |
+| `track_set` | change | A track's name, fader, pan, mute, solo, arm, instrument, place and sends, and whether it's inactive (kept, but not played or loaded). |
 | `synth_set` | change | List or set a built-in synth's knobs. |
 | `kit_set` | change | List or set a sampled kit's microphones, tune and decay, and each pad's own sound. |
 | `instruments` | see | What can play a track: the synths and the installed packs' instruments. |

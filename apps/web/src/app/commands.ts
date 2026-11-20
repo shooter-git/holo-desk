@@ -59,6 +59,8 @@ export interface Actions {
   transposeSelection(semitones: number): void;
   selectTrack(id: string): void;
   setChannel(track: string, patch: { mute?: boolean; solo?: boolean }, label: string): void;
+  /** Switch a track on or off (Make Inactive): one undo step. */
+  setActive(track: string, active: boolean): void;
   newTrack(): void;
   save(): void;
   bounce(): void;
@@ -380,7 +382,8 @@ export function commandTable(s: BarState, act: Actions): Command[] {
       title: track ? `${track.channel.mute ? 'Unmute' : 'Mute'} ${track.name}` : 'Mute the track',
       group: 'Tracks',
       keys: 'M',
-      available: (x) => selected(x) !== null,
+      // (an inactive track's buttons do nothing until it's on again)
+      available: (x) => selected(x) !== null && !track?.inactive,
       run: () => track && act.setChannel(track.id, { mute: !track.channel.mute }, 'Mute'),
     },
     {
@@ -388,8 +391,16 @@ export function commandTable(s: BarState, act: Actions): Command[] {
       title: track ? `${track.channel.solo ? 'Unsolo' : 'Solo'} ${track.name}` : 'Solo the track',
       group: 'Tracks',
       keys: 'S',
-      available: (x) => selected(x) !== null,
+      available: (x) => selected(x) !== null && !track?.inactive,
       run: () => track && act.setChannel(track.id, { solo: !track.channel.solo }, 'Solo'),
+    },
+    {
+      id: 'active',
+      title: track ? `Make ${track.name} ${track.inactive ? 'active' : 'inactive'}` : 'Make the track inactive',
+      group: 'Tracks',
+      also: 'power on off switch deactivate disable enable activate free cpu memory',
+      available: (x) => selected(x) !== null,
+      run: () => track && act.setActive(track.id, !!track.inactive),
     },
     {
       id: 'new-track',

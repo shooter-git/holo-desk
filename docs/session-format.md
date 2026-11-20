@@ -51,6 +51,7 @@ in what's missing.
   "articulations": [{ "id": "pizz", "name": "Pizzicato", "instrument": { … } }],
   "input": { "port": "*", "channel": 0 },        // live MIDI: a port name or "*", channel 1-16 or 0 for all
   "armed": false,
+  "inactive": true,                              // switched off (Make Inactive); absent when on
   "midiFx": [ /* plugins */ ],
   "regions": [{
     "id": "rgn_…", "name": "", "start": 3840, "length": 7680, "muted": false,
@@ -68,6 +69,11 @@ in what's missing.
 - Controller lanes are keyed by CC number, `pb` (pitch bend, −8192…8191) or `at` (channel pressure),
   as `[tick from the region's start, value]`.
 - `origin.edited` becomes true the moment anyone changes the track's music in HO[LO].
+- `inactive` (only `true` is kept) switches a track off: it stays in the song and can still be
+  edited, but nothing plays, loads or records for it. Its instrument, MIDI effects, plugins and sends
+  aren't built and its samples and recordings aren't loaded, which frees what a mute doesn't (a muted
+  track still runs them). A solo on an inactive track is left out too, and a bounce leaves the track
+  out. An older HO[LO], or a creation built with an older engine, drops the flag and plays the track.
 
 ### Performance and Glass instruments
 

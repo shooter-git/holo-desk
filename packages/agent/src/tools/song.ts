@@ -50,7 +50,10 @@ export const songStatus: Tool = {
       ...(Array.isArray(state.about) ? state.about.filter((l): l is string => typeof l === 'string') : []),
       `Tracks: ${
         project.tracks
-          .map((t) => `${t.name}${t.channel.mute ? ' (muted)' : ''}${t.channel.solo ? ' (solo)' : ''}`)
+          .map(
+            (t) =>
+              `${t.name}${t.inactive ? ' (inactive)' : ''}${t.channel.mute ? ' (muted)' : ''}${t.channel.solo ? ' (solo)' : ''}`,
+          )
           .join(', ') || 'none'
       }`,
     ];

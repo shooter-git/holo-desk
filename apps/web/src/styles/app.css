@@ -451,6 +451,33 @@ a.btn {
   box-shadow: 0 0 10px rgb(var(--rec-rgb) / 0.5);
 }
 
+.chip:disabled {
+  cursor: default;
+  opacity: 0.4;
+}
+
+/* a track's on/off: lit (in the text's own color) while the track plays, quieter while it's inactive
+   (but still plainly a button, beside the disabled ones) */
+.chip.power {
+  color: var(--text-2);
+}
+.chip.power.on {
+  color: var(--text);
+}
+.chip.power svg {
+  width: 11px;
+  height: 11px;
+}
+
+/* an inactive track, dimmed wherever it shows (its on/off stays at full strength, to turn it back on;
+   its other buttons are disabled, and dim themselves) */
+.track-row.inactive > :not(.chips),
+.track-row.rail-cell.inactive > *,
+.strip.inactive > :not(.strip-chips),
+.track-dock.inactive > :not(.chips) {
+  opacity: 0.45;
+}
+
 /* the sliders you can reach from the keyboard: the ring follows their shape */
 .knob:focus-visible,
 .fader:focus-visible {
@@ -2255,6 +2282,13 @@ a.btn {
   display: flex;
   justify-content: center;
   gap: 3px;
+}
+
+/* a track strip's four buttons share its width */
+.strip.track .strip-chips .chip {
+  flex: 1 1 0;
+  min-width: 0;
+  padding: 0;
 }
 
 /* fingers: the chips, the output and the slot's power button reach a touch target */

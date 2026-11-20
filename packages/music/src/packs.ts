@@ -224,13 +224,17 @@ export interface NeededFile {
 /**
  * Every sample file a song can play: each pack instrument's zones and performance files, and its
  * spaces' responses. (A Performance part loads only the files its notes reach; fetching all of an
- * instrument's is a little more than it needs, and the next song may want the rest.)
+ * instrument's is a little more than it needs, and the next song may want the rest.) An inactive
+ * track's aren't: it isn't played. (Its packs stay pinned, so it can be switched on again.)
  */
 export function songFiles(
-  project: Project,
+  song: Project,
   packs: PinnedPacks,
   catalog?: Record<string, string>,
 ): { files: NeededFile[]; problems: string[] } {
+  const project = song.tracks.some((t) => t.inactive)
+    ? { ...song, tracks: song.tracks.filter((t) => !t.inactive) }
+    : song;
   const files = new Map<string, NeededFile>();
   const problems: string[] = [];
   const byId = new Map(packs.packs.map((p) => [p.id, p]));

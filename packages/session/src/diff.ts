@@ -348,6 +348,7 @@ function trackChanges({ a, b, meter }: Context): string[] {
       continue;
     }
     if (o.name !== t.name) out.push(`Track "${o.name}" renamed "${t.name}"`);
+    if (!o.inactive !== !t.inactive) out.push(`${t.name}: made ${t.inactive ? 'inactive' : 'active'}`);
     if (!equal(o.instrument, t.instrument)) {
       const [x, y] = [instrumentText(o.instrument), instrumentText(t.instrument)];
       out.push(x === y ? `${t.name}: ${y} sound edited` : `${t.name}: instrument ${x} → ${y}`);

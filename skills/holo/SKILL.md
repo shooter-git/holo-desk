@@ -47,6 +47,7 @@ holo write --track Strings --at 9 --replace "…"                     # replaces
 holo clear --track Strings --from 9 --to 13
 holo track add "Counter-melody" --instrument vsco2/oboe
 holo track set Strings --volume -4 --pan -0.3 --instrument synth:"Warm Pad"
+holo track set "Old Pad" --inactive on                          # switched off: kept, not played or loaded (frees CPU and memory)
 holo track add Bass --instrument synth:"Fat Mono"                # a Moog-style mono: legato glides
 holo synth Bass cutoff=450 emphasis=0.5 glide=0.12 drive=0.7     # its knobs (holo synth Bass lists them)
 holo synth Pad space=0.7 shimmer=0.6 bloom=2                     # Ethereal Pad/Keys: a shimmering hall of its own

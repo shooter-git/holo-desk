@@ -403,6 +403,12 @@ describe('the patches some bars play', () => {
     expect(early.every((j) => !second.includes(j.key) || j.spec.a < 0.6 * SR + 0.2 * SR)).toBe(true);
     expect(patchesWithin(p, segments, SR, bar(5), bar(7))).toEqual([]);
   });
+
+  it("has none on an inactive track: Play doesn't wait for them", () => {
+    const parked = { ...p, tracks: p.tracks.map((t) => ({ ...t, inactive: true })) };
+    expect(patchSpans(parked, segments, SR).size).toBe(0);
+    expect(patchesWithin(parked, segments, SR, 0, bar(5))).toEqual([]);
+  });
 });
 
 describe('patches about to be played (a version an A/B plays)', () => {

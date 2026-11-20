@@ -266,6 +266,7 @@ Writing (positions are bar.beat.sixteenth: 14, 14.3, 14.3.2; notes as "D5:1 B5:2
   holo clear --track T --from 14 --to 18
   holo track add NAME --instrument synth:"Warm Pad"|pack/name
   holo track set T [--volume -6] [--pan -0.3] [--mute on|off] [--solo on|off] [--instrument …] [--arm on|off]
+                   [--inactive on|off]   (inactive: kept, but not played, loaded or recorded)
   holo synth T [knob=value…]           a synth's own knobs (most built-in synths have six): shown, or set
                                       e.g. holo synth Bass cutoff=500 glide=0.12 drive=0.7
   holo kit T [knob=value…]             a kit's own knobs: each microphone's level (dB), tune, decay
@@ -489,10 +490,29 @@ async function main(): Promise<void> {
         if (flag('instrument')) tp.instrument = parseInstrument(flag('instrument') as string);
         if (flag('arm')) tp.armed = flag('arm') !== 'off';
         if (flag('name')) tp.name = flag('name');
+        if (flag('inactive')) {
+          // switched off: kept and editable, but nothing plays, loads or records for it
+          const off = flag('inactive') !== 'off';
+          if (off && tp.armed)
+            throw new Error(`${t.name} can't be armed and inactive: an inactive track records nothing`);
+          tp.inactive = off;
+          if (off) {
+            tp.armed = false;
+            if (t.audioInput?.monitor) tp.audioInput = { ...t.audioInput, monitor: false };
+          }
+        }
         if (Object.keys(tp).length) list.push({ op: 'updateTrack', track: t.id, patch: tp });
         if (!list.length)
-          throw new Error('Nothing to set: --volume, --pan, --mute, --solo, --instrument, --arm, --name');
-        await ops(project, list, `${t.name}: ${Object.keys({ ...ch, ...tp }).join(', ')}`);
+          throw new Error('Nothing to set: --volume, --pan, --mute, --solo, --instrument, --arm, --name, --inactive');
+        // (switched off, it's disarmed too: the label says what was asked)
+        const said = Object.keys({ ...ch, ...tp }).flatMap((k) =>
+          k === 'inactive'
+            ? [tp.inactive ? 'made inactive' : 'made active']
+            : (k === 'armed' && !flag('arm')) || k === 'audioInput'
+              ? []
+              : [k],
+        );
+        await ops(project, list, `${t.name}: ${said.join(', ')}`);
         return;
       }
       throw new Error('holo track add NAME --instrument … | holo track set NAME --volume …');

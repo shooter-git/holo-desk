@@ -60,28 +60,35 @@ export abstract class Instrument {
     if (v) this.addVoice(v);
   }
 
-  /** A voice into a free place, or in place of the oldest let-go voice (else the oldest) when they're all taken. */
+  /** Voices cut to make room, still fading out: they no longer count against the notes at once. */
+  private readonly stolen = new WeakSet<Voice>();
+
+  /**
+   * A voice into a free place. When the notes at once are all taken, the oldest let-go voice (else
+   * the oldest) is cut. A voice already fading from that doesn't count and isn't cut twice, so a
+   * chord of more notes than voices keeps its latest notes.
+   */
   protected addVoice(v: Voice): void {
     v.age = this.clock++;
+    let live = 0;
+    for (const x of this.voices) if (!x.done && !this.stolen.has(x)) live++;
+    if (live >= this.maxVoices) {
+      let pick: Voice | null = null;
+      for (const x of this.voices) {
+        if (x.done || this.stolen.has(x)) continue;
+        if (!pick || (x.released && !pick.released) || (x.released === pick.released && x.age < pick.age)) pick = x;
+      }
+      if (pick) {
+        this.stolen.add(pick);
+        pick.kill();
+      }
+    }
     let free = -1;
     for (let i = 0; i < this.voices.length; i++) {
       if ((this.voices[i] as Voice).done) {
         free = i;
         break;
       }
-    }
-    if (free < 0 && this.voices.length >= this.maxVoices) {
-      // steal: the oldest released voice, else the oldest
-      let oldest = -1;
-      for (let i = 0; i < this.voices.length; i++) {
-        const x = this.voices[i] as Voice;
-        if (oldest < 0) oldest = i;
-        const o = this.voices[oldest] as Voice;
-        if ((x.released && !o.released) || (x.released === o.released && x.age < o.age)) oldest = i;
-      }
-      (this.voices[oldest] as Voice).kill();
-      this.voices.push(v);
-      return;
     }
     if (free < 0) this.voices.push(v);
     else this.voices[free] = v;

@@ -4716,6 +4716,185 @@ html[data-layout="phone-landscape"] .bar .field input {
   box-shadow: 0 0 8px rgb(var(--cycle-rgb) / 0.5);
 }
 
+/* a plugin's presets, in its window's header, beside the name (which gives way first) */
+.plugin-window header .name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.plugin-window header .preset-btn {
+  flex: none;
+  max-width: 160px;
+  height: 24px;
+  font-size: 11.5px;
+}
+
+.plugin-window header .owner-name {
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* a dynamics plugin's display: its transfer curve, then its meter, falling from the top */
+.dyn {
+  display: flex;
+  align-items: stretch;
+  gap: 10px;
+  padding: 10px 12px;
+}
+
+.dyn-curve {
+  position: relative;
+  flex: none;
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+/* (where the reduction now puts the input on the curve: moved by a transform, never laid out) */
+.dyn-dot {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow:
+    0 0 10px rgb(var(--cycle-rgb) / 0.9),
+    0 0 3px #fff;
+  pointer-events: none;
+  transition: opacity 0.15s;
+}
+
+.dyn-meter {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: space-between;
+  width: 30px;
+}
+
+.dyn-label {
+  color: var(--lcd-dim);
+}
+
+.dyn-track {
+  width: 10px;
+  border-radius: var(--radius-s);
+  background: #13171b;
+  overflow: hidden;
+}
+
+.dyn-bar {
+  width: 100%;
+  height: 100%;
+  transform: scaleY(0);
+  transform-origin: top;
+  background: linear-gradient(180deg, var(--cycle), var(--rec));
+  box-shadow: 0 0 8px rgb(var(--cycle-rgb) / 0.5);
+}
+
+.dyn-value {
+  color: var(--lcd-text);
+  font-size: 10.5px;
+}
+
+.dyn-scale {
+  position: relative;
+  width: 22px;
+  color: var(--lcd-dim);
+  font: 500 9.5px var(--mono);
+}
+
+.dyn-scale span {
+  position: absolute;
+  left: 0;
+  transform: translateY(-50%);
+}
+
+/* (the reduction's last seconds, beside the meter, on its scale) */
+.dyn-history {
+  flex: none;
+  border-radius: 4px;
+}
+
+/* a window's settings in groups, each under its name; two halves side by side where there's room */
+.face-groups {
+  display: flex;
+  flex-wrap: wrap;
+  column-gap: 12px;
+}
+
+.face-group {
+  flex: 1 1 100%;
+  min-width: 0;
+}
+
+.face-group.half {
+  flex: 1 1 calc(50% - 6px);
+}
+
+@media (max-width: 700px) {
+  .face-group.half {
+    flex-basis: 100%;
+  }
+}
+
+.face-title {
+  display: block;
+  padding: 12px 14px 0;
+}
+
+.face-group .face {
+  grid-template-columns: repeat(auto-fill, minmax(76px, 1fr));
+  padding-top: 8px;
+  padding-bottom: 4px;
+}
+
+/* (a setting the others leave idle, drawn faint: the cell lets its knob stay the grid's) */
+.face-cell {
+  display: contents;
+}
+
+.face-cell.dim > * {
+  opacity: 0.35;
+}
+
+/* Studio EQ's bands: a column each, low to high (four across on a phone) */
+.studio-bands {
+  display: grid;
+  grid-template-columns: repeat(8, minmax(0, 1fr));
+  gap: 10px 6px;
+  padding: 12px 12px 0;
+}
+
+@media (max-width: 700px) {
+  .studio-bands {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+
+.studio-band-name {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+}
+
+.studio-dot {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+}
+
+.studio-band.off .studio-dot {
+  opacity: 0.35;
+}
+
 /* ---------- phones ---------- */
 
 .app.phone-portrait {

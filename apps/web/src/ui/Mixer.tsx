@@ -48,6 +48,7 @@ import { engine } from '../audio/engine.ts';
 import { library, type PackSummary, samplerKnobDefs } from '../audio/samples.ts';
 import { Fader, formatDb, Knob, Meter, PanKnob, startDrag, TAP } from './controls.tsx';
 import { Fm6Window } from './Fm6Window.tsx';
+import { DelayView, DynamicsView, PresetButton, ReverbView, STUDIO_BANDS, StudioEqView } from './FxViews.tsx';
 import { prepare, useFrame, useSize } from './frame.ts';
 import { isMenuPress } from './gesture.ts';
 import { KitPads, kitPadGrid, useInstrumentMap } from './KitPads.tsx';
@@ -922,6 +923,139 @@ function EqBands({
   );
 }
 
+/**
+ * Studio EQ's bands, a column each as its curve reads, low to high: the band's switch, then its
+ * frequency, its gain (a cut's slope), and its Q, on the same lines across the bands.
+ */
+function StudioEqBands({
+  def,
+  params,
+  target,
+  plugin,
+}: {
+  def: PluginDef;
+  params: Record<string, number>;
+  target: string;
+  plugin: string;
+}) {
+  const param = (id: string) => def.params.find((p) => p.id === id);
+  const setting = (id: string, label: string, color: string, dim: boolean) => {
+    const p = param(id);
+    if (!p) return null;
+    return (
+      <div key={id} className={`peq-knob${dim ? ' dim' : ''}`}>
+        <PluginSetting
+          target={target}
+          plugin={plugin}
+          of={def.name}
+          def={p}
+          value={paramValue('studioeq', params, id)}
+          size={30}
+          label={label}
+          color={color}
+        />
+      </div>
+    );
+  };
+  return (
+    <div className="studio-bands">
+      {STUDIO_BANDS.map((b) => {
+        const off = paramValue('studioeq', params, `${b.key}On`) < 0.5;
+        return (
+          <div key={b.key} className={`eq-band studio-band${off ? ' off' : ''}`}>
+            <span className="label studio-band-name">
+              <span className="studio-dot" style={{ background: b.color }} />
+              {b.name}
+            </span>
+            {setting(`${b.key}On`, '', b.color, false)}
+            {setting(`${b.key}Freq`, 'Freq', b.color, off)}
+            {b.cut ? setting(`${b.key}Slope`, 'Slope', b.color, off) : setting(`${b.key}Gain`, 'Gain', b.color, off)}
+            {setting(`${b.key}Q`, 'Q', b.color, off)}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+/** The settings Studio EQ's bands show (the rest, its output and Proportional Q, are knobs under them). */
+const STUDIO_BANDED = new Set(
+  STUDIO_BANDS.flatMap((b) => ['On', 'Freq', 'Gain', 'Slope', 'Q'].map((k) => `${b.key}${k}`)),
+);
+
+/**
+ * The plugins whose settings come in groups, each under its name (half: two side by side, where
+ * there's room): what shapes the sound first, then what follows it.
+ */
+const FACE_GROUPS: Record<string, { title: string; ids: string[]; half?: boolean }[]> = {
+  charcomp: [
+    { title: 'Circuit', ids: ['circuit', 'threshold', 'ratio', 'attack', 'release', 'knee', 'detector'] },
+    { title: 'Output', ids: ['makeup', 'autoGain', 'saturation', 'limiter', 'limit', 'mix'] },
+  ],
+  dualdelay: [
+    { title: 'Left', ids: ['noteL', 'grooveL', 'timeL', 'fbL', 'crossLR', 'invL'], half: true },
+    { title: 'Right', ids: ['noteR', 'grooveR', 'timeR', 'fbR', 'crossRL', 'invR'], half: true },
+    { title: 'Both', ids: ['sync', 'lowcut', 'highcut', 'invX', 'mix'] },
+  ],
+  roomreverb: [
+    { title: 'Room', ids: ['predelay', 'size', 'walls', 'density', 'diffusion', 'spread'] },
+    { title: 'Tail', ids: ['decay', 'lowDecay', 'crossover', 'highDecay', 'highcut', 'lowLevel'] },
+    { title: 'Mix', ids: ['balance', 'dry', 'wet'] },
+  ],
+  smoothhall: [
+    { title: 'Space', ids: ['predelay', 'size', 'decay', 'density'] },
+    { title: 'Tone', ids: ['highcut', 'lowcut', 'modRate', 'modDepth', 'spread'] },
+    { title: 'Mix', ids: ['dry', 'wet'] },
+  ],
+};
+
+/** Shorter names under a group's knobs, where the group's own name says the rest (Dual Delay's sides). */
+const FACE_LABELS: Record<string, Record<string, string>> = {
+  dualdelay: {
+    noteL: 'Note',
+    grooveL: 'Groove',
+    timeL: 'Time',
+    fbL: 'Feedback',
+    crossLR: 'To Right',
+    invL: 'Invert',
+    noteR: 'Note',
+    grooveR: 'Groove',
+    timeR: 'Time',
+    fbR: 'Feedback',
+    crossRL: 'To Left',
+    invR: 'Invert',
+  },
+};
+
+/** A setting that does nothing as the others stand (a free delay's note, a synced one's time; the limit with the limiter off), drawn faint. */
+function dimmed(type: string, id: string, params: Record<string, number>): boolean {
+  const v = (x: string) => paramValue(type, params, x);
+  if (type === 'dualdelay') {
+    const sync = v('sync') >= 0.5;
+    if (id.startsWith('time')) return sync;
+    if (id.startsWith('note') || id.startsWith('groove')) return !sync;
+  }
+  if (type === 'charcomp') {
+    if (id === 'limit') return v('limiter') < 0.5;
+    // (an FET hears its own peaks, an opto cell its power: neither has a choice of detector)
+    if (id === 'detector') return [1, 3].includes(Math.round(v('circuit')));
+  }
+  return false;
+}
+
+/** Window widths by plugin (the ones with a wide display or many bands want more room than a row of knobs). */
+const WINDOW_WIDTHS: Record<string, number> = {
+  peq: 600,
+  eq: 540,
+  studioeq: 660,
+  charcomp: 640,
+  limiter: 520,
+  compressor: 460,
+  dualdelay: 640,
+  roomreverb: 600,
+  smoothhall: 500,
+};
+
 /** Parametric EQ's eight bands, side by side: each one's type, and its frequency, gain and Q. */
 function PeqBands({
   def,
@@ -1034,8 +1168,8 @@ export function PluginWindow() {
   const plugin = owner?.list.find((p) => p.id === id);
   const def = plugin ? pluginDef(plugin.type) : undefined;
   if (!owner || !plugin || !def) return null;
-  // Parametric EQ's eight bands want more room than a row of knobs
-  const width = phone ? vp.w : plugin.type === 'peq' ? 600 : plugin.type === 'eq' ? 540 : 460;
+  const width = phone ? vp.w : (WINDOW_WIDTHS[plugin.type] ?? 460);
+  const bpm = project.tempo[0]?.bpm ?? 120;
   const close = () => store.set({ plugin: null });
   return (
     <Floating
@@ -1058,7 +1192,8 @@ export function PluginWindow() {
             <Power />
           </button>
           <span className="name">{def.name}</span>
-          <span className="muted">{owner.name}</span>
+          <PresetButton target={target} plugin={plugin} />
+          <span className="muted owner-name">{owner.name}</span>
           <button type="button" className="btn ghost icon" title="Close" aria-label="Close" onClick={close}>
             <X />
           </button>
@@ -1101,39 +1236,92 @@ export function PluginWindow() {
           }
         />
       )}
-      {(plugin.type === 'compressor' || plugin.type === 'limiter' || plugin.type === 'gate') && (
+      {plugin.type === 'studioeq' && (
+        <>
+          <div className="display">
+            <StudioEqView target={target} plugin={plugin} width={width - 30} sr={engine.sampleRate} />
+          </div>
+          <StudioEqBands def={def} params={plugin.params} target={target} plugin={id} />
+        </>
+      )}
+      {(plugin.type === 'charcomp' || plugin.type === 'compressor' || plugin.type === 'limiter') && (
+        <div className="display">
+          <DynamicsView target={target} plugin={plugin} width={width - 30} />
+        </div>
+      )}
+      {plugin.type === 'gate' && (
         <div className="display">
           <GainReduction target={target} plugin={plugin.id} />
+        </div>
+      )}
+      {plugin.type === 'dualdelay' && (
+        <div className="display">
+          <DelayView params={plugin.params} width={width - 30} bpm={bpm} />
+        </div>
+      )}
+      {(plugin.type === 'roomreverb' || plugin.type === 'smoothhall') && (
+        <div className="display">
+          <ReverbView type={plugin.type} params={plugin.params} width={width - 30} />
         </div>
       )}
       {(plugin.type === 'space' || plugin.type === 'shimmer') && <SpacePicker target={target} plugin={plugin} />}
       {plugin.type === 'replacer' && <KitPicker target={target} plugin={plugin} />}
       {plugin.type === 'wow' && plugin.settings?.curve && <WowDrift target={target} plugin={plugin} />}
-      <div className="face">
-        {def.params
-          .filter((p) => plugin.type !== 'peq' || p.id === 'output')
-          // (Channel EQ's bands have their settings, above)
-          .filter((p) => plugin.type !== 'eq' || !EQ_BANDED.has(p.id))
-          .filter(
-            (p) =>
-              (plugin.type !== 'space' && plugin.type !== 'shimmer') || spaceKnob(plugin.type, p.id, plugin.params),
-          )
-          // a drift curve stands in for every generated setting
-          .filter(() => plugin.type !== 'wow' || !plugin.settings?.curve)
-          // (a Drum Replacer's piece has its own menu, by its kit)
-          .filter((p) => plugin.type !== 'replacer' || p.id !== 'piece')
-          .map((p) => (
-            <PluginSetting
-              key={p.id}
-              target={target}
-              plugin={id}
-              of={def.name}
-              def={p}
-              value={paramValue(def.type, plugin.params, p.id)}
-              color={def.kind === 'midi' ? 'var(--midi)' : 'var(--accent)'}
-            />
+      {FACE_GROUPS[plugin.type] ? (
+        <div className="face-groups">
+          {FACE_GROUPS[plugin.type]?.map((g) => (
+            <section key={g.title} className={`face-group${g.half ? ' half' : ''}`}>
+              <span className="label face-title">{g.title}</span>
+              <div className="face">
+                {g.ids.map((pid) => {
+                  const p = def.params.find((x) => x.id === pid);
+                  if (!p) return null;
+                  return (
+                    <div key={pid} className={`face-cell${dimmed(plugin.type, pid, plugin.params) ? ' dim' : ''}`}>
+                      <PluginSetting
+                        target={target}
+                        plugin={id}
+                        of={def.name}
+                        def={p}
+                        value={paramValue(def.type, plugin.params, pid)}
+                        color="var(--accent)"
+                        label={FACE_LABELS[plugin.type]?.[pid]}
+                      />
+                    </div>
+                  );
+                })}
+              </div>
+            </section>
           ))}
-      </div>
+        </div>
+      ) : (
+        <div className="face">
+          {def.params
+            .filter((p) => plugin.type !== 'peq' || p.id === 'output')
+            // (Channel EQ's and Studio EQ's bands have their settings, above)
+            .filter((p) => plugin.type !== 'eq' || !EQ_BANDED.has(p.id))
+            .filter((p) => plugin.type !== 'studioeq' || !STUDIO_BANDED.has(p.id))
+            .filter(
+              (p) =>
+                (plugin.type !== 'space' && plugin.type !== 'shimmer') || spaceKnob(plugin.type, p.id, plugin.params),
+            )
+            // a drift curve stands in for every generated setting
+            .filter(() => plugin.type !== 'wow' || !plugin.settings?.curve)
+            // (a Drum Replacer's piece has its own menu, by its kit)
+            .filter((p) => plugin.type !== 'replacer' || p.id !== 'piece')
+            .map((p) => (
+              <PluginSetting
+                key={p.id}
+                target={target}
+                plugin={id}
+                of={def.name}
+                def={p}
+                value={paramValue(def.type, plugin.params, p.id)}
+                color={def.kind === 'midi' ? 'var(--midi)' : 'var(--accent)'}
+              />
+            ))}
+        </div>
+      )}
       <div className="muted plugin-note">{def.description}</div>
     </Floating>
   );

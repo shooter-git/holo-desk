@@ -336,8 +336,15 @@ function blankPatch(): Patch {
   };
 }
 
+/** A copy of a patch (plain objects, arrays and numbers: an AudioWorklet's scope has no structuredClone). */
 function clonePatch(p: Patch): Patch {
-  return structuredClone(p);
+  return copy(p) as Patch;
+}
+
+function copy(v: unknown): unknown {
+  if (Array.isArray(v)) return v.map(copy);
+  if (v && typeof v === 'object') return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, copy(x)]));
+  return v;
 }
 
 /** Fields that only take whole numbers. */
@@ -1041,7 +1048,14 @@ function derive(patch: Patch, knobs: Record<string, number>, waveCache: Map<stri
 
 const DEFAULT = 'Bright Tines';
 
-function resolve(preset: string, params: Record<string, number> | undefined, waveCache: Map<string, Mips>): Fm6Params {
+/** A six-operator patch as it plays: every operator, the matrix, every envelope, the filter and the rest. */
+export type Fm6Patch = Patch;
+
+/**
+ * A six-operator sound's whole patch: its preset (or a blank patch) with the sound's params over it,
+ * each kept in its range. What the engine plays, and what the synth's window shows.
+ */
+export function fm6Patch(preset: string, params?: Record<string, number>): Fm6Patch {
   const name = PRESETS[preset] ? preset : DEFAULT;
   // a whole patch may start from nothing rather than from the preset it names
   const patch = (params?.['patch:blank'] ?? 0) >= 0.5 ? blankPatch() : clonePatch(PRESETS[name] as Patch);
@@ -1051,7 +1065,12 @@ function resolve(preset: string, params: Record<string, number> | undefined, wav
       const k = fm6Key(id);
       if (k) applyKey(patch, k, v);
     }
-  return derive(patch, macroValues(name, params), waveCache);
+  return patch;
+}
+
+function resolve(preset: string, params: Record<string, number> | undefined, waveCache: Map<string, Mips>): Fm6Params {
+  const name = PRESETS[preset] ? preset : DEFAULT;
+  return derive(fm6Patch(preset, params), macroValues(name, params), waveCache);
 }
 
 // ---- envelopes ---------------------------------------------------------------------------------------

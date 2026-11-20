@@ -51,6 +51,7 @@ describe('the six-operator patch format', () => {
       'w1:1024',
       'w1:x',
       'lfo:depth',
+      'voice:longest',
       'mic:room',
     ])
       expect(fm6Key(id), id).toBeNull();

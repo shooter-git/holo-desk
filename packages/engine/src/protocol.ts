@@ -1,4 +1,4 @@
-import type { SampleMic } from '@holo/session';
+import type { KitPadSettings, SampleMic } from '@holo/session';
 import type { PreparedImpulse } from './convolver.ts';
 
 /**
@@ -186,6 +186,12 @@ export interface SamplerSpec {
   releaseVelocityRange?: number;
   /** The microphones its zones were recorded with, each at its own level (a multi-microphone kit). */
   mics?: SampleMic[];
+  /**
+   * A kit's pads that have settings of their own (level, tune, pan, saturator, velocity curve, pitch
+   * envelope, filter, one-shot or gated: see packages/session/src/kit-pads.ts), by key. Only those
+   * that set something: a kit without them plays as it always did.
+   */
+  pads?: KitPadSettings[];
 }
 
 /**

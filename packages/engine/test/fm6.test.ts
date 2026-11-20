@@ -110,6 +110,21 @@ describe('six-operator FM synth', () => {
     });
   }
 
+  it('plays where structuredClone is missing, as in an AudioWorklet', () => {
+    const was = globalThis.structuredClone;
+    // biome-ignore lint/suspicious/noExplicitAny: taken away for the test
+    (globalThis as any).structuredClone = undefined;
+    try {
+      for (const preset of FM6_PRESETS) {
+        const s = new Fm6Synth(SR, preset, { 'op1:ratio': 2 });
+        s.noteOn(60, 100);
+        expect(peak(play(s, 0.1).l), preset).toBeGreaterThan(0);
+      }
+    } finally {
+      globalThis.structuredClone = was;
+    }
+  });
+
   it('a carrier alone is a sine; a modulator adds sidebands at its spacing, as deep as its index', () => {
     const f = hz(60);
     const alone = new Fm6Synth(SR, 'Bright Tines', solo());

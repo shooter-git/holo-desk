@@ -338,8 +338,15 @@ function blankPatch(): Patch {
   };
 }
 
+/** A copy of a patch (plain objects, arrays and numbers: an AudioWorklet's scope has no structuredClone). */
 function clonePatch(p: Patch): Patch {
-  return structuredClone(p);
+  return copy(p) as Patch;
+}
+
+function copy(v: unknown): unknown {
+  if (Array.isArray(v)) return v.map(copy);
+  if (v && typeof v === 'object') return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, copy(x)]));
+  return v;
 }
 
 /** Fields that only take whole numbers. */

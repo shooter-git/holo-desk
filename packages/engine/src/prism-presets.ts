@@ -359,7 +359,7 @@ export const PRISM_PRESET_KEYS: Record<string, Keys> = {
     // a struck bar's partials ringing out, a soft triangle body and a breath of mallet
     ...src(1, { kind: 1, data: BAR, partials: 16, speed: 1, level: 1.3 }),
     ...src(2, { kind: 0, wave: 1, count: 1, level: 0.5 }),
-    ...src(3, { kind: 2, data: AIR, ftype: 3, cutoff: 2600, res: 0.4, level: 0.9 }),
+    ...src(3, { kind: 2, data: AIR, ftype: 3, cutoff: 2600, res: 0.5, level: 0.9 }),
     ...flt(1, { type: 0, cutoff: 5500, res: 0.05 }),
     ...env(1, { a: 0.001, d: 2.8, s: 0, r: 0.5, dc: 0.5 }),
     ...env(2, { a: 0.001, d: 0.45, s: 0, r: 0.2, dc: 0.6 }),
@@ -550,7 +550,7 @@ export const PRISM_PRESET_KEYS: Record<string, Keys> = {
       loop: 4,
       ftype: 3,
       cutoff: 1800,
-      res: 0.55,
+      res: 0.64,
       level: 1.4,
     }),
     ...src(3, { kind: 0, wave: 1, count: 1, coarse: 12, level: 0.12 }),

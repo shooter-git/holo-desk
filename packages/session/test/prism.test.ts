@@ -33,9 +33,9 @@ describe("Prism's patch format", () => {
     expect(prismKey('f2:type')).toMatchObject({ part: 'flt', index: 1, field: 'type' });
     expect(prismKey('f:serial')).toMatchObject({ part: 'flt', index: -1, field: 'serial' });
     expect(prismKey('xy:x')).toMatchObject({ part: 'xy', field: 'x', min: 0, max: 1 });
-    expect(prismKey('lfo8:beats')).toMatchObject({ part: 'lfo', index: 7, field: 'beats' });
+    expect(prismKey('lfo12:beats')).toMatchObject({ part: 'lfo', index: 11, field: 'beats' });
     expect(prismKey('env4:rc')).toMatchObject({ part: 'env', index: 3, field: 'rc', min: -1, max: 1 });
-    expect(prismKey('shape2:x15')).toMatchObject({ part: 'shape', index: 1, field: 'x', sub: 15 });
+    expect(prismKey('shape2:x47')).toMatchObject({ part: 'shape', index: 1, field: 'x', sub: 47 });
     expect(prismKey('shape2:loop')).toMatchObject({ part: 'shape', field: 'loop', sub: -1 });
     expect(prismKey('curve8:c3')).toMatchObject({ part: 'curve', index: 7, field: 'c', sub: 3 });
     expect(prismKey('seq1:v31')).toMatchObject({ part: 'seq', field: 'v', sub: 31 });
@@ -57,9 +57,9 @@ describe("Prism's patch format", () => {
       's5:on',
       's1:shade',
       'f3:type',
-      'lfo9:rate',
+      'lfo13:rate',
       'env5:a',
-      'shape1:x16',
+      'shape1:x48',
       'curve9:n',
       'seq1:v32',
       'mod33:src',

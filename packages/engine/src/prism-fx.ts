@@ -66,7 +66,8 @@ export class PrismFilter {
     this.drive = 1 + 3 * drive;
     if (type <= 4) {
       const g = Math.tan((Math.PI * f) / sr);
-      const q = Math.SQRT1_2 * 70 ** (type === 4 ? res * 0.9 : res);
+      // (a band-pass or notch: how narrow, from four octaves wide; the others: resonance)
+      const q = type === 2 || type === 3 ? 0.27 * 180 ** res : Math.SQRT1_2 * 70 ** (type === 4 ? res * 0.9 : res);
       const k = 1 / q;
       const a1 = 1 / (1 + g * (g + k));
       const a2 = g * a1;
@@ -519,16 +520,26 @@ class Band implements Effect {
   }
 }
 
+/**
+ * A one-knob compressor: Amount brings the level up (by 1 / (1 − amount)) and bends whatever then goes
+ * past the knee (0.3) under full scale along a quadratic, so a peak at full scale stays there. A peak
+ * follower that rises over 30 ms and falls over 80 ms drives it; the gain drops at once and comes
+ * back over the release.
+ */
 class Compressor implements Effect {
   private readonly sr: number;
   private env = 0;
   private gain = 1;
   private makeup = 1;
+  private rise = 0;
   private fall = 0;
+  private back = 0;
   private mix = 1;
   ringing = 0;
   constructor(sr: number) {
     this.sr = sr;
+    this.rise = 1 / (0.03 * sr);
+    this.fall = 1 / (0.08 * sr);
   }
   reset(): void {
     this.env = 0;
@@ -537,26 +548,31 @@ class Compressor implements Effect {
   set(s: FxSettings): void {
     const a = Math.min(0.97, s.amount ?? 0.4);
     this.makeup = 1 / (1 - a);
-    this.fall = 1 / Math.max(1, (s.release ?? 0.25) * this.sr);
+    this.back = 1 / Math.max(1, (s.release ?? 0.25) * this.sr);
     this.mix = s.mix ?? 1;
   }
   process(l: Float32Array, r: Float32Array, start: number, end: number): void {
-    const { makeup, fall, mix } = this;
+    const { makeup, rise, fall, back, mix } = this;
+    const knee = 0.3;
     let env = this.env;
     let gain = this.gain;
     for (let i = start; i < end; i += CTRL) {
       const stop = Math.min(end, i + CTRL);
-      // the block's peak, followed: straight up, falling at the release's pace
-      let peak = 0;
+      // the peak followed, its slope limited either way
       for (let j = i; j < stop; j++) {
         const a = Math.max(Math.abs(l[j] as number), Math.abs(r[j] as number));
-        if (a > peak) peak = a;
+        env = a > env ? Math.min(a, env + rise) : Math.max(a, env - fall);
       }
-      env = peak > env ? peak : Math.max(peak, env - fall * (stop - i));
-      // brought up by the makeup, then above half way bent softly under full scale
+      // the gain this level wants: the makeup, and past the knee the quadratic bend toward full scale
       const e = env * makeup;
-      const target = e > 0.5 ? (makeup * (0.5 + 0.5 * soft((e - 0.5) / 0.5))) / e : makeup;
-      const step = (target - gain) / (stop - i);
+      let target = makeup;
+      if (e > knee && makeup > knee) {
+        const u = Math.min(1, (e - knee) / (makeup - knee));
+        target = (makeup * (knee + (1 - knee) * (1 - (1 - u) * (1 - u)))) / e;
+      }
+      // down at once, back up over the release
+      const to = target < gain ? target : Math.min(target, gain + back * (stop - i));
+      const step = (to - gain) / (stop - i);
       for (let j = i; j < stop; j++) {
         gain += step;
         const x = l[j] as number;

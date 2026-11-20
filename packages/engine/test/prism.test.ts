@@ -375,6 +375,36 @@ describe('Prism', () => {
     expect(Math.abs(cents(pitch(l.subarray(SR * 1.3, SR * 1.5), hz(60)), hz(60)))).toBeLessThan(3);
   });
 
+  it("answers its links by its level's power: at 3, velocity's share is cubed", () => {
+    const level = (velocity: number, power: number) => {
+      const s = new PrismSynth(
+        SR,
+        'Pulse Bells',
+        solo({ 'mod1:src': 1, 'mod1:dst': 70, 'mod1:depth': 0.5, 'amp:power': power }),
+        host(),
+      );
+      s.noteOn(60, velocity);
+      return rms(play(s, 0.4).l, SR * 0.1, SR * 0.4);
+    };
+    // velocity 84 at half depth: 0.5 + 0.5 × 84/127 of the level, or that cubed
+    const share = 0.5 + (0.5 * 84) / 127;
+    expect(level(84, 1) / level(127, 1)).toBeCloseTo(share, 2);
+    expect(level(84, 3) / level(127, 3)).toBeCloseTo(share ** 3, 2);
+  });
+
+  it('keeps the latest notes of a chord bigger than its voices, stealing each old one once', () => {
+    const s = new PrismSynth(SR, 'Pulse Bells', solo({ 'voice:poly': 4 }), host());
+    const chord = [48, 52, 55, 59, 62, 65];
+    for (const k of chord) s.noteOn(k, 100);
+    const x = play(s, 0.5).l.subarray(SR * 0.1);
+    const heard = chord.map((k) => tone(x, hz(k)));
+    const loudest = Math.max(...heard);
+    // the first two were stolen, the last four sound
+    expect((heard[0] as number) / loudest).toBeLessThan(0.01);
+    expect((heard[1] as number) / loudest).toBeLessThan(0.01);
+    for (const v of heard.slice(2)) expect(v / loudest).toBeGreaterThan(0.5);
+  });
+
   it('a pack instrument that names it plays through it in the engine, its params its patch', () => {
     const core = new EngineCore(SR, () => undefined);
     core.receive({ type: 'sampler', spec: media([zone({ source: 1, partials: steady([[1, 0.5]]) })]) });

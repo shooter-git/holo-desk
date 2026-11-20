@@ -106,6 +106,7 @@ export interface PrismSourcePatch {
   on: number;
   kind: number;
   level: number;
+  power: number;
   pan: number;
   coarse: number;
   fine: number;
@@ -169,7 +170,7 @@ export interface PrismPatch {
   xy: { on: number; x: number; y: number; power: number };
   flt: PrismFilterPatch[];
   serial: number;
-  amp: { level: number; pan: number; volume: number };
+  amp: { level: number; pan: number; volume: number; power: number };
   voice: {
     poly: number;
     mono: number;
@@ -198,6 +199,7 @@ function blankSource(on: boolean): PrismSourcePatch {
     on: on ? 1 : 0,
     kind: 0,
     level: 1,
+    power: 1,
     pan: 0,
     coarse: 0,
     fine: 0,
@@ -266,7 +268,7 @@ function blankPatch(): PrismPatch {
     xy: { on: 0, x: 0.5, y: 0.5, power: 1 },
     flt: [0, 1].map(() => ({ on: 0, type: 0, cutoff: 20000, res: 0, drive: 0 })),
     serial: 0,
-    amp: { level: 0.25, pan: 0, volume: 0 },
+    amp: { level: 0.25, pan: 0, volume: 0, power: 1 },
     voice: { poly: 8, mono: 0, legato: 0, glide: 0, glidemode: 0, bend: 2, transpose: 0, tune: 0 },
     lfo: Array.from({ length: PRISM_LFOS }, () => ({
       shape: 0,
@@ -341,24 +343,17 @@ const WHOLE = new Set([
   'viacurve',
   'poly',
 ]);
-const SWITCH = new Set([
-  'on',
-  'keytrack',
-  'stereo',
-  'free',
-  'sync',
-  'bipolar',
-  'mono',
-  'legato',
-  'glidemode',
-  'power',
-  'blank',
-]);
+const SWITCH = new Set(['on', 'keytrack', 'stereo', 'free', 'sync', 'bipolar', 'mono', 'legato', 'glidemode', 'blank']);
 
 function applyKey(p: PrismPatch, k: PrismKey, raw: number): void {
   let v = Math.min(k.max, Math.max(k.min, raw));
   if (WHOLE.has(k.field)) v = Math.round(v);
-  else if (SWITCH.has(k.field) || (k.part === 'seq' && k.field === 't')) v = v >= 0.5 ? 1 : 0;
+  else if (
+    SWITCH.has(k.field) ||
+    (k.part === 'seq' && k.field === 't') ||
+    (k.part === 'xy' && (k.field === 'power' || k.field === 'on'))
+  )
+    v = v >= 0.5 ? 1 : 0;
   const set = (o: object, f: string) => {
     (o as Record<string, number>)[f] = v;
   };
@@ -781,6 +776,11 @@ class PrismVoice implements Voice {
     this.killing = true;
   }
 
+  /** Fading out, stolen or stopped: it no longer counts against the notes at once. */
+  get stolen(): boolean {
+    return this.killing;
+  }
+
   /** One control step: the modulators and the matrix, then where every source is headed. */
   private control(ctl: Controls): void {
     const p = this.p;
@@ -856,7 +856,8 @@ class PrismVoice implements Voice {
       if (!sp.on) continue;
       const T = s * PER_SOURCE;
       const weight = s === 0 ? w0 : s === 1 ? w1 : s === 2 ? w2 : w3;
-      const level = applyTarget(T, sp.level, 0, mul[T] as number) * weight;
+      const m = mul[T] as number;
+      const level = sp.level * (sp.power === 1 ? m : m ** sp.power) * weight;
       const pan = applyTarget(T + 1, sp.pan, add[T + 1] as number, 1);
       const srcNote =
         (sp.keytrack ? note : 60 + v.transpose + v.tune / 100) +
@@ -952,7 +953,8 @@ class PrismVoice implements Voice {
     // the amplitude: env 1, the level and what moves it, the place, the expression; a stolen note fades fast
     const env = m.envs[0] as (typeof m.envs)[number];
     if (this.killing) this.fade = Math.max(0, this.fade - dt / 0.006);
-    const a = applyTarget(TGT_LEVEL, P.amp.level, 0, mul[TGT_LEVEL] as number) * env.value * ctl.expression * this.fade;
+    const moved = (mul[TGT_LEVEL] as number) * env.value;
+    const a = P.amp.level * (P.amp.power === 1 ? moved : moved ** P.amp.power) * ctl.expression * this.fade;
     const pan = applyTarget(TGT_PAN, P.amp.pan, add[TGT_PAN] as number, 1);
     this.dampL = (a * panLeft(pan) * Math.SQRT2 - this.ampL) / CTRL;
     this.dampR = (a * panRight(pan) * Math.SQRT2 - this.ampR) / CTRL;
@@ -1237,6 +1239,30 @@ export class PrismSynth extends Instrument {
     this.p = derive(prismPatch(this.preset, params), params, this.cache);
     this.configure();
   }
+
+  /**
+   * A voice into a free place: when the notes at once are all taken, the oldest let-go note is
+   * stolen (else the oldest). A voice already fading out doesn't count, and isn't stolen twice, so a
+   * chord of more notes than voices keeps its latest notes.
+   */
+  protected override addVoice(v: Voice): void {
+    v.age = this.ages++;
+    const voices = this.voices as PrismVoice[];
+    let live = 0;
+    for (const x of voices) if (!x.done && !x.stolen) live++;
+    if (live >= this.maxVoices) {
+      let pick: PrismVoice | null = null;
+      for (const x of voices) {
+        if (x.done || x.stolen) continue;
+        if (!pick || (x.released && !pick.released) || (x.released === pick.released && x.age < pick.age)) pick = x;
+      }
+      pick?.kill();
+    }
+    const free = voices.findIndex((x) => x.done);
+    if (free >= 0) voices[free] = v as PrismVoice;
+    else voices.push(v as PrismVoice);
+  }
+  private ages = 0;
 
   protected startVoice(key: number, velocity: number): Voice | null {
     const v = this.p.patch.voice;

@@ -12,6 +12,8 @@
  *   s{n}:on         0|1        it plays at all (a source off costs nothing)
  *   s{n}:kind       0…3        0 oscillators, 1 partials, 2 sample, 3 grains (PRISM_KINDS)
  *   s{n}:level      0…4        its gain (1: as made)
+ *   s{n}:power      0.25…4     how its level answers what moves it: what the links make of it is raised
+ *                              to this power (1 straight; 3 a cube: fades that fall away fast at the end)
  *   s{n}:pan        ±1         where it sits
  *   s{n}:coarse     ±48        semitones (not rounded: 7.02 is a pure fifth)
  *   s{n}:fine       ±100       cents
@@ -21,7 +23,8 @@
  *                              spreads), its grains too (spray), or a sample plays both its sides;
  *                              0: one channel, panned (cheaper)
  *   s{n}:ftype      0…7        its own filter: 0 none, else PRISM_FILTERS[ftype - 1]
- *   s{n}:cutoff     20…20000   Hz;  s{n}:res 0…1
+ *   s{n}:cutoff     20…20000   Hz;  s{n}:res 0…1 (a band-pass or notch: how narrow, from four
+ *                              octaves wide)
  *
  *  Oscillators (kind 0): a bank of oscillators reading one waveform, each at its own pitch, level
  *  and place, so the same bank is a single saw, a detuned stack or an organ of sine partials:
@@ -64,13 +67,14 @@
  *   f{k}:drive 0…1, k = 1, 2;  f:serial 0…1 (how much of filter 1 goes on into filter 2)
  *
  * Amplitude and voice: env 1 is the amplitude envelope (a voice ends when it does):
- *   amp:level 0…4, amp:pan ±1, amp:volume ±24 dB (after the effects)
+ *   amp:level 0…4, amp:pan ±1, amp:volume ±24 dB (after the effects), amp:power 0.25…4 (env 1 and
+ *   what the links make of the level, raised to this power, as a source's)
  *   voice:poly 1…32 notes at once, voice:mono 0|1, voice:legato 0|1 (mono: a note played over a held
  *   one glides there without starting again), voice:glide 0…10 s, voice:glidemode 0|1 (0 the time is
  *   the whole glide; 1 per octave), voice:bend 0…24 semitones, voice:transpose ±48, voice:tune ±100 cents
  *
  * Modulators. Everything below moves at the control rate (every 32 samples), smoothly between:
- *   LFOs, n = 1…8: lfo{n}:shape 0…6 (PRISM_LFO_SHAPES), lfo{n}:custom 0…4 (a shape the sound
+ *   LFOs, n = 1…12: lfo{n}:shape 0…6 (PRISM_LFO_SHAPES), lfo{n}:custom 0…4 (a shape the sound
  *   brings, l1…l4 below, instead), lfo{n}:rate 0.01…50 Hz, lfo{n}:sync 0|1 and lfo{n}:beats
  *   1/32…128 (with sync, a cycle lasts this many quarter notes), lfo{n}:bipolar 0|1 (−1…1, else 0…1),
  *   lfo{n}:delay 0…20 s, lfo{n}:fade 0…20 s (its depth comes in), lfo{n}:phase 0…1 (where it starts),
@@ -78,27 +82,27 @@
  *   Envelopes, n = 1…4: env{n}:a, env{n}:h, env{n}:d, env{n}:r 0…60 s, env{n}:s 0…1, and the shape of
  *   the attack, decay and release env{n}:ac, env{n}:dc, env{n}:rc ±1 (0 straight; above 0 quick
  *   then slow, below 0 slow then quick)
- *   Shapes (drawn envelopes), n = 1…4: shape{n}:n 2…16 points, shape{n}:x{k} 0…64 (seconds, or quarter
+ *   Shapes (drawn envelopes), n = 1…4: shape{n}:n 2…48 points, shape{n}:x{k} 0…64 (seconds, or quarter
  *   notes with sync), shape{n}:y{k} 0…1, shape{n}:c{k} ±1 (the curve from point k to the next),
- *   shape{n}:loop 0…3 (PRISM_SHAPE_LOOPS), shape{n}:ls, shape{n}:le 0…15 (the loop's points),
+ *   shape{n}:loop 0…3 (PRISM_SHAPE_LOOPS), shape{n}:ls, shape{n}:le 0…47 (the loop's points),
  *   shape{n}:sync 0|1
  *   Step sequencers, n = 1…4: seq{n}:steps 1…32, seq{n}:beats 1/32…16 (quarter notes a step),
  *   seq{n}:v{k} 0…1 (step k's value), seq{n}:t{k} 0|1 (tied into the next), seq{n}:swing 0…1,
  *   seq{n}:attack, seq{n}:gate, seq{n}:release 0…1 (shares of a step: rise, hold, fall)
- *   Curves, n = 1…8, bend a source on its way to a target: curve{n}:n 2…16 points, curve{n}:x{k},
+ *   Curves, n = 1…8, bend a source on its way to a target: curve{n}:n 2…48 points, curve{n}:x{k},
  *   curve{n}:y{k} 0…1, curve{n}:c{k} ±1
  *   Controls ctl1…ctl10 0…1: fixed values a patch can route like knobs.
  *
  * The matrix, n = 1…32 links, each a source moving a target:
- *   mod{n}:src      0…43       PRISM_MOD_SOURCES (0: the link is off)
- *   mod{n}:dst      0…124      PRISM_MOD_TARGETS: each source's (level … resonance, PRISM_SOURCE_TARGETS),
+ *   mod{n}:src      0…47       PRISM_MOD_SOURCES (0: the link is off)
+ *   mod{n}:dst      0…128      PRISM_MOD_TARGETS: each source's (level … resonance, PRISM_SOURCE_TARGETS),
  *                              then the filters, level, pan, pitch, the morph point, each LFO's rate and
  *                              each envelope's attack, decay and release (in octaves), then each effect's
  *                              mix and first four settings (prismTargetName names one)
  *   mod{n}:depth    ±1         how far: a whole target's range at 1 (levels: how much of the way
  *                              to silence the source takes it; below 0, the other way round)
  *   mod{n}:curve    0…8        a curve the source goes through first (0: none)
- *   mod{n}:via      0…43       a second source that moves the depth (0: none), by
+ *   mod{n}:via      0…47       a second source that moves the depth (0: none), by
  *   mod{n}:viadepth ±1, through mod{n}:viacurve 0…8
  *   A bipolar source (an LFO set so, Key, Bend, a knob) swings either way; the others only push.
  *
@@ -156,7 +160,7 @@ export const PRISM_PARTIAL_SETS = ['Struck Bar', 'Glass', 'Bell', 'Bowl', 'Voice
 /** Recordings built in (made, not recorded: a source's data 1…). */
 export const PRISM_SAMPLES = ['Air', 'Shimmer', 'Choir', 'Chime'];
 
-export const PRISM_LFOS = 8;
+export const PRISM_LFOS = 12;
 export const PRISM_ENVS = 4;
 export const PRISM_SHAPES = 4;
 export const PRISM_SEQS = 4;
@@ -164,7 +168,7 @@ export const PRISM_CURVES = 8;
 export const PRISM_CONTROLS = 10;
 export const PRISM_LINKS = 32;
 export const PRISM_FX = 6;
-export const PRISM_POINTS = 16;
+export const PRISM_POINTS = 48;
 export const PRISM_STEPS = 32;
 export const PRISM_CUSTOM_WAVES = 4;
 export const PRISM_CUSTOM_POINTS = 1024;
@@ -411,6 +415,7 @@ const SRC: Record<string, Range> = {
   on: [0, 1],
   kind: [0, PRISM_KINDS.length - 1],
   level: [0, 4],
+  power: [0.25, 4],
   pan: [-1, 1],
   coarse: [-48, 48],
   fine: [-100, 100],
@@ -540,7 +545,7 @@ const PLAIN: Record<string, Record<string, Range>> = {
   patch: { blank: [0, 1] },
   xy: { on: [0, 1], x: [0, 1], y: [0, 1], power: [0, 1] },
   f: { serial: [0, 1] },
-  amp: { level: [0, 4], pan: [-1, 1], volume: [-24, 24] },
+  amp: { level: [0, 4], pan: [-1, 1], volume: [-24, 24], power: [0.25, 4] },
   voice: {
     poly: [1, 32],
     mono: [0, 1],

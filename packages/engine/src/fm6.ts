@@ -19,7 +19,9 @@
  *
  * Voices are counted as oscillator voices, unison copies each one: when a new note needs more than
  * are free it takes the copies with the highest unison number (the oldest first), so chords thin
- * their unison rather than cutting notes.
+ * their unison rather than cutting notes. A note is over once the envelopes of the operators heard
+ * (directly or through the filter) are, and, where the filter is heard, a second later: it may still
+ * ring, and the note keeps its voice until then.
  */
 import { FM6_ENV_POINTS, FM6_KEY_POINTS, FM6_OPS, type Fm6Key, fm6Key, macroValues } from '@holo/session';
 import { ifft } from './fft.ts';
@@ -231,7 +233,7 @@ interface Patch {
     cutoff: number;
     amp: number;
   };
-  voice: { transpose: number; tune: number; poly: number; level: number; drift: number; longest: number };
+  voice: { transpose: number; tune: number; poly: number; level: number; drift: number };
   uni: { voices: number; detune: number; pan: number };
   fx: {
     dry: number;
@@ -317,7 +319,7 @@ function blankPatch(): Patch {
     },
     pitch: { env: 0 },
     lfo: { wave: 0, rate: 5, velrate: 0, phase: 0, fade: 0, pitch: 0, wheel: 0.5, cutoff: 0, amp: 0 },
-    voice: { transpose: 0, tune: 0, poly: 32, level: 0.2, drift: 0, longest: 0 },
+    voice: { transpose: 0, tune: 0, poly: 32, level: 0.2, drift: 0 },
     uni: { voices: 1, detune: 0, pan: 0 },
     fx: {
       dry: 1,
@@ -336,8 +338,15 @@ function blankPatch(): Patch {
   };
 }
 
+/** A copy of a patch (plain objects, arrays and numbers: an AudioWorklet's scope has no structuredClone). */
 function clonePatch(p: Patch): Patch {
-  return structuredClone(p);
+  return copy(p) as Patch;
+}
+
+function copy(v: unknown): unknown {
+  if (Array.isArray(v)) return v.map(copy);
+  if (v && typeof v === 'object') return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, copy(x)]));
+  return v;
 }
 
 /** Fields that only take whole numbers. */
@@ -857,6 +866,8 @@ interface Fm6Params {
   /** The operators heard directly or through the filter: the note is over once these are. */
   audible: Int8Array;
   nAudible: number;
+  /** The filter is heard: a note holds on a second after its operators, for the filter to ring out. */
+  filterHeard: boolean;
   /** Operator-to-operator modulation (cycles of phase per unit), Brightness in. */
   routeSrc: Int8Array;
   routeDst: Int8Array;
@@ -1009,6 +1020,7 @@ function derive(patch: Patch, knobs: Record<string, number>, waveCache: Map<stri
     nAct: act.length,
     audible: Int8Array.from(audible),
     nAudible: audible.length,
+    filterHeard: filterOn && f.out !== 0,
     routeSrc: Int8Array.from(src),
     routeDst: Int8Array.from(dst),
     routeAmt: Float64Array.from(amt),
@@ -1143,12 +1155,9 @@ class Contour {
     const knob = k === 0 ? p.attack : E.sus < 0 || k <= E.sus ? p.decay : p.release;
     let time = (E.t[k] as number) * this.scale * knob;
     if (E.sus >= 0 && k === E.sus + 1) time *= releaseShare(this.y, to, r);
-    // whole steps, the rounding carried on so long envelopes keep their time (and, where the patch
-    // limits how long a stretch lasts, the time it was owed carried on to the next)
+    // whole steps, the rounding carried on so long envelopes keep their time
     const want = Math.max(0, time * this.rate - this.carry);
-    let n = Math.max(1, Math.round(want));
-    const longest = p.patch.voice.longest;
-    if (longest > 0) n = Math.min(n, Math.max(1, Math.round(longest * this.rate)));
+    const n = Math.max(1, Math.round(want));
     this.carry = n - want;
     const y0 = this.y;
     if (Math.abs(r - 1) < 1e-5) {
@@ -1219,6 +1228,12 @@ class Fm6Voice implements Voice {
   private gainInc = 0;
   private left = 0;
   private killing = 0;
+  /** Control steps since everything heard went quiet, and how many the filter may ring for. */
+  private hold = 0;
+  private readonly holdTicks: number;
+  /** The operators are silent and only the filter rings out; it has died away. */
+  private ringing = false;
+  private rung = false;
   private readonly p: Fm6Params;
   private readonly sr: number;
   private readonly vel: number;
@@ -1247,6 +1262,7 @@ class Fm6Voice implements Voice {
     this.out = new Float64Array(U * OPS);
     this.mods = new Float64Array(U * OPS);
     this.dropK = Math.exp(-6.9 / (0.005 * sr));
+    this.holdTicks = Math.round(sr / CTRL);
     const half = (n - 1) / 2;
     for (let c = 0; c < U; c++) {
       const off = unisonOffset(ks[c] as number, n);
@@ -1343,6 +1359,11 @@ class Fm6Voice implements Voice {
     const sr = this.sr;
     const env = this.env;
     for (let e = 0; e < ENVS; e++) env[e]?.tick();
+    // (only the hold is left to count)
+    if (this.rung) {
+      this.over();
+      return;
+    }
     // the LFO
     const L = P.lfo;
     let ph = this.lfoPh + this.lfoInc;
@@ -1407,11 +1428,24 @@ class Fm6Voice implements Voice {
       }
       // (tiny states flushed: no slow denormal arithmetic in a ringing-out filter)
       const fs = this.fs;
-      for (let i = 0; i < fs.length; i++) if (Math.abs(fs[i] as number) < 1e-18) fs[i] = 0;
+      let most = 0;
+      for (let i = 0; i < fs.length; i++) {
+        const v = Math.abs(fs[i] as number);
+        if (v < 1e-18) fs[i] = 0;
+        else if (v > most) most = v;
+      }
+      // with nothing more going in, once it has died away there is nothing left to run
+      this.rung = this.ringing && most < 1e-6;
     }
     const target = P.voice.level * ctl.expression * (1 - L.amp * up);
     this.gainInc = (target - this.gain) / CTRL;
-    // over once everything heard is
+    this.over();
+  }
+
+  /** Over once everything heard is, and a second later where the filter is heard (it may still ring). */
+  private over(): void {
+    const p = this.p;
+    const env = this.env;
     if (this.killing === 0) {
       let quiet = true;
       for (let j = 0; j < p.nAudible; j++) {
@@ -1421,11 +1455,18 @@ class Fm6Voice implements Voice {
           break;
         }
       }
-      if (quiet) {
+      if (!quiet) {
+        this.hold = 0;
+        this.ringing = false;
+        this.rung = false;
+      } else {
         let loud = 0;
         for (let j = 0; j < p.nAudible; j++)
           loud = Math.max(loud, Math.abs(this.amp[p.audible[j] as number] as number));
-        if (loud < 1e-4) this.done = true;
+        if (p.filterHeard && this.hold < this.holdTicks) {
+          this.hold++;
+          this.ringing = loud < 1e-4;
+        } else if (loud < 1e-4) this.done = true;
         else this.killing = 1;
       }
     }
@@ -1477,6 +1518,30 @@ class Fm6Voice implements Voice {
     }
   }
 
+  /** One sample of the filter ringing out with nothing going in, added at `i`; true once the voice is over. */
+  private ring(l: Float32Array, r: Float32Array, i: number): boolean {
+    let yl = 0;
+    let yr = 0;
+    for (let s = 0, n = this.fs.length >> 3; s < n; s++) {
+      this.filter(s, 0, 0);
+      yl += this.fyl;
+      yr += this.fyr;
+    }
+    this.gain += this.gainInc;
+    let g = this.gain;
+    if (this.killing > 0) {
+      this.killing *= 0.995;
+      g *= this.killing;
+      if (this.killing < 1e-3) {
+        this.done = true;
+        return true;
+      }
+    }
+    l[i] = (l[i] as number) + yl * this.p.foL * g;
+    r[i] = (r[i] as number) + yr * this.p.foR * g;
+    return false;
+  }
+
   render(l: Float32Array, r: Float32Array, start: number, end: number, ctl: Controls): void {
     const p = this.p;
     const U = this.copies;
@@ -1516,6 +1581,20 @@ class Fm6Voice implements Voice {
         this.tick(ctl);
         this.left = CTRL - 1;
         if (this.done) return;
+      }
+      if (this.ringing) {
+        // the operators are silent: only the filter, ringing out on nothing, until it has; then
+        // nothing to do but wait for the next control step
+        if (this.rung) {
+          if (this.killing > 0) {
+            this.done = true;
+            return;
+          }
+          const k = Math.min(this.left, end - 1 - i);
+          i += k;
+          this.left -= k;
+        } else if (this.ring(l, r, i)) return;
+        continue;
       }
       for (let j = 0; j < nAct; j++) {
         const o = act[j] as number;

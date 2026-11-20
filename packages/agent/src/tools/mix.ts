@@ -46,7 +46,7 @@ export const plugins: Tool = {
   name: 'plugins',
   kind: 'see',
   summary:
-    "The stock plugins: each type, what it does, and whether it's an audio effect (on a track, a bus or the master) or a MIDI effect (before a track's instrument: arpeggiator, harmonizer, chord…). With \"type\" it lists that plugin's parameters, ranges, units and defaults (choices are numbered options).",
+    "The stock plugins: each type, what it does, and whether it's an audio effect (on a track, a bus or the master) or a MIDI effect (before a track's instrument: arpeggiator, harmonizer, chord…). With \"type\" it lists that plugin's parameters, ranges, units and defaults (choices are numbered options), and its presets' settings.",
   args: [{ name: 'type', type: 'string', describe: 'A plugin type, e.g. "compressor" or "harmonizer"', maxLength: 40 }],
   async run(_ctx, args) {
     const type = str(args, 'type')?.trim();
@@ -57,6 +57,13 @@ export const plugins: Tool = {
         text: [
           `${def.type} (${def.name}, ${def.kind === 'midi' ? 'MIDI effect' : 'audio effect'}): ${def.description}`,
           ...def.params.map((p) => `  ${paramLine(p)}  ${p.name}`),
+          // (a preset is its settings: what it leaves out stays at the default)
+          ...(def.presets ?? []).map(
+            (pr) =>
+              `  preset "${pr.name}": ${Object.entries(pr.params)
+                .map(([k, v]) => `${k}=${v}`)
+                .join(', ')}`,
+          ),
         ].join('\n'),
       };
     }

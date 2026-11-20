@@ -4,16 +4,21 @@
  */
 import { paramValue } from '@holo/session';
 import { Softener, StereoWidth, TapeWarmth, WowFlutter } from './character.ts';
+import { CharacterCompressor } from './charcomp.ts';
 import type { PreparedImpulse } from './convolver.ts';
 import { Biquad, dbToGain } from './dsp.ts';
+import { DualDelay } from './dualdelay.ts';
 import { Lofi, Phaser, RotarySpeaker, Tremolo } from './modfx.ts';
 import { ParametricEq } from './peq.ts';
 import { PitchCorrection } from './pitchcorrect.ts';
 import type { SamplerSpec } from './protocol.ts';
 import { DrumReplacer } from './replacer.ts';
 import { StringResonance } from './resonance.ts';
+import { RoomReverb } from './roomreverb.ts';
 import { Shimmer } from './shimmer.ts';
+import { SmoothHall } from './smoothhall.ts';
 import { SpaceDesigner } from './space.ts';
+import { StudioEq } from './studioeq.ts';
 
 export interface Host {
   sr: number;
@@ -322,10 +327,18 @@ class Gate implements Effect {
   }
 }
 
-/** Look-ahead limiter: the gain needed over the next few milliseconds, reached smoothly in time. */
+/**
+ * Look-ahead limiter: the gain needed over the next few milliseconds, reached smoothly in time. With
+ * a soft knee (dB wide) a peak starts to be held back half the knee below the ceiling, along a
+ * quadratic curve that meets the ceiling half the knee above it; with none, only what passes the
+ * ceiling is (as it always was).
+ */
 class Limiter implements Effect {
   gr = 0;
   private ceiling = 0.89;
+  private knee = 0;
+  /** Where the knee begins (linear): below it nothing is held back. */
+  private kneeFrom = 0.89;
   private input = 1;
   private look = 0;
   private dl = new Ring(1);
@@ -349,6 +362,8 @@ class Limiter implements Effect {
     const v = (id: string) => paramValue('limiter', p, id);
     const sr = this.host.sr;
     this.ceiling = dbToGain(v('ceiling'));
+    this.knee = v('knee');
+    this.kneeFrom = this.ceiling * 10 ** (-this.knee / 40);
     this.input = dbToGain(v('gain'));
     const look = Math.max(1, Math.round((v('lookahead') / 1000) * sr));
     if (look !== this.look) {
@@ -367,6 +382,15 @@ class Limiter implements Effect {
     this.rel = Math.exp(-1 / ((v('release') / 1000) * sr));
     this.att = Math.exp(-1 / (look / 3));
   }
+  /** The gain a peak asks for on the soft knee. */
+  private soft(peak: number): number {
+    if (peak <= this.kneeFrom) return 1;
+    const k = this.knee;
+    const x = 20 * Math.log10(peak / this.ceiling);
+    if (x >= k / 2) return this.ceiling / peak;
+    const y = x + k / 2;
+    return 10 ** (-(y * y) / (2 * k) / 20);
+  }
   /** The look-ahead: the sound comes out this many frames late (none in Low Latency Mode). */
   get latency(): number {
     return this.host.lowLatency ? 0 : this.look - 1;
@@ -378,7 +402,7 @@ class Limiter implements Effect {
     }
     // the window: this frame and the `look` before it
     const W = this.look + 1;
-    const { need, needMask, dq, dqMask, dl, dr, input, att, rel, look } = this;
+    const { need, needMask, dq, dqMask, dl, dr, input, att, rel, look, knee } = this;
     const c = this.ceiling;
     let { dqHead, dqTail, gain } = this;
     let minG = 1;
@@ -386,7 +410,7 @@ class Limiter implements Effect {
       const a = (l[i] as number) * input;
       const b = (r[i] as number) * input;
       const peak = Math.max(Math.abs(a), Math.abs(b));
-      const req = peak > c ? c / peak : 1;
+      const req = knee > 0 ? this.soft(peak) : peak > c ? c / peak : 1;
       // sliding minimum of the required gain over the look-ahead window (monotonic queue)
       const idx = this.counter++;
       need[idx & needMask] = req;
@@ -419,11 +443,12 @@ class Limiter implements Effect {
   private processNow(l: Float32Array, r: Float32Array, n: number): void {
     let minG = 1;
     const c = this.ceiling;
+    const knee = this.knee;
     for (let i = 0; i < n; i++) {
       const a = (l[i] as number) * this.input;
       const b = (r[i] as number) * this.input;
       const peak = Math.max(Math.abs(a), Math.abs(b));
-      const req = peak > c ? c / peak : 1;
+      const req = knee > 0 ? this.soft(peak) : peak > c ? c / peak : 1;
       this.gain = req < this.gain ? req : req + (this.gain - req) * this.rel;
       if (this.gain < minG) minG = this.gain;
       const ya = a * this.gain;
@@ -771,6 +796,16 @@ export function createEffect(type: string, host: Host): Effect | null {
       return new SpaceDesigner(host);
     case 'peq':
       return new ParametricEq(host);
+    case 'studioeq':
+      return new StudioEq(host);
+    case 'charcomp':
+      return new CharacterCompressor(host);
+    case 'dualdelay':
+      return new DualDelay(host);
+    case 'roomreverb':
+      return new RoomReverb(host);
+    case 'smoothhall':
+      return new SmoothHall(host);
     case 'softener':
       return new Softener(host);
     case 'width':

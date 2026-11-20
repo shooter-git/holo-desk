@@ -110,7 +110,10 @@ function renderSeconds(song: Project, from?: number, to?: number): number {
  * runner scales it by how the song's last render went.
  */
 const inserts = (list: readonly { type: string }[]) =>
-  list.reduce((w, p) => w + (p.type === 'space' || p.type === 'reverb' || p.type === 'shimmer' ? 0.1 : 0.02), 0);
+  list.reduce(
+    (w, p) => w + (['space', 'reverb', 'roomreverb', 'smoothhall', 'shimmer'].includes(p.type) ? 0.1 : 0.02),
+    0,
+  );
 const weight = (t: Track): number => (t.kind === 'audio' ? 0.01 : 0.05) + inserts(t.channel.inserts);
 
 /** The whole mix's: every track, and the buses' and the master's plugins. */
@@ -407,7 +410,18 @@ export function planMeasure(ctx: PlanContext, song: Project, what: Exclude<Measu
       const id = idOf(b.plugin, 'plugin');
       const p = owner.channel.inserts.find((x) => x.id === id);
       if (!p) throw new Refusal(404, `No plugin ${id} there`);
-      const linear = ['eq', 'peq', 'reverb', 'space', 'delay', 'width'].includes(p.type);
+      const linear = [
+        'eq',
+        'peq',
+        'studioeq',
+        'reverb',
+        'roomreverb',
+        'smoothhall',
+        'space',
+        'delay',
+        'dualdelay',
+        'width',
+      ].includes(p.type);
       const seconds = renderSeconds(song, from, to);
       const heavy = owner.track ? 0.1 + weight(owner.track) : mixWeight(song);
       const estimate = linear ? 3 : runner.paced(song.id, 3 + seconds * heavy);

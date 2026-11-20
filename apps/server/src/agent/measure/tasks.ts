@@ -235,9 +235,23 @@ const dbOf = (amp: number) => (amp > 0 ? r1(20 * Math.log10(amp)) : null);
 const BLOCK = 128;
 
 /** The plugins measured by their response to an impulse: what they do is the same at any level. */
-const LINEAR = new Set(['eq', 'peq', 'reverb', 'space', 'delay', 'width']);
+const LINEAR = new Set([
+  'eq',
+  'peq',
+  'studioeq',
+  'reverb',
+  'roomreverb',
+  'smoothhall',
+  'space',
+  'delay',
+  'dualdelay',
+  'width',
+]);
+/** Of those, the ones that ring on (measured over seconds, with their decay), and the echoes. */
+const REVERBS = new Set(['reverb', 'roomreverb', 'smoothhall', 'space']);
+const DELAYS = new Set(['delay', 'dualdelay']);
 /** The plugins whose gain reduction is measured. */
-const DYNAMICS = new Set(['compressor', 'gate', 'limiter', 'softener']);
+const DYNAMICS = new Set(['compressor', 'charcomp', 'gate', 'limiter', 'softener']);
 
 /** A rendered stretch of a song: its channels from where the pre-roll begins, and how many frames that is. */
 interface Rendered {
@@ -872,7 +886,7 @@ async function plugin(input: Extract<ChildInput, { kind: 'plugin' }>, progress: 
   if (LINEAR.has(p.type)) {
     progress(0.2, 'Sending an impulse through it');
     const { host } = await hostFor(p, project, source, sr);
-    const long = p.type === 'reverb' || p.type === 'space' || p.type === 'delay';
+    const long = REVERBS.has(p.type) || DELAYS.has(p.type);
     const amplitude = 0.25;
     const ir = effectResponse(p.type, p.params, p.settings, host, Math.round(sr * (long ? 4 : 0.5)), amplitude);
     if (!ir) throw new Error(`${p.type} isn't a plugin HO[LO] plays`);
@@ -881,8 +895,8 @@ async function plugin(input: Extract<ChildInput, { kind: 'plugin' }>, progress: 
       thirds: bandResponse([left, right], sr, amplitude),
       latency,
     };
-    if (p.type === 'reverb' || p.type === 'space') Object.assign(response, decayOf(left, right, latency, sr));
-    if (p.type === 'delay') response.echoes = echoesOf(left, right, latency, sr, amplitude);
+    if (REVERBS.has(p.type)) Object.assign(response, decayOf(left, right, latency, sr));
+    if (DELAYS.has(p.type)) response.echoes = echoesOf(left, right, latency, sr, amplitude);
     return { ...base, method: 'response', response };
   }
   if (found.kind === 'bus')

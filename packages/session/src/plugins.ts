@@ -20,6 +20,12 @@ export interface ParamDef {
   offAtMin?: boolean;
 }
 
+/** A plugin's starting point by name: its settings (the ones left out keep their defaults). */
+export interface PluginPreset {
+  name: string;
+  params: Record<string, number>;
+}
+
 export interface PluginDef {
   type: string;
   name: string;
@@ -27,6 +33,8 @@ export interface PluginDef {
   category: string;
   description: string;
   params: ParamDef[];
+  /** Settings to start from, by name (the plugin window's Presets menu). */
+  presets?: PluginPreset[];
 }
 
 const onOff = (id: string, name: string, on = 0): ParamDef => ({
@@ -218,6 +226,116 @@ export const DRUM_PIECES: { name: string; key: number }[] = [
   { name: 'Cowbell', key: 56 },
 ];
 
+/** Character Compressor's circuits: how it hears the level and how its gain moves. */
+export const COMP_CIRCUITS = ['Clean', 'FET', 'VCA', 'Opto'];
+/** What Character Compressor's output stage does to peaks: nothing, round them, round them late, or clip them. */
+export const COMP_SATURATION = ['Off', 'Soft', 'Hard', 'Clip'];
+
+/** Studio EQ's cut slopes (dB an octave): each six is one order of a Butterworth cascade. */
+export const EQ_SLOPES = [6, 12, 18, 24, 36, 48];
+/**
+ * Studio EQ's Proportional Q: how much a bell narrows as its gain grows (Off keeps the Q as set). The
+ * asymmetric ones narrow cuts three times as much as boosts: broad lifts, surgical dips.
+ */
+export const PROPORTIONAL_Q = [
+  'Off',
+  'Light',
+  'Medium',
+  'Strong',
+  'Asymmetric light',
+  'Asymmetric medium',
+  'Asymmetric strong',
+];
+/** Studio EQ's bells, low to high. */
+export const STUDIO_EQ_BELLS = 4;
+
+/** Dual Delay's note values, in quarter notes; its groove stretches each (50% straight, 75% dotted, 33% triplet). */
+export const DELAY_NOTES: { name: string; beats: number }[] = [
+  { name: '1/1', beats: 4 },
+  { name: '1/2', beats: 2 },
+  { name: '1/4', beats: 1 },
+  { name: '1/8', beats: 0.5 },
+  { name: '1/16', beats: 0.25 },
+  { name: '1/32', beats: 0.125 },
+];
+
+const choice = (id: string, name: string, options: string[], def = 0): ParamDef => ({
+  id,
+  name,
+  min: 0,
+  max: options.length - 1,
+  default: def,
+  step: 1,
+  options,
+});
+
+function studioEqParams(): ParamDef[] {
+  const slopes = EQ_SLOPES.map((s) => `${s} dB`);
+  const cutQ = (id: string, name: string): ParamDef => ({
+    id,
+    name,
+    min: 0.5,
+    max: 6,
+    default: Math.SQRT1_2,
+    scale: 'log',
+  });
+  const shelfQ = (id: string, name: string): ParamDef => ({
+    id,
+    name,
+    min: 0.3,
+    max: 6,
+    default: Math.SQRT1_2,
+    scale: 'log',
+  });
+  const bellFreqs = [200, 600, 2000, 6000];
+  const bells: ParamDef[] = [];
+  for (let b = 1; b <= STUDIO_EQ_BELLS; b++) {
+    bells.push(
+      onOff(`p${b}On`, `Bell ${b}`, 1),
+      hz(`p${b}Freq`, `Bell ${b} Freq`, 20, 20000, bellFreqs[b - 1] ?? 1000),
+      db(`p${b}Gain`, `Bell ${b} Gain`, -24, 24, 0),
+      { id: `p${b}Q`, name: `Bell ${b} Q`, min: 0.1, max: 100, default: 1, scale: 'log' },
+    );
+  }
+  return [
+    onOff('lcOn', 'Low Cut'),
+    hz('lcFreq', 'Low Cut Freq', 10, 2000, 80),
+    choice('lcSlope', 'Low Cut Slope', slopes, 3),
+    cutQ('lcQ', 'Low Cut Q'),
+    onOff('lsOn', 'Low Shelf', 1),
+    hz('lsFreq', 'Low Shelf Freq', 20, 2000, 100),
+    db('lsGain', 'Low Shelf Gain', -24, 24, 0),
+    shelfQ('lsQ', 'Low Shelf Q'),
+    ...bells,
+    onOff('hsOn', 'High Shelf', 1),
+    hz('hsFreq', 'High Shelf Freq', 500, 20000, 10000),
+    db('hsGain', 'High Shelf Gain', -24, 24, 0),
+    shelfQ('hsQ', 'High Shelf Q'),
+    onOff('hcOn', 'High Cut'),
+    hz('hcFreq', 'High Cut Freq', 500, 22000, 16000),
+    choice('hcSlope', 'High Cut Slope', slopes, 1),
+    cutQ('hcQ', 'High Cut Q'),
+    db('output', 'Output', -24, 24, 0),
+    choice('propQ', 'Proportional Q', PROPORTIONAL_Q),
+  ];
+}
+
+const noteParam = (id: string, name: string, def: number): ParamDef =>
+  choice(
+    id,
+    name,
+    DELAY_NOTES.map((n) => n.name),
+    def,
+  );
+const groove = (id: string, name: string, def: number): ParamDef => ({
+  id,
+  name,
+  min: 10,
+  max: 100,
+  default: def,
+  unit: '%',
+});
+
 export const PLUGINS: PluginDef[] = [
   {
     type: 'eq',
@@ -255,6 +373,140 @@ export const PLUGINS: PluginDef[] = [
     params: peqParams(),
   },
   {
+    type: 'studioeq',
+    name: 'Studio EQ',
+    kind: 'audio',
+    category: 'EQ',
+    description:
+      'Low and high cuts from 6 to 48 dB an octave, two shelves and four bells, drawn as one curve. With Proportional Q a bell narrows as it boosts or cuts harder.',
+    params: studioEqParams(),
+    presets: [
+      {
+        name: 'Vocal Clarity',
+        params: {
+          lcOn: 1,
+          lcFreq: 90,
+          p1Gain: -3,
+          p1Freq: 300,
+          p1Q: 1.2,
+          p3Gain: 2.5,
+          p3Freq: 3200,
+          p3Q: 0.9,
+          hsGain: 3,
+          hsFreq: 11000,
+          propQ: 2,
+        },
+      },
+      {
+        name: 'Vocal De-mud',
+        params: {
+          lcOn: 1,
+          lcFreq: 110,
+          p1Gain: -4,
+          p1Freq: 350,
+          p1Q: 1.5,
+          p2Gain: -2.5,
+          p2Freq: 850,
+          p2Q: 1.6,
+          p4Gain: 1.5,
+          p4Freq: 7000,
+          propQ: 6,
+        },
+      },
+      {
+        name: 'Kick',
+        params: {
+          lcOn: 1,
+          lcFreq: 30,
+          p1Gain: 4,
+          p1Freq: 60,
+          p1Q: 1.2,
+          p2Gain: -5,
+          p2Freq: 380,
+          p2Q: 1.4,
+          p3Gain: 3,
+          p3Freq: 3500,
+          p3Q: 1.3,
+          propQ: 5,
+        },
+      },
+      {
+        name: 'Snare',
+        params: {
+          lcOn: 1,
+          lcFreq: 80,
+          p1Gain: 2,
+          p1Freq: 200,
+          p1Q: 1.2,
+          p2Gain: -3,
+          p2Freq: 650,
+          p2Q: 1.8,
+          p3Gain: 3,
+          p3Freq: 5000,
+          p3Q: 1,
+          hsGain: 2,
+          hsFreq: 10000,
+          propQ: 5,
+        },
+      },
+      {
+        name: 'Bass',
+        params: {
+          lcOn: 1,
+          lcFreq: 32,
+          lcSlope: 1,
+          p1Gain: 3,
+          p1Freq: 80,
+          p1Q: 1,
+          p2Gain: -3,
+          p2Freq: 260,
+          p2Q: 1.5,
+          p3Gain: 2,
+          p3Freq: 900,
+          p3Q: 1.4,
+          hcOn: 1,
+          hcFreq: 9000,
+        },
+      },
+      {
+        name: 'Acoustic Guitar',
+        params: {
+          lcOn: 1,
+          lcFreq: 85,
+          p1Gain: -3,
+          p1Freq: 220,
+          p1Q: 1.2,
+          p3Gain: 2,
+          p3Freq: 2600,
+          p3Q: 1,
+          hsGain: 3,
+          hsFreq: 12000,
+          propQ: 2,
+        },
+      },
+      { name: 'Air', params: { p4Gain: 1.5, p4Freq: 8000, p4Q: 0.7, hsGain: 4, hsFreq: 13000 } },
+      { name: 'Reverb Return', params: { lcOn: 1, lcFreq: 250, hcOn: 1, hcFreq: 8000 } },
+      {
+        name: 'Telephone',
+        params: { lcOn: 1, lcFreq: 450, hcOn: 1, hcFreq: 3200, hcSlope: 3, p2Gain: 4, p2Freq: 1500, p2Q: 1 },
+      },
+      {
+        name: 'Master Polish',
+        params: {
+          lcOn: 1,
+          lcFreq: 24,
+          lsGain: 1,
+          lsFreq: 80,
+          p2Gain: -1,
+          p2Freq: 320,
+          p2Q: 0.8,
+          hsGain: 1.5,
+          hsFreq: 12000,
+        },
+      },
+    ],
+  },
+  {
     type: 'compressor',
     name: 'Compressor',
     kind: 'audio',
@@ -276,6 +528,99 @@ export const PLUGINS: PluginDef[] = [
         default: 0,
         step: 1,
         options: ['Log', 'Linear'],
+      },
+    ],
+  },
+  {
+    type: 'charcomp',
+    name: 'Character Compressor',
+    kind: 'audio',
+    category: 'Dynamics',
+    description:
+      'One compressor, four circuits: Clean (even and transparent), FET (fast and forward: it hears its own output), VCA (punchy, even in decibels) and Opto (slow to let go after long, deep compression). Then auto gain, a soft or hard output stage, a limiter and a parallel mix.',
+    params: [
+      choice('circuit', 'Circuit', COMP_CIRCUITS),
+      db('threshold', 'Threshold', -60, 0, -20),
+      { id: 'ratio', name: 'Ratio', min: 1, max: 30, default: 4, scale: 'log', unit: ':1' },
+      ms('attack', 'Attack', 0.05, 200, 10),
+      ms('release', 'Release', 5, 3000, 150),
+      pct('knee', 'Knee', 40),
+      choice('detector', 'Detector', ['Peak', 'RMS']),
+      db('makeup', 'Make-up', -12, 24, 0),
+      onOff('autoGain', 'Auto Gain'),
+      choice('saturation', 'Output', COMP_SATURATION),
+      onOff('limiter', 'Limiter'),
+      db('limit', 'Limit At', -24, 6, 0),
+      pct('mix', 'Mix', 100),
+    ],
+    presets: [
+      {
+        name: 'Vocal',
+        params: { threshold: -20, ratio: 3, attack: 6, release: 120, knee: 60, detector: 1, makeup: 4 },
+      },
+      {
+        name: 'Vocal Upfront',
+        params: {
+          circuit: 1,
+          threshold: -24,
+          ratio: 4,
+          attack: 1.5,
+          release: 80,
+          knee: 30,
+          makeup: 6,
+          saturation: 1,
+          limiter: 1,
+          limit: -1,
+        },
+      },
+      {
+        name: 'Drums',
+        params: {
+          circuit: 1,
+          threshold: -18,
+          ratio: 4,
+          attack: 8,
+          release: 120,
+          knee: 30,
+          makeup: 5,
+          saturation: 1,
+          limiter: 1,
+        },
+      },
+      {
+        name: 'Drum Crush',
+        params: {
+          circuit: 1,
+          threshold: -36,
+          ratio: 20,
+          attack: 0.2,
+          release: 60,
+          knee: 10,
+          makeup: 12,
+          saturation: 2,
+          mix: 35,
+        },
+      },
+      { name: 'Bass', params: { circuit: 3, threshold: -22, ratio: 4, attack: 10, release: 150, knee: 40, makeup: 4 } },
+      {
+        name: 'Piano',
+        params: { circuit: 3, threshold: -20, ratio: 2.5, attack: 15, release: 300, knee: 50, makeup: 3 },
+      },
+      {
+        name: 'Acoustic Guitar',
+        params: { threshold: -22, ratio: 3, attack: 12, release: 150, knee: 50, detector: 1, makeup: 4 },
+      },
+      {
+        name: 'Gentle Bus',
+        params: { circuit: 2, threshold: -16, ratio: 2, attack: 30, release: 300, knee: 50, makeup: 1.5 },
+      },
+      {
+        name: 'Bus Glue',
+        params: { circuit: 2, threshold: -20, ratio: 4, attack: 10, release: 100, knee: 20, makeup: 3, mix: 70 },
+      },
+      {
+        name: 'Leveler',
+        params: { circuit: 3, threshold: -28, ratio: 3, attack: 30, release: 800, knee: 70, makeup: 6 },
       },
     ],
   },
@@ -312,12 +657,22 @@ export const PLUGINS: PluginDef[] = [
     name: 'Limiter',
     kind: 'audio',
     category: 'Dynamics',
-    description: 'A look-ahead brick-wall limiter for the master.',
+    description:
+      'A look-ahead brick-wall limiter for the master. With a soft knee it starts to hold peaks back a little below the ceiling, so it eases into the limit.',
     params: [
       db('gain', 'Gain', 0, 24, 0),
       db('ceiling', 'Ceiling', -12, 0, -1),
       ms('release', 'Release', 1, 1000, 50),
       ms('lookahead', 'Lookahead', 0, 10, 3, false),
+      db('knee', 'Soft Knee', 0, 12, 0),
+    ],
+    presets: [
+      { name: 'Master', params: { gain: 2, ceiling: -1, release: 80, lookahead: 3, knee: 3 } },
+      { name: 'Loud Master', params: { gain: 6, ceiling: -0.8, release: 60, lookahead: 5, knee: 4 } },
+      { name: 'Gentle', params: { gain: 0, ceiling: -1, release: 200, lookahead: 5, knee: 8 } },
+      { name: 'Vocal Peaks', params: { gain: 3, ceiling: -1, release: 20, lookahead: 2, knee: 8 } },
+      { name: 'Drum Bus', params: { gain: 4, ceiling: -2, release: 30, lookahead: 1, knee: 2 } },
+      { name: 'Brick Wall', params: { gain: 0, ceiling: -0.3, release: 50, lookahead: 3, knee: 0 } },
     ],
   },
   {
@@ -334,6 +689,247 @@ export const PLUGINS: PluginDef[] = [
       hz('lowcut', 'Low Cut', 20, 1000, 120),
       pct('width', 'Width', 100),
       pct('mix', 'Mix', 30),
+    ],
+  },
+  {
+    type: 'roomreverb',
+    name: 'Room Reverb',
+    kind: 'audio',
+    category: 'Reverb',
+    description:
+      'A room you shape: its size and number of walls place the early reflections, then a dense tail rings on with its own decay for the lows and highs. From a small room to a church.',
+    params: [
+      ms('predelay', 'Pre-delay', 0, 200, 8, false),
+      { id: 'size', name: 'Size', min: 2, max: 60, default: 14, unit: 'm', scale: 'log' },
+      { id: 'walls', name: 'Walls', min: 3, max: 8, default: 6, step: 1 },
+      { id: 'decay', name: 'Decay', min: 0.1, max: 20, default: 1.2, unit: 's', scale: 'log' },
+      { id: 'lowDecay', name: 'Low Decay', min: 25, max: 300, default: 100, unit: '%', scale: 'log' },
+      hz('crossover', 'Crossover', 50, 2000, 400),
+      { id: 'highDecay', name: 'High Decay', min: 10, max: 100, default: 60, unit: '%' },
+      hz('highcut', 'High Cut', 1000, 20000, 12000),
+      db('lowLevel', 'Low Level', -24, 6, 0),
+      pct('density', 'Density', 60),
+      pct('diffusion', 'Diffusion', 70),
+      pct('spread', 'Spread', 100, 200),
+      pct('balance', 'Early / Late', 50),
+      { ...db('dry', 'Dry', -60, 0, 0), offAtMin: true },
+      { ...db('wet', 'Wet', -60, 6, -12), offAtMin: true },
+    ],
+    presets: [
+      {
+        name: 'Small Room',
+        params: {
+          predelay: 2,
+          size: 6,
+          walls: 4,
+          decay: 0.45,
+          lowDecay: 90,
+          crossover: 300,
+          highDecay: 55,
+          highcut: 10000,
+          lowLevel: -2,
+          density: 70,
+          spread: 80,
+          balance: 40,
+        },
+      },
+      {
+        name: 'Studio Room',
+        params: {
+          predelay: 4,
+          size: 10,
+          walls: 6,
+          decay: 0.7,
+          lowDecay: 95,
+          highDecay: 60,
+          highcut: 11000,
+          density: 70,
+          diffusion: 75,
+          balance: 45,
+        },
+      },
+      {
+        name: 'Drum Room',
+        params: {
+          predelay: 3,
+          size: 12,
+          walls: 4,
+          decay: 0.9,
+          lowDecay: 80,
+          highDecay: 70,
+          density: 80,
+          diffusion: 60,
+          spread: 120,
+          balance: 45,
+        },
+      },
+      {
+        name: 'Chamber',
+        params: {
+          predelay: 8,
+          size: 16,
+          walls: 5,
+          decay: 1.4,
+          lowDecay: 105,
+          highDecay: 60,
+          highcut: 10000,
+          diffusion: 85,
+          spread: 110,
+          balance: 55,
+        },
+      },
+      {
+        name: 'Hall',
+        params: {
+          predelay: 18,
+          size: 30,
+          walls: 6,
+          decay: 2.4,
+          lowDecay: 115,
+          crossover: 350,
+          highDecay: 55,
+          highcut: 9000,
+          density: 75,
+          diffusion: 85,
+          spread: 130,
+          balance: 60,
+        },
+      },
+      {
+        name: 'Church',
+        params: {
+          predelay: 4,
+          size: 40,
+          walls: 7,
+          decay: 5.5,
+          lowDecay: 125,
+          crossover: 400,
+          highDecay: 55,
+          highcut: 8000,
+          lowLevel: -6,
+          density: 85,
+          diffusion: 100,
+          spread: 160,
+          balance: 65,
+        },
+      },
+      {
+        name: 'Cathedral',
+        params: {
+          predelay: 10,
+          size: 60,
+          walls: 8,
+          decay: 9,
+          lowDecay: 120,
+          highDecay: 45,
+          highcut: 6500,
+          lowLevel: -4,
+          density: 90,
+          diffusion: 100,
+          spread: 180,
+          balance: 70,
+        },
+      },
+      {
+        name: 'Ambience',
+        params: { predelay: 0, size: 4, walls: 6, decay: 0.3, highDecay: 70, spread: 120, balance: 25 },
+      },
+    ],
+  },
+  {
+    type: 'smoothhall',
+    name: 'Smooth Hall',
+    kind: 'audio',
+    category: 'Reverb',
+    description:
+      'A soft, even hall that blooms and fades without a grain: two crossed loops of slowly moving diffusers. Few settings, and it suits almost anything.',
+    params: [
+      ms('predelay', 'Pre-delay', 0, 200, 20, false),
+      pct('size', 'Size', 60),
+      { id: 'decay', name: 'Decay', min: 0.2, max: 20, default: 2, unit: 's', scale: 'log' },
+      pct('density', 'Density', 80),
+      hz('highcut', 'High Cut', 1000, 20000, 9000),
+      hz('lowcut', 'Low Cut', 20, 1000, 100),
+      { id: 'modRate', name: 'Motion Rate', min: 0.05, max: 5, default: 0.5, unit: 'Hz', scale: 'log' },
+      pct('modDepth', 'Motion', 40),
+      pct('spread', 'Spread', 80),
+      { ...db('dry', 'Dry', -60, 0, 0), offAtMin: true },
+      { ...db('wet', 'Wet', -60, 6, -12), offAtMin: true },
+    ],
+    presets: [
+      {
+        name: 'Soft Hall',
+        params: {
+          predelay: 25,
+          size: 70,
+          decay: 1.8,
+          density: 90,
+          highcut: 10000,
+          lowcut: 120,
+          modRate: 0.6,
+          modDepth: 50,
+          spread: 70,
+        },
+      },
+      {
+        name: 'Vocal Hall',
+        params: { predelay: 60, size: 60, decay: 2.2, density: 80, highcut: 8000, lowcut: 200, modDepth: 40 },
+      },
+      {
+        name: 'Plate',
+        params: {
+          predelay: 10,
+          size: 35,
+          decay: 1.6,
+          density: 100,
+          highcut: 12000,
+          lowcut: 150,
+          modRate: 1.2,
+          modDepth: 25,
+          spread: 100,
+        },
+      },
+      {
+        name: 'Large Hall',
+        params: {
+          predelay: 30,
+          size: 100,
+          decay: 3.5,
+          density: 85,
+          highcut: 7500,
+          lowcut: 80,
+          modRate: 0.4,
+          modDepth: 50,
+          spread: 90,
+        },
+      },
+      {
+        name: 'Pad Wash',
+        params: {
+          predelay: 80,
+          size: 100,
+          decay: 9,
+          density: 100,
+          highcut: 6000,
+          lowcut: 150,
+          modRate: 0.3,
+          modDepth: 80,
+          spread: 100,
+        },
+      },
+      {
+        name: 'Short Bloom',
+        params: {
+          predelay: 5,
+          size: 25,
+          decay: 0.9,
+          density: 70,
+          highcut: 11000,
+          lowcut: 120,
+          modDepth: 30,
+          spread: 70,
+        },
+      },
     ],
   },
   {
@@ -412,6 +1008,104 @@ export const PLUGINS: PluginDef[] = [
       hz('lowcut', 'Low Cut', 20, 2000, 150),
       hz('highcut', 'High Cut', 1000, 20000, 6000),
       pct('mix', 'Mix', 25),
+    ],
+  },
+  {
+    type: 'dualdelay',
+    name: 'Dual Delay',
+    kind: 'audio',
+    category: 'Delay',
+    description:
+      'Two delays, left and right, each with its own note and groove (50% straight, 75% dotted), feedback, and a crossfeed into the other side. Its filters darken each repeat further; flip a path’s phase for a hollow, wide echo.',
+    params: [
+      onOff('sync', 'Sync', 1),
+      noteParam('noteL', 'Left Note', 3),
+      groove('grooveL', 'Left Groove', 75),
+      noteParam('noteR', 'Right Note', 2),
+      groove('grooveR', 'Right Groove', 50),
+      ms('timeL', 'Left Time', 1, 4000, 375),
+      ms('timeR', 'Right Time', 1, 4000, 500),
+      pct('fbL', 'Left Feedback', 30, 99),
+      pct('fbR', 'Right Feedback', 30, 99),
+      pct('crossLR', 'Left to Right', 0, 99),
+      pct('crossRL', 'Right to Left', 0, 99),
+      onOff('invL', 'Invert Left'),
+      onOff('invR', 'Invert Right'),
+      onOff('invX', 'Invert Cross'),
+      hz('lowcut', 'Low Cut', 20, 2000, 80),
+      hz('highcut', 'High Cut', 1000, 20000, 8000),
+      pct('mix', 'Mix', 30),
+    ],
+    presets: [
+      {
+        name: 'Dotted Eighth',
+        params: {
+          noteL: 3,
+          grooveL: 75,
+          noteR: 3,
+          grooveR: 75,
+          fbL: 30,
+          fbR: 0,
+          crossLR: 45,
+          crossRL: 0,
+          lowcut: 120,
+          highcut: 7000,
+        },
+      },
+      {
+        name: 'Dotted Quarter',
+        params: {
+          noteL: 2,
+          grooveL: 75,
+          noteR: 2,
+          grooveR: 50,
+          fbL: 25,
+          fbR: 25,
+          crossLR: 12,
+          crossRL: 12,
+          lowcut: 80,
+          highcut: 6000,
+        },
+      },
+      { name: 'Slapback', params: { sync: 0, timeL: 95, timeR: 110, fbL: 8, fbR: 8, lowcut: 100, highcut: 6000 } },
+      {
+        name: 'Ping-Pong Eighths',
+        params: {
+          noteL: 3,
+          grooveL: 50,
+          noteR: 3,
+          grooveR: 50,
+          fbL: 0,
+          fbR: 0,
+          crossLR: 55,
+          crossRL: 55,
+          lowcut: 150,
+          highcut: 8000,
+        },
+      },
+      {
+        name: 'Wide Doubler',
+        params: { sync: 0, timeL: 12, timeR: 19, fbL: 0, fbR: 0, invR: 1, lowcut: 200, highcut: 12000 },
+      },
+      {
+        name: 'Dub Echo',
+        params: {
+          noteL: 2,
+          grooveL: 75,
+          noteR: 2,
+          grooveR: 50,
+          fbL: 65,
+          fbR: 60,
+          crossLR: 20,
+          crossRL: 20,
+          lowcut: 300,
+          highcut: 2500,
+        },
+      },
+      {
+        name: 'Triplet Echo',
+        params: { noteL: 2, grooveL: 33.3, noteR: 2, grooveR: 66.7, fbL: 35, fbR: 35, lowcut: 120, highcut: 7000 },
+      },
     ],
   },
   {
@@ -729,6 +1423,44 @@ const BY_TYPE = new Map(PLUGINS.map((p) => [p.type, p]));
 
 export function pluginDef(type: string): PluginDef | undefined {
   return BY_TYPE.get(type);
+}
+
+/**
+ * The settings a preset leaves where they are unless it names them: how loud an effect is in its
+ * place (a reverb on a bus keeps its dry signal off, a send's delay its wet-only mix).
+ */
+const PRESET_KEEPS: Record<string, string[]> = {
+  roomreverb: ['dry', 'wet'],
+  smoothhall: ['dry', 'wet'],
+  dualdelay: ['mix'],
+};
+
+/**
+ * A preset's whole set of settings: its own over the plugin's defaults, keeping from `current` the
+ * mix levels it doesn't name (undefined: no such preset).
+ */
+export function presetParams(
+  type: string,
+  name: string,
+  current: Record<string, number> = {},
+): Record<string, number> | undefined {
+  const def = BY_TYPE.get(type);
+  const preset = def?.presets?.find((p) => p.name === name);
+  if (!def || !preset) return undefined;
+  const out: Record<string, number> = Object.fromEntries(def.params.map((p) => [p.id, p.default]));
+  for (const id of PRESET_KEEPS[type] ?? []) if (current[id] !== undefined) out[id] = current[id] as number;
+  return { ...out, ...preset.params };
+}
+
+/** The preset a plugin's settings are now, if they are one's to the letter (defaults standing in for what's left out). */
+export function presetNamed(type: string, params: Record<string, number>): string | undefined {
+  const def = BY_TYPE.get(type);
+  for (const preset of def?.presets ?? []) {
+    const want = presetParams(type, preset.name, params);
+    if (want && def?.params.every((p) => Math.abs(paramValue(type, params, p.id) - (want[p.id] ?? p.default)) < 1e-6))
+      return preset.name;
+  }
+  return undefined;
 }
 
 export function defaultParams(type: string): Record<string, number> {

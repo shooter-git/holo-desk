@@ -356,6 +356,16 @@ Grains source, or, with `partials: true`, a partial set (a Partials source's sou
 file format `writePartials` in `packages/engine/src/prism-sources.ts` documents). So a pack of your own
 can carry whole patches with their own recordings and analyses, and the track's params go over them.
 
+**A kit's pads** (`pads` in an instrument, each a key and the piece it plays) may have settings of
+their own (`packages/session/src/kit-pads.ts`): a level, tune and pan, a saturator, a velocity curve,
+a pitch envelope, a filter, one-shot or gated. A song turns them as the instrument's params
+(`pad:KEY:ID`). In the sampler, a hit on such a pad reads its sample at the pad's pitch (the pitch
+envelope sweeping it), saturates it at the level the pack set it to, filters it, and only then gives
+it its level: the velocity curve, the pad's level and pan, the kit's envelope and each microphone's
+level. Level, tune, pan, the curve and gating are taken as a hit starts; only a saturator, a pitch
+envelope or a filter is work at every frame, and only for the hits of the pads that have one. A pad
+without settings plays through exactly the code it always did.
+
 The packs HO[LO] plays live in their own repository, [HO[LO] Packs](https://github.com/shooter-git/holo-packs):
 a folder a pack, with its map, every file's checksum and, for the packs made from recordings, the recipe
 that wrote them.

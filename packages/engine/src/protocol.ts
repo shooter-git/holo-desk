@@ -1,4 +1,4 @@
-import type { SampleMic } from '@holo/session';
+import type { KitPadSettings, SampleMic } from '@holo/session';
 import type { PreparedImpulse } from './convolver.ts';
 import type { PartialSet } from './prism-sources.ts';
 
@@ -197,6 +197,12 @@ export interface SamplerSpec {
    */
   synth?: string;
   params?: Record<string, number>;
+  /**
+   * A kit's pads that have settings of their own (level, tune, pan, saturator, velocity curve, pitch
+   * envelope, filter, one-shot or gated: see packages/session/src/kit-pads.ts), by key. Only those
+   * that set something: a kit without them plays as it always did.
+   */
+  pads?: KitPadSettings[];
 }
 
 /**

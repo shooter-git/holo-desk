@@ -18,8 +18,6 @@ const decoded = new Map<string, Promise<[Float32Array, Float32Array]>>();
 export type InstrumentMap = InstrumentManifest & {
   /** Its name in the Library ("Rock Kit"). */
   title?: string;
-  /** A kit's pads, every piece once, in rows of four (the top row first): the key each plays and what sounds there. */
-  pads?: { key: number; name: string }[];
 };
 
 /** An instrument's manifest (with its Performance data), fetched once. */

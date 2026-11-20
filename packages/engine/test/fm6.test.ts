@@ -110,6 +110,21 @@ describe('six-operator FM synth', () => {
     });
   }
 
+  it('plays where structuredClone is missing, as in an AudioWorklet', () => {
+    const was = globalThis.structuredClone;
+    // biome-ignore lint/suspicious/noExplicitAny: taken away for the test
+    (globalThis as any).structuredClone = undefined;
+    try {
+      for (const preset of FM6_PRESETS) {
+        const s = new Fm6Synth(SR, preset, { 'op1:ratio': 2 });
+        s.noteOn(60, 100);
+        expect(peak(play(s, 0.1).l), preset).toBeGreaterThan(0);
+      }
+    } finally {
+      globalThis.structuredClone = was;
+    }
+  });
+
   it('a carrier alone is a sine; a modulator adds sidebands at its spacing, as deep as its index', () => {
     const f = hz(60);
     const alone = new Fm6Synth(SR, 'Bright Tines', solo());
@@ -299,32 +314,52 @@ describe('six-operator FM synth', () => {
     }
   });
 
-  it('a patch may limit how long an envelope stretch lasts, carrying the rest into the next', () => {
-    const slow = (longest: number) => {
-      // a fall over a minute, let go after a moment: the release is short, unless the minute was cut
-      // short and what it was owed carries into the release
+  it('a note ends with the envelopes of what is heard: a modulator still moving does not hold it', () => {
+    // operator 2 swings operator 1 and falls over a minute; operator 1, the one heard, is gone 50 ms after
+    // the key is let go
+    const s = new Fm6Synth(
+      SR,
+      'Bright Tines',
+      solo({
+        'op2:on': 1,
+        'op2:ratio': 2,
+        'mod:2>1': 1,
+        'env2:n': 2,
+        'env2:t0': 0.002,
+        'env2:l0': 1,
+        'env2:t1': 60,
+        'env2:l1': 0,
+        'env2:sus': -1,
+      }),
+    );
+    s.noteOn(60, 100);
+    play(s, 0.2);
+    s.noteOff(60);
+    play(s, 0.2);
+    expect(s.active).toBe(0);
+  });
+
+  it('where the filter is heard, a note keeps its voice a second longer for the filter to ring out', () => {
+    const through = (filtered: boolean) => {
       const s = new Fm6Synth(
         SR,
         'Bright Tines',
-        solo({
-          'env1:n': 3,
-          'env1:t0': 0.002,
-          'env1:l0': 1,
-          'env1:t1': 60,
-          'env1:l1': 0,
-          'env1:t2': 0.05,
-          'env1:l2': 0,
-          'env1:sus': 1,
-          'voice:longest': longest,
-        }),
+        solo(
+          filtered
+            ? { 'op1:wave': 2, 'op1:out': 0, 'op1:filter': 1, 'flt:out': 1, 'flt:cutoff': 800, 'flt:res1': 0.9 }
+            : {},
+        ),
       );
-      s.noteOn(60, 100);
-      play(s, 0.2);
-      s.noteOff(60);
-      play(s, 1);
-      return s.active;
+      s.noteOn(48, 110);
+      play(s, 0.3);
+      s.noteOff(48);
+      // the envelope is down 50 ms after the key: then, a second more with the filter heard
+      return [0.2, 0.7, 0.4].map((t) => {
+        play(s, t);
+        return s.active;
+      });
     };
-    expect(slow(0)).toBe(0);
-    expect(slow(2)).toBe(1);
+    expect(through(false)).toEqual([0, 0, 0]);
+    expect(through(true)).toEqual([1, 1, 0]);
   });
 });

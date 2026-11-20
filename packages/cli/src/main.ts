@@ -12,6 +12,8 @@ import {
   findTrack,
   formatBarBeat,
   type Instrument,
+  type KitPad,
+  kitPadKnobs,
   type MiddleC,
   macroValues,
   meterAt,
@@ -25,6 +27,7 @@ import {
   PLUGINS,
   PPQ,
   type Project,
+  padLines,
   parseNotation,
   parsePosition,
   parseProject,
@@ -501,24 +504,40 @@ async function main(): Promise<void> {
       const track = trackOf(project, words.shift() ?? '');
       const inst = track.instrument;
       if (inst.type !== 'sampler') throw new Error(`${track.name} plays no sample-pack instrument`);
-      const m = await call<{ pads?: unknown[]; pitched?: boolean; mics?: SampleMic[] }>(
-        `/api/packs/${encodeURIComponent(inst.pack)}/instruments/${encodeURIComponent(inst.name)}`,
-      );
+      const m = await call<{
+        pads?: KitPad[];
+        pitched?: boolean;
+        mics?: SampleMic[];
+        velocityRange?: number;
+        oneShot?: boolean;
+      }>(`/api/packs/${encodeURIComponent(inst.pack)}/instruments/${encodeURIComponent(inst.name)}`);
       if (!m.pads?.length && m.pitched !== false && !m.mics?.length)
         throw new Error(`${inst.pack}/${inst.name} isn't a kit and has no microphones of its own`);
       const defs = samplerKnobs(m.mics);
+      const kit = { velocityRange: m.velocityRange ?? 0, oneShot: m.oneShot !== false };
+      const pads = m.pads ?? [];
       if (!words.length) {
         console.log(`${track.name}: ${inst.pack}/${inst.name}`);
         for (const d of defs)
           console.log(
             `  ${d.id.padEnd(18)} ${String(samplerKnobValue(defs, inst.params, d.id)).padEnd(8)} ${d.min}..${d.max} ${d.unit ?? ''}${d.offAtMin ? ` (${d.min}: off)` : ''}  ${d.name}`,
           );
+        if (pads.length) {
+          for (const line of padLines(kit, pads, inst.params)) console.log(line);
+          console.log(
+            '  each pad: pad:KEY:level, tune, pan, drive, character, output, curve, range, intensity, pitchEnv, pitchDecay, filter, cutoff, resonance, filterVelocity, play',
+          );
+        }
         return;
       }
       const params = parseParams(words);
+      const all = [...defs, ...kitPadKnobs(kit, pads)];
       for (const [k, v] of Object.entries(params)) {
-        const d = defs.find((x) => x.id === k);
-        if (!d) throw new Error(`${inst.pack}/${inst.name} has no "${k}": ${defs.map((x) => x.id).join(', ')}`);
+        const d = all.find((x) => x.id === k);
+        if (!d)
+          throw new Error(
+            `${inst.pack}/${inst.name} has no "${k}": ${defs.map((x) => x.id).join(', ')}${pads.length ? ', pad:KEY:ID' : ''}`,
+          );
         if (v < d.min || v > d.max) throw new Error(`${k} goes from ${d.min} to ${d.max}`);
       }
       await ops(

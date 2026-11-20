@@ -5,7 +5,7 @@
  */
 import { type Dirent, existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, normalize, resolve, sep } from 'node:path';
-import type { PackSound, SampleMic } from '@holo/session';
+import type { KitPad, PackSound, SampleMic } from '@holo/session';
 
 export interface Zone {
   file: string;
@@ -52,8 +52,12 @@ export interface PackInstrument {
   /** Keys from this one up have no dampers: letting them go doesn't stop them (a piano's top strings). */
   undamped?: number;
   zones: Zone[];
-  /** A kit's pads, every piece once, in rows of four: the key each plays and what sounds there. */
-  pads?: { key: number; name: string }[];
+  /**
+   * A kit's pads, every piece once, in rows of four: the key each plays, what sounds there, and any
+   * settings of its own (level, tune, pan, saturator, velocity curve, pitch envelope, filter, one-shot
+   * or gated: packages/session/src/kit-pads.ts).
+   */
+  pads?: KitPad[];
   /** A multi-microphone instrument's microphones: every one's zone for a hit sounds together. */
   mics?: SampleMic[];
   /**

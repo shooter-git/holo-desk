@@ -23,6 +23,7 @@ export {
 export * from './format.ts';
 export * from './instruments.ts';
 export * from './keysig.ts';
+export * from './kit-pads.ts';
 export * from './merge.ts';
 export * from './midi-file.ts';
 export * from './notation.ts';

@@ -349,6 +349,13 @@ and hands them to the audio thread (transferred, not copied). Files are kept in 
 storage, so the next load needs no network. Zones that play the same stretch of one file (a drum on two
 pads) share one copy.
 
+A pack instrument may play through Prism, the morphing synth, instead of the sampler: its `synth` names
+one of Prism's sounds and `params` is its whole patch (the keys in `packages/session/src/prism.ts`). Its
+zones are then the patch's data, each for the source it names (`source`, 1…4): a sample for a Sample or
+Grains source, or, with `partials: true`, a partial set (a Partials source's sound over time, in the
+file format `writePartials` in `packages/engine/src/prism-sources.ts` documents). So a pack of your own
+can carry whole patches with their own recordings and analyses, and the track's params go over them.
+
 **A kit's pads** (`pads` in an instrument, each a key and the piece it plays) may have settings of
 their own (`packages/session/src/kit-pads.ts`): a level, tune and pan, a saturator, a velocity curve,
 a pitch envelope, a filter, one-shot or gated. A song turns them as the instrument's params

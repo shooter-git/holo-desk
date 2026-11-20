@@ -28,6 +28,7 @@ import { ORGAN_PRESETS, TonewheelOrgan } from './organ.ts';
 import type { PartPlans } from './parts.ts';
 import { PlanVoice, prepareLengthened, type SampleData } from './performance.ts';
 import { PLUCKED_PRESETS, PluckedSynth } from './plucked.ts';
+import { PRISM_PRESETS, PrismSynth } from './prism.ts';
 import {
   type ChannelSpec,
   type ClipSpec,
@@ -1456,12 +1457,18 @@ export class EngineCore implements Host {
         if (REED_PRESETS.includes(spec.preset)) return new ReedSynth(this.sr, spec.preset, spec.params);
         if (CHOIR_PRESETS.includes(spec.preset)) return new ChoirSynth(this.sr, spec.preset, spec.params);
         if (STRUCK_PRESETS.includes(spec.preset)) return new StruckSynth(this.sr, spec.preset, spec.params);
+        if (PRISM_PRESETS.includes(spec.preset))
+          return new PrismSynth(this.sr, spec.preset, spec.params, this.midiHost);
         return new Synth(this.sr, spec.preset, spec.params);
       case 'drums':
         return new DrumSynth(this.sr);
       case 'sampler': {
         const s = this.samplers.get(spec.key);
-        return s ? new Sampler(this.sr, s, spec.params) : null;
+        if (!s) return null;
+        // an instrument that plays through Prism: its zones are the sources' data, its params its patch
+        if (s.synth && PRISM_PRESETS.includes(s.synth))
+          return new PrismSynth(this.sr, s.synth, { 'patch:blank': 1, ...s.params, ...spec.params }, this.midiHost, s);
+        return new Sampler(this.sr, s, spec.params);
       }
       default:
         return null;

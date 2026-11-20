@@ -6,10 +6,12 @@
 
 import {
   fadeTail,
+  partialZone,
   playingExtras,
   type SampleFrames,
   type SamplerSpec,
   type SampleZone,
+  synthExtras,
   type ZoneManifest,
   zoneExtras,
 } from '@holo/engine';
@@ -38,6 +40,8 @@ export interface InstrumentSummary {
   kit?: boolean;
   /** The microphones it was recorded with: a level knob for each. */
   mics?: SampleMic[];
+  /** It plays through a built-in synth (Prism): that synth's window, not the sampler's. */
+  synth?: string;
 }
 
 export interface PackSummary {
@@ -318,6 +322,15 @@ export class SampleLibrary {
       while (next < total) {
         const index = next++;
         const z = manifest.zones[indices[index] as number] as ZoneManifest;
+        if (z.partials) {
+          // a partial set for a synth's source: data, not audio
+          const zone = partialZone(z, new Uint8Array(await packFileData(pack, z.file, priority)));
+          if (!zone) throw new Error(`${z.file} isn't a partial set`);
+          zones[index] = zone;
+          done++;
+          progress?.(done, total);
+          continue;
+        }
         const { left, right, k } = await load(z);
         const start = Math.max(0, Math.round(z.start * k));
         zones[index] = {
@@ -349,6 +362,7 @@ export class SampleLibrary {
       velocityRange: manifest.velocityRange,
       attack: manifest.attack,
       ...playingExtras(manifest),
+      ...synthExtras(manifest),
     };
   }
 }

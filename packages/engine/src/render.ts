@@ -35,6 +35,7 @@ import { finish } from './master.ts';
 import { renderNotePatch } from './notes/patch.ts';
 import { songPatches } from './notes/plan.ts';
 import { isPlanned, type PerformanceManifest, partReach, partSamples, planTrack, wrapPlans } from './parts.ts';
+import { readPartials } from './prism-sources.ts';
 import { EV_OFF, EV_ON, EVENT_SIZE, type SampleFrames, type SamplerSpec, type SampleZone } from './protocol.ts';
 import { resample } from './resample.ts';
 import { type ImpulseSource, impulseFromAudio } from './space.ts';
@@ -69,6 +70,10 @@ export interface ZoneManifest {
   /** The microphone it was recorded with, and where it sits if mono (see SampleZone). */
   mic?: string;
   pan?: number;
+  /** An instrument that plays through a synth: the synth's source the zone is for (see SampleZone). */
+  source?: number;
+  /** The file is a partial set (prism-sources.ts's writePartials), not audio. */
+  partials?: boolean;
 }
 
 /**
@@ -102,7 +107,10 @@ export interface PlayingManifest {
 }
 
 /** The zone's and the instrument's optional settings, as the sampler takes them (only those the pack has). */
-type ZoneExtras = Pick<SampleZone, 'group' | 'offBy' | 'trigger' | 'part' | 'decay' | 'release' | 'mic' | 'pan'>;
+type ZoneExtras = Pick<
+  SampleZone,
+  'group' | 'offBy' | 'trigger' | 'part' | 'decay' | 'release' | 'mic' | 'pan' | 'source'
+>;
 
 export function zoneExtras(z: ZoneManifest): ZoneExtras {
   const out: ZoneExtras = {};
@@ -114,7 +122,41 @@ export function zoneExtras(z: ZoneManifest): ZoneExtras {
   if (z.release !== undefined) out.release = z.release;
   if (typeof z.mic === 'string' && z.mic) out.mic = z.mic;
   if (typeof z.pan === 'number' && Number.isFinite(z.pan) && z.pan !== 0) out.pan = Math.max(-1, Math.min(1, z.pan));
+  if (typeof z.source === 'number' && Number.isInteger(z.source) && z.source >= 1) out.source = z.source;
   return out;
+}
+
+/** An instrument's synth, when it plays through one (its zones are then that synth's data, see SamplerSpec). */
+export function synthExtras(m: { synth?: unknown; params?: unknown }): {
+  synth?: string;
+  params?: Record<string, number>;
+} {
+  if (typeof m.synth !== 'string' || !m.synth) return {};
+  const params: Record<string, number> = {};
+  if (m.params && typeof m.params === 'object')
+    for (const [k, v] of Object.entries(m.params)) if (typeof v === 'number' && Number.isFinite(v)) params[k] = v;
+  return { synth: m.synth, params };
+}
+
+/** A partial-set zone, loaded: its data in place of frames. */
+export function partialZone(z: ZoneManifest, bytes: Uint8Array): SampleZone | null {
+  const partials = readPartials(bytes);
+  if (!partials) return null;
+  return {
+    left: new Float32Array(0),
+    right: null,
+    root: z.root,
+    lo: z.lo,
+    hi: z.hi,
+    lovel: z.lovel,
+    hivel: z.hivel,
+    gain: 10 ** (z.gain / 20),
+    loopStart: 0,
+    loopEnd: 0,
+    rr: z.rr,
+    ...zoneExtras(z),
+    partials,
+  };
 }
 
 /** What a played instrument asks of the sampler, as the sampler takes it (its pads only those with settings). */
@@ -151,6 +193,9 @@ export function playingExtras(m: PlayingManifest): PlayingExtras {
 export interface InstrumentManifest extends PlayingManifest {
   pack: string;
   name: string;
+  /** A built-in synth it plays through (Prism's sounds), and its patch. */
+  synth?: string;
+  params?: Record<string, number>;
   /** How a Performance instrument plays it (the creation's own sampler), when the pack has it. */
   performance?: PerformanceManifest;
   release: number;
@@ -206,6 +251,11 @@ export async function buildSampler(
   // zones that play the same stretch of the same file (a drum on two pads) share one copy
   const shared = new Map<string, { left: Float32Array; right: Float32Array | null; k: number }>();
   for (const z of manifest.zones) {
+    if (z.partials) {
+      const zone = partialZone(z, await source.sample(pack, z.file));
+      if (zone) zones.push(zone);
+      continue;
+    }
     const key = `${z.file}|${z.start}|${z.end}|${z.fadeOut ?? 0}`;
     let copy = shared.get(key);
     if (!copy) {
@@ -253,6 +303,7 @@ export async function buildSampler(
     velocityRange: manifest.velocityRange,
     attack: manifest.attack,
     ...playingExtras(manifest),
+    ...synthExtras(manifest),
   };
 }
 

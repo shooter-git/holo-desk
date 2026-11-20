@@ -1,5 +1,6 @@
 import { fm6Key } from './fm6.ts';
 import type { ParamDef } from './plugins.ts';
+import { PRISM_MACRO_IDS, prismKey } from './prism.ts';
 
 /** The built-in synthesizer's presets: always there, before any sample pack is installed. */
 export const SYNTH_PRESETS = [
@@ -74,6 +75,20 @@ export const SYNTH_PRESETS = [
   'Anvil',
   'Shimmer Bell',
   'Kalimba',
+  'Pulse Bells',
+  'Glass Steps',
+  'Drift Pad',
+  'Choir Bloom',
+  'Glass Pluck',
+  'Wood Pluck',
+  'Deep Bass',
+  'Pulse Bass',
+  'Silver Keys',
+  'Glow Keys',
+  'Stack Lead',
+  'Air Whistle',
+  'Tide Field',
+  'Frozen Bells',
   'Drum Synth',
   'Analog Machine',
   'Punch Machine',
@@ -101,6 +116,8 @@ export const SYNTH_FAMILIES: { name: string; presets: readonly string[] }[] = [
       'Velvet Tines',
       'Glass Keys',
       'Ethereal Keys',
+      'Silver Keys',
+      'Glow Keys',
     ],
   },
   {
@@ -134,14 +151,41 @@ export const SYNTH_FAMILIES: { name: string; presets: readonly string[] }[] = [
       'Morph Lead',
       'Morph Pluck',
       'Morph Bass',
+      'Drift Pad',
+      'Glass Pluck',
+      'Wood Pluck',
+      'Deep Bass',
+      'Pulse Bass',
+      'Stack Lead',
+      'Air Whistle',
     ],
   },
   {
     name: 'Bells and glass',
-    presets: ['Glass Bells', 'FM Bells', 'Crystal Bells', 'Music Box', 'Glass Harmonica', 'Shimmer Bell'],
+    presets: [
+      'Glass Bells',
+      'FM Bells',
+      'Crystal Bells',
+      'Music Box',
+      'Glass Harmonica',
+      'Shimmer Bell',
+      'Pulse Bells',
+      'Glass Steps',
+    ],
   },
-  { name: 'Textures', presets: ['Ethereal Pad', 'Drone Field', 'Drone Metal', 'Drone Breath', 'Drone Glass'] },
-  { name: 'Voices', presets: ['Choir Ahh', 'Male Choir', 'Morph Choir'] },
+  {
+    name: 'Textures',
+    presets: [
+      'Ethereal Pad',
+      'Drone Field',
+      'Drone Metal',
+      'Drone Breath',
+      'Drone Glass',
+      'Tide Field',
+      'Frozen Bells',
+    ],
+  },
+  { name: 'Voices', presets: ['Choir Ahh', 'Male Choir', 'Morph Choir', 'Choir Bloom'] },
   {
     name: 'World',
     presets: [
@@ -355,6 +399,37 @@ for (const name of FM6_SOUNDS)
     { id: 'release', name: 'Release', min: 0.1, max: 10, default: 1, ...times },
     { id: 'chorus', name: 'Chorus', min: 0, max: 2, default: 1, unit: '×' },
   ];
+
+/**
+ * Prism's sounds (the morphing synth of four sources). Each names its own six knobs, each a source
+ * in its matrix that swings either way about the middle: a sound is as made with them half way, and
+ * they work on whatever patch it plays (its preset's, or a whole one it brings, see prism.ts).
+ */
+export const PRISM_KNOBS: Record<string, string[]> = {
+  'Pulse Bells': ['Tone', 'Pulse', 'Shimmer', 'Hop', 'Echo', 'Space'],
+  'Glass Steps': ['Tone', 'Steps', 'Strike', 'Hop', 'Echo', 'Space'],
+  'Drift Pad': ['Morph', 'Brightness', 'Motion', 'Air', 'Attack', 'Space'],
+  'Choir Bloom': ['Vowel', 'Motion', 'Breath', 'Brightness', 'Echo', 'Space'],
+  'Glass Pluck': ['Brightness', 'Decay', 'Body', 'Width', 'Echo', 'Space'],
+  'Wood Pluck': ['Brightness', 'Decay', 'Mallet', 'Body', 'Echo', 'Space'],
+  'Deep Bass': ['Cutoff', 'Growl', 'Sub', 'Punch', 'Drive', 'Grit'],
+  'Pulse Bass': ['Cutoff', 'Resonance', 'Envelope', 'Width', 'Sub', 'Drive'],
+  'Silver Keys': ['Brightness', 'Strike', 'Bell', 'Decay', 'Chorus', 'Space'],
+  'Glow Keys': ['Brightness', 'Glass', 'Tremolo', 'Body', 'Drive', 'Space'],
+  'Stack Lead': ['Brightness', 'Width', 'Vibrato', 'Octave', 'Echo', 'Space'],
+  'Air Whistle': ['Breath', 'Tone', 'Vibrato', 'Body', 'Echo', 'Space'],
+  'Tide Field': ['Drift', 'Waves', 'Air', 'Glow', 'Depth', 'Space'],
+  'Frozen Bells': ['Moment', 'Wander', 'Chimes', 'Tone', 'Sway', 'Space'],
+};
+export const PRISM_SOUNDS: readonly string[] = Object.keys(PRISM_KNOBS);
+for (const [name, knobs] of Object.entries(PRISM_KNOBS))
+  SYNTH_MACROS[name] = knobs.map((label, i) => ({
+    id: PRISM_MACRO_IDS[i] as string,
+    name: label,
+    min: 0,
+    max: 1,
+    default: 0.5,
+  }));
 
 const morph = (d: Record<'morph' | 'brightness' | 'motion' | 'texture' | 'release' | 'space', number>): ParamDef[] => [
   { id: 'morph', name: 'Morph', min: 0, max: 1, default: d.morph },
@@ -625,6 +700,32 @@ export const SYNTH_NOTES: Record<string, string> = {
   'Shimmer Bell':
     'A small glassy bell: its bright partial a third above the note and a hum below. Ensemble spreads it into a shimmer.',
   Kalimba: "A thumb piano's steel tines: near-pure plucked tones and the thumb's soft thump; high notes ring shorter.",
+  'Pulse Bells':
+    'A struck tone restruck on every beat, a glass layer an octave up on the half note, hopping between the sides. Pulse sets the pace (half notes to eighths), Shimmer the glass, Hop how far it jumps.',
+  'Glass Steps':
+    "Mallet tones on a free bar's modes, accented by a sixteenth-note pattern over a glass strike on the beat. Steps is how much the pattern shows; Strike the glass.",
+  'Drift Pad':
+    'A detuned saw stack, a voice of partials singing through its vowels and grains of shimmer, morphing slowly between them. Morph moves the point, Motion how far it drifts, Air the grains.',
+  'Choir Bloom':
+    'Grains of a small choir and a voice of partials moving through its vowels, over a soft saw. Vowel shifts the vowels, Breath the grains.',
+  'Glass Pluck':
+    'Two detuned saws through a ladder that snaps shut, with a struck bar an octave up: lovely under an arpeggiator. Body is the bar.',
+  'Wood Pluck': "A struck bar's partials ringing out over a soft body, with the mallet's breath on each note.",
+  'Deep Bass':
+    'Two saws and a sine an octave down through a growling diode filter; one note at a time, gliding when played legato. Punch is how far each note opens it.',
+  'Pulse Bass':
+    "A square whose symmetry sways, over a saw an octave down, through a ladder's 24 dB slope. Width is how far the symmetry sways.",
+  'Silver Keys':
+    'Sine partials, darker played softly and brighter hard, over a struck attack and a bell-like twelfth. High notes ring shorter.',
+  'Glow Keys': 'Drawbar partials and a detuned sine body, with glass ringing an octave up and a gentle tremolo.',
+  'Stack Lead':
+    'Five detuned saws and a square an octave up, the filter opening on each note and vibrato that waits; one note at a time, gliding. The mod wheel adds vibrato.',
+  'Air Whistle':
+    'A sine with breath around it and a breathy chiff on each note, its vibrato waiting; one note at a time. The mod wheel adds vibrato.',
+  'Tide Field':
+    "Grains of air and shimmer, a bowl's partials and a low sine, morphing on two slow tides, swells drawn across the filter. Hold a chord and let it move.",
+  'Frozen Bells':
+    'A bell and a bowl held at one moment of their ring, that moment wandering slowly, under grains of chimes. Moment picks where; Wander how far it drifts.',
 };
 
 /** A synth's knob at its value in the instrument's params (its preset's default where it has none), kept in range. */
@@ -642,7 +743,7 @@ export function macroValue(preset: string, params: Record<string, number> | unde
 export function synthParam(preset: string, id: string): { id: string; min: number; max: number } | null {
   const knob = SYNTH_MACROS[preset]?.find((p) => p.id === id);
   if (knob) return knob;
-  const key = FM6_SOUNDS.includes(preset) ? fm6Key(id) : null;
+  const key = FM6_SOUNDS.includes(preset) ? fm6Key(id) : PRISM_SOUNDS.includes(preset) ? prismKey(id) : null;
   return key ? { id, min: key.min, max: key.max } : null;
 }
 

@@ -1,5 +1,6 @@
 import type { KitPadSettings, SampleMic } from '@holo/session';
 import type { PreparedImpulse } from './convolver.ts';
+import type { PartialSet } from './prism-sources.ts';
 
 /**
  * What the main thread and the audio thread say to each other.
@@ -157,6 +158,10 @@ export interface SampleZone {
   mic?: string;
   /** Where a mono sample sits, -1 (left) to 1 (right): its microphone's pan when absent. */
   pan?: number;
+  /** An instrument that plays through a synth (SamplerSpec.synth): the synth's source it is for (1…). */
+  source?: number;
+  /** A partial set (the synth's partials source plays it), in place of frames (left is then empty). */
+  partials?: PartialSet;
 }
 
 export interface SamplerSpec {
@@ -186,6 +191,12 @@ export interface SamplerSpec {
   releaseVelocityRange?: number;
   /** The microphones its zones were recorded with, each at its own level (a multi-microphone kit). */
   mics?: SampleMic[];
+  /**
+   * A built-in synth it plays through instead of the sampler (Prism's sounds): its zones are the
+   * synth's samples and partial sets, and `params` its patch (the track's params go over it).
+   */
+  synth?: string;
+  params?: Record<string, number>;
   /**
    * A kit's pads that have settings of their own (level, tune, pan, saturator, velocity curve, pitch
    * envelope, filter, one-shot or gated: see packages/session/src/kit-pads.ts), by key. Only those

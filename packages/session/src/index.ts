@@ -34,6 +34,7 @@ export * from './notes-midi.ts';
 export * from './ops.ts';
 export * from './palettes.ts';
 export * from './plugins.ts';
+export * from './prism.ts';
 export * from './realize.ts';
 export * from './summary.ts';
 export * from './time.ts';

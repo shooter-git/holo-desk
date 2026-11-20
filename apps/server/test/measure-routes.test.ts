@@ -12,6 +12,10 @@ import { GONE, NO_ANSWER } from '../src/live.ts';
 import { agentWorld, auth } from './agent-fakes.ts';
 import { BAR, FakeChild, SR, takeWorld, tone } from './measure-fakes.ts';
 
+// every test here decodes and analyses real audio: seconds of work, far longer on a busy runner than the
+// default 5 s
+vi.setConfig({ testTimeout: 30_000 });
+
 const made: string[] = [];
 afterAll(() => {
   for (const dir of made) rmSync(dir, { recursive: true, force: true });

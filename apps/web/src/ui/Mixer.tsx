@@ -50,6 +50,7 @@ import { Fader, formatDb, Knob, Meter, PanKnob, startDrag, TAP } from './control
 import { Fm6Window } from './Fm6Window.tsx';
 import { prepare, useFrame, useSize } from './frame.ts';
 import { isMenuPress } from './gesture.ts';
+import { KitPads, kitPadGrid, useInstrumentMap } from './KitPads.tsx';
 import { openMenu, openMenuAt } from './menu.tsx';
 import { pressToReorder, useNoScrollWhileDragging } from './reorder.ts';
 import { useScrollCue } from './scroll-cue.ts';
@@ -1222,7 +1223,10 @@ export function SynthWindow() {
   );
 }
 
-/** A sampler kit's knobs: each microphone's level, then tune and decay. */
+/** Which page a kit's window opened on last: its own knobs, or its pads. */
+let kitView: 'kit' | 'pads' = 'kit';
+
+/** A sampler kit's knobs (each microphone's level, then tune and decay), and on a page of their own its pads'. */
 function KitWindow({
   track,
   inst,
@@ -1235,10 +1239,19 @@ function KitWindow({
   const layout = useLayout();
   const phone = isPhone(layout);
   const vp = useViewport();
+  const map = useInstrumentMap(inst);
+  const [view, setView] = useState(kitView);
   const defs = samplerKnobDefs(inst, packs);
   if (!defs) return null;
   const title = instrumentLabel(inst);
   const mics = defs.length > 2;
+  const grid = kitPadGrid(inst, map);
+  const pads = view === 'pads' && map !== null && grid !== null;
+  const show = (v: 'kit' | 'pads') => {
+    kitView = v;
+    setView(v);
+  };
+  const width = phone ? vp.w : pads ? 700 : mics ? 560 : 300;
   const close = () => store.set({ synth: null });
   const change = (param: string, value: number) =>
     gestureChange([
@@ -1251,14 +1264,40 @@ function KitWindow({
   return (
     <Floating
       key={track.id}
-      width={phone ? vp.w : mics ? 560 : 300}
+      width={width}
       phone={phone}
       label={title}
       onClose={close}
       header={
         <>
           <span className="name">{title}</span>
-          <span className="muted">{track.name}</span>
+          {!phone && <span className="muted">{track.name}</span>}
+          {grid && (
+            <div className="seg" role="radiogroup" aria-label="Page">
+              {/* biome-ignore lint/a11y/useSemanticElements: the studio's segmented buttons, as a radio group */}
+              <button
+                type="button"
+                role="radio"
+                aria-checked={!pads}
+                className={`btn tight${pads ? '' : ' on'}`}
+                title="The kit's own knobs: tune, decay and its microphones"
+                onClick={() => show('kit')}
+              >
+                Kit
+              </button>
+              {/* biome-ignore lint/a11y/useSemanticElements: the studio's segmented buttons, as a radio group */}
+              <button
+                type="button"
+                role="radio"
+                aria-checked={pads}
+                className={`btn tight${pads ? ' on' : ''}`}
+                title="Each pad's own level, tune, velocity curve and saturator"
+                onClick={() => show('pads')}
+              >
+                Pads
+              </button>
+            </div>
+          )}
           <button
             type="button"
             className="btn ghost icon"
@@ -1277,19 +1316,25 @@ function KitWindow({
         </>
       }
     >
-      <div className="face">
-        {defs.map((p) => (
-          <Setting
-            key={p.id}
-            def={p}
-            value={samplerKnobValue(defs, inst.params, p.id)}
-            onBegin={() => beginGesture(`${title}: ${p.name}`)}
-            onEnd={endGesture}
-            onChange={(v) => change(p.id, v)}
-          />
-        ))}
-      </div>
-      <div className="muted plugin-note">{mics ? MICS_NOTE + KIT_NOTE : KIT_NOTE}</div>
+      {pads ? (
+        <KitPads track={track} inst={inst} map={map} grid={grid} width={width} phone={phone} />
+      ) : (
+        <>
+          <div className="face">
+            {defs.map((p) => (
+              <Setting
+                key={p.id}
+                def={p}
+                value={samplerKnobValue(defs, inst.params, p.id)}
+                onBegin={() => beginGesture(`${title}: ${p.name}`)}
+                onEnd={endGesture}
+                onChange={(v) => change(p.id, v)}
+              />
+            ))}
+          </div>
+          <div className="muted plugin-note">{mics ? MICS_NOTE + KIT_NOTE : KIT_NOTE}</div>
+        </>
+      )}
     </Floating>
   );
 }

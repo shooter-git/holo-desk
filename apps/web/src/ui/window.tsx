@@ -54,13 +54,23 @@ export function Floating({
     x: Math.max(8, window.innerWidth / 2 - width / 2),
     y: Math.max(60, window.innerHeight / 2 - 220),
   }));
-  // it opens whole: a window taller than the room under where it would open moves up to fit
+  // it opens whole, and stays so as it grows (a kit's pads page opened, its deeper settings shown): a
+  // window taller than the room under it moves up to fit
   useLayoutEffect(() => {
-    const h = win.current?.offsetHeight ?? 0;
-    setPos((p) => {
-      const y = Math.max(8, Math.min(p.y, window.innerHeight - h - 8));
-      return y === p.y ? p : { ...p, y };
-    });
+    const el = win.current;
+    if (!el) return;
+    const fit = () => {
+      const h = el.offsetHeight;
+      setPos((p) => {
+        const y = Math.max(8, Math.min(p.y, window.innerHeight - h - 8));
+        return y === p.y ? p : { ...p, y };
+      });
+    };
+    fit();
+    if (typeof ResizeObserver === 'undefined') return;
+    const watch = new ResizeObserver(fit);
+    watch.observe(el);
+    return () => watch.disconnect();
   }, []);
   useEffect(() => {
     const before = document.activeElement;

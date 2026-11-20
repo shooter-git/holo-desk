@@ -1186,6 +1186,13 @@ export class EngineCore implements Host {
       case 'forgetAudio':
         this.audio.delete(msg.key);
         break;
+      case 'forgetImpulse':
+        // (the studio lets one go once no plugin plays it: a plugin that still did keeps its own copy)
+        this.impulses.delete(msg.key);
+        break;
+      case 'forgetPerformance':
+        this.perfData.delete(msg.key);
+        break;
       case 'audition': {
         // (a worker rendering ahead plays nothing live: the audio thread does, its twin if need be)
         if (this.split && this.split.self >= 0) break;

@@ -79,7 +79,7 @@ import { engineRate } from './engine-rate.ts';
 import { audioFiles } from './files.ts';
 import ImpulseWorker from './impulse.worker.ts?worker';
 import { OnceAFrame } from './once-a-frame.ts';
-import { instrumentManifest, sampleFile } from './pack-files.ts';
+import { forgetSampleFiles, instrumentManifest, sampleFile } from './pack-files.ts';
 import { PatchStore } from './patch-store.ts';
 import { PatchRenderer, type PatchWorker, patchesWithin, planPatches, recordingOf } from './patches.ts';
 import processorUrl from './worklet/processor.ts?worker&url';
@@ -112,6 +112,13 @@ function impulseWorkersFor(cores: number): number {
 
 /** How long an instrument no track plays keeps its samples (an undo often brings it back). */
 const FORGET_AFTER = 30_000;
+
+/**
+ * What waits out that grace besides samplers, by its key under a prefix no sampler key has: a hall
+ * (a Space Designer's or Shimmer's response) no plugin plays, a Performance instrument no part plays.
+ */
+const HALL = '\u0000hall:';
+const PERFORMANCE = '\u0000performance:';
 
 /**
  * Seconds a track's clips crossfade over when a note edit's patch comes in or goes while the song
@@ -233,7 +240,7 @@ export class AudioEngine {
   private keptAudio = new Map<string, Float32Array[]>();
   /** Sampler keys the song's tracks play (as of the last graph). */
   private usedSamplers = new Set<string>();
-  /** Samplers no track plays, and since when: let go after a grace. */
+  /** Samplers no track plays, and since when: let go after a grace (and halls and Performance data, prefixed). */
   private unused = new Map<string, number>();
   private unusedTimer: ReturnType<typeof setTimeout> | null = null;
   private restartListeners = new Set<(keys: string[]) => void>();
@@ -662,6 +669,7 @@ export class AudioEngine {
         }
         this.syncAudio(project);
         this.syncImpulses(project);
+        this.prunePerformances(project);
         this.syncPatches(project);
       }
       for (const t of project.tracks) {
@@ -713,6 +721,22 @@ export class AudioEngine {
   private sentParts = new Map<string, { from: readonly unknown[]; key: string }>();
   private partVersion = new Map<string, number>();
   private perfSent = new Map<string, Set<number>>();
+  /** The pack and sample files each Performance instrument was handed (decoded once, in the page too). */
+  private perfFiles = new Map<string, { pack: string; files: Set<string> }>();
+
+  /**
+   * Performance instruments no part plays any more (its track gone, switched off, or on another
+   * instrument): their samples are let go after the same grace as a sampler's, in every thread.
+   */
+  private prunePerformances(project: Project): void {
+    const playing = new Set<string>();
+    for (const t of project.tracks)
+      if (t.instrument.type === 'performance' && isPlanned(t)) playing.add(`${t.instrument.pack}/${t.instrument.name}`);
+    for (const key of this.perfSent.keys()) {
+      if (playing.has(key)) this.unused.delete(PERFORMANCE + key);
+      else this.markUnused(PERFORMANCE + key);
+    }
+  }
 
   /** Whether a part needs planning again: the pieces it's planned from have changed, by their text if not the same objects. */
   private partChanged(t: Track, project: Project): boolean {
@@ -755,7 +779,11 @@ export class AudioEngine {
         this.pendingChanged();
         const samples = await Promise.all(
           wanted.map(async (index) => {
-            const [left, right] = await sampleFile(inst.pack, perf?.files[index] as string, ctx);
+            const file = perf?.files[index] as string;
+            const files = this.perfFiles.get(plans.key) ?? { pack: inst.pack, files: new Set<string>() };
+            this.perfFiles.set(plans.key, files);
+            files.files.add(file);
+            const [left, right] = await sampleFile(inst.pack, file, ctx);
             const l = this.share(left);
             return { index, left: l, right: right === left ? l : this.share(right) };
           }),
@@ -1220,11 +1248,22 @@ export class AudioEngine {
     return () => this.patchListeners.delete(fn);
   }
 
-  /** Space Designer's spaces: made (or read) in a worker, then handed to the audio thread. */
+  /**
+   * Space Designer's spaces: made (or read) in a worker, then handed to the audio thread. One no
+   * plugin plays any more isn't made if it's still waiting, and is let go after a grace if it was.
+   */
   private syncImpulses(project: Project): void {
     const ctx = this.ctx;
     if (!ctx) return;
-    for (const { key, source } of songImpulses(project, ctx.sampleRate)) {
+    const wanted = songImpulses(project, ctx.sampleRate);
+    const keys = new Set(wanted.map((w) => w.key));
+    for (const j of this.impulseQueue) if (!keys.has(j.key)) this.impulsesSent.delete(j.key);
+    this.impulseQueue = this.impulseQueue.filter((j) => keys.has(j.key));
+    for (const key of this.impulsesSent) {
+      if (keys.has(key)) this.unused.delete(HALL + key);
+      else this.markUnused(HALL + key);
+    }
+    for (const { key, source } of wanted) {
       if (this.impulsesSent.has(key)) continue;
       this.impulsesSent.add(key);
       // (a new audio thread asks again for what's still waiting)
@@ -1466,6 +1505,19 @@ export class AudioEngine {
     for (const [key, since] of this.unused) {
       if (now - since < FORGET_AFTER) continue;
       this.unused.delete(key);
+      if (key.startsWith(HALL)) {
+        const hall = key.slice(HALL.length);
+        if (this.impulsesSent.delete(hall)) this.post({ type: 'forgetImpulse', key: hall });
+        continue;
+      }
+      if (key.startsWith(PERFORMANCE)) {
+        const perf = key.slice(PERFORMANCE.length);
+        if (this.perfSent.delete(perf)) this.post({ type: 'forgetPerformance', key: perf });
+        const files = this.perfFiles.get(perf);
+        this.perfFiles.delete(perf);
+        if (files) forgetSampleFiles(files.pack, files.files);
+        continue;
+      }
       if (!this.samplers.delete(key)) continue;
       this.kept.delete(key);
       this.post({ type: 'forgetSampler', key });

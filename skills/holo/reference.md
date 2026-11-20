@@ -63,9 +63,20 @@ per quarter note.
 ## Audio effects (tracks, buses, master)
 
 `eq` (Channel EQ), `peq` (Parametric EQ: eight bands, each `t1`–`t8` type 0 off, 1 low cut, 2 low
-shelf, 3 bell, 4 notch, 5 band pass, 6 high shelf, 7 high cut, with `f`, `g`, `q`), `compressor`
-(`detector` 0 log, 1 linear), `gate`, `softener` (Transient Softener), `limiter`, `space` (Space
-Designer), `shimmer`, `reverb`, `delay`, `chorus`, `wow` (Wow & Flutter), `width` (Stereo Width:
+shelf, 3 bell, 4 notch, 5 band pass, 6 high shelf, 7 high cut, with `f`, `g`, `q`), `studioeq` (Studio
+EQ: `lc`/`hc` cuts with `…On`, `…Freq`, `…Slope` 0–5 for 6–48 dB an octave and `…Q`; `ls`/`hs`
+shelves and bells `p1`–`p4` with `…On`, `…Freq`, `…Gain`, `…Q`; `propQ` 0 off, 1–3 light to strong,
+4–6 the same narrowing cuts three times as much; `output`), `compressor` (`detector` 0 log, 1
+linear), `charcomp` (Character Compressor: `circuit` 0 clean, 1 FET, 2 VCA, 3 opto; `threshold`,
+`ratio`, `attack`, `release`, `knee` %, `detector` 0 peak, 1 RMS, `makeup`, `autoGain`, `saturation`
+0 off, 1 soft, 2 hard, 3 clip, `limiter` with `limit` dB, `mix`), `gate`, `softener` (Transient
+Softener), `limiter` (`knee` dB: 0 hard), `space` (Space Designer), `shimmer`, `reverb`, `roomreverb`
+(Room Reverb: `size` m, `walls` 3–8, `decay` s with `lowDecay`/`highDecay` % of it and `crossover`,
+`highcut`, `lowLevel`, `density`, `diffusion`, `spread`, `balance` 0 early … 100 late, `dry`/`wet`
+dB), `smoothhall` (Smooth Hall: `predelay`, `size`, `decay`, `density`, `highcut`, `lowcut`, `modRate`,
+`modDepth`, `spread`, `dry`/`wet`), `delay`, `dualdelay` (Dual Delay: `sync`, `noteL`/`noteR` 0–5 for
+1/1 … 1/32 with `grooveL`/`grooveR` % (50 straight, 75 dotted, 33.3 triplet), `timeL`/`timeR` ms when
+free, `fbL`/`fbR`, `crossLR`/`crossRL`, `invL`/`invR`/`invX`, `lowcut`, `highcut`, `mix`), `chorus`, `wow` (Wow & Flutter), `width` (Stereo Width:
 `width` %, `position` −100 left … 100 right, `mono` and `monoFreq` for the lows), `tape` (Tape Warmth),
 `saturator`, `rotary` (Rotary Speaker: `speed` 0 brake, 1 slow, 2 fast; horn and drum speeds and
 ramps, `drive`, `distance` of the microphones), `phaser` (`stages` 0–5 for 2–12), `tremolo` (`mode` 0

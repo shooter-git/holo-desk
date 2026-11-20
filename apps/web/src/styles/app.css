@@ -4132,6 +4132,133 @@ html[data-layout="phone-landscape"] .bar .field input {
   overflow: hidden;
 }
 
+/* the six-operator FM synth's window: its six knobs big along the top, the matrix under them, and
+   the rest of the patch one level down, behind three tabs */
+.fm6-macros {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 10px 6px;
+  padding: 16px 14px 6px;
+}
+
+@media (max-width: 700px) {
+  .fm6-macros {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+.fm6-macros .knob .knob-label {
+  color: var(--text);
+  font-size: 11.5px;
+  font-weight: 600;
+}
+
+.fm6-matrix:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.fm6-tabs {
+  display: flex;
+  justify-content: center;
+  padding: 12px 14px 2px;
+}
+
+.fm6-tabs .seg {
+  max-width: 100%;
+}
+
+.fm6-tabs .seg .btn {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.fm6-page {
+  display: flex;
+  flex-direction: column;
+  padding-bottom: 8px;
+}
+
+.fm6-section {
+  display: flex;
+  flex-direction: column;
+  margin-top: 12px;
+  border-top: 1px solid var(--line-2);
+}
+
+.fm6-section-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: calc(var(--control) + 4px);
+  padding: 10px 14px 0;
+}
+
+.fm6-section-head .label {
+  flex: 1;
+}
+
+.fm6-switches {
+  display: flex;
+  gap: 6px;
+}
+
+.plugin-window .face.fm6-face {
+  grid-template-columns: repeat(auto-fill, minmax(78px, 1fr));
+  padding: 12px 14px 4px;
+}
+
+/* the six operators, each with its envelope's shape: the one open is lit in its own color */
+.fm6-ops {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 6px;
+  padding: 12px 14px 0;
+}
+
+.fm6-op {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+  padding: 5px 2px 4px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: rgba(0, 0, 0, 0.22);
+  color: var(--op);
+  cursor: pointer;
+}
+
+.fm6-op:hover {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.fm6-op.on {
+  border-color: var(--op);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--op) 35%, transparent);
+  background: color-mix(in srgb, var(--op) 12%, transparent);
+}
+
+.fm6-op.off {
+  color: var(--text-3);
+}
+
+.fm6-op-n {
+  font-weight: 700;
+  font-size: 12px;
+}
+
+.fm6-thumb {
+  max-width: 100%;
+}
+
+.fm6-envelope .display {
+  cursor: default;
+}
+
 .stage-distance {
   display: flex;
   align-items: center;

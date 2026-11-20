@@ -1053,7 +1053,14 @@ function derive(patch: Patch, knobs: Record<string, number>, waveCache: Map<stri
 
 const DEFAULT = 'Bright Tines';
 
-function resolve(preset: string, params: Record<string, number> | undefined, waveCache: Map<string, Mips>): Fm6Params {
+/** A six-operator patch as it plays: every operator, the matrix, every envelope, the filter and the rest. */
+export type Fm6Patch = Patch;
+
+/**
+ * A six-operator sound's whole patch: its preset (or a blank patch) with the sound's params over it,
+ * each kept in its range. What the engine plays, and what the synth's window shows.
+ */
+export function fm6Patch(preset: string, params?: Record<string, number>): Fm6Patch {
   const name = PRESETS[preset] ? preset : DEFAULT;
   // a whole patch may start from nothing rather than from the preset it names
   const patch = (params?.['patch:blank'] ?? 0) >= 0.5 ? blankPatch() : clonePatch(PRESETS[name] as Patch);
@@ -1063,7 +1070,12 @@ function resolve(preset: string, params: Record<string, number> | undefined, wav
       const k = fm6Key(id);
       if (k) applyKey(patch, k, v);
     }
-  return derive(patch, macroValues(name, params), waveCache);
+  return patch;
+}
+
+function resolve(preset: string, params: Record<string, number> | undefined, waveCache: Map<string, Mips>): Fm6Params {
+  const name = PRESETS[preset] ? preset : DEFAULT;
+  return derive(fm6Patch(preset, params), macroValues(name, params), waveCache);
 }
 
 // ---- envelopes ---------------------------------------------------------------------------------------

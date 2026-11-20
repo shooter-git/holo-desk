@@ -282,6 +282,12 @@ and the kit's window (the button on its instrument slot) has a level for each (t
 overheads, rooms), turned while it plays. Every kit also has **Tune** and **Decay** there. They're
 kept in the song, and `holo kit Drums mic:room=-6 decay=70` sets them from the command line.
 
+The same window's **Pads** page gives each pad a sound of its own: its level, tune and pan, a
+saturator (soft or hard), how velocity sets its level (straight in decibels, cubic, or linear, each
+drawn as you turn it), and deeper down a pitch envelope, a filter and whether it plays to its end or
+stops when let go. A pack can set them too; a pad left alone plays exactly as the kit always did.
+`holo kit Drums pad:38:drive=40 pad:36:curve=1` sets them from the command line.
+
 You can also import your own from the studio: **Library → Import a sample pack (.zip)**. SFZ
 instruments come in with their mapping, their release samples (`trigger=release`: a piano's dampers
 falling, quieter the longer a note was held where `rt_decay` says so) and the sustain pedal's own

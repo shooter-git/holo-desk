@@ -35,6 +35,7 @@ import {
   type RunnerState,
 } from '../live.ts';
 import { hashToken, newToken, sameHash } from './auth.ts';
+import { plainReply } from './plain.ts';
 import {
   type AttachmentInfo,
   buildPrompt,
@@ -934,9 +935,11 @@ export class Jobs implements AgentHooks {
         }
         break;
       case 'agent-done':
-        // the harness's last words stand as the reply when the agent never called finish
-        if (job.view.reply === undefined && typeof msg.reply === 'string' && msg.reply.trim()) {
-          job.view.reply = oneLine(msg.reply, 600);
+        // the harness's last words stand as the reply when the agent never called finish: what it
+        // said in its own chat, often markdown, made plain for the bar
+        if (job.view.reply === undefined && typeof msg.reply === 'string') {
+          const said = plainReply(msg.reply, 600);
+          if (said) job.view.reply = said;
         }
         void this.turnDone(job);
         break;

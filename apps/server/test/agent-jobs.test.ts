@@ -1242,12 +1242,33 @@ describe('what the harness step needs', () => {
     await waitFor(() => status(desk, first.job)?.state === 'done');
     expect(status(desk, first.job)).toMatchObject({ reply: 'I wrote a bass line under the verse.' });
 
-    // finish's reply stands
+    // what it said in its own chat is often markdown: made plain, a line for each paragraph and item
+    const asked = await start({ project: s.id, text: 'Do the parts all play?' });
+    run.say({
+      type: 'agent-done',
+      job: asked.job,
+      reply: '**Short answer:** they mostly work.\n\n- `Bass` plays\n- **Organ** has no patch',
+    });
+    await waitFor(() => status(desk, asked.job)?.state === 'done');
+    expect(status(desk, asked.job)).toMatchObject({
+      reply: 'Short answer: they mostly work.\n• Bass plays\n• Organ has no patch',
+    });
+
+    // finish's reply and view stand as they were sent, whatever the last words
     const second = await start({ project: s.id, text: 'Drums' });
-    await tool(second.job, second.token, 'POST', '/finish', { label: 'Drums', reply: 'Added drums.' });
-    run.say({ type: 'agent-done', job: second.job, reply: 'Something else' });
+    const view = [{ list: [{ text: 'Bar 3', do: { go: { bar: 3 } } }] }];
+    const finished = await tool(second.job, second.token, 'POST', '/finish', {
+      label: 'Drums',
+      reply: 'Added drums,\n*straight* eighths.',
+      view,
+    });
+    expect(finished.statusCode, finished.body).toBe(200);
+    run.say({ type: 'agent-done', job: second.job, reply: '**Something else**' });
     await waitFor(() => status(desk, second.job)?.state === 'done');
-    expect(status(desk, second.job)).toMatchObject({ reply: 'Added drums.' });
+    expect(status(desk, second.job)).toMatchObject({
+      reply: 'Added drums,\n*straight* eighths.',
+      view: { blocks: view, versions: {} },
+    });
 
     // at most 600 characters
     const other = await song('Other');

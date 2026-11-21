@@ -287,7 +287,7 @@ export const version: Tool = {
 export const finish: Tool = {
   name: 'finish',
   kind: 'ask',
-  summary: `End your turn: "label" names the undo step for everything you changed (at most 80 characters, e.g. "Counter-melody on oboe, bars 9–16"), and "reply" is what the user reads under the bar: one or two short sentences, at most about 200 characters, in musical terms; what changed and where (or what you're waiting for, or why you couldn't). "view" (optional) is what shows under the reply, made of the blocks and actions below. "go" (optional, only when they asked to see something) is a go the studio moves to as the reply arrives. Call it exactly once, last. ${VIEW_GRAMMAR}`,
+  summary: `End your turn, always, even when you were only asked a question: only finish reaches the user, and text you write outside it isn't shown. "label" names the undo step for everything you changed (at most 80 characters, e.g. "Counter-melody on oboe, bars 9–16"), and "reply" is what the user reads under the bar, shown exactly as written: plain text (no markdown, lists or code), one or two short sentences, at most about 200 characters, in musical terms; what changed and where (or the answer, what you're waiting for, or why you couldn't). "view" (optional) is what shows under the reply, made of the blocks and actions below: a question's details go there too. "go" (optional, only when they asked to see something) is a go the studio moves to as the reply arrives. Call it exactly once, last. ${VIEW_GRAMMAR}`,
   args: [
     {
       name: 'label',
@@ -300,7 +300,7 @@ export const finish: Tool = {
       name: 'reply',
       type: 'string',
       describe:
-        'The reply under the bar: one or two short sentences, at most about 200 characters; what changed and where',
+        'The reply under the bar, plain text (no markdown, lists or code): one or two short sentences, at most about 200 characters; what changed and where, or the answer',
       required: true,
       maxLength: 600,
     },

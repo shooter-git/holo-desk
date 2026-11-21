@@ -73,7 +73,13 @@ describe('a reply’s view, checked', () => {
   });
 
   it('says what’s wrong and where', () => {
-    expect(error([{ banner: 'Hi' }])).toMatch(/^view\[0\]: the kinds: text, row/);
+    expect(error([{ banner: 'Hi' }])).toMatch(
+      /^view\[0\]: a block's kind is its key, e.g. \{"text": "…"\}; the kinds: text, row/,
+    );
+    // the kind written as "type", as other formats do
+    expect(error([{ type: 'button', label: 'Play', go: { from: 9, to: 25 } }])).toMatch(
+      /^view\[0\]: a block's kind is its key, not "type": \{"button": …\}, not \{"type": "button", …\}; the kinds: text/,
+    );
     expect(error([{ text: 'a', button: 'b' }])).toMatch(/one kind a block/);
     expect(error([{ text: 'a', colour: 'red' }])).toMatch(/view\[0\]: "colour" isn't one of its fields/);
     expect(error([{ row: [{ button: 'Play', do: { play: { from: 9, to: 9 } } }] }])).toMatch(

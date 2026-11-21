@@ -153,7 +153,14 @@ describe('finish, with what the reply shows', () => {
     );
     expect(await finish([{ wave: { track: 'Strings', from: 1, to: 2 } }])).toMatch(/show it with notes/);
     expect(await finish([{ toggle: { track: 'master', param: 'solo' } }])).toMatch(/Only a track can be soloed/);
-    expect(await finish([{ banner: 'Hi' }])).toMatch(/view\[0\]: the kinds/);
+    expect(await finish([{ banner: 'Hi' }])).toMatch(/view\[0\]: a block's kind is its key/);
+    // a refusal says nothing reached them, and gives the grammar to write the view again
+    const said = await finish([{ type: 'table', columns: ['Track'], rows: [['Bass']] }]);
+    expect(said).toMatch(
+      /^finish was refused, so nothing has reached them yet: view\[0\]: a block's kind is its key, not "type"/,
+    );
+    expect(said).toMatch(/Call finish again with the view written as below, or without a view/);
+    expect(said).toContain('{"button": "label", "do": action}');
     // nothing was sent
     expect(api.calls.some((c) => c.method === 'finish')).toBe(false);
   });

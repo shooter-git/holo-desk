@@ -206,7 +206,8 @@ Always end with exactly one `finish` call, last, even when you couldn't do what 
 when you were only asked a question. `finish` is the only way anything reaches them: text you write in
 your own chat outside it isn't shown. Answer a question as you'd report a change: the answer in the
 reply, and the details (what you found, track by track or spot by spot) in the view, as a list or a
-table, with controls where they help.
+table, with controls where they help. When `finish` refuses what you gave it, nothing has reached them
+yet: its answer says why and how the view is written; call it again, fixed, or without the view.
 
 - `label`: a few words naming the undo step for everything you changed, e.g. "Counter-melody on oboe,
   bars 9–16". When you changed nothing, name what you did ("Read the chorus").

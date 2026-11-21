@@ -13,12 +13,14 @@
  * the order they were called; reading runs alongside. It exits when stdin closes.
  */
 import { readFileSync, realpathSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import { createInterface } from 'node:readline';
 import { fileURLToPath } from 'node:url';
 import { format } from 'node:util';
 import type { MiddleC } from '@holo/session';
 import { ApiError, httpJobApi } from './api.ts';
 import { check, toJsonSchema } from './args.ts';
+import { FINISHED_FILE } from './harness/workspace.ts';
 import { describeTool, newMemory, type Tool, type ToolContext, ToolError, type ToolResult } from './tools/common.ts';
 import { TOOLS } from './tools/index.ts';
 
@@ -60,6 +62,8 @@ export interface ServerOptions {
   log?: (line: string) => void;
   /** Called on each `initialize`: a harness has started the server and is talking to it. */
   onInitialize?: () => void;
+  /** Called when a call of finish goes through (not when it's refused): the turn has its reply. */
+  onFinish?: () => void;
 }
 
 export interface Server {
@@ -113,6 +117,7 @@ export function createServer(opts: ServerOptions): Server {
         log(`${name}: ${err instanceof Error ? err.stack : message}`);
       return reply(id, { content: [{ type: 'text', text: message || `${name} failed` }], isError: true });
     }
+    if (name === 'finish') opts.onFinish?.();
     if (tool.kind === 'change' && result.progress) {
       ctx.api.progress(result.progress.slice(0, 200)).catch((err: unknown) => {
         log(`progress: ${err instanceof Error ? err.message : String(err)}`);
@@ -251,12 +256,22 @@ async function main(): Promise<void> {
         }
       }
     : undefined;
+  // beside the job's token, in the run's workspace: the runner reads it when the run ends
+  const finished = join(dirname(tokenFile), FINISHED_FILE);
+  const onFinish = () => {
+    try {
+      writeFileSync(finished, '', { mode: 0o600 });
+    } catch (e) {
+      err(`can't mark the turn finished: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  };
   await serveStdio({
     tools: TOOLS,
     ctx,
     version: VERSION,
     log: err,
     write: (t) => void protocol(t),
+    onFinish,
     ...(onInitialize ? { onInitialize } : {}),
   });
   protocol('', () => process.exit(0));

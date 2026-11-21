@@ -6,7 +6,7 @@
  * limit, and after every run.
  */
 import type { ChildProcess } from 'node:child_process';
-import { existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { harnessEnv } from './env.ts';
 import {
@@ -22,7 +22,7 @@ import {
 } from './process.ts';
 import type { AuthStatus, Binary, Harness, HarnessEvent, HarnessId, HarnessInfo, Job, Run, RunEvent } from './types.ts';
 import { MODEL } from './types.ts';
-import { mcpServer, privateDir } from './workspace.ts';
+import { FINISHED_FILE, mcpServer, privateDir } from './workspace.ts';
 
 /** What reading one event (or one line of stderr) found. */
 export type Seen =
@@ -275,7 +275,7 @@ const TOOL_WORDS: Record<string, string> = {
  * wrote in its own chat never reached the person (the server shows its last words only as a stand-in).
  */
 export const FINISH_NOW =
-  "Your turn ended without calling finish, so the person saw nothing you wrote: only finish reaches them. Call finish now, without doing the work again: a short label, and as the reply one or two short sentences of plain text (no markdown) with your answer or what you did; put any details in finish's view. Then stop.";
+  "Your turn ended without a finish that went through, so the person saw nothing you wrote: only finish reaches them. Call finish now, without doing the work again: a short label, and as the reply one or two short sentences of plain text (no markdown) with your answer or what you did; put any details in finish's view. If finish refused your view, write it as its answer showed, or leave it out and don't mention it. Then stop.";
 
 export function toolWords(name: string): string {
   return TOOL_WORDS[name] ?? 'Working';
@@ -751,8 +751,9 @@ export function defineHarness(spec: Spec, o: AdapterOptions): Harness {
       let heard = false;
       let lastLine = '';
       let reply: string | undefined;
-      /** Whether it called finish. */
-      let finished = false;
+      // written by HO[LO]'s MCP server when a finish goes through: this run's own, from nothing
+      const finishedFile = join(job.workspace, FINISHED_FILE);
+      rmSync(finishedFile, { force: true });
       const secrets = [job.prompt.length > 40 ? job.prompt : ''];
 
       const handle = (seen: Seen[]) => {
@@ -770,7 +771,6 @@ export function defineHarness(spec: Spec, o: AdapterOptions): Harness {
               break;
             case 'tool': {
               busy = true;
-              if (s.name === 'finish') finished = true;
               const line = toolWords(s.name);
               if (line !== lastLine) {
                 lastLine = line;
@@ -887,7 +887,7 @@ export function defineHarness(spec: Spec, o: AdapterOptions): Harness {
             return resolve({});
           }
           const carryOn = session ?? job.session;
-          if (!finished && !asked && askToFinish && carryOn) {
+          if (!asked && askToFinish && carryOn && !existsSync(finishedFile)) {
             return resolve({ again: 'finish', session: carryOn, ...(reply ? { said: reply } : {}) });
           }
           const said = asked?.said || reply;

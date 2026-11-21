@@ -356,6 +356,23 @@ a.btn {
   border-left: 1px solid var(--line);
 }
 
+/* in a dialog's page a segment never runs past its edge: on the narrowest phones its buttons give up
+   width and their words go onto two lines (wherever they fit, they look as they always have). A row of
+   tabs that scrolls sideways (Settings') keeps its buttons whole. */
+.dialog .content .seg {
+  max-width: 100%;
+}
+.dialog .content .seg .btn {
+  flex: 0 1 auto;
+  min-width: 0;
+  height: auto;
+  min-height: var(--control);
+  padding-block: 3px;
+  line-height: 1.2;
+  text-align: center;
+  white-space: normal;
+}
+
 /* the segment clips its buttons: the focus ring is drawn inside, over the neighbors */
 .seg .btn:focus-visible {
   position: relative;
@@ -1401,6 +1418,9 @@ a.btn {
   top: calc(var(--control) + 4px + var(--row-top));
   left: var(--headers);
   z-index: 9;
+  /* a finger drawn back to the left puts them away: the drag is this panel's own, where the browser
+     would take it for a pan and cancel the pointer before it got far enough (its buttons still tap) */
+  touch-action: none;
   display: flex;
   align-items: center;
   gap: 8px;

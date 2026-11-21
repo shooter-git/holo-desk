@@ -50,6 +50,10 @@ beforeAll(async () => {
         return send(200, { ok: true, revision: 2 });
       }
       if (req.method === 'POST' && rest === '/progress') return send(200, { ok: true });
+      if (req.method === 'POST' && rest === '/finish')
+        return (body as { label: string }).label === 'Refused'
+          ? send(400, { error: 'view[0].button: no version "Hall"' })
+          : send(200, { ok: true });
       if (req.method === 'POST' && rest === '/transport') return send(409, { error: 'The studio is closed' });
       return send(404, { error: 'Not found' });
     });
@@ -354,6 +358,32 @@ describe('the MCP server starting and stopping', () => {
     plain.child.stdin.end();
     expect(await plain.exited).toBe(0);
     expect(existsSync(ready)).toBe(false);
+  });
+
+  it('marks a finish that went through beside the token, and not a refused one', async () => {
+    const mark = join(work, '.holo-finished');
+    rmSync(mark, { force: true });
+    const s = start();
+    await s.request('initialize', { protocolVersion: '2025-11-25' });
+    const finish = async (args: Record<string, unknown>) =>
+      (await s.request('tools/call', { name: 'finish', arguments: args })).result as CallResult;
+    // refused here (a view in another format) and by HO[LO] (its 400): no mark, and the answer says why
+    const typed = await finish({ label: 'x', reply: 'y', view: [{ type: 'button', label: 'Play' }] });
+    expect(typed.isError).toBe(true);
+    expect(typed.content[0]?.text).toMatch(
+      /^finish was refused, so nothing has reached them yet: view\[0\]: a block's kind is its key, not "type"/,
+    );
+    const server = await finish({ label: 'Refused', reply: 'y' });
+    expect(server.content[0]?.text).toMatch(
+      /^finish was refused, so nothing has reached them yet: view\[0\]\.button: no version "Hall"/,
+    );
+    expect(existsSync(mark)).toBe(false);
+    const done = await finish({ label: 'Read the bass', reply: 'The bass is fine.' });
+    expect(done.isError).toBeFalsy();
+    expect(statSync(mark).mode & 0o777).toBe(0o600);
+    s.child.stdin.end();
+    expect(await s.exited).toBe(0);
+    rmSync(mark);
   });
 
   it('refuses to start without a job', async () => {

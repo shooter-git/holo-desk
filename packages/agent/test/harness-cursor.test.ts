@@ -14,6 +14,7 @@ import {
   parseCursorModels,
 } from '../src/harness/cursor.ts';
 import { GIT_ENV, harnessEnv, harnessPath } from '../src/harness/env.ts';
+import { FINISHED_FILE } from '../src/harness/workspace.ts';
 import {
   alive,
   collect,
@@ -480,6 +481,8 @@ describe('Cursor: a turn that ends without finish', () => {
     tool_call: { mcpToolCall: { args: { providerIdentifier: 'holo', toolName: name } } },
   });
   const ok = { type: 'result', subtype: 'success', is_error: false };
+  /** A finish that goes through: HO[LO]'s MCP server marks it beside the token, in the workspace (the run's cwd). */
+  const finishes = `${say(tool('finish'))}\ntouch ${FINISHED_FILE}`;
   const ANSWER = '**No.** The bass has no sends, and the piano goes to the hall.';
   /** A first go that answers in its own chat, then `asked` for the go that's asked for finish. */
   const run = (asked: string) =>
@@ -489,7 +492,7 @@ describe('Cursor: a turn that ends without finish', () => {
   it('is carried on once, in its conversation, asked only for finish', async () => {
     s = sandbox();
     const events = await runToEnd(
-      fake({ askToFinish: true, run: run(`${say(init, tool('finish'), text('Done.'), ok)}\nexit 0`) }),
+      fake({ askToFinish: true, run: run(`${say(init)}\n${finishes}\n${say(text('Done.'), ok)}\nexit 0`) }),
       job(s),
     );
     expect(runs()).toBe(2);
@@ -503,6 +506,21 @@ describe('Cursor: a turn that ends without finish', () => {
     expect(events.at(-1)).toEqual({ type: 'done', reply: ANSWER });
   });
 
+  it('is asked when its finish was refused and it gave up, and a mark from an earlier run doesn’t count', async () => {
+    s = sandbox();
+    writeFileSync(join(job(s).workspace, FINISHED_FILE), '');
+    // it called finish, which refused its view (no mark), then answered in its own chat
+    const first = say(init, tool('finish'), text(ANSWER), ok);
+    const h = fake({
+      askToFinish: true,
+      run: `case "$*" in *--resume=*) ${say(init)}\n${finishes}\n${say(ok)};; *) ${first};; esac\nexit 0`,
+    });
+    const events = await runToEnd(h, job(s));
+    expect(runs()).toBe(2);
+    expect(recorded(s, 1).stdin).toBe(FINISH_NOW);
+    expect(events.at(-1)).toEqual({ type: 'done', reply: ANSWER });
+  });
+
   it('keeps the turn’s own words when, asked, it still doesn’t finish, or that go fails', async () => {
     for (const asked of [`${say(init, text('Called it.'), ok)}\nexit 0`, 'echo "boom" >&2; exit 1']) {
       s = sandbox();
@@ -513,10 +531,12 @@ describe('Cursor: a turn that ends without finish', () => {
     }
   });
 
-  it('isn’t carried on when it called finish, and still stops at the tripwire when it is', async () => {
+  it('isn’t carried on when its finish went through, and still stops at the tripwire when it is', async () => {
     s = sandbox();
+    // a mark left by an earlier run doesn't count for this one
+    writeFileSync(join(job(s).workspace, FINISHED_FILE), '');
     const finished = await runToEnd(
-      fake({ askToFinish: true, run: `${say(init, tool('finish'), text('Done.'), ok)}\nexit 0` }),
+      fake({ askToFinish: true, run: `${say(init)}\n${finishes}\n${say(text('Done.'), ok)}\nexit 0` }),
       job(s),
     );
     expect(runs()).toBe(1);

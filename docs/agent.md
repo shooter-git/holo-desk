@@ -488,10 +488,14 @@ of the stretch `played` asked for); `length` is ms (null while still held).
    for the requester's studio, which merges it into the job's undo step.
 4. **End of the turn.** The agent calls `finish {label, reply}` (and `ask_permission`, `look` or
    `hand_off` before it if it needs to), then the harness exits.
-   - A run that ends well without calling `finish` (the harness answered in its own chat) is carried on
-     once in its conversation, with only `FINISH_NOW` (`packages/agent/src/harness/adapter.ts`) as the
-     prompt, under the same job and token: one turn, one undo step. If that go doesn't call `finish`
-     either, or fails, the first go's last words stand; a tripwire still stops it.
+   - A run that ends well without a `finish` that went through (the harness answered in its own chat,
+     or gave up after `finish` refused its view) is carried on once in its conversation, with only
+     `FINISH_NOW` (`packages/agent/src/harness/adapter.ts`) as the prompt, under the same job and token:
+     one turn, one undo step. HO[LO]'s MCP server marks a `finish` that goes through with
+     `.holo-finished` beside the job's token, cleared before each run; a refused one leaves none. If
+     that go doesn't finish either, or fails, the first go's last words stand; a tripwire still stops it.
+   - A refused `finish` answers that nothing has reached the user yet, why, and the view's grammar, so
+     the model can write it again (or leave the view out and stop mentioning it).
    - The runner sends `agent-done` and removes the token file.
    - The server revokes the token, asks the studio to save, then stores the song as saved as the
      thread's `seen_doc`.

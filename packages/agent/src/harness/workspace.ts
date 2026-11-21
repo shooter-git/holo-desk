@@ -163,6 +163,12 @@ export function antigravityAgent(instructions: string | null, tools: readonly st
   ].join('\n');
 }
 
+/**
+ * Written by HO[LO]'s MCP server, beside the job's token, when a call of finish goes through: a run that
+ * ends without it never gave the studio its reply (a refused finish doesn't count). Cleared before each run.
+ */
+export const FINISHED_FILE = '.holo-finished';
+
 /** Written by HO[LO]'s MCP server when a harness starts it (HOLO_MCP_READY_FILE, Antigravity's runs only). */
 export const READY_FILE = '.holo-mcp-ready';
 

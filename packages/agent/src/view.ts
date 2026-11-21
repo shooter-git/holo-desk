@@ -339,8 +339,17 @@ export function checkView(input: unknown, strict = false): ViewCheck {
     if (!isObject(v)) fail(at, `a block is an object, e.g. {"text": "…"}; the kinds: ${KINDS.join(', ')}`);
     const o = v as Record<string, unknown>;
     const kinds = KINDS.filter((k) => k in o);
-    if (kinds.length !== 1)
-      fail(at, kinds.length ? `one kind a block (${kinds.join(' and ')})` : `the kinds: ${KINDS.join(', ')}`);
+    if (kinds.length > 1) fail(at, `one kind a block (${kinds.join(' and ')})`);
+    if (!kinds.length) {
+      // a kind written as "type" (as other formats do) is the likeliest slip: say so
+      const typed = typeof o.type === 'string' ? o.type : null;
+      fail(
+        at,
+        typed
+          ? `a block's kind is its key, not "type": {"${typed}": …}, not {"type": "${typed}", …}; the kinds: ${KINDS.join(', ')}`
+          : `a block's kind is its key, e.g. {"text": "…"}; the kinds: ${KINDS.join(', ')}`,
+      );
+    }
     const kind = kinds[0] as Kind;
     if (inCell && !['text', 'button', 'slider', 'toggle'].includes(kind))
       fail(at, 'a table cell holds words, a number, text, a button, a slider or a toggle');

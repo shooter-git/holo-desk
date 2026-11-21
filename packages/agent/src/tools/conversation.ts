@@ -6,7 +6,7 @@
  * reply. Asking ends the turn: the user's click starts the next one.
  */
 import { type MiddleC, noteName, PPQ, tickToBarBeat } from '@holo/session';
-import type { PermissionKind } from '../api.ts';
+import { ApiError, type PermissionKind } from '../api.ts';
 import { AFTER, BEFORE, LIMITS, PREVIOUS, VERSION_NAME } from '../view.ts';
 import { getAttachment, need, plural, str, type Tool, ToolError } from './common.ts';
 import { playedText, recordedNotes } from './play.ts';
@@ -322,10 +322,22 @@ export const finish: Tool = {
   async run(ctx, args) {
     const label = need(args, 'label');
     const reply = need(args, 'reply');
-    const { view, go } = await resolvePresentation(ctx, args.view, args.go);
-    await ctx.api.finish(label, reply, view, go);
+    try {
+      const { view, go } = await resolvePresentation(ctx, args.view, args.go);
+      await ctx.api.finish(label, reply, view, go);
+    } catch (err) {
+      // refused: the model must know nothing reached them, and how to get it through
+      if (err instanceof ToolError || (err instanceof ApiError && err.status === 400))
+        throw new ToolError(finishRefused(err.message));
+      throw err;
+    }
     return { text: 'Done. Stop now: your turn is over.' };
   },
 };
+
+/** What a refused finish answers: nothing reached them yet, why, and the view's grammar to write it again. */
+export function finishRefused(why: string): string {
+  return `finish was refused, so nothing has reached them yet: ${why}. Call finish again with the view written as below, or without a view (and then don't mention one in the reply). ${VIEW_GRAMMAR}`;
+}
 
 export const conversationTools: Tool[] = [attachmentGet, look, askPermission, handOff, version, finish];

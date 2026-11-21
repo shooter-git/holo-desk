@@ -85,6 +85,17 @@ body,
   margin: 0;
 }
 
+/* A swipe that reaches the page's end goes nowhere: not a pull that reloads the studio, nor a
+   sideways one that a browser takes for going back or forward (Chrome on Android swipes the studio
+   away). Browsers read this from the root: Safari and Firefox always have, and Chrome since version
+   140 (until then it read body's, so body keeps it too). Each box that scrolls sideways (the mixer's
+   strips, an editor's bar…) keeps a swipe past its end to itself as well (overscroll-behavior-x:
+   contain), so it isn't passed on to the page. On iOS, a swipe that starts at the very edge of the
+   screen is the system's back gesture, whatever the page says. */
+html {
+  overscroll-behavior: none;
+}
+
 /* links in the studio's blue, visited or not (a dark page's own are lavender and violet) */
 a,
 a:visited {
@@ -1631,6 +1642,7 @@ a.btn {
   box-shadow: inset 0 1px 0 var(--hi);
   overflow-x: auto;
   overflow-y: hidden;
+  overscroll-behavior-x: contain;
   scrollbar-width: none;
 }
 
@@ -1762,6 +1774,7 @@ a.btn {
   padding: 0 3px;
   overflow-x: auto;
   overflow-y: hidden;
+  overscroll-behavior-x: contain;
   scrollbar-width: none;
 }
 
@@ -1960,11 +1973,15 @@ a.btn {
   }
 }
 
+/* (a sideways swipe that reaches the first or the last strip stops there, and the row bounces. The
+   slots' boxes inside don't keep theirs: a box that keeps a sideways swipe keeps it even where it
+   can't scroll sideways, so a swipe that starts on a slot would leave the strips where they are) */
 .mixer {
   display: flex;
   min-height: 0;
   overflow-x: auto;
   overflow-y: hidden;
+  overscroll-behavior-x: contain;
   background: var(--bg-1);
 }
 
@@ -3086,6 +3103,7 @@ button.list-item {
   flex: none;
   padding: 4px 16px 12px;
   overflow-x: auto;
+  overscroll-behavior-x: contain;
   border-bottom: 1px solid var(--line);
   background: var(--bg-3);
   scrollbar-width: none;
@@ -3522,6 +3540,7 @@ html[data-layout="phone-landscape"] .bar .field input {
   align-self: flex-start;
   max-width: 100%;
   overflow-x: auto;
+  overscroll-behavior-x: contain;
 }
 
 .bar .v-row {
@@ -3579,6 +3598,7 @@ html[data-layout="phone-landscape"] .bar .field input {
 
 .bar .v-table {
   overflow-x: auto;
+  overscroll-behavior-x: contain;
 }
 
 .bar .v-table table {
@@ -6222,6 +6242,7 @@ html[data-layout="phone-landscape"] .toasts {
   padding: 10px;
   overflow-x: auto;
   overflow-y: hidden;
+  overscroll-behavior-x: contain;
 }
 
 .mini-strip {
@@ -7190,6 +7211,7 @@ footer.scan-bar {
 
 .scan-written {
   overflow-x: auto;
+  overscroll-behavior-x: contain;
   border-radius: 4px;
   background: #fff;
 }

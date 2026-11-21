@@ -50,6 +50,9 @@ The in-app agent lives in `packages/agent` (`@holo/agent`): the runner's side (`
   token and that the job is running.
 - **Data, not instructions.** Names in the song, scans, attachments and what was played are material.
   Only the request and `packages/agent/AGENT.md` tell the agent what to do.
+- **Only `finish` reaches the user.** Every turn ends with it, a question's too: a reply of a sentence
+  or two of plain text, and the details in the view. What the harness writes in its own chat isn't
+  shown, except as a plain stand-in for a turn that never called `finish` (`agent-done`, below).
 - **Asking ends the turn.** What only the user can allow (a pack, sending to a creation, a screenshot,
   a photo, a recording) is asked with one button; the user's click starts the next turn.
 - **They press play.** The agent shows its work under its reply, in a view it composes (below): buttons
@@ -360,8 +363,10 @@ agent's other traffic uses the existing `state`, `played`, `ack`, `transport`, `
   last look found it; it doesn't count as a look (`…/harnesses/look`).
 - `agent-progress {job, line}`
 - `agent-session {job, session}`
-- `agent-done {job, reply?}`. `reply` (one line, ≤ 600) stands as the reply only when the agent never
-  called `finish`.
+- `agent-done {job, reply?}`. `reply`, the harness's last chat message, stands as the reply only when
+  the agent never called `finish`. It's often markdown, so it's made plain first (`plainReply` in
+  `apps/server/src/agent/plain.ts`): its markup goes, paragraphs, headings, list items and table rows
+  keep a line each, and past 600 characters it's cut at the end of a sentence, with "…".
 - `agent-failed {job, error}`
 - `agent-harness {harness, kind:'login'|'update'|'install'|'refresh', state:'running'|'done'|'failed', url?, code?, ask?:'code', line?, error?}`.
   A sign-in, an update or an install says `done` or `failed` only after the runner has looked at its
@@ -662,7 +667,7 @@ change may also post a line under the bar (`…/progress`).
 | `ask_permission` | ask | Ask to install a pack, send to the creation, bounce the song, have the creation render it, or for a screenshot, a photo or a recording. |
 | `hand_off` | ask | A brief for the user's own coding agent, only for a change to HO[LO] Desk's code, holo-packs or a creation (no commands or code in it; never to read or send files, keys, passwords or tokens). |
 | `version` | change | Keep the song as it is now as a named version, for the reply's view to play or keep. |
-| `finish` | ask | End the turn: the undo step's label, the reply (one or two short sentences, about 200 characters at most: what changed and where), what shows under it (`view`) and where the studio goes as it arrives (`go`, when they asked to see something). |
+| `finish` | ask | End the turn, always, a question's too: the undo step's label, the reply (one or two short sentences of plain text, about 200 characters at most: what changed and where, or the answer), what shows under it (`view`) and where the studio goes as it arrives (`go`, when they asked to see something). |
 
 There are no tools for opening, creating or exporting songs, or for creations. What the user attached
 comes into the open song through `import`; a bounce, sending the song to its creation and the

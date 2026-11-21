@@ -614,14 +614,21 @@ function RailPeek({ track, top, height }: { track: Track; top: number; height: n
       <div
         className="rail-peek"
         style={{ ['--row-top' as string]: `${top}px`, height, ['--c' as string]: track.color }}
-        onPointerDown={(e) => {
+        // (in the capture phase: a press on one of its buttons, which keep their presses to themselves, counts too)
+        onPointerDownCapture={(e) => {
           // drawn back to the left, they go away
           const x0 = e.clientX;
           const back = (ev: PointerEvent) => {
-            if (x0 - ev.clientX > PEEK_SWIPE) store.set({ trackPeek: null });
+            if (ev.pointerId === e.pointerId && x0 - ev.clientX > PEEK_SWIPE) store.set({ trackPeek: null });
+          };
+          const done = () => {
+            window.removeEventListener('pointermove', back);
+            window.removeEventListener('pointerup', done);
+            window.removeEventListener('pointercancel', done);
           };
           window.addEventListener('pointermove', back);
-          window.addEventListener('pointerup', () => window.removeEventListener('pointermove', back), { once: true });
+          window.addEventListener('pointerup', done);
+          window.addEventListener('pointercancel', done);
         }}
       >
         <span className="name">{track.name}</span>

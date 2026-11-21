@@ -786,7 +786,9 @@ ACP server's `authenticate` answers "No browser is available here … Run `agy a
 `agy acp --login` needs no terminal: it prints "Open this link in a browser to log in with Google:", the
 link (redirect `https://antigravity.google/oauth-callback`), then "Then paste the authorization code, or the
 full URL of the page you land on, and press Enter:", and reads it on stdin (a bad one: "couldn't log in:
-token exchange failed: …", exit 1). Run with the user's own home, so it's the sign-in the terminal uses.
+token exchange failed: …", exit 1). The link is about 700 characters (its client, challenge and six scopes),
+longer than any other harness's: the server passes on sign-in links of up to 2,048. The page it lands on
+shows the code alone, with "Copy to Clipboard", and takes it out of the address. Run with the user's own home, so it's the sign-in the terminal uses.
 Asked while signed in, it starts a new sign-in; HO[LO] never asks then. No account name is given anywhere
 but its logs and the token file, so the row says "Signed in" without one.
 

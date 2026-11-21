@@ -1719,13 +1719,19 @@ export function parseHarnesses(list: unknown): HarnessInfo[] {
 /** How long a sign-in, an update or an install under way is shown to a studio that comes later (a sign-in waits no longer). */
 const RELAY_LIFE = 15 * 60_000;
 
+/**
+ * The longest sign-in link passed on to the studio. Google's (Antigravity) is about 700 characters,
+ * with its client, its challenge and six scopes; the others' are much shorter.
+ */
+const URL_MOST = 2048;
+
 /** How a sign-in, update, install or refresh goes, from the runner, checked before the studios see it. */
 export function parseHarnessEvent(msg: Record<string, unknown>): Record<string, unknown> | null {
   if (!HARNESSES.includes(msg.harness as HarnessId)) return null;
   if (msg.kind !== 'login' && msg.kind !== 'update' && msg.kind !== 'install' && msg.kind !== 'refresh') return null;
   if (msg.state !== 'running' && msg.state !== 'done' && msg.state !== 'failed') return null;
   const out: Record<string, unknown> = { harness: msg.harness, kind: msg.kind, state: msg.state };
-  if (typeof msg.url === 'string' && msg.url.length <= 500) {
+  if (typeof msg.url === 'string' && msg.url.length <= URL_MOST) {
     try {
       const url = new URL(msg.url);
       if (url.protocol === 'https:' || url.protocol === 'http:') out.url = url.href;

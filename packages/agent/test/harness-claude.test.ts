@@ -102,6 +102,8 @@ exit 0`,
     env: { ...s.env, HOLO_CLAUDE: path, ANTHROPIC_API_KEY: 'sk-ant-test', OPENAI_API_KEY: 'sk-openai-nope' },
     root: s.root,
     repo: REPO,
+    // the recorded streams never call finish: no turn is carried on to ask for it
+    askToFinish: false,
     fetchText: async (url) => {
       if (url === 'https://downloads.claude.ai/claude-code-releases/stable') return '2.1.400\n';
       throw new Error(`unexpected ${url}`);

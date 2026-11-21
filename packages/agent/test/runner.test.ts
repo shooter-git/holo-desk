@@ -402,7 +402,8 @@ describe('the agent runner with a real adapter', () => {
     const env = { ...s.env, HOLO_CLAUDE: path };
     const sent: Record<string, unknown>[] = [];
     const harnesses = {
-      claude: claudeHarness({ env, root: s.root, repo: REPO }),
+      // the recorded stream never calls finish: no turn is carried on to ask for it
+      claude: claudeHarness({ env, root: s.root, repo: REPO, askToFinish: false }),
     } as unknown as Record<HarnessId, Harness>;
     const r = startAgentRunner({
       base: 'http://127.0.0.1:47998',

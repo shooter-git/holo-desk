@@ -104,6 +104,8 @@ exit 0`,
     env: { ...s.env, HOLO_CODEX: path, OPENAI_API_KEY: 'sk-openai-test', ANTHROPIC_API_KEY: 'sk-ant-nope' },
     root: s.root,
     repo: REPO,
+    // the recorded streams never call finish: no turn is carried on to ask for it
+    askToFinish: false,
     fetchText: async (url) => {
       if (url === 'https://registry.npmjs.org/@openai/codex/latest') return JSON.stringify({ version: '0.170.0' });
       throw new Error(`unexpected ${url}`);

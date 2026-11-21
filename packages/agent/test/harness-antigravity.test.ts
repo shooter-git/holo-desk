@@ -141,6 +141,8 @@ echo "couldn't log in: token exchange failed: oauth2: \\"invalid_grant\\" \\"Mal
     platform: o.platform ?? 'linux',
     root: s.root,
     repo: REPO,
+    // the recorded streams never call finish: no turn is carried on to ask for it
+    askToFinish: false,
     fetchText: async (url) => {
       fetched.push(url);
       return JSON.stringify({ version: '1.5.14', url: 'https://example.invalid/agy.tar.gz', sha512: 'abc' });

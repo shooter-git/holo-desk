@@ -200,7 +200,12 @@ export function applyOp(project: Project, op: Op): Project {
       return { ...project, tracks: move(project.tracks, from, op.index) };
     }
     case 'updateTrack':
-      return mapTrack(project, op.track, (t) => ({ ...t, ...op.patch }));
+      return mapTrack(project, op.track, (t) => {
+        const next: Track = { ...t, ...op.patch };
+        // active again: the song reads as if it never was switched off
+        if (!next.inactive) delete next.inactive;
+        return next;
+      });
     case 'updateChannel':
       return mapChannel(project, op.target, (c) => {
         const { stage, ...rest } = op.patch;

@@ -126,6 +126,7 @@ function songShape(p: Project | null): { markers: unknown[]; tracks: unknown[] }
       solo: t.channel.solo,
       volume: t.channel.volume,
       pan: t.channel.pan,
+      ...(t.inactive ? { inactive: true } : {}),
     })),
   };
   return shape;
@@ -515,14 +516,16 @@ async function command(msg: Record<string, unknown>): Promise<void> {
       if (p?.tracks.some((t) => t.id === track)) selectTrack(track);
       return;
     case 'arm': {
+      // (an inactive track's buttons do nothing until it's on again)
       const t = p?.tracks.find((x) => x.id === track);
-      if (t) updateTrack(t.id, { armed: !t.armed }, 'Arm');
+      if (t && !t.inactive) updateTrack(t.id, { armed: !t.armed }, 'Arm');
       return;
     }
     case 'mute':
     case 'solo': {
       const t = p?.tracks.find((x) => x.id === track);
-      if (t) updateChannel(t.id, { [msg.action]: !t.channel[msg.action] }, msg.action === 'mute' ? 'Mute' : 'Solo');
+      if (t && !t.inactive)
+        updateChannel(t.id, { [msg.action]: !t.channel[msg.action] }, msg.action === 'mute' ? 'Mute' : 'Solo');
       return;
     }
     case 'channel': {

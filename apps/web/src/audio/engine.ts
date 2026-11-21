@@ -568,6 +568,8 @@ export class AudioEngine {
       this.sentTracks.delete(id);
       this.sentArts.delete(id);
       this.sentParts.delete(id);
+      // a part still being planned for it is out of date (its number may soon be another track's)
+      this.partVersion.set(id, (this.partVersion.get(id) ?? 0) + 1);
       freed = true;
     }
     // (lowest first: pop takes from the end)
@@ -597,6 +599,10 @@ export class AudioEngine {
    */
   private syncNow(written: Project, live: boolean): void {
     this.project = written;
+    if (written.tracks !== this.inactiveFrom) {
+      this.inactiveFrom = written.tracks;
+      this.inactive = new Set(written.tracks.filter((t) => t.inactive).map((t) => t.id));
+    }
     if (!this.port) return;
     const sr = this.sampleRate;
     // what plays: the song with its repeats played out (the very same song when it has none)
@@ -709,6 +715,9 @@ export class AudioEngine {
     }
   }
   private sentArts = new Map<string, Track['articulations']>();
+  /** The song's inactive tracks (by id), and the track list they're from: nothing is sent to one. */
+  private inactive = new Set<string>();
+  private inactiveFrom: readonly Track[] | null = null;
   /** Planned parts: what they were planned from (the pieces, and their text), the newest planning, and the sample files sent. */
   private sentParts = new Map<string, { from: readonly unknown[]; key: string }>();
   private partVersion = new Map<string, number>();
@@ -1296,12 +1305,12 @@ export class AudioEngine {
     for (const fn of this.pendingListeners) fn();
   }
 
-  /** Audio tracks that are armed or monitoring listen to this device's input. */
+  /** Audio tracks that are armed or monitoring listen to this device's input (not an inactive one). */
   private syncInputs(project: Project): void {
     if (project.tracks !== this.inputTracks) {
       this.inputTracks = project.tracks;
       const specs: InputSpec[] = project.tracks
-        .filter((t) => t.kind === 'audio' && (t.armed || t.audioInput?.monitor))
+        .filter((t) => t.kind === 'audio' && !t.inactive && (t.armed || t.audioInput?.monitor))
         .map((t) => ({
           num: this.numOf(t.id),
           input: t.audioInput?.input ?? 0,
@@ -1769,8 +1778,9 @@ export class AudioEngine {
     return frameToTick(this.segments, song);
   }
 
-  /** Live MIDI to a track, straight into the audio thread (shared memory when there is). */
+  /** Live MIDI to a track, straight into the audio thread (shared memory when there is). An inactive track has nothing to play it. */
   live(status: number, d1: number, d2: number, trackId: string): void {
+    if (this.inactive.has(trackId)) return;
     this.liveNum(status, d1, d2, this.numOf(trackId));
   }
 
@@ -1823,6 +1833,7 @@ export class AudioEngine {
 
   /** A plugin window opened: meter that plugin's own gain reduction (not the whole channel's). */
   watchPlugin(target: string, plugin: string): void {
+    if (this.inactive.has(target)) return;
     const num = target === 'master' ? 0 : this.numOf(target);
     this.post({ type: 'watch', num, plugin });
   }

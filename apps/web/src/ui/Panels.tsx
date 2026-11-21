@@ -24,6 +24,7 @@ import {
   quantizeSelection,
   secondsBetween,
   setInstrument,
+  setTrackActive,
   updateTrack,
 } from '../app/actions.ts';
 import { store, toast, useApp } from '../app/store.ts';
@@ -348,9 +349,21 @@ export function Inspector({ overlay = false }: { overlay?: boolean }) {
                 <input
                   type="checkbox"
                   checked={track.armed}
+                  disabled={!!track.inactive}
                   onChange={(e) => updateTrack(track.id, { armed: e.target.checked }, 'Arm')}
                 />{' '}
                 armed
+              </label>
+            </div>
+            <div className="row">
+              <span>Active</span>
+              <label className="hstack" title="Off, the track is kept but nothing plays, loads or records for it">
+                <input
+                  type="checkbox"
+                  checked={!track.inactive}
+                  onChange={(e) => setTrackActive(track.id, e.target.checked)}
+                />{' '}
+                {track.inactive ? 'off: not heard or loaded' : 'on'}
               </label>
             </div>
             <div className="row">

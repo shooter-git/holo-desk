@@ -313,10 +313,11 @@ export class AudioFiles {
   /**
    * Peaks for drawing: as kept on this device from the last time, else taken from the file (the
    * engine's own decoding of it when that's on its way or can be; before the audio starts, one of
-   * its own).
+   * its own). `keptOnly`: never decode for them (a recording that isn't loaded, an inactive track's).
    */
-  ensurePeaks(project: string, file: string, ctx?: BaseAudioContext): void {
+  ensurePeaks(project: string, file: string, ctx?: BaseAudioContext, keptOnly = false): void {
     if (this.peaks.has(file) || this.pending.has(file)) return;
+    if (keptOnly && this.notKept.has(file)) return;
     this.pending.add(file);
     void this.keptPeaks(project, file)
       .then(async (kept) => {
@@ -326,6 +327,11 @@ export class AudioFiles {
           this.emitSoon();
           return;
         }
+        if (keptOnly) {
+          // (asked once: the drawing comes back for them each frame)
+          this.notKept.add(file);
+          return;
+        }
         // (decode takes the peaks on its way)
         await this.decode(project, file, ctx ?? new OfflineAudioContext(1, 1, 48000));
       })
@@ -333,6 +339,8 @@ export class AudioFiles {
       .finally(() => this.pending.delete(file));
   }
   private pending = new Set<string>();
+  /** Files this device keeps no peaks for, as asked without decoding them. */
+  private notKept = new Set<string>();
 
   private async keptPeaks(project: string, file: string): Promise<Peaks | null> {
     if (!('caches' in globalThis)) return null;

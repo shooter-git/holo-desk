@@ -33,6 +33,7 @@ describe('what of a song the timeline draws', () => {
       [{ op: 'addRegion', track: t.id, region: newRegion(3840, 3840) }],
       [{ op: 'updateTrack', track: t.id, patch: { color: '#123456' } }],
       [{ op: 'updateTrack', track: t.id, patch: { name: 'Piano' } }],
+      [{ op: 'updateTrack', track: t.id, patch: { inactive: true } }],
       [{ op: 'setProject', patch: { tempo: [{ tick: 0, bpm: 97 }] } }],
       [{ op: 'setProject', patch: { markers: [{ id: 'mrk_a', tick: 3840, name: 'Verse' }] } }],
     ];

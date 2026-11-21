@@ -496,6 +496,7 @@ function track(v: unknown, i: number): Track {
     regions: arr(v.regions, `${where}.regions`).map((r, j) => region(r, `${where}.regions[${j}]`)),
     channel: channel(v.channel, `${where}.channel`),
   };
+  if (v.inactive === true) t.inactive = true;
   if (isObj(v.audioInput)) {
     t.audioInput = {
       input: Math.max(0, Math.round(num(v.audioInput.input, `${where}.audioInput.input`, 0))),

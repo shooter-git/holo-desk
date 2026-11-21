@@ -123,7 +123,8 @@ export function patchSpans(
   const wanted = new Set(songPatches(project, sr).map((j) => j.key));
   const out = new Map<string, { job: PatchJob; spans: [number, number][] }>();
   for (const t of project.tracks) {
-    if (t.kind !== 'audio') continue;
+    // (an inactive track isn't heard: Play doesn't wait for its patches)
+    if (t.kind !== 'audio' || t.inactive) continue;
     for (const r of t.regions) {
       const a = r.audio;
       if (!a?.notes || r.muted) continue;

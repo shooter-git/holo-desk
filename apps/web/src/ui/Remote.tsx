@@ -429,7 +429,9 @@ function toggle(track: StudioTrack, what: 'mute' | 'solo' | 'armed') {
   command(what === 'armed' ? 'arm' : what, { track: track.id });
 }
 
+/** A track's mute, solo and arm (an inactive track's do nothing until the studio turns it on again). */
 function TrackChips({ track }: { track: StudioTrack }) {
+  const off = !!track.inactive;
   return (
     <div className="chips" onClick={(e) => e.stopPropagation()}>
       <button
@@ -437,6 +439,7 @@ function TrackChips({ track }: { track: StudioTrack }) {
         className={`chip mute${track.mute ? ' on' : ''}`}
         aria-label={`Mute ${track.name}`}
         aria-pressed={track.mute}
+        disabled={off}
         onClick={() => toggle(track, 'mute')}
       >
         M
@@ -446,6 +449,7 @@ function TrackChips({ track }: { track: StudioTrack }) {
         className={`chip solo${track.solo ? ' on' : ''}`}
         aria-label={`Solo ${track.name}`}
         aria-pressed={track.solo}
+        disabled={off}
         onClick={() => toggle(track, 'solo')}
       >
         S
@@ -455,6 +459,7 @@ function TrackChips({ track }: { track: StudioTrack }) {
         className={`chip rec${track.armed ? ' on' : ''}`}
         aria-label={`Record-arm ${track.name}`}
         aria-pressed={track.armed}
+        disabled={off}
         onClick={() => toggle(track, 'armed')}
       >
         R

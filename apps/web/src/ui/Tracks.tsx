@@ -32,6 +32,7 @@ import {
   Pencil,
   Piano,
   Plus,
+  Power,
   Waves,
   ZoomIn,
   ZoomOut,
@@ -66,6 +67,7 @@ import {
   repeatRegions,
   selectTrack,
   setCycle,
+  setTrackActive,
   splitAtPlayhead,
   takeLinkedTick,
   updateChannel,
@@ -336,7 +338,13 @@ const TrackRow = memo(function TrackRow({ track, top, height, selected, phone, f
           },
       {
         label: track.armed ? 'Disarm' : 'Arm for recording',
+        // (an inactive track records nothing)
+        disabled: !!track.inactive,
         onSelect: () => updateTrack(track.id, { armed: !track.armed }, 'Arm'),
+      },
+      {
+        label: track.inactive ? 'Make active' : 'Make inactive',
+        onSelect: () => setTrackActive(track.id, !!track.inactive),
       },
       'sep',
       ...moveEntries(track.id),
@@ -407,11 +415,16 @@ const TrackRow = memo(function TrackRow({ track, top, height, selected, phone, f
     />
   );
   if (fold === 'rail') {
-    const on = [track.channel.mute && 'muted', track.channel.solo && 'soloed', track.armed && 'armed'];
+    const on = [
+      track.inactive && 'inactive',
+      track.channel.mute && 'muted',
+      track.channel.solo && 'soloed',
+      track.armed && 'armed',
+    ];
     return (
       <button
         type="button"
-        className={`track-row rail-cell${selected ? ' selected' : ''}${height < RAIL_CELL_TALL ? ' short' : ''}`}
+        className={`track-row rail-cell${selected ? ' selected' : ''}${height < RAIL_CELL_TALL ? ' short' : ''}${track.inactive ? ' inactive' : ''}`}
         style={{ top, height }}
         title={track.name}
         aria-label={[track.name, ...on.filter(Boolean)].join(', ')}
@@ -436,7 +449,7 @@ const TrackRow = memo(function TrackRow({ track, top, height, selected, phone, f
   }
   return (
     <div
-      className={`track-row${selected ? ' selected' : ''}${show.trackIcons && !phone ? '' : ' no-icon'}`}
+      className={`track-row${selected ? ' selected' : ''}${show.trackIcons && !phone ? '' : ' no-icon'}${track.inactive ? ' inactive' : ''}`}
       style={{ top, height }}
       onPointerDown={onDown}
       onContextMenu={onContextMenu}
@@ -496,15 +509,21 @@ const TrackRow = memo(function TrackRow({ track, top, height, selected, phone, f
   );
 });
 
-/** A track's mute, solo and record buttons (and an audio track's monitoring). */
+/**
+ * A track's on/off, mute, solo and record buttons (and an audio track's monitoring). Switched off
+ * (inactive), only the first does anything.
+ */
 function TrackButtons({ track }: { track: Track }) {
+  const off = !!track.inactive;
   return (
     <div className="chips" onPointerDown={(e) => e.stopPropagation()}>
+      <PowerChip id={track.id} name={track.name} inactive={off} />
       <button
         type="button"
         className={`chip mute${track.channel.mute ? ' on' : ''}`}
         title="Mute (M)"
         aria-pressed={track.channel.mute}
+        disabled={off}
         onClick={() => updateChannel(track.id, { mute: !track.channel.mute }, 'Mute')}
       >
         M
@@ -514,6 +533,7 @@ function TrackButtons({ track }: { track: Track }) {
         className={`chip solo${track.channel.solo ? ' on' : ''}`}
         title="Solo (S)"
         aria-pressed={track.channel.solo}
+        disabled={off}
         onClick={() => updateChannel(track.id, { solo: !track.channel.solo }, 'Solo')}
       >
         S
@@ -525,6 +545,7 @@ function TrackButtons({ track }: { track: Track }) {
           track.kind === 'audio' ? 'Record-arm: the input is recorded here' : 'Record-arm: live MIDI is recorded here'
         }
         aria-pressed={track.armed}
+        disabled={off}
         onClick={() => updateTrack(track.id, { armed: !track.armed }, 'Arm')}
       >
         R
@@ -535,6 +556,7 @@ function TrackButtons({ track }: { track: Track }) {
           className={`chip mon${track.audioInput?.monitor ? ' on' : ''}`}
           title="Input monitoring: hear the input through the track (wear headphones)"
           aria-pressed={!!track.audioInput?.monitor}
+          disabled={off}
           onClick={() =>
             updateTrack(
               track.id,
@@ -552,6 +574,25 @@ function TrackButtons({ track }: { track: Track }) {
         </button>
       )}
     </div>
+  );
+}
+
+/**
+ * A track's on/off button (Make Inactive, as in other studios): lit while it plays. Off, the track
+ * is kept as it is, but nothing plays, loads or records for it. Shared by the headers and the mixer.
+ */
+export function PowerChip({ id, name, inactive }: { id: string; name: string; inactive: boolean }) {
+  return (
+    <button
+      type="button"
+      className={`chip power${inactive ? '' : ' on'}`}
+      title={inactive ? `${name} is inactive: turn it on` : 'Active: turn off to free its CPU and memory'}
+      aria-label={inactive ? `Make ${name} active` : `Make ${name} inactive`}
+      aria-pressed={!inactive}
+      onClick={() => setTrackActive(id, inactive)}
+    >
+      <Power />
+    </button>
   );
 }
 
@@ -598,7 +639,10 @@ function TrackDock({ track }: { track: Track }) {
   const box = useRef<HTMLDivElement>(null);
   const size = useSize(box);
   return (
-    <section className="track-dock" aria-label={`${track.name}, the selected track`}>
+    <section
+      className={`track-dock${track.inactive ? ' inactive' : ''}`}
+      aria-label={`${track.name}, the selected track${track.inactive ? ' (inactive)' : ''}`}
+    >
       <div className="swatch" style={{ background: track.color }} />
       <div className="dock-name">
         <div className="name" title={track.name}>
@@ -703,7 +747,7 @@ export function drawnOf(project: Project, lanes: boolean): unknown[] {
     if (key === 'tracks' || key === 'buses' || key === 'master' || key === 'revision' || key === 'modified') continue;
     out.push(key, value);
   }
-  for (const t of project.tracks) out.push(t.id, t.name, t.color, t.kind, t.regions);
+  for (const t of project.tracks) out.push(t.id, t.name, t.color, t.kind, t.regions, !!t.inactive);
   return out;
 }
 
@@ -720,7 +764,8 @@ function drawTimeline(ctx: CanvasRenderingContext2D, d: Draw): void {
   project.tracks.forEach((t, i) => {
     const y = i * trackHeight - v.y;
     if (y > h || y + trackHeight < 0) return;
-    ctx.fillStyle = t.id === d.selectedTrack ? '#1a1e24' : i % 2 ? '#131519' : '#14171b';
+    // (an inactive track's lane sits darker, as its header does)
+    ctx.fillStyle = t.inactive ? '#0f1114' : t.id === d.selectedTrack ? '#1a1e24' : i % 2 ? '#131519' : '#14171b';
     ctx.fillRect(0, y, w, trackHeight);
     ctx.fillStyle = '#0b0d10';
     ctx.fillRect(0, y + trackHeight - 1, w, 1);
@@ -763,7 +808,21 @@ function drawTimeline(ctx: CanvasRenderingContext2D, d: Draw): void {
       if (y > h || y + rh < 0) continue;
       const audio = moved?.audio ?? r.audio;
       const shown = moved ? { ...r, start, length, ...(audio ? { audio } : {}) } : r;
-      drawRegion(ctx, shown, t.color, x, y, rw, rh, d.selectedRegions.has(r.id), !!moved, project, w, show);
+      drawRegion(
+        ctx,
+        shown,
+        t.color,
+        x,
+        y,
+        rw,
+        rh,
+        d.selectedRegions.has(r.id),
+        !!moved,
+        project,
+        w,
+        show,
+        !!t.inactive,
+      );
     }
   });
 
@@ -791,7 +850,7 @@ const NAME_FONT = '600 11.5px Inter Variable, system-ui, sans-serif';
 /**
  * Each track's name on its lane, for a phone whose headers are folded to the rail: at the lane's
  * left edge, under the regions' name bands, where it stays as the song scrolls by (a region's own
- * name goes off the edge with the region's start). A muted track's lane is dimmed.
+ * name goes off the edge with the region's start). A muted or inactive track's lane is dimmed.
  */
 function drawLaneNames(ctx: CanvasRenderingContext2D, project: Project, trackHeight: number, w: number, h: number) {
   const v = tracksView;
@@ -802,7 +861,8 @@ function drawLaneNames(ctx: CanvasRenderingContext2D, project: Project, trackHei
   project.tracks.forEach((t, i) => {
     const y = i * trackHeight - v.y;
     if (y > h || y + trackHeight < 0) return;
-    if (t.channel.mute) {
+    const dim = t.channel.mute || t.inactive;
+    if (dim) {
       ctx.fillStyle = 'rgba(18, 20, 24, 0.62)';
       ctx.fillRect(0, y, w, trackHeight - 1);
     }
@@ -814,7 +874,7 @@ function drawLaneNames(ctx: CanvasRenderingContext2D, project: Project, trackHei
     ctx.fill();
     ctx.fillStyle = t.color;
     ctx.fillRect(5, top, 3, 19);
-    ctx.fillStyle = t.channel.mute ? '#6d7584' : '#e4e8ef';
+    ctx.fillStyle = dim ? '#6d7584' : '#e4e8ef';
     ctx.fillText(name, 13, top + 10);
   });
 }
@@ -856,8 +916,11 @@ function drawRegion(
   project: Project,
   canvasWidth: number,
   show: AppState['show'],
+  /** On an inactive track: drawn as a muted region is, its waveform only if kept on this device. */
+  inactive = false,
 ): void {
-  const base = r.muted ? '#5d6470' : color;
+  const dim = r.muted || inactive;
+  const base = dim ? '#5d6470' : color;
   const header = show.regionNames ? Math.min(15, h * 0.32) : 0;
   ctx.save();
   roundRect(ctx, x + 0.5, y + 0.5, Math.max(3, w - 1), h, 4);
@@ -876,10 +939,11 @@ function drawRegion(
       y + header / 2 + 0.5,
     );
   }
-  if (r.audio && show.regionContents) drawWave(ctx, project, r, r.audio, x, y + header, w, h - header, canvasWidth);
+  if (r.audio && show.regionContents)
+    drawWave(ctx, project, r, r.audio, x, y + header, w, h - header, canvasWidth, inactive);
   // the notes, scaled to the region's own range
   if (r.notes.length && show.regionContents) {
-    ctx.fillStyle = r.muted ? '#9aa1ab' : '#f2f5f8';
+    ctx.fillStyle = dim ? '#9aa1ab' : '#f2f5f8';
     drawMiniNotes(ctx, r.notes, r.length, { x, y: y + header + 3, w, h: h - header - 6 }, pitchRange(r), canvasWidth);
   }
   ctx.restore();
@@ -902,9 +966,11 @@ function drawWave(
   w: number,
   h: number,
   canvasWidth: number,
+  inactive: boolean,
 ): void {
-  const color = r.muted ? 'rgba(220,226,234,0.55)' : 'rgba(242,245,248,0.92)';
-  const style = { from: r.start, to: r.start + r.length, y, h, color, shaped: true, canvasWidth };
+  const color = r.muted || inactive ? 'rgba(220,226,234,0.55)' : 'rgba(242,245,248,0.92)';
+  // (an inactive track's recording isn't loaded: its waveform is drawn from what this device kept, if anything)
+  const style = { from: r.start, to: r.start + r.length, y, h, color, shaped: true, canvasWidth, keptOnly: inactive };
   if (!drawClipWave(ctx, project, r, clip, tracksView, style)) return;
   drawFades(ctx, project, r, clip, tracksView, y, h);
   if (Math.abs(clip.stretch - 1) > 1e-4 && w > 60) {

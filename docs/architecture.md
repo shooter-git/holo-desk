@@ -56,6 +56,10 @@ wraps `EngineCore` from `@holo/engine`):
 - **Each track** runs its MIDI effects (arpeggiator, harmonizer…), then its instruments (sampler,
   synth, drum kit; one per articulation), splitting the block at each event. Then come its inserts,
   fader and balance, and its sends to buses. Buses, then the master, follow.
+- **An inactive track isn't there.** The engines play the song as `performed()` (`@holo/session`'s
+  `form.ts`) gives it, and that leaves inactive tracks out: no strip, instrument, plugin or send is
+  built for one, and nothing of it is loaded (its samples, recordings, spaces, note patches). A mute,
+  by contrast, only closes the fader. Switched on again, it's a new track to the engines.
 - **Where the song stops or jumps, it fades.** Stopped, located while it plays, or around a cycle,
   what was playing (its recordings, a planned part's voices) goes on from where it was for 15 ms,
   fading out, and a recording already under way where the song lands fades in over the same, so

@@ -20,6 +20,8 @@ export interface StudioTrack {
   solo: boolean;
   volume: number;
   pan: number;
+  /** Switched off in the studio (Make Inactive): not heard, its buttons do nothing. */
+  inactive?: boolean;
 }
 
 export interface StudioState {

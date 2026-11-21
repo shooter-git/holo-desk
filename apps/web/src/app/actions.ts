@@ -40,6 +40,7 @@ import {
   type Project,
   paramValue,
   parseProject,
+  performed,
   pluginDef,
   projectEnd,
   quantize,
@@ -879,13 +880,17 @@ export function setShareDevice(on: boolean): void {
   companion.setExclusive(!on);
 }
 
-/** The song's instruments into the audio thread, the selected and armed tracks' first (they're the ones about to be played). */
-export function loadInstruments(project: Project): void {
+/**
+ * The song's instruments into the audio thread, the selected and armed tracks' first (they're the
+ * ones about to be played). An inactive track's aren't: it isn't heard.
+ */
+export function loadInstruments(written: Project): void {
   if (!engine.ctx) return;
+  const project = performed(written);
   const selected = store.get().selectedTrack;
   // on a phone or tablet, each instrument's samples for the keys the song plays (more come as more
   // are played): a big song's instruments whole are more than its browser allows a page
-  const keys = isTouch() ? songKeys(project) : null;
+  const keys = isTouch() ? songKeys(written) : null;
   const keysOf = (pack: string, name: string) => keys?.get(`${pack}/${name}`) ?? undefined;
   for (const t of project.tracks) {
     const first = t.id === selected || t.armed;
@@ -904,10 +909,13 @@ export function loadInstruments(project: Project): void {
 
 // ---- live routing ----
 
-/** Live MIDI goes to the armed tracks whose input matches; with none armed, to the selected track. */
+/**
+ * Live MIDI goes to the armed tracks whose input matches; with none armed, to the selected track.
+ * Never to an inactive one (it has nothing to play it on).
+ */
 export function refreshRouting(): void {
   const s = store.get();
-  const tracks = s.project?.tracks ?? [];
+  const tracks = (s.project?.tracks ?? []).filter((t) => !t.inactive);
   const route = (t: Track): LiveRoute => ({ num: engine.numOf(t.id), port: t.input.port, channel: t.input.channel });
   const selected = tracks.find((t) => t.id === s.selectedTrack);
   midi.setRoutes({ armed: tracks.filter((t) => t.armed).map(route), selected: selected ? route(selected) : null });
@@ -1052,6 +1060,12 @@ export async function toggleRecord(): Promise<void> {
     finishRecording();
     return;
   }
+  // with nothing armed, a take goes to the selected track: not when that one is switched off
+  const selected = s.project?.tracks.find((t) => t.id === s.selectedTrack);
+  if (selected?.inactive && !s.project?.tracks.some((t) => t.armed && !t.inactive)) {
+    toast(`${selected.name} is inactive: make it active to record on it`, 'info');
+    return;
+  }
   if (s.playing) {
     // punch in
     store.set({ recording: true });
@@ -1167,10 +1181,11 @@ function startRecording(): void {
     const armed = project.tracks.filter(
       (t) =>
         t.armed &&
+        !t.inactive &&
         (t.input.port === '*' || t.input.port === e.port) &&
         (t.input.channel === 0 || t.input.channel === channel),
     );
-    const targets = armed.length ? armed : project.tracks.filter((t) => t.id === s.selectedTrack);
+    const targets = armed.length ? armed : project.tracks.filter((t) => t.id === s.selectedTrack && !t.inactive);
     const kind = e.status & 0xf0;
     for (const t of targets) {
       let take = takes.get(t.id);
@@ -1636,6 +1651,22 @@ async function warnNoteEffects(trackId: string, instrument: Instrument): Promise
 
 export function updateTrack(trackId: string, patch: TrackPatch, label = 'Track'): void {
   apply([{ op: 'updateTrack', track: trackId, patch }], label);
+}
+
+/**
+ * Switch a track off (Make Inactive) or on again: one undo step. Off, it's kept and stays editable
+ * but nothing plays, loads or records for it, so it's disarmed and stops monitoring its input too.
+ */
+export function setTrackActive(trackId: string, active: boolean): void {
+  const t = store.get().project?.tracks.find((x) => x.id === trackId);
+  if (!t || active === !t.inactive) return;
+  if (active) {
+    updateTrack(trackId, { inactive: false }, 'Make Active');
+    return;
+  }
+  const patch: TrackPatch = { inactive: true, armed: false };
+  if (t.audioInput?.monitor) patch.audioInput = { ...t.audioInput, monitor: false };
+  updateTrack(trackId, patch, 'Make Inactive');
 }
 
 export function updateChannel(target: string, patch: ChannelPatch, label = 'Mixer'): void {

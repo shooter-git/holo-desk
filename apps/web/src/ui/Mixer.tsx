@@ -59,7 +59,7 @@ import { pressToReorder, useNoScrollWhileDragging } from './reorder.ts';
 import { useScrollCue } from './scroll-cue.ts';
 import { pastSlop, upDownOnly } from './slop.ts';
 import { slotName, stripRows } from './strips.ts';
-import { inputLabel, instrumentLabel, instrumentMenu } from './Tracks.tsx';
+import { inputLabel, instrumentLabel, instrumentMenu, PowerChip } from './Tracks.tsx';
 import { Floating, Setting, useViewport } from './window.tsx';
 
 function pluginsOf(kind: 'audio' | 'midi'): PluginDef[] {
@@ -179,7 +179,7 @@ export const Strip = memo(function Strip({ id, kind, name, color, channel, track
   useNoScrollWhileDragging(nameBar);
   return (
     <section
-      className={`strip ${kind}${selected ? ' selected' : ''}`}
+      className={`strip ${kind}${selected ? ' selected' : ''}${track?.inactive ? ' inactive' : ''}`}
       onPointerDown={(e) => {
         press.current = e.button === 0 ? { x: e.clientX, y: e.clientY } : null;
       }}
@@ -468,6 +468,7 @@ export const Strip = memo(function Strip({ id, kind, name, color, channel, track
         <Meter id={id} height={Math.max(40, faderHeight - 8)} width={12} />
       </div>
       <div className="strip-chips">
+        {track && <PowerChip id={id} name={name} inactive={!!track.inactive} />}
         {kind !== 'master' && (
           <>
             <button
@@ -476,6 +477,7 @@ export const Strip = memo(function Strip({ id, kind, name, color, channel, track
               title="Mute"
               aria-label={`Mute ${name}`}
               aria-pressed={channel.mute}
+              disabled={!!track?.inactive}
               onClick={() => updateChannel(id, { mute: !channel.mute }, 'Mute')}
             >
               M
@@ -487,6 +489,7 @@ export const Strip = memo(function Strip({ id, kind, name, color, channel, track
                 title="Solo"
                 aria-label={`Solo ${name}`}
                 aria-pressed={channel.solo}
+                disabled={!!track?.inactive}
                 onClick={() => updateChannel(id, { solo: !channel.solo }, 'Solo')}
               >
                 S
@@ -501,6 +504,7 @@ export const Strip = memo(function Strip({ id, kind, name, color, channel, track
             title="Record-arm"
             aria-label={`Record-arm ${name}`}
             aria-pressed={track.armed}
+            disabled={!!track.inactive}
             onClick={() => updateTrack(id, { armed: !track.armed }, 'Arm')}
           >
             R

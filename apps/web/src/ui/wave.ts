@@ -24,6 +24,8 @@ export interface WaveStyle {
   /** Inside the region the gain and fades shape it; outside it's drawn as recorded. */
   shaped: boolean;
   canvasWidth: number;
+  /** Only peaks kept on this device, never the file decoded for them (an inactive track's isn't loaded). */
+  keptOnly?: boolean;
 }
 
 const seconds = (project: Project, from: number, to: number) =>
@@ -41,7 +43,7 @@ export function drawClipWave(
   const peaks = audioFiles.peaks.get(clip.file);
   if (!peaks) {
     audioFiles.know(project.files ?? []);
-    audioFiles.ensurePeaks(project.id, clip.file, engine.ctx ?? undefined);
+    audioFiles.ensurePeaks(project.id, clip.file, engine.ctx ?? undefined, style.keptOnly);
     return false;
   }
   const tempo = project.tempo;

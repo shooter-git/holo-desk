@@ -226,11 +226,26 @@ describe('the bar’s commands', () => {
     run('mixer');
     run('mute');
     run('songs');
+    run('active');
     expect(calls).toEqual([
       'set({"editor":null,"noteView":"roll","mobileTab":"editor"})',
       'set({"editor":"mixer","mobileTab":"mixer"})',
       `setChannel("${piano}", {"mute":true}, "Mute")`,
       'set({"dialog":"projects"})',
+      `setActive("${piano}", false)`,
     ]);
+  });
+
+  it("switches a track on and off, and leaves an inactive track's mute and solo alone", () => {
+    const { project, piano } = song();
+    project.tracks = project.tracks.map((t) => (t.id === piano ? { ...t, inactive: true } : t));
+    const s = studio({ project, selectedTrack: piano });
+    const { act, calls } = recorder();
+    const table = commandTable(s, act);
+    const active = table.find((c) => c.id === 'active');
+    expect(active?.title).toBe('Make Piano active');
+    active?.run();
+    expect(calls).toEqual([`setActive("${piano}", true)`]);
+    for (const id of ['mute', 'solo']) expect(table.find((c) => c.id === id)?.available?.(s)).toBe(false);
   });
 });

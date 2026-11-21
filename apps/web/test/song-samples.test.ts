@@ -37,6 +37,20 @@ describe('the keys a song plays on each sampled instrument', () => {
     expect(keys.size).toBe(1);
   });
 
+  it("leaves out an inactive track's keys", () => {
+    const piano = { type: 'sampler', pack: 'p', name: 'grand' } as const;
+    const strings = { type: 'sampler', pack: 'p', name: 'strings' } as const;
+    const p = song([
+      { instrument: piano, pitches: [60] },
+      { instrument: piano, pitches: [72] },
+      { instrument: strings, pitches: [55] },
+    ]);
+    p.tracks = p.tracks.map((t, i) => (i === 0 ? t : { ...t, inactive: true }));
+    const keys = songKeys(p);
+    expect([...(keys.get('p/grand') ?? [])]).toEqual([60]);
+    expect(keys.has('p/strings')).toBe(false);
+  });
+
   it('takes the whole instrument when a MIDI effect plays it', () => {
     const strings = { type: 'sampler', pack: 'v', name: 'strings' } as const;
     const keys = songKeys(

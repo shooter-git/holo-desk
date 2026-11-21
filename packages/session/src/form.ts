@@ -401,6 +401,10 @@ const tempoCache: Cache<readonly TempoPoint[], TempoPoint[]> = new WeakMap();
 const meterCache: Cache<readonly MeterPoint[], MeterPoint[]> = new WeakMap();
 const projectCache: Cache<Project, Project> = new WeakMap();
 
+/** The tracks that are heard: all but the inactive ones (the same list when none is). */
+const heardTracks = (tracks: readonly Track[]): readonly Track[] =>
+  tracks.some((t) => t.inactive) ? tracks.filter((t) => !t.inactive) : tracks;
+
 /** The same list when every item came out the same, else the new one. */
 const sameOr = <T>(list: readonly T[], next: T[]): T[] =>
   next.length === list.length && next.every((x, i) => x === list[i]) ? (list as T[]) : next;
@@ -449,7 +453,8 @@ function keyList(project: Pick<Project, 'key' | 'keys'>): readonly KeyPoint[] {
  * The song as it's heard: its repeats and jumps played out, its ornaments played as notes. What the
  * engines play; the song itself (what's shown and edited) keeps the music as it's written. A song
  * with neither is itself, and what doesn't change from one call to the next stays the same objects,
- * so an engine that goes by them only works again on what changed.
+ * so an engine that goes by them only works again on what changed. An inactive track isn't heard:
+ * it's left out, so nothing is played or loaded for it.
  */
 export function performed(project: Project): Project {
   const map = playMap(project);
@@ -457,7 +462,7 @@ export function performed(project: Project): Project {
   const tracks = memo(tracksCache, project.tracks, [map, project.tempo, project.keys, project.key], () =>
     sameOr(
       project.tracks,
-      project.tracks.map((t) =>
+      heardTracks(project.tracks).map((t) =>
         memo(trackCache, t, [map, project.tempo, project.keys, project.key], () => {
           const regions = playedRegions(t.regions, map, project.tempo, keys);
           const channel = playedChannel(t.channel, map);

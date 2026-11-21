@@ -280,7 +280,8 @@ function onKeyDown(e: KeyboardEvent): void {
   } else if (key === 'm' || key === 's') {
     const id = selectedTrackId();
     const t = s.project?.tracks.find((x) => x.id === id);
-    if (t)
+    // (an inactive track's mute and solo wait until it's on again)
+    if (t && !t.inactive)
       updateChannel(
         t.id,
         key === 'm' ? { mute: !t.channel.mute } : { solo: !t.channel.solo },

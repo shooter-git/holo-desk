@@ -375,6 +375,19 @@ describe('tracks', () => {
     expect(await refused(api, 'track_set', { track: 'Low' })).toContain('Say what to change');
   });
 
+  it('switches a track off (disarmed: it records nothing) and on again', async () => {
+    const api = setup();
+    await call(api, 'track_set', { track: 'Bass', armed: true });
+    const off = await call(api, 'track_set', { track: 'Bass', inactive: true });
+    expect(off.text).toContain('made inactive');
+    expect(lastOps(api)).toEqual([{ op: 'updateTrack', track: 'trk_bass', patch: { armed: false, inactive: true } }]);
+    expect(api.project.tracks.find((t) => t.id === 'trk_bass')).toMatchObject({ inactive: true, armed: false });
+    expect(await refused(api, 'track_set', { track: 'Bass', inactive: true })).toContain('inactive already');
+    expect(await refused(api, 'track_set', { track: 'Bass', armed: true })).toContain('records nothing');
+    await call(api, 'track_set', { track: 'Bass', inactive: false });
+    expect('inactive' in (api.project.tracks.find((t) => t.id === 'trk_bass') ?? {})).toBe(false);
+  });
+
   it("shows and sets a synth's knobs within their ranges", async () => {
     const api = setup();
     expect((await call(api, 'synth_set', { track: 'Bass' })).text).toContain('cutoff');

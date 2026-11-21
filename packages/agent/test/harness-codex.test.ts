@@ -311,6 +311,8 @@ describe('Codex: a sealed run', () => {
     expect(argv.some((a) => a.startsWith('--sandbox') || a.startsWith('--cd'))).toBe(false);
     expect(argv).toContain('sandbox_mode="read-only"');
     expect(events.at(-1)).toEqual({ type: 'done', reply: 'spike-42; yellow.' });
+    // AGENTS.md reaches it only when a thread starts: a resumed one has the rules as they are now first
+    expect(recorded(s).stdin).toBe(`# Rules\nWork on the open song only.\n\n${PROMPT_MARK}\n`);
   });
 
   it('starts the thread again when Codex no longer has it', async () => {
@@ -321,6 +323,8 @@ ${replay('codex-normal')}`,
     });
     const events = await runToEnd(h, job(s, { session: 'gone-thread' }));
     expect(recorded(s, 1).argv[1]).not.toBe('resume');
+    // a new thread reads the rules from AGENTS.md: the prompt alone
+    expect(recorded(s, 1).stdin).toBe(`${PROMPT_MARK}\n`);
     expect(events.at(-1)?.type).toBe('done');
   });
 

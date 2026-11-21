@@ -372,6 +372,19 @@ describe('Cursor: a sealed run', () => {
     expect(recorded(s).argv.at(-1)).toBe('--resume=4da7463b-469a-41bf-86ad-c56bdcee7187');
     expect(recorded(s).env.HOME).toBe(join(s.root, 'agt_0123456789ab', 'home'));
     expect(events.at(-1)).toEqual({ type: 'done', reply: '**spike-42**, red.' });
+    // AGENTS.md is read only when a conversation starts: a resumed one has the rules as they are now first
+    expect(recorded(s).stdin).toBe(`# Rules\nWork on the open song only.\n\n${PROMPT_MARK}\n`);
+  });
+
+  it('starts the conversation again, with the prompt alone, when Cursor no longer has it', async () => {
+    s = sandbox();
+    const h = fake({
+      run: `case "$*" in *--resume=*) echo "Error: chat not found" >&2; exit 1;; esac\n${replay('cursor-normal')}\nexit 0`,
+    });
+    const events = await runToEnd(h, job(s, { session: 'gone-chat' }));
+    expect(recorded(s, 1).argv.some((a) => a.startsWith('--resume'))).toBe(false);
+    expect(recorded(s, 1).stdin).toBe(`${PROMPT_MARK}\n`);
+    expect(events.at(-1)?.type).toBe('done');
   });
 
   it('runs without its sandbox where it can’t start, and remembers', async () => {

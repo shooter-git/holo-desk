@@ -481,7 +481,10 @@ of the stretch `played` asked for); `length` is ms (null while still held).
    (`${XDG_CACHE_HOME:-~/.cache}/holo/agent/<thread>`, mode 0700) and puts the token in
    `<workspace>/.holo-job` (mode 0600). It starts the harness sealed, with `@holo/agent`'s MCP server as
    its only tools (`HOLO_URL`, `HOLO_JOB`, `HOLO_JOB_TOKEN_FILE`, `HOLO_MIDDLE_C`), the prompt on stdin,
-   and the thread's session resumed if it has one. Each change the tools make is an `agent-ops` batch
+   and the thread's session resumed if it has one. The rules (`AGENT.md`) go where the harness reads
+   them (a system prompt, or the workspace's `AGENTS.md`), not in the prompt too; a harness that reads
+   `AGENTS.md` only when a conversation starts (Cursor, Codex) gets them at the head of a resumed turn's
+   prompt, so the rules as they are now reach it. Each change the tools make is an `agent-ops` batch
    for the requester's studio, which merges it into the job's undo step.
 4. **End of the turn.** The agent calls `finish {label, reply}` (and `ask_permission`, `look` or
    `hand_off` before it if it needs to), then the harness exits.

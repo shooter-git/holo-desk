@@ -404,6 +404,8 @@ export function codexSpec(): Spec {
       return { args: codexArgs(job, serverFor(ctx, job)), env: {} };
     },
     reader: codexReader,
+    // AGENTS.md reaches the model as one message when a conversation starts, as Cursor's does
+    rulesAtStartOnly: true,
   };
 }
 

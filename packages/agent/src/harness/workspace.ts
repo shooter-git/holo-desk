@@ -1,15 +1,18 @@
 /**
  * A thread's workspace: one folder per conversation, `${XDG_CACHE_HOME:-~/.cache}/holo/agent/<thread>`,
  * mode 0700, outside every repository so a harness's sessions there never mix with the user's own.
- * It stays as long as the thread does (Claude, Codex and Cursor find their sessions by it, Cursor's
- * private home lives in it), and holds:
+ * It stays as long as the thread does (the harnesses find their sessions by it, Cursor's and
+ * Antigravity's private homes live in it), and holds:
  *
  * - `.holo-job` (mode 0600): the running job's token, for HO[LO]'s MCP server to read. It's never in
  *   argv, the environment or a log, and it's removed when the job ends.
+ * - `.holo-mcp-ready`: written by HO[LO]'s MCP server when an Antigravity run starts it (that harness
+ *   doesn't say), removed before each run.
  * - The harness's own files: Claude's `mcp.json`, `settings.json` and `instructions.md`; Codex's
- *   `AGENTS.md`; Cursor's `.cursor/mcp.json`, `.cursor/cli.json`, `AGENTS.md` and `home/`.
+ *   `AGENTS.md`; Cursor's `.cursor/mcp.json`, `.cursor/cli.json`, `AGENTS.md` and `home/`;
+ *   Antigravity's `.agents/mcp_config.json`, `.agents/agents/holo.md` and `home/`.
  */
-import { chmodSync, lstatSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, lstatSync, mkdirSync, rmSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { THREAD } from './types.ts';
@@ -135,4 +138,92 @@ export function cursorFiles(workspace: string, server: McpServer, instructions: 
   const home = privateDir(join(workspace, 'home'));
   privateDir(join(home, '.cursor'));
   return { home };
+}
+
+/** The custom agent an Antigravity run runs as (`--agent=holo`). */
+export const ANTIGRAVITY_AGENT = 'holo';
+
+/**
+ * Antigravity's custom agent: none of its built-in tools or prompt sections
+ * (`excludeDefaultComponents`), only the ones `tools` names (none: HO[LO]'s MCP tools come from the
+ * workspace's MCP config), never a subagent, and the agent's instructions as its system prompt.
+ */
+export function antigravityAgent(instructions: string | null, tools: readonly string[] = []): string {
+  return [
+    '---',
+    `name: ${ANTIGRAVITY_AGENT}`,
+    "description: Works on the open song through HO[LO]'s tools only.",
+    'mainAgent: true',
+    'subagent: false',
+    'excludeDefaultComponents: true',
+    `tools: ${JSON.stringify(tools)}`,
+    '---',
+    instructions?.trim() || "Work on the open song with HO[LO]'s tools.",
+    '',
+  ].join('\n');
+}
+
+/** Written by HO[LO]'s MCP server when a harness starts it (HOLO_MCP_READY_FILE, Antigravity's runs only). */
+export const READY_FILE = '.holo-mcp-ready';
+
+/**
+ * Antigravity's files: the workspace's MCP config (HO[LO]'s server, each of its tools loaded up front,
+ * so the model has them without the built-in tools that read their schemas; told to mark when it's
+ * started, which Antigravity doesn't say), the custom agent, and the private home (kept for resume: the
+ * conversations are in it).
+ */
+export function antigravityFiles(
+  workspace: string,
+  server: McpServer,
+  instructions: string | null,
+  tools: readonly string[],
+): { home: string } {
+  const dir = privateDir(join(workspace, '.agents'));
+  const ready = join(workspace, READY_FILE);
+  rmSync(ready, { force: true });
+  writePrivate(
+    join(dir, 'mcp_config.json'),
+    json({
+      mcpServers: {
+        holo: {
+          ...server,
+          env: { ...server.env, HOLO_MCP_READY_FILE: ready },
+          // a call (and the server's start) may take as long as Claude's and Codex's
+          timeoutSeconds: TOOL_TIMEOUT_MS / 1000,
+          tools: Object.fromEntries(tools.map((t) => [t, { eager: true }])),
+        },
+      },
+    }),
+  );
+  writePrivate(join(privateDir(join(dir, 'agents')), `${ANTIGRAVITY_AGENT}.md`), antigravityAgent(instructions));
+  return { home: privateDir(join(workspace, 'home')) };
+}
+
+/** Where Antigravity keeps its sign-in when the desktop has no keyring, under a home. */
+export const ANTIGRAVITY_TOKEN = ['.gemini', 'antigravity-cli', 'antigravity-oauth-token'] as const;
+
+/**
+ * Ready a private home for Antigravity: its folder, a link to the sign-in file in the user's own home
+ * (read by Antigravity, never by HO[LO]: with a keyring it isn't used at all), and its last update check
+ * marked now, so it doesn't update itself in the background (it looks at most every 15 minutes).
+ */
+export function antigravityHome(home: string, realHome: string): void {
+  const dir = privateDir(join(home, '.gemini', 'antigravity-cli'));
+  privateDir(join(home, '.gemini'));
+  privateDir(home);
+  const link = join(home, ...ANTIGRAVITY_TOKEN);
+  try {
+    // made again each time: a sign-in renewed in here may have replaced the link with a file
+    rmSync(link, { force: true });
+    symlinkSync(join(realHome, ...ANTIGRAVITY_TOKEN), link);
+  } catch {
+    // no links here (Windows without the right): a keyring's sign-in still works
+  }
+  const stamp = join(dir, 'last_check.timestamp');
+  const now = new Date();
+  try {
+    utimesSync(stamp, now, now);
+  } catch {
+    writeFileSync(stamp, '', { mode: 0o600 });
+  }
 }

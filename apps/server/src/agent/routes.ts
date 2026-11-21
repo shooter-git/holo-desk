@@ -871,6 +871,6 @@ export function agentRoutes(app: FastifyInstance, o: AgentOptions): { jobs: Jobs
 
 /** A harness named in a body (400 if it isn't one). */
 function harnessIdOr400(v: unknown): HarnessId {
-  if (!HARNESSES.includes(v as HarnessId)) throw bad('harness is claude, codex or cursor');
+  if (!HARNESSES.includes(v as HarnessId)) throw bad('harness is claude, codex, cursor or antigravity');
   return v as HarnessId;
 }

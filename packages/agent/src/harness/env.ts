@@ -28,6 +28,9 @@ export const AUTH_ENV: Record<HarnessId, RegExp> = {
   claude: /^(ANTHROPIC_API_KEY|ANTHROPIC_AUTH_TOKEN|ANTHROPIC_BASE_URL|CLAUDE_CODE_OAUTH_TOKEN|CLAUDE_CONFIG_DIR)$/,
   codex: /^(OPENAI_API_KEY|OPENAI_BASE_URL|CODEX_API_KEY|CODEX_HOME)$/,
   cursor: /^(CURSOR_API_KEY|CURSOR_AUTH_TOKEN)$/,
+  // the subscription sign-in only (no GEMINI_API_KEY, no AGY_ADC_AUTH): its token is in the desktop's
+  // keyring, reached over the session bus, or in a file (antigravity.ts)
+  antigravity: /^(DBUS_SESSION_BUS_ADDRESS|AGY_CA_CERT|AGY_PROXY_STRICT_SSL)$/,
 };
 
 /** Set for every Claude Code run: no self-update, none of claude.ai's connectors, no CLAUDE.md. */

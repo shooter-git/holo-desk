@@ -1,0 +1,2 @@
+error: failed to construct executor: failed to resolve components: unknown component: tool "holo_probe_not_a_tool" not found in registry
+AGY_ERROR: {"short_error":"failed to construct executor: failed to resolve components: unknown component: tool \"holo_probe_not_a_tool\" not found in registry","status":"UNKNOWN","error_code":2,"code_kind":"grpc","retryable":false,"error_id":"188213a7-1ccf-4c8e-bb01-038057648d72-1"}

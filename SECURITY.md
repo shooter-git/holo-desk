@@ -20,7 +20,7 @@ delete songs, import sample packs and write sessions into the creations folder i
 ## The agent
 
 The agent in the studio is off until it's turned on in Settings › Agent. On, it carries out requests
-typed in the studio's bar with the user's own Claude Code, Codex or Cursor, which the runner
+typed in the studio's bar with the user's own Claude Code, Codex, Cursor or Antigravity, which the runner
 (`pnpm runner`) starts on the host. Unlike the rest of HO[LO], it has a list of who may use it. What
 keeps it to the open song:
 
@@ -71,8 +71,15 @@ keeps it to the open song:
   `GIT_CONFIG_GLOBAL=/dev/null` and `GIT_TERMINAL_PROMPT=0`. Tripwires stop the run, its whole process
   group, at the first sign of a tool other than HO[LO]'s. Each harness's flags are in
   `packages/agent/src/harness/`, and what each still does on its own (Codex reads the user's global
-  `AGENTS.md`; Cursor connects the account's plugins but refuses calls to them) is in
-  [docs/agent-harnesses.md](docs/agent-harnesses.md).
+  `AGENTS.md`; Cursor connects the account's plugins but refuses calls to them; Antigravity's sign-in is
+  linked into its private home, unread by HO[LO], and its tools are limited by a custom agent that a probe
+  checks per version) is in [docs/agent-harnesses.md](docs/agent-harnesses.md).
+- **Antigravity and Google's terms.** Google's Antigravity FAQ says running `agy` inside another app isn't
+  supported on consumer plans, and that it can get the account suspended. HO[LO] runs it only once it's
+  chosen in Settings › Agent, after the studio has said so (on Sign in and on Use), never as the harness
+  picked when none is chosen, and with the subscription sign-in only (no API key is passed). Its sign-in
+  has the `cloud-platform` scope; on a host without a keyring it's a file in `~/.gemini`, as Antigravity
+  keeps it in a terminal.
 - **Scope.** The agent works on the open song only. It can't change HO[LO]'s code, holo-packs,
   `packs.lock.json`, a creation's code or engine, or any file; asked to, it writes a brief for the user
   to paste into their own coding agent in that repository. A brief is only for such a change: asked to
@@ -80,13 +87,14 @@ keeps it to the open song:
   of a brief that mentions a secret, holds a link or runs a command. Screenshots, photos and
   recordings are sent only after the user's click, and pictures are redrawn in the browser first,
   without their location data. Attachments are kept on the host for 7 days. HO[LO] itself never reads
-  or writes the user's harness configuration (`~/.claude`, `~/.codex`, `~/.cursor`), and never signs a
+  or writes the user's harness configuration (`~/.claude`, `~/.codex`, `~/.cursor`, `~/.gemini`), and never signs a
   harness out or switches its account. Two things change a harness, each only when an allowed device's
   user clicks it and confirms: **Update**, which runs the harness's own updater (`claude update`,
-  `codex update`, `cursor-agent update`), and **Install**, offered only for a harness the host doesn't
+  `codex update`, `cursor-agent update`, `agy update`), and **Install**, offered only for a harness the host doesn't
   have, which runs its vendor's official installer, a fixed command in the runner's code (Claude Code's
   `curl -fsSL https://claude.ai/install.sh | bash`, Codex's `curl -fsSL https://chatgpt.com/codex/install.sh | sh`,
-  Cursor's `curl https://cursor.com/install -fsS | bash`, by `bash -o pipefail -c`). Nothing from the
+  Cursor's `curl https://cursor.com/install -fsS | bash`, Antigravity's
+  `curl -fsSL https://antigravity.google/cli/install.sh | bash`, by `bash -o pipefail -c`). Nothing from the
   studio, the server or a request reaches either command: the server only names the harness. Both run
   as the user, with the user's own home and the harness's allowlisted environment, never while that
   harness has a job, and the confirmation says on which computer and what runs.

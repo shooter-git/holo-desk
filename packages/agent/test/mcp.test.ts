@@ -1,5 +1,5 @@
 import { type ChildProcessWithoutNullStreams, spawn } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
@@ -336,6 +336,24 @@ describe('the MCP server starting and stopping', () => {
     expect(s.lines.map((l) => JSON.parse(l).jsonrpc)).toEqual(['2.0']);
     expect(s.stderr.join('')).toContain('raw noise');
     expect(s.stderr.join('')).toContain('noise');
+  });
+
+  it('marks that it started at the first initialize, only when asked to (Antigravity’s runs)', async () => {
+    const ready = join(work, '.holo-mcp-ready');
+    const s = start({ HOLO_MCP_READY_FILE: ready });
+    expect((await s.request('ping')).result).toEqual({});
+    expect(existsSync(ready)).toBe(false);
+    await s.request('initialize', { protocolVersion: '2025-11-25' });
+    expect(statSync(ready).mode & 0o777).toBe(0o600);
+    s.child.stdin.end();
+    expect(await s.exited).toBe(0);
+    rmSync(ready);
+    // not asked: nothing written
+    const plain = start();
+    await plain.request('initialize', { protocolVersion: '2025-11-25' });
+    plain.child.stdin.end();
+    expect(await plain.exited).toBe(0);
+    expect(existsSync(ready)).toBe(false);
   });
 
   it('refuses to start without a job', async () => {

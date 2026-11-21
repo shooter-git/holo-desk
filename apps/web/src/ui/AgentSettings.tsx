@@ -1,6 +1,6 @@
 /**
- * Settings › Agent: Off or On, and, once this device is allowed, Claude Code, Codex and Cursor as the
- * host has them (each installed or not, with its version, sign-in and update, and the one the agent
+ * Settings › Agent: Off or On, and, once this device is allowed, Claude Code, Codex, Cursor and
+ * Antigravity as the host has them (each installed or not, with its version, sign-in and update, and the one the agent
  * runs with), its model and effort, what it asks first and never does, and the devices allowed to use
  * it. Off is the default, and then this section is all there is of it.
  *
@@ -33,7 +33,18 @@ import {
 } from '../app/agent.ts';
 import { device } from '../app/live.ts';
 import { takePairCode } from '../app/pair-link.ts';
-import { choices, defaultLabel, harnessRow, installQuestion, runsWith, runsWithText, toChoose } from './harness-row.ts';
+import {
+  caution,
+  choices,
+  defaultLabel,
+  effortsFor,
+  harnessRow,
+  installQuestion,
+  inUse,
+  runsWith,
+  runsWithText,
+  toChoose,
+} from './harness-row.ts';
 
 /**
  * Where turning it on has got to, on a device not allowed yet. `code`: a code from the host is asked for
@@ -305,9 +316,7 @@ function Allowed() {
   }, []);
   if (!settings) return <div className="muted">Reading the agent’s settings…</div>;
   const listed = settings.harnesses;
-  const found = listed.filter((h) => h.found);
-  const usable = found.filter((h) => h.sealed);
-  const current = found.find((h) => h.id === settings.harness) ?? usable[0] ?? null;
+  const current = inUse(listed, settings.harness);
   // harnesses a runner listed before it went (or one that can't take the agent's jobs connected)
   const problem = listed.length ? runnerProblem(runner) : null;
   return (
@@ -361,8 +370,8 @@ function LookAgain() {
 }
 
 /**
- * Claude Code, Codex and Cursor, a row each, installed or not: its version, sign-in and update, and the
- * one the agent runs with; one that isn't on the host offers Install.
+ * Claude Code, Codex, Cursor and Antigravity, a row each, installed or not: its version, sign-in and
+ * update, and the one the agent runs with; one that isn't on the host offers Install.
  */
 function Harnesses({ listed, current }: { listed: HarnessInfo[]; current: HarnessInfo | null }) {
   return (
@@ -379,12 +388,13 @@ function Harnesses({ listed, current }: { listed: HarnessInfo[]; current: Harnes
 
 /**
  * A harness, plainly (harness-row.ts): "Not installed" and Install; or its version, "Signed in" or
- * Sign in, "Up to date" or Update to x.y, and "In use" or Use. Install and Update ask first. Under it,
- * a sign-in, an update or an install under way, and why one can't be used yet.
+ * Sign in, "Up to date" or Update to x.y, and "In use" or Use. Install and Update ask first, and so do
+ * Sign in and Use for a harness its vendor doesn't support HO[LO] running (`caution`). Under it, a
+ * sign-in, an update or an install under way, and why one can't be used yet.
  */
 function HarnessRow({ harness: h, current }: { harness: HarnessInfo; current: boolean }) {
   const event = useAgent((a) => a.harness[h.id]);
-  const [confirm, setConfirm] = useState<null | 'update' | 'install'>(null);
+  const [confirm, setConfirm] = useState<null | 'update' | 'install' | 'login' | 'use'>(null);
   const [code, setCode] = useState('');
   const [error, setError] = useState('');
   const v = harnessRow(h, event, current);
@@ -393,6 +403,10 @@ function HarnessRow({ harness: h, current }: { harness: HarnessInfo; current: bo
     void harnessAction(h.id, action).catch((err: unknown) => setError(message(err)));
   };
   const question = installQuestion(h);
+  const warning = caution(h);
+  // another harness takes its own models: theirs start from its default
+  const use = () =>
+    void setSettings({ harness: h.id, model: '', effort: '' }).catch((err: unknown) => setError(message(err)));
   return (
     <div className="list-item still agent-harness">
       <span className="strong">{h.name}</span>
@@ -404,7 +418,12 @@ function HarnessRow({ harness: h, current }: { harness: HarnessInfo; current: bo
             Signed in
           </span>
         ) : v.signIn ? (
-          <button type="button" className="btn" disabled={v.signIn.busy} onClick={() => act('login')}>
+          <button
+            type="button"
+            className="btn"
+            disabled={v.signIn.busy || confirm !== null}
+            onClick={() => (warning ? setConfirm('login') : act('login'))}
+          >
             Sign in
           </button>
         ) : null}
@@ -440,10 +459,8 @@ function HarnessRow({ harness: h, current }: { harness: HarnessInfo; current: bo
             type="button"
             className="btn ghost"
             aria-label={`Use ${h.name}`}
-            // another harness takes its own models: theirs start from its default
-            onClick={() =>
-              void setSettings({ harness: h.id, model: '', effort: '' }).catch((err: unknown) => setError(message(err)))
-            }
+            disabled={confirm !== null}
+            onClick={() => (warning ? setConfirm('use') : use())}
           >
             Use
           </button>
@@ -464,6 +481,35 @@ function HarnessRow({ harness: h, current }: { harness: HarnessInfo; current: bo
             }}
           >
             Install
+          </button>
+          <button type="button" className="btn ghost" onClick={() => setConfirm(null)}>
+            Not now
+          </button>
+        </div>
+      )}
+      {warning && (confirm === 'login' || confirm === 'use') && (
+        <div
+          className="agent-more hstack agent-confirm"
+          role="alertdialog"
+          aria-label={confirm === 'login' ? `Sign in to ${h.name}?` : `Use ${h.name}?`}
+        >
+          <span className="grow">
+            {warning.text}{' '}
+            <a href={warning.link} target="_blank" rel="noopener noreferrer">
+              {warning.source}
+            </a>
+          </span>
+          <button
+            type="button"
+            className="btn primary"
+            onClick={() => {
+              const what = confirm;
+              setConfirm(null);
+              if (what === 'login') act('login');
+              else use();
+            }}
+          >
+            {confirm === 'login' ? 'Sign in anyway' : 'Use it anyway'}
           </button>
           <button type="button" className="btn ghost" onClick={() => setConfirm(null)}>
             Not now
@@ -554,9 +600,14 @@ function HarnessRows({ harness: h, model, effort }: { harness: HarnessInfo; mode
   const [typed, setTyped] = useState(model);
   useEffect(() => setTyped(model), [model]);
   const models = choices(h.models ?? [], model, h.aliases);
-  const efforts = choices(h.efforts ?? [], effort);
+  // the efforts of the model a run uses (each model's own, when the harness says them)
+  const own = effortsFor(h, model);
+  const efforts = choices(own ?? [], effort);
   const modelGone = models.some((c) => c.gone);
-  const effortGone = efforts.some((c) => c.gone);
+  // a model that takes no effort has none to be gone
+  const effortGone = !!own?.length && efforts.some((c) => c.gone);
+  // offered with other models, not with this one
+  const notThisModel = effortGone && !!h.efforts?.includes(effort);
   const must = !!h.mustChoose;
   const modelDefault = must ? 'Choose a model' : defaultLabel(h, h.defaultModel ?? null);
   // the default effort of the model a run uses
@@ -573,7 +624,12 @@ function HarnessRows({ harness: h, model, effort }: { harness: HarnessInfo; mode
             className="select agent-select"
             aria-label="Model"
             value={model}
-            onChange={(e) => void setSettings({ model: e.target.value }).catch(() => undefined)}
+            // an effort the new model doesn't take goes with the old one
+            onChange={(e) => {
+              const next = e.target.value;
+              const keeps = !effort || !!effortsFor(h, next)?.includes(effort);
+              void setSettings({ model: next, ...(keeps ? {} : { effort: '' }) }).catch(() => undefined);
+            }}
           >
             <option value="" disabled={must}>
               {modelDefault}
@@ -604,7 +660,7 @@ function HarnessRows({ harness: h, model, effort }: { harness: HarnessInfo; mode
         )}
         {modelGone && <span className="muted">{gone}</span>}
       </div>
-      {h.efforts?.length || effortGone ? (
+      {own?.length || effortGone ? (
         <>
           <span className="agent-key">Effort</span>
           <div className="hstack" style={{ flexWrap: 'wrap', gap: 10 }}>
@@ -623,10 +679,18 @@ function HarnessRows({ harness: h, model, effort }: { harness: HarnessInfo; mode
                 </option>
               ))}
             </select>
-            {effortGone && <span className="muted">{gone}</span>}
+            {effortGone && (
+              <span className="muted">
+                {notThisModel
+                  ? must
+                    ? 'This model doesn’t take it: choose another'
+                    : 'This model doesn’t take it, so it uses its own'
+                  : gone}
+              </span>
+            )}
           </div>
         </>
-      ) : h.efforts ? (
+      ) : own ? (
         <>
           <span className="agent-key">Effort</span>
           <span className="muted">Comes with the model</span>

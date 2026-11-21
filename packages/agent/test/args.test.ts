@@ -113,6 +113,12 @@ describe('checking arguments', () => {
     expect(check(defs, { track: 'x', volume: Number.NaN })).toMatchObject({ ok: false });
   });
 
+  it('forgives a number in a list of text, as in a text field', () => {
+    const names = [{ name: 'parts', type: 'array', items: 'string', describe: 'Parts' }] as const;
+    expect(check(names, { parts: ['Violin I', 2] })).toEqual({ ok: true, args: { parts: ['Violin I', '2'] } });
+    expect(check(names, { parts: [true] })).toMatchObject({ ok: false, errors: ['"parts"[0] must be a string'] });
+  });
+
   it('takes anything for a json field', () => {
     expect(check(defs, { track: 'x', meta: [1, { a: null }] })).toMatchObject({
       ok: true,

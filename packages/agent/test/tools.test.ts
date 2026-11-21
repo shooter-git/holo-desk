@@ -26,6 +26,11 @@ describe('the tool list', () => {
     }
   });
 
+  it('says what every list’s items are, which Gemini (Antigravity) needs: it refuses the whole request otherwise', () => {
+    for (const t of TOOLS)
+      for (const a of t.args) if (a.type === 'array') expect(a.items, `${t.name}.${a.name}`).toBeDefined();
+  });
+
   it('gives as examples only plugin settings that exist (TYPE.PARAM, TYPE#2.PARAM)', () => {
     const types = new Map(PLUGINS.map((p) => [p.type, new Set(p.params.map((x) => x.id))]));
     const named: string[] = [];

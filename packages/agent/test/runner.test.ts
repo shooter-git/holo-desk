@@ -22,7 +22,7 @@ function stub(id: HarnessId, o: { delayInfo?: number; missing?: boolean } = {}) 
   let installed = !o.missing;
   const h: Harness = {
     id,
-    name: id === 'claude' ? 'Claude Code' : id === 'codex' ? 'Codex' : 'Cursor',
+    name: { claude: 'Claude Code', codex: 'Codex', cursor: 'Cursor', antigravity: 'Antigravity' }[id],
     detect: async () => ({ path: `/bin/${id}`, prefix: [] }),
     async info(): Promise<HarnessInfo> {
       infoCalls++;
@@ -81,18 +81,19 @@ function runner(over: { delayInfo?: number; missing?: HarnessId[] } = {}) {
   const claude = stub('claude', { ...over, missing: over.missing?.includes('claude') });
   const codex = stub('codex', { ...over, missing: over.missing?.includes('codex') });
   const cursor = stub('cursor', { ...over, missing: over.missing?.includes('cursor') });
+  const antigravity = stub('antigravity', { ...over, missing: over.missing?.includes('antigravity') });
   const r = startAgentRunner({
     base: 'http://127.0.0.1:47998',
     send: (m) => sent.push(m),
     repo: REPO,
     log: (l) => logs.push(l),
-    harnesses: { claude: claude.h, codex: codex.h, cursor: cursor.h },
+    harnesses: { claude: claude.h, codex: codex.h, cursor: cursor.h, antigravity: antigravity.h },
     root: s.root,
     env: s.env,
     middleC: async () => 'C4',
     host: 'studio-host',
   });
-  return { r, sent, logs, claude, codex, cursor };
+  return { r, sent, logs, claude, codex, cursor, antigravity };
 }
 
 const run = (n: number, over: Record<string, unknown> = {}) => ({
@@ -139,6 +140,7 @@ describe('the agent runner', () => {
         { id: 'claude', host: 'studio-host' },
         { id: 'codex', host: 'studio-host' },
         { id: 'cursor', host: 'studio-host' },
+        { id: 'antigravity', host: 'studio-host' },
       ],
     });
     r.connected();
@@ -147,7 +149,7 @@ describe('the agent runner', () => {
     // asked to look again: a fresh look (a failed seal checked again), and each harness says it's done
     r.handle({ type: 'agent-refresh' });
     expect(claude.rechecks()).toBe(1);
-    await until(() => sent.filter((m) => m.type === 'agent-harness').length === 3);
+    await until(() => sent.filter((m) => m.type === 'agent-harness').length === 4);
     expect(claude.infoCalls()).toBe(2);
     expect(sent.filter((m) => m.type === 'agent-harness')[0]).toEqual({
       type: 'agent-harness',

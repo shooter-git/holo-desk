@@ -51,7 +51,7 @@ import {
   sinceLines,
   songLines,
 } from './prompt.ts';
-import { type AgentStore, HARNESSES, type HarnessId, type ThreadRow, type TurnExtra } from './store.ts';
+import { type AgentStore, CHOSEN_ONLY, HARNESSES, type HarnessId, type ThreadRow, type TurnExtra } from './store.ts';
 import { parseExtra, type Threads } from './threads.ts';
 
 export type JobState = 'waiting' | 'running' | 'awaiting' | 'done' | 'failed' | 'cancelled';
@@ -99,6 +99,8 @@ export interface HarnessInfo {
   reason?: string;
   models?: string[];
   efforts?: string[];
+  /** By model: the efforts it takes, when the models don't all take the same. */
+  modelEfforts?: Record<string, string[]>;
   /** What a run given no model uses, as the harness lists it. */
   defaultModel?: string;
   /** By model: the effort a run given none uses. */
@@ -281,7 +283,12 @@ export interface NewRequest {
 
 const LIVE: ReadonlySet<JobState> = new Set(['waiting', 'running']);
 const isLive = (job: AgentJob) => LIVE.has(job.view.state);
-const HARNESS_NAMES: Record<HarnessId, string> = { claude: 'Claude Code', codex: 'Codex', cursor: 'Cursor' };
+const HARNESS_NAMES: Record<HarnessId, string> = {
+  claude: 'Claude Code',
+  codex: 'Codex',
+  cursor: 'Cursor',
+  antigravity: 'Antigravity',
+};
 
 /**
  * Why a harness that lists no defaults (`mustChoose`) won't run with this model and effort: what's
@@ -408,9 +415,11 @@ export class Jobs implements AgentHooks {
   /** The harness a request runs with, its runner and what it reported; or why there's none. */
   private pick(wanted: HarnessId | null): { harness: HarnessId; runner: LiveClient; info: HarnessInfo } {
     if (!this.o.live.agentRunners().length) throw new Refusal(409, noRunnerText(this.o.live.runners()), 'no-runner');
-    // none chosen: the first that can be sealed, else the first found (whose refusal then says why)
-    const sealed = HARNESSES.filter((id) => this.runnerFor(id)?.info.sealed);
-    const ids = wanted ? [wanted] : sealed.length ? sealed : HARNESSES.filter((id) => this.runnerFor(id));
+    // none chosen: the first that can be sealed, else the first found (whose refusal then says why);
+    // never one that runs only when it's chosen
+    const any = HARNESSES.filter((id) => !CHOSEN_ONLY.has(id));
+    const sealed = any.filter((id) => this.runnerFor(id)?.info.sealed);
+    const ids = wanted ? [wanted] : sealed.length ? sealed : any.filter((id) => this.runnerFor(id));
     const harness = ids[0];
     const found = harness ? this.runnerFor(harness) : null;
     if (!harness || !found)
@@ -418,7 +427,9 @@ export class Jobs implements AgentHooks {
         409,
         wanted
           ? `${HARNESS_NAMES[wanted]} isn’t on this computer: pick another harness in Settings › Agent`
-          : 'No harness is on this computer: install Claude Code, Codex or Cursor',
+          : [...CHOSEN_ONLY].some((id) => this.runnerFor(id))
+            ? 'Choose a harness in Settings › Agent: Antigravity runs only once it’s chosen there'
+            : 'No harness is on this computer: install Claude Code, Codex or Cursor',
         'no-harness',
       );
     // signed out, with its seal not yet checked (it asks for its sign-in first): the sign-in is what's missing
@@ -1686,6 +1697,18 @@ export function parseHarnesses(list: unknown): HarnessInfo[] {
         .filter((e): e is [string, string] => MODEL.test(e[0]) && typeof e[1] === 'string' && MODEL.test(e[1]))
         .slice(0, most);
       if (kept.length) info[key] = Object.fromEntries(kept);
+    }
+    // each model's efforts: a model's name to a few efforts, as settings check them
+    const own = h.modelEfforts;
+    if (typeof own === 'object' && own !== null && !Array.isArray(own)) {
+      const kept = Object.entries(own)
+        .filter(
+          (e): e is [string, string[]] =>
+            MODEL.test(e[0]) && Array.isArray(e[1]) && e[1].every((x) => typeof x === 'string' && MODEL.test(x)),
+        )
+        .slice(0, 500)
+        .map(([m, list]) => [m, list.slice(0, 50)] as const);
+      if (kept.length) info.modelEfforts = Object.fromEntries(kept);
     }
     if (h.mustChoose === true) info.mustChoose = true;
     out.push(info);

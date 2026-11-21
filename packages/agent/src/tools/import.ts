@@ -150,7 +150,9 @@ export const importTool: Tool = {
       name: 'parts',
       type: 'array',
       describe:
-        'MIDI and MusicXML: which of the file’s parts, by name or number from 1, e.g. ["Violin I", "Cello"] or [2]',
+        'MIDI and MusicXML: which of the file’s parts, by name or number from 1, e.g. ["Violin I", "Cello"] or ["2"]',
+      // text, a number among it ("2"): Gemini (Antigravity) refuses a list whose items have no type
+      items: 'string',
       maxLength: 64,
     },
   ],

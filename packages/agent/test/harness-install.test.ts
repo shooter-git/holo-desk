@@ -7,6 +7,7 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, symlinkSync, writeFileS
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { NOT_SEEN } from '../src/harness/adapter.ts';
+import { antigravityHarness } from '../src/harness/antigravity.ts';
 import { claudeHarness } from '../src/harness/claude.ts';
 import { codexHarness } from '../src/harness/codex.ts';
 import { cursorHarness } from '../src/harness/cursor.ts';
@@ -20,6 +21,12 @@ const OFFICIAL = {
   claude: { make: claudeHarness, program: 'claude', curl: ['-fsSL', 'https://claude.ai/install.sh'], shell: 'bash' },
   codex: { make: codexHarness, program: 'codex', curl: ['-fsSL', 'https://chatgpt.com/codex/install.sh'], shell: 'sh' },
   cursor: { make: cursorHarness, program: 'cursor-agent', curl: ['https://cursor.com/install', '-fsS'], shell: 'bash' },
+  antigravity: {
+    make: antigravityHarness,
+    program: 'agy',
+    curl: ['-fsSL', 'https://antigravity.google/cli/install.sh'],
+    shell: 'bash',
+  },
 } as const;
 
 type Id = keyof typeof OFFICIAL;

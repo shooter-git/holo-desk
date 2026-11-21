@@ -6,12 +6,13 @@
  *
  * with HOLO_URL (the server), HOLO_JOB (the job), HOLO_JOB_TOKEN_FILE (where the job token is; the
  * token itself is never in the environment or argv) and HOLO_MIDDLE_C ("C3" or "C4", the studio's
- * note naming).
+ * note naming). With HOLO_MCP_READY_FILE, it writes that (empty) file when a harness first says
+ * `initialize`: how the runner knows a harness that doesn't say so started it (Antigravity).
  *
  * stdout carries JSON-RPC only: anything else printed goes to stderr. Changes run one at a time, in
  * the order they were called; reading runs alongside. It exits when stdin closes.
  */
-import { readFileSync, realpathSync } from 'node:fs';
+import { readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { createInterface } from 'node:readline';
 import { fileURLToPath } from 'node:url';
 import { format } from 'node:util';
@@ -23,7 +24,7 @@ import { TOOLS } from './tools/index.ts';
 
 /**
  * The protocol versions understood, newest first; a client asking for another gets the newest.
- * Claude Code and Cursor ask for 2025-11-25, Codex for 2025-06-18 (docs/agent-harnesses.md).
+ * Claude Code, Cursor and Antigravity ask for 2025-11-25, Codex for 2025-06-18 (docs/agent-harnesses.md).
  */
 export const PROTOCOL_VERSIONS = ['2025-11-25', '2025-06-18', '2025-03-26', '2024-11-05'] as const;
 
@@ -57,6 +58,8 @@ export interface ServerOptions {
   version?: string;
   /** Where the server's own notes go (stderr), never the protocol. */
   log?: (line: string) => void;
+  /** Called on each `initialize`: a harness has started the server and is talking to it. */
+  onInitialize?: () => void;
 }
 
 export interface Server {
@@ -138,6 +141,7 @@ export function createServer(opts: ServerOptions): Server {
       typeof m.params === 'object' && m.params !== null && !Array.isArray(m.params) ? (m.params as Message) : {};
     switch (m.method) {
       case 'initialize': {
+        opts.onInitialize?.();
         const asked = params.protocolVersion;
         const protocolVersion = (PROTOCOL_VERSIONS as readonly unknown[]).includes(asked)
           ? asked
@@ -237,7 +241,24 @@ async function main(): Promise<void> {
   }
   // one memory for the run: a listen in parts is heard as one, and the last one is kept
   const ctx: ToolContext = { api, middleC, memory: newMemory() };
-  await serveStdio({ tools: TOOLS, ctx, version: VERSION, log: err, write: (t) => void protocol(t) });
+  const ready = process.env.HOLO_MCP_READY_FILE;
+  const onInitialize = ready
+    ? () => {
+        try {
+          writeFileSync(ready, '', { mode: 0o600 });
+        } catch (e) {
+          err(`can't mark the server started: ${e instanceof Error ? e.message : String(e)}`);
+        }
+      }
+    : undefined;
+  await serveStdio({
+    tools: TOOLS,
+    ctx,
+    version: VERSION,
+    log: err,
+    write: (t) => void protocol(t),
+    ...(onInitialize ? { onInitialize } : {}),
+  });
   protocol('', () => process.exit(0));
 }
 

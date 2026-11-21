@@ -99,6 +99,8 @@ export interface HarnessInfo {
   reason?: string;
   models?: string[];
   efforts?: string[];
+  /** By model: the efforts it takes, when the models don't all take the same. */
+  modelEfforts?: Record<string, string[]>;
   /** What a run given no model uses, as the harness lists it. */
   defaultModel?: string;
   /** By model: the effort a run given none uses. */
@@ -1695,6 +1697,18 @@ export function parseHarnesses(list: unknown): HarnessInfo[] {
         .filter((e): e is [string, string] => MODEL.test(e[0]) && typeof e[1] === 'string' && MODEL.test(e[1]))
         .slice(0, most);
       if (kept.length) info[key] = Object.fromEntries(kept);
+    }
+    // each model's efforts: a model's name to a few efforts, as settings check them
+    const own = h.modelEfforts;
+    if (typeof own === 'object' && own !== null && !Array.isArray(own)) {
+      const kept = Object.entries(own)
+        .filter(
+          (e): e is [string, string[]] =>
+            MODEL.test(e[0]) && Array.isArray(e[1]) && e[1].every((x) => typeof x === 'string' && MODEL.test(x)),
+        )
+        .slice(0, 500)
+        .map(([m, list]) => [m, list.slice(0, 50)] as const);
+      if (kept.length) info.modelEfforts = Object.fromEntries(kept);
     }
     if (h.mustChoose === true) info.mustChoose = true;
     out.push(info);

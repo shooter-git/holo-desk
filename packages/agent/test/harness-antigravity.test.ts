@@ -123,8 +123,9 @@ echo "couldn't log in: token exchange failed: oauth2: \\"invalid_grant\\" \\"Mal
         run: `env -0 > ${q(join(s.rec, 'update-env'))}; echo "⟳ Checking for updates... (current version 1.5.13)"; echo "✓ You are already on the latest version."; exit 0`,
       },
     ],
+    // HO[LO]'s MCP server, as Antigravity starts it, marks the workspace
     o.run ??
-      `case "$*" in *--conversation=*) ${replay('antigravity-resume')};; *) ${replay('antigravity-normal')};; esac\nexit 0`,
+      `touch .holo-mcp-ready\ncase "$*" in *--conversation=*) ${replay('antigravity-resume')};; *) ${replay('antigravity-normal')};; esac\nexit 0`,
   );
   const fetched: string[] = [];
   const h = antigravityHarness({
@@ -162,6 +163,13 @@ describe('Antigravity: finding it', () => {
       // a model's effort variants are one model with those efforts
       models: ['gemini-3.8-flash', 'claude-sonnet-4-6', 'claude-opus-4-6-thinking', 'gpt-oss-120b'],
       efforts: ['low', 'medium', 'high'],
+      // each model's own: none for one whose effort comes with it
+      modelEfforts: {
+        'gemini-3.8-flash': ['low', 'medium', 'high'],
+        'claude-sonnet-4-6': [],
+        'claude-opus-4-6-thinking': [],
+        'gpt-oss-120b': ['medium'],
+      },
       update: { available: true, latest: '1.5.14' },
     });
     expect(h.fetched).toEqual([`${ANTIGRAVITY_MANIFESTS}/${antigravityPlatform('linux')}.json`]);
@@ -346,6 +354,7 @@ describe('Antigravity: a sealed run', () => {
     expect(holo.env.HOLO_JOB_TOKEN_FILE).toBe(join(j.workspace, '.holo-job'));
     expect(JSON.stringify(config)).not.toContain(TOKEN);
     expect(holo.timeoutSeconds).toBe(240);
+    expect(holo.env.HOLO_MCP_READY_FILE).toBe(join(j.workspace, '.holo-mcp-ready'));
     expect(Object.keys(holo.tools)).toEqual(TOOLS.map((t) => t.name));
     expect(Object.values(holo.tools).every((t) => (t as { eager: boolean }).eager === true)).toBe(true);
     expect(statSync(join(j.workspace, '.agents', 'mcp_config.json')).mode & 0o777).toBe(0o600);
@@ -380,6 +389,21 @@ describe('Antigravity: a sealed run', () => {
     expect(antigravityModelArgs('gemini-3.8-flash', '', null)).toEqual(['--model=gemini-3.8-flash']);
     expect(antigravityModelArgs('', 'high', null)).toEqual(['--effort=high']);
     expect(antigravityModelArgs('gemini-9', 'max', {})).toEqual(['--model=gemini-9', '--effort=max']);
+  });
+
+  it('fails a run that used none of HO[LO]’s tools when its MCP server never started (nothing else says so)', async () => {
+    s = sandbox();
+    const dead = fake({ signedIn: true, run: `${replay('antigravity-resume')}\nexit 0` });
+    const j = job(s);
+    // a mark left from an earlier run doesn't count: it's removed before each one
+    writeFileSync(join(j.workspace, '.holo-mcp-ready'), '');
+    expect(await runToEnd(dead, j)).toEqual([
+      { type: 'session', session: '353139ba-a600-4fd1-ae54-5b948d504c57' },
+      { type: 'failed', error: 'HO[LO]’s tools didn’t start in Antigravity, so it answered without them' },
+    ]);
+    // one that called them had them, mark or not
+    const called = fake({ signedIn: true, run: `${replay('antigravity-normal')}\nexit 0` });
+    expect((await runToEnd(called, job(s))).at(-1)).toMatchObject({ type: 'done' });
   });
 
   it('carries a conversation on with --conversation, in the same private home', async () => {

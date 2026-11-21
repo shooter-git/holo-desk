@@ -125,6 +125,12 @@ describe('Codex: finding it', () => {
       models: ['gpt-6-sol', 'gpt-6-luna', 'gpt-5.5'],
       // "ultra" delegates to sub-agents, which a sealed run doesn't have
       efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
+      // not every model takes them all: each model's own
+      modelEfforts: {
+        'gpt-6-sol': ['low', 'medium', 'high', 'xhigh', 'max'],
+        'gpt-6-luna': ['low', 'medium', 'high', 'xhigh', 'max'],
+        'gpt-5.5': ['low', 'medium'],
+      },
       // what a run given none uses: the listed model first in the catalog's order, and each one's own effort
       defaultModel: 'gpt-6-luna',
       defaultEfforts: { 'gpt-6-sol': 'medium', 'gpt-6-luna': 'low' },

@@ -44,6 +44,11 @@ export interface HarnessInfo {
   models?: string[];
   efforts?: string[];
   /**
+   * The efforts each model takes, when the models don't all take the same (Antigravity, Codex): a
+   * model with none here takes none (its effort comes with it). `efforts` is all of them.
+   */
+  modelEfforts?: Record<string, string[]>;
+  /**
    * The model a run uses when the agent's Model is left empty, as the harness lists it (Codex's
    * catalog, Cursor's "(default)").
    */

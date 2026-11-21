@@ -107,6 +107,16 @@ export function caution(h: Pick<HarnessInfo, 'id'>): { text: string; link: strin
   };
 }
 
+/**
+ * The harness the agent runs with, as the server picks it: the one chosen, when the host has it; else
+ * the first that can be limited to HO[LO]'s tools, never one that asks first (`caution`: the server
+ * runs it only once it's chosen); null when there's none.
+ */
+export function inUse(listed: readonly HarnessInfo[], chosen: HarnessInfo['id'] | null): HarnessInfo | null {
+  const found = listed.filter((h) => h.found);
+  return found.find((h) => h.id === chosen) ?? found.find((h) => h.sealed && !caution(h)) ?? null;
+}
+
 /** What Install asks before it runs: what runs, where, as the vendor's docs give it. */
 export function installQuestion(h: HarnessInfo): { text: string; command: string } {
   return {
@@ -134,13 +144,23 @@ function aliasLabel(alias: string, full: string): string {
   return `${name} (${said.startsWith(`${name} `) ? said.slice(name.length + 1) : said})`;
 }
 
+/**
+ * The efforts the model a run uses takes: its own list when the harness gives each model's
+ * (`modelEfforts`), else the harness's. The model is the one chosen while the harness offers it, else
+ * its default.
+ */
+export function effortsFor(h: HarnessInfo, model: string): string[] | undefined {
+  const name = model && (!h.models?.length || h.models.includes(model)) ? model : (h.defaultModel ?? '');
+  return name && h.modelEfforts && Object.hasOwn(h.modelEfforts, name) ? h.modelEfforts[name] : h.efforts;
+}
+
 /** The model and effort a run uses now, from the agent's Model and Effort and what the harness says. */
 export interface RunsWith {
   /** The model chosen (what its alias stood for at its last run), or the harness's default; null: not said. */
   model: string | null;
   /** The effort chosen, or the model's own default; null: not said, or carried in the model's name. */
   effort: string | null;
-  /** The model's name carries its effort (Cursor): there's no Effort to choose. */
+  /** The model's name carries its effort (Cursor, some of Antigravity's): there's no Effort to choose. */
   effortInModel: boolean;
   /** Each is the harness's default: nothing chosen, or the one chosen is no longer offered. */
   defaultModel: boolean;
@@ -155,8 +175,9 @@ export interface RunsWith {
 export function runsWith(h: HarnessInfo, model: string, effort: string): RunsWith {
   const chosen = model && (!h.models?.length || h.models.includes(model)) ? model : '';
   const resolved = chosen ? (h.aliases?.[chosen] ?? chosen) : (h.defaultModel ?? null);
-  const effortInModel = h.efforts?.length === 0;
-  const picked = !effortInModel && effort && (!h.efforts || h.efforts.includes(effort)) ? effort : '';
+  const efforts = effortsFor(h, model);
+  const effortInModel = efforts?.length === 0;
+  const picked = !effortInModel && effort && (!efforts || efforts.includes(effort)) ? effort : '';
   const effortNow = effortInModel ? null : picked || (resolved && h.defaultEfforts?.[resolved]) || null;
   return { model: resolved, effort: effortNow, effortInModel, defaultModel: !chosen, defaultEffort: !picked };
 }

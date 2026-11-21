@@ -120,6 +120,10 @@ When the runner looks:
   and efforts as they are now, each seal as remembered for its version. A new version, noticed then or
   after an update, is read in full at once (its `--help`, its catalog, its seal).
 
+When the models don't all take the same efforts (Codex's catalog, Antigravity's variants), the runner
+also reports each model's (`HarnessInfo.modelEfforts`, read from what's already listed), and the Effort
+picker offers those of the model a run uses.
+
 A saved model or effort the harness no longer offers isn't an error: the adapter drops it before the
 run (the model when the last look listed others; the effort when the harness doesn't take it with that
 model), and the run uses the harness's default. The picker shows it as "(no longer offered)". Claude
@@ -701,7 +705,7 @@ Cursor unavailable when they fail. What it does instead is the flag probe below.
 
 ## Antigravity
 
-Google's Antigravity CLI (`agy`), 1.5.13, on 2026-11-21, signed in with a free personal Google account.
+Google's Antigravity CLI (`agy`), 1.5.13, on 2026-11-21, signed in with a free account.
 Recorded by hand (the binary in a scratch folder with a HOME of its own, the stub MCP server of
 `tools/agent-spike.mjs`), not with the spike tool. The cheapest model, `gemini-3.8-flash-low`.
 
@@ -816,8 +820,12 @@ with HO[LO]'s own MCP server had all its tools and called `song_status`.
 
 **Caveats.**
 - The consumer-plan terms, above.
-- A HO[LO] MCP server that can't start isn't seen: neither the stream nor the log says so, and the model
-  answers that it has no such tool. The reply says so, and nothing else happens.
+- A HO[LO] MCP server that can't start isn't in the stream or the log: the model just answers that it has
+  no such tool. So HO[LO]'s server marks the workspace at its first `initialize` (`HOLO_MCP_READY_FILE`,
+  set in Antigravity's MCP config only; `.holo-mcp-ready`, removed before each run), and a run that used
+  none of HO[LO]'s tools without the mark fails: "HO[LO]'s tools didn't start in Antigravity, so it
+  answered without them". The server starts before the model is asked (its tools are in the first
+  request: with the server gone, the model didn't have them, cached schemas or not).
 - Linux only, so far: on macOS the keyring and the private home are unchecked.
 
 ## Tool count

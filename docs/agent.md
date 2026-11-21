@@ -134,7 +134,7 @@ server). Scan's own Read in, which needs no agent, uses `GET /api/scans/:id/engi
 step. That isn't an agent route.
 
 **`HarnessInfo`** is:
-`{id:'claude'|'codex'|'cursor'|'antigravity', name, found, version?, signedIn?, account?, update?:{available, latest?}, sealed, sealUnknown?, reason?, models?:string[], efforts?:string[], defaultModel?, defaultEfforts?:{[model]:effort}, aliases?:{[alias]:model}, mustChoose?, host?, installer?}`.
+`{id:'claude'|'codex'|'cursor'|'antigravity', name, found, version?, signedIn?, account?, update?:{available, latest?}, sealed, sealUnknown?, reason?, models?:string[], efforts?:string[], modelEfforts?:{[model]:effort[]}, defaultModel?, defaultEfforts?:{[model]:effort}, aliases?:{[alias]:model}, mustChoose?, host?, installer?}`.
 - The runner reports all four, found or not.
 - `sealed: false` means the harness can't be locked down to HO[LO]'s tools. The studio shows it as
   unavailable, with `reason`.
@@ -150,6 +150,10 @@ step. That isn't an agent route.
   for the native one), so Update never offers a version `claude update` won't install. Codex's is
   npm's `latest`; Cursor's is what `cursor-agent about` says; Antigravity's is the manifest its installer
   reads.
+- `modelEfforts` gives each model's efforts when the models don't all take the same (Antigravity, Codex):
+  a model listed with none takes none (its effort comes with it). The Effort picker offers the efforts
+  of the model a run uses, "Requests use" says only what that model takes, and choosing a model clears
+  a saved effort it doesn't take.
 - At most 500 `models` and 50 `efforts` are kept, each checked as settings check them. They're the
   harness's own lists, read on the host (docs/agent-harnesses.md, "Models and efforts"): HO[LO]'s server
   never asks a vendor for them, it keeps what the runner reports.
@@ -177,7 +181,8 @@ each (`apps/web/src/ui/harness-row.ts`), through a harness's whole life:
    why it can't be used). The sign-in is each harness's own relay: Claude Code's page and a pasted code,
    Codex's page and a one-time code, Cursor's page while it waits, Google's page and a pasted code for
    Antigravity. A harness signed out isn't offered as **Use**.
-4. **Signed in**: **Use**, or **In use** for the one the agent runs with.
+4. **Signed in**: **Use**, or **In use** for the one the agent runs with: the one chosen, or with none
+   chosen the first that can be limited to HO[LO]'s tools, as the server picks it (never Antigravity).
 
 For Antigravity, **Sign in** and **Use** ask first (`caution` in `harness-row.ts`): Google's FAQ says
 running `agy` inside another app "is not supported under consumer plans", and that third-party software

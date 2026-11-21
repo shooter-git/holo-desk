@@ -6,6 +6,8 @@
  *
  * - `.holo-job` (mode 0600): the running job's token, for HO[LO]'s MCP server to read. It's never in
  *   argv, the environment or a log, and it's removed when the job ends.
+ * - `.holo-mcp-ready`: written by HO[LO]'s MCP server when an Antigravity run starts it (that harness
+ *   doesn't say), removed before each run.
  * - The harness's own files: Claude's `mcp.json`, `settings.json` and `instructions.md`; Codex's
  *   `AGENTS.md`; Cursor's `.cursor/mcp.json`, `.cursor/cli.json`, `AGENTS.md` and `home/`;
  *   Antigravity's `.agents/mcp_config.json`, `.agents/agents/holo.md` and `home/`.
@@ -161,10 +163,14 @@ export function antigravityAgent(instructions: string | null, tools: readonly st
   ].join('\n');
 }
 
+/** Written by HO[LO]'s MCP server when a harness starts it (HOLO_MCP_READY_FILE, Antigravity's runs only). */
+export const READY_FILE = '.holo-mcp-ready';
+
 /**
  * Antigravity's files: the workspace's MCP config (HO[LO]'s server, each of its tools loaded up front,
- * so the model has them without the built-in tools that read their schemas), the custom agent, and the
- * private home (kept for resume: the conversations are in it).
+ * so the model has them without the built-in tools that read their schemas; told to mark when it's
+ * started, which Antigravity doesn't say), the custom agent, and the private home (kept for resume: the
+ * conversations are in it).
  */
 export function antigravityFiles(
   workspace: string,
@@ -173,12 +179,15 @@ export function antigravityFiles(
   tools: readonly string[],
 ): { home: string } {
   const dir = privateDir(join(workspace, '.agents'));
+  const ready = join(workspace, READY_FILE);
+  rmSync(ready, { force: true });
   writePrivate(
     join(dir, 'mcp_config.json'),
     json({
       mcpServers: {
         holo: {
           ...server,
+          env: { ...server.env, HOLO_MCP_READY_FILE: ready },
           // a call (and the server's start) may take as long as Claude's and Codex's
           timeoutSeconds: TOOL_TIMEOUT_MS / 1000,
           tools: Object.fromEntries(tools.map((t) => [t, { eager: true }])),

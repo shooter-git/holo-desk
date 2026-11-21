@@ -101,6 +101,11 @@ export interface Spec {
   reader(): Reader;
   /** A run that failed at once for a reason a second try without it avoids (Cursor's sandbox). */
   retry?(ctx: Context, job: Job, output: string): boolean;
+  /**
+   * Whether HO[LO]'s MCP server started for this run, for a harness whose stream doesn't say
+   * (Antigravity): a run that ends having used none of HO[LO]'s tools, without it, answered without them.
+   */
+  toolsStarted?(job: Job): boolean;
   /** What a run reads on stdin, when it isn't the prompt as it is (Antigravity's is one JSON line). */
   input?(job: Job): string;
   /**
@@ -492,6 +497,15 @@ export function defineHarness(spec: Spec, o: AdapterOptions): Harness {
         offered = { version: ctx.version, models: okModels };
         if (okModels.length) info.models = okModels;
         info.efforts = efforts.filter((e) => MODEL.test(e));
+        // each model's own efforts, when they aren't all the same (the lists are read already: no new look)
+        const all = info.efforts.join(' ');
+        const byModel = await Promise.all(
+          okModels.map(async (m) => {
+            const own = await spec.efforts(ctx, m).catch(() => null);
+            return [m, own ? own.filter((e) => MODEL.test(e)) : (info.efforts ?? [])] as const;
+          }),
+        );
+        if (byModel.some(([, own]) => own.join(' ') !== all)) info.modelEfforts = Object.fromEntries(byModel);
         Object.assign(info, defaults());
         if (spec.mustChoose) info.mustChoose = true;
         if (update) info.update = update;
@@ -809,6 +823,13 @@ export function defineHarness(spec: Spec, o: AdapterOptions): Harness {
           return resolve({});
         }
         if (code === 0 || (ended && exited && code === null)) {
+          if (!busy && spec.toolsStarted && !spec.toolsStarted(job)) {
+            report({
+              type: 'failed',
+              error: `HO[LO]’s tools didn’t start in ${spec.name}, so it answered without them`,
+            });
+            return resolve({});
+          }
           report(reply ? { type: 'done', reply } : { type: 'done' });
           return resolve({});
         }

@@ -10,8 +10,10 @@ import {
   caution,
   choices,
   defaultLabel,
+  effortsFor,
   harnessRow,
   installQuestion,
+  inUse,
   modelName,
   runsWith,
   runsWithText,
@@ -104,6 +106,52 @@ describe('a harness its vendor doesn’t support HO[LO] running', () => {
     expect(warning?.text).toContain('suspended');
     expect(warning?.link).toBe('https://antigravity.google/docs/faq/');
     for (const id of ['claude', 'codex', 'cursor'] as const) expect(caution({ id })).toBeNull();
+  });
+
+  it('offers the efforts of the model a run uses, and says a model that takes none has its own', () => {
+    const h: HarnessInfo = {
+      id: 'antigravity',
+      name: 'Antigravity',
+      found: true,
+      sealed: true,
+      models: ['gemini-3.8-flash', 'claude-sonnet-4-6', 'gpt-oss-120b'],
+      efforts: ['low', 'medium', 'high'],
+      modelEfforts: {
+        'gemini-3.8-flash': ['low', 'medium', 'high'],
+        'claude-sonnet-4-6': [],
+        'gpt-oss-120b': ['medium'],
+      },
+    };
+    expect(effortsFor(h, 'gemini-3.8-flash')).toEqual(['low', 'medium', 'high']);
+    expect(effortsFor(h, 'gpt-oss-120b')).toEqual(['medium']);
+    // none chosen, and no default said: every effort
+    expect(effortsFor(h, '')).toEqual(['low', 'medium', 'high']);
+    expect(runsWithText(h, 'gemini-3.8-flash', 'high')).toBe('Gemini-3.8-flash at high effort');
+    // its effort comes with it: none is said, whatever was saved
+    expect(runsWith(h, 'claude-sonnet-4-6', 'high')).toMatchObject({ effort: null, effortInModel: true });
+    expect(runsWithText(h, 'claude-sonnet-4-6', 'high')).toBe('Claude-sonnet-4-6');
+    // one it doesn't take: its own default
+    expect(runsWithText(h, 'gpt-oss-120b', 'low')).toBe('Gpt-oss-120b at Antigravity’s default effort');
+  });
+
+  it('is never the one in use unless it’s chosen, as the server runs it', () => {
+    const antigravity: HarnessInfo = {
+      id: 'antigravity',
+      name: 'Antigravity',
+      found: true,
+      sealed: true,
+      signedIn: true,
+    };
+    const codex: HarnessInfo = { id: 'codex', name: 'Codex', found: true, sealed: true, signedIn: true };
+    const claude: HarnessInfo = { id: 'claude', name: 'Claude Code', found: true, sealed: false };
+    // the only one there, sealed and signed in: none is in use
+    expect(inUse([antigravity], null)).toBeNull();
+    // with another that can be used: that one
+    expect(inUse([claude, codex, antigravity], null)).toBe(codex);
+    // chosen: it
+    expect(inUse([claude, codex, antigravity], 'antigravity')).toBe(antigravity);
+    // chosen and gone from the host: the first that can be used instead
+    expect(inUse([codex, { ...antigravity, found: false }], 'antigravity')).toBe(codex);
   });
 });
 

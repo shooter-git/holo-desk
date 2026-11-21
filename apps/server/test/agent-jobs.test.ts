@@ -799,6 +799,27 @@ describe('harnesses', () => {
       expect(codex?.[key], key).toBeUndefined();
   });
 
+  it('keeps each model’s efforts as settings check them, a model taking none included', () => {
+    const [antigravity, codex] = parseHarnesses([
+      {
+        id: 'antigravity',
+        name: 'Antigravity',
+        found: true,
+        sealed: true,
+        modelEfforts: {
+          'gemini-3.8-flash': ['low', 'high'],
+          'claude-sonnet-4-6': [],
+          'bad; rm': ['low'],
+          'gpt-oss-120b': ['medium', '$(reboot)'],
+          x: 'low',
+        },
+      },
+      { id: 'codex', name: 'Codex', found: true, sealed: true, modelEfforts: ['low'] },
+    ]);
+    expect(antigravity?.modelEfforts).toEqual({ 'gemini-3.8-flash': ['low', 'high'], 'claude-sonnet-4-6': [] });
+    expect(codex?.modelEfforts).toBeUndefined();
+  });
+
   it('says a harness whose seal waits on its sign-in is signed out, not unsealed', async () => {
     const t = await agentApp();
     close = t.close;

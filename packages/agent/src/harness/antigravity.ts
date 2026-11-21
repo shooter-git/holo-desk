@@ -15,11 +15,15 @@
  * run waits for a browser sign-in, silently: nothing runs before the sign-in is known to be there, and a
  * run that says nothing for two minutes is stopped.
  *
+ * HO[LO]'s MCP server marks the workspace when it's started (neither the stream nor the log says): a
+ * run that used none of its tools, without the mark, failed rather than answered without them.
+ *
  * Tripwire: any tool step but HO[LO]'s (`mcp_holo_*`, or `call_mcp_tool` and the resource tools for
  * the holo server), `manage_task` (its own background tasks, of which it can start none), any
  * subagent, any action denied, and a run not as the `holo` agent.
  */
 import { createHash } from 'node:crypto';
+import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { TOOLS } from '../tools/index.ts';
 import {
@@ -42,6 +46,7 @@ import {
   antigravityFiles,
   antigravityHome,
   privateDir,
+  READY_FILE,
   writePrivate,
 } from './workspace.ts';
 
@@ -452,6 +457,8 @@ export function antigravitySpec(o: { startupMs?: number } = {}): Spec {
       return { args: antigravityArgs(job, variants), env: antigravityEnv(files.home) };
     },
     reader: antigravityReader,
+    // neither its stream nor its log says whether HO[LO]'s server started: the server marks it
+    toolsStarted: (job) => existsSync(join(job.workspace, READY_FILE)),
     input: (job) => antigravityInput(job.prompt),
     startup: {
       limitMs: o.startupMs ?? STARTUP_MS,

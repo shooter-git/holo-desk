@@ -33,6 +33,11 @@ export interface HarnessInfo {
   reason?: string;
   models?: string[];
   efforts?: string[];
+  /**
+   * By model: the efforts it takes, when the models don't all take the same (Antigravity, Codex). A
+   * model listed with none takes none: its effort comes with it.
+   */
+  modelEfforts?: Record<string, string[]>;
   /** What a run uses when Model is left empty: the harness's own default, as it lists it. */
   defaultModel?: string;
   /** By model: the effort a run uses when Effort is left empty. */

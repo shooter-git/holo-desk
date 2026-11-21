@@ -113,6 +113,13 @@ export interface Spec {
    * for a browser sign-in when its own has lapsed): it's stopped, and `error` says why.
    */
   startup?: { limitMs: number; error: string };
+  /**
+   * Whether it reads the agent's instructions (its workspace's AGENTS.md) only when a conversation
+   * starts, and never on resume (seen with Cursor). A resumed turn then carries them at the head of its
+   * prompt, so the rules as they are now reach a conversation begun before they changed, and a long one
+   * still has them.
+   */
+  rulesAtStartOnly?: boolean;
 }
 
 export interface AdapterOptions {
@@ -662,7 +669,8 @@ export function defineHarness(spec: Spec, o: AdapterOptions): Harness {
         if (!ctx) return report({ type: 'failed', error: `${spec.name} isn’t installed on this computer` });
         const checked = await checkJob(spec, ctx, job, offered?.version === ctx.version ? offered.models : null);
         if ('error' in checked) return report({ type: 'failed', error: checked.error });
-        let attempt: Job = checked.job;
+        const given = checked.job;
+        let attempt: Job = withRules(given);
         /** Set once the turn has been carried on to ask for finish: what the turn itself last said. */
         let asked: { said: string } | null = null;
         for (let tries = 0; tries < 3 && !cancelled; tries++) {
@@ -683,8 +691,8 @@ export function defineHarness(spec: Spec, o: AdapterOptions): Harness {
             continue;
           }
           if (outcome.again === 'fresh' && attempt.session) {
-            // the harness no longer has that session: start the conversation again
-            attempt = { ...attempt };
+            // the harness no longer has that session: start the conversation again (it reads the rules then)
+            attempt = { ...attempt, prompt: given.prompt };
             delete attempt.session;
             continue;
           }
@@ -703,6 +711,13 @@ export function defineHarness(spec: Spec, o: AdapterOptions): Harness {
       } satisfies Run;
     },
   };
+
+  /** A resumed turn's prompt, for a harness that reads its instructions only when a conversation starts: the rules first. */
+  function withRules(job: Job): Job {
+    const rules = job.instructions?.trim();
+    if (!spec.rulesAtStartOnly || !job.session || !rules || job.prompt.startsWith(rules)) return job;
+    return { ...job, prompt: `${rules}\n\n${job.prompt}` };
+  }
 
   /**
    * One go at a turn; `again` asks for another (without the session, or as it was), or for the turn to

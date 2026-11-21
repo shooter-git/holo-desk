@@ -24,7 +24,7 @@ server of ours as its only tools. The adapters in `packages/agent/src/harness/` 
 | Shell/read attempt | Nothing to call; with built-ins on, `dontAsk` denies at once | Nothing to call (`exec_command` gone); a forced write is refused | Denied by the workspace `cli.json`, no hang, no `--force` | Nothing to call, says so; without the agent, `run_command` is denied by the `--settings` deny rule |
 | Tool calls run without a prompt | `--allowedTools=mcp__holo__*` | needs `default_tools_approval_mode="approve"` | `--approve-mcps` plus `allow: Mcp(holo:*)` | `--settings` with `allow: mcp(holo/*)`; without it, refused (`denied_actions`) |
 | Prompt on stdin | Yes (`-p`, no argument) | Yes (`-`) | Yes (`-p`, no argument) | Only as one stream-json line (`--input-format=stream-json`); `-p` takes the prompt as its value |
-| The agent's instructions | `--append-system-prompt-file` | the workspace's `AGENTS.md`, after the user's global `$CODEX_HOME/AGENTS.md` | the workspace's `AGENTS.md` | the custom agent's body: its system prompt |
+| The agent's instructions | `--append-system-prompt-file` | the workspace's `AGENTS.md`, after the user's global `$CODEX_HOME/AGENTS.md`, when a thread starts | the workspace's `AGENTS.md`, when a conversation starts (not on resume: seen) | the custom agent's body: its system prompt |
 | Session id | `init.session_id` | `thread.started.thread_id` | `init.session_id` | `conversation_id`, on every event |
 | Resume | `--resume=<id>`: works | `exec resume … <id> -`: works; `--ephemeral` breaks it | `--resume=<id>`: works only with the same private `HOME` | `--conversation=<id>`: works with the same private `HOME`; an unknown id starts a new conversation (a warning on stderr) |
 | MCP image reaches the model | Yes (named the colour) | Yes | Yes | Yes (named the colour) |
@@ -474,7 +474,9 @@ write tool left, `apply_patch`, is refused. The caveats:
 - the user's global `$CODEX_HOME/AGENTS.md` reaches the model as instructions (text only).
 
 **In the adapter** (`packages/agent/src/harness/codex.ts`):
-- The agent's instructions are the workspace's `AGENTS.md` (mode 0600).
+- The agent's instructions are the workspace's `AGENTS.md` (mode 0600). They reach the model as one message
+  when a thread starts, so a resumed turn carries them at the head of its prompt (`rulesAtStartOnly`, as
+  Cursor's; not checked with Codex itself).
 - **The seal is checked once per version**, remembered in `<root>/.harnesses.json`: `codex debug prompt-input`
   with the run's `-c` settings, in an empty `CODEX_HOME` of its own (`<root>/.codex-probe`,
   so none of the user's config or MCP servers is read or started). Codex is offered only when the model's tools
@@ -693,7 +695,10 @@ Cursor unavailable when they fail. What it does instead is the flag probe below.
 - **The sandbox fallback.** A run starts with `--sandbox=enabled`. If Cursor answers
   `Sandbox mode is enabled but not available`, the adapter notes that for this version and runs the turn again
   with `--sandbox=disabled`, as every later run of that version does. A new version tries the sandbox again.
-- The agent's instructions are the workspace's `AGENTS.md`.
+- The agent's instructions are the workspace's `AGENTS.md`. Cursor reads it when a conversation starts and
+  not on resume (seen, 2026.11.11: rules changed between turns never showed up in the conversation's stored
+  chat), so a resumed turn carries them at the head of its prompt (`rulesAtStartOnly`). A new conversation's
+  prompt leaves them out, since `AGENTS.md` has them.
 - Status (`status --format json`), models (`cursor-agent models`) and the update check (`about --format json`)
   run with the probe's private home. Sign-in (`login`, with `NO_OPEN_BROWSER=1`) and `update` run with the user's
   own home and config, so they sign in and update the Cursor the terminal uses, and only on a click.

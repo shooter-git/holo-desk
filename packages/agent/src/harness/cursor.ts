@@ -328,6 +328,8 @@ export function cursorSpec(): Spec {
       return { args: cursorArgs(job, sandbox), env: cursorEnv(privateHome, ctx.env) };
     },
     reader: cursorReader,
+    // AGENTS.md is read when a conversation starts; a resumed one keeps the rules it began with (seen)
+    rulesAtStartOnly: true,
     retry(ctx, _job, output) {
       // its sandbox can't start where unprivileged user namespaces are blocked: run without it from now on
       if (!/Sandbox mode is enabled but not available/i.test(output)) return false;

@@ -190,6 +190,12 @@ export function channelData(audio: AudioBuffer, channel: number, start: number, 
   return data.slice(start, end);
 }
 
+/** Lets go of a pack's decoded sample files, at every rate (a Performance instrument no part plays any more). */
+export function forgetSampleFiles(pack: string, files: Iterable<string>): void {
+  const names = new Set([...files].map((f) => `${pack}/${f}`));
+  for (const key of [...decoded.keys()]) if (names.has(key.slice(0, key.lastIndexOf('@')))) decoded.delete(key);
+}
+
 /** A pack's sample file, decoded (the decoder resamples it to the context's rate). */
 export function sampleFile(pack: string, file: string, ctx: BaseAudioContext): Promise<[Float32Array, Float32Array]> {
   const key = `${pack}/${file}@${ctx.sampleRate}`;

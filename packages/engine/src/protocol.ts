@@ -307,6 +307,8 @@ export type ToWorklet =
   | { type: 'forgetSampler'; key: string }
   /** A Space Designer's response, prepared (transferred). */
   | { type: 'impulse'; key: string; data: PreparedImpulse }
+  /** No plugin plays this response any more: it's let go (engines before it keep it). */
+  | { type: 'forgetImpulse'; key: string }
   /** Audio for clips: one or two channels at the context's rate (transferred). */
   | { type: 'audio'; key: string; channels: Float32Array[] }
   | { type: 'forgetAudio'; key: string }
@@ -345,6 +347,8 @@ export type ToWorklet =
   | { type: 'plans'; num: number; plans: import('./parts.ts').PartPlans | null }
   /** Sample files of a Performance instrument (`pack/name`), by their index in its manifest. */
   | { type: 'performance'; key: string; samples: { index: number; left: Float32Array; right: Float32Array }[] }
+  /** No part plays this Performance instrument any more: its sample files are let go (engines before it keep them). */
+  | { type: 'forgetPerformance'; key: string }
   /**
    * `sound`: the click's (engines before it play the beep); `audition`: one click now, to hear the
    * sound and level being chosen.

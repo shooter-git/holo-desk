@@ -3611,6 +3611,25 @@ html[data-layout="phone-landscape"] .bar .field input {
   cursor: default;
 }
 
+.bar .v-list .item > svg {
+  flex: none;
+  color: var(--text-2);
+}
+
+/* after the hint when there is one, else at the row's end */
+.bar .v-list .item > .go {
+  margin-left: auto;
+  color: var(--text-3);
+}
+
+.bar .v-list .item > .hint + .go {
+  margin-left: 0;
+}
+
+.bar .v-list .item.on {
+  background: var(--bg-3);
+}
+
 .bar .v-list .item:disabled {
   opacity: 0.45;
   cursor: default;

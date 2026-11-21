@@ -1,7 +1,7 @@
 {
   "name": "@holo/session",
   "private": true,
-  "version": "0.9.12",
+  "version": "0.9.13",
   "license": "MIT",
   "type": "module",
   "description": "The HO[LO] session format: types, timing, operations, notation and MIDI files.",

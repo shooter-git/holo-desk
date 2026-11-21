@@ -1,6 +1,6 @@
 import { describeChanges, type Project } from '@holo/session';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { briefWarnings, chooseText, LOOK_EVERY_MS, parseHarnesses } from '../src/agent/jobs.ts';
+import { briefWarnings, chooseText, LOOK_EVERY_MS, parseHarnessEvent, parseHarnesses } from '../src/agent/jobs.ts';
 import { agentApp, agentWorld, auth, CLAUDE, type Msg, settle, waitFor } from './agent-fakes.ts';
 
 let close: (() => Promise<void>) | null = null;
@@ -457,6 +457,22 @@ describe('harnesses', () => {
     expect(late.got('agent-on')).toHaveLength(2);
     expect(meanwhile.got('agent-on')).toHaveLength(1);
     expect(unkeyed.got('agent-on')).toEqual([]);
+  });
+
+  it('passes on a sign-in link as long as Google’s (Antigravity’s, with its six scopes), and none much longer', () => {
+    const google =
+      'https://accounts.google.com/o/oauth2/auth?access_type=offline&client_id=000000000000-abcdefghijklmnopqrstuvwxyz012345.apps.googleusercontent.com&code_challenge=abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQ&code_challenge_method=S256&prompt=consent&redirect_uri=https%3A%2F%2Fantigravity.google%2Foauth-callback&response_type=code&scope=https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fcloud-platform+https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fuserinfo.email+https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fuserinfo.profile+https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fcclog+https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fexperimentsandconfigs+https%3A%2F%2Fwww.googleapis.com%2Fauth%2Faicode+openid&state=abcdefghijklmnopqrstuv';
+    expect(google.length).toBeGreaterThan(700);
+    const event = (url: string) =>
+      parseHarnessEvent({ harness: 'antigravity', kind: 'login', state: 'running', url, ask: 'code' });
+    expect(event(google)).toEqual({
+      harness: 'antigravity',
+      kind: 'login',
+      state: 'running',
+      url: google,
+      ask: 'code',
+    });
+    expect(event(`https://example.com/?q=${'x'.repeat(2100)}`)?.url).toBeUndefined();
   });
 
   it('relays sign-in, codes and updates to the runner that has the harness, and its progress back', async () => {

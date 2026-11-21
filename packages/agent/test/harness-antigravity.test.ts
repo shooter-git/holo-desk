@@ -64,6 +64,9 @@ gemini-3.8-flash-low\tGemini 3.8 Flash (Low)
 claude-sonnet-4-6\tClaude Sonnet 4.6 (Thinking)
 claude-opus-4-6-thinking\tClaude Opus 4.6 (Thinking)
 gpt-oss-120b-medium\tGPT-OSS 120B (Medium)`;
+/** A sign-in link as long as `agy acp --login` prints (about 700 characters: its client, challenge and six scopes). */
+const GOOGLE_LINK =
+  'https://accounts.google.com/o/oauth2/auth?access_type=offline&client_id=000000000000-abcdefghijklmnopqrstuvwxyz012345.apps.googleusercontent.com&code_challenge=abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQ&code_challenge_method=S256&prompt=consent&redirect_uri=https%3A%2F%2Fantigravity.google%2Foauth-callback&response_type=code&scope=https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fcloud-platform+https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fuserinfo.email+https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fuserinfo.profile+https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fcclog+https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fexperimentsandconfigs+https%3A%2F%2Fwww.googleapis.com%2Fauth%2Faicode+openid&state=abcdefghijklmnopqrstuv';
 const SIGNED_OUT = `Fetching available models...
 Error: Please sign in to view available models. Launch the CLI without arguments to sign in.`;
 const PROBE_SAID = readFileSync(join(FIXTURES, 'antigravity-probe.stderr.txt'), 'utf8');
@@ -111,7 +114,7 @@ if [ -f ${signed} ]; then cat <<'EOF'\n${MODELS}\nEOF\nexit 0; else cat <<'EOF'\
         run: `env -0 > ${q(join(s.rec, 'login-env'))}
 echo "Open this link in a browser to log in with Google:"
 echo ""
-echo "  https://accounts.google.com/o/oauth2/auth?access_type=offline&client_id=abc&redirect_uri=https%3A%2F%2Fantigravity.google%2Foauth-callback&state=xyz"
+echo "  ${GOOGLE_LINK}"
 echo ""
 echo "Then paste the authorization code, or the full URL of the page you land on, and press Enter:"
 read code
@@ -215,7 +218,7 @@ describe('Antigravity: finding it', () => {
     await until(() => events.some((e) => e.url));
     expect(events.find((e) => e.url)).toEqual({
       state: 'running',
-      url: 'https://accounts.google.com/o/oauth2/auth?access_type=offline&client_id=abc&redirect_uri=https%3A%2F%2Fantigravity.google%2Foauth-callback&state=xyz',
+      url: GOOGLE_LINK,
       ask: 'code',
     });
     expect(h.loginCode('good-code')).toBe(true);

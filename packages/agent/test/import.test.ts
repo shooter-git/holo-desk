@@ -153,9 +153,10 @@ describe('importing a MIDI or MusicXML file', () => {
     expect(
       await refused(setup({ imports: { [A]: notes(midiSong()) } }), 'import', { attachment: A, track: 'Bass' }),
     ).toMatch(/2 parts can't all go on "Bass"/);
-    expect(
-      await refused(setup({ imports: { [A]: notes(midiSong()) } }), 'import', { attachment: A, parts: [{ x: 1 }] }),
-    ).toMatch(/"parts" are the names of the file's parts or their numbers/);
+    // a list of text: anything else is refused before the tool runs (a number is taken as text)
+    await expect(
+      call(setup({ imports: { [A]: notes(midiSong()) } }), 'import', { attachment: A, parts: [{ x: 1 }] }),
+    ).rejects.toThrow('"parts"[0] must be a string');
   });
 });
 

@@ -1,8 +1,10 @@
 /**
- * The harnesses the runner offers: Claude Code, Codex and Cursor, each found the way its installer
- * puts it (or named by HOLO_CLAUDE, HOLO_CODEX, HOLO_CURSOR), never through a shell.
+ * The harnesses the runner offers: Claude Code, Codex, Cursor and Antigravity, each found the way its
+ * installer puts it (or named by HOLO_CLAUDE, HOLO_CODEX, HOLO_CURSOR, HOLO_ANTIGRAVITY), never
+ * through a shell.
  */
 import type { AdapterOptions } from './adapter.ts';
+import { antigravityHarness } from './antigravity.ts';
 import { claudeHarness } from './claude.ts';
 import { codexHarness } from './codex.ts';
 import { cursorHarness } from './cursor.ts';
@@ -13,7 +15,12 @@ export * from './types.ts';
 export { agentRoot } from './workspace.ts';
 
 export function createHarnesses(o: AdapterOptions): Record<HarnessId, Harness> {
-  return { claude: claudeHarness(o), codex: codexHarness(o), cursor: cursorHarness(o) };
+  return {
+    claude: claudeHarness(o),
+    codex: codexHarness(o),
+    cursor: cursorHarness(o),
+    antigravity: antigravityHarness(o),
+  };
 }
 
 /** Every harness as the studio sees it, looked at side by side. */

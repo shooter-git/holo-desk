@@ -1,12 +1,12 @@
 /**
- * The harnesses the in-app agent runs through (Claude Code, Codex, Cursor), as the runner sees them:
+ * The harnesses the in-app agent runs through (Claude Code, Codex, Cursor, Antigravity), as the runner sees them:
  * found or not, signed in or not, sealed to HO[LO]'s tools or not, and how a job runs in one.
  * docs/agent-harnesses.md records why each adapter does what it does.
  */
 
-export type HarnessId = 'claude' | 'codex' | 'cursor';
+export type HarnessId = 'claude' | 'codex' | 'cursor' | 'antigravity';
 
-export const HARNESS_IDS: readonly HarnessId[] = ['claude', 'codex', 'cursor'];
+export const HARNESS_IDS: readonly HarnessId[] = ['claude', 'codex', 'cursor', 'antigravity'];
 
 /** A model or effort as the harnesses take them: passed as `--opt=value`, so nothing that reads as more. */
 export const MODEL = /^[A-Za-z0-9][\w.:\-[\]=]{0,79}$/;
@@ -36,7 +36,8 @@ export interface HarnessInfo {
   sealed: boolean;
   /**
    * The seal couldn't be checked yet: the harness asks for its sign-in before it reads its options
-   * (Cursor). It's signed out; once it's signed in, the next look checks the seal.
+   * (Cursor), or its check would start a browser sign-in (Antigravity). It's signed out; once it's
+   * signed in, the next look checks the seal.
    */
   sealUnknown?: boolean;
   reason?: string;

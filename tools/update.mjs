@@ -303,7 +303,7 @@ function runnerService(what) {
     console.log(
       'On: the runner runs as you, now, and starts again after each update.' +
         (pnpm ? '' : '\n(pnpm isn’t on your PATH: after an update its packages wait for `pnpm install`.)') +
-        '\nIt finds a harness (Claude Code, Codex, Cursor) on the PATH you have now: install one later in a new' +
+        '\nIt finds a harness (Claude Code, Codex, Cursor, Antigravity) on the PATH you have now: install one later in a new' +
         ' folder, and run `pnpm run runner-service on` again.' +
         '\nIts log: journalctl --user -u holo-runner' +
         `\n${lingerNote('the runner', lingering())}`,

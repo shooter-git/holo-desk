@@ -51,7 +51,7 @@ import {
   sinceLines,
   songLines,
 } from './prompt.ts';
-import { type AgentStore, HARNESSES, type HarnessId, type ThreadRow, type TurnExtra } from './store.ts';
+import { type AgentStore, CHOSEN_ONLY, HARNESSES, type HarnessId, type ThreadRow, type TurnExtra } from './store.ts';
 import { parseExtra, type Threads } from './threads.ts';
 
 export type JobState = 'waiting' | 'running' | 'awaiting' | 'done' | 'failed' | 'cancelled';
@@ -281,7 +281,12 @@ export interface NewRequest {
 
 const LIVE: ReadonlySet<JobState> = new Set(['waiting', 'running']);
 const isLive = (job: AgentJob) => LIVE.has(job.view.state);
-const HARNESS_NAMES: Record<HarnessId, string> = { claude: 'Claude Code', codex: 'Codex', cursor: 'Cursor' };
+const HARNESS_NAMES: Record<HarnessId, string> = {
+  claude: 'Claude Code',
+  codex: 'Codex',
+  cursor: 'Cursor',
+  antigravity: 'Antigravity',
+};
 
 /**
  * Why a harness that lists no defaults (`mustChoose`) won't run with this model and effort: what's
@@ -408,9 +413,11 @@ export class Jobs implements AgentHooks {
   /** The harness a request runs with, its runner and what it reported; or why there's none. */
   private pick(wanted: HarnessId | null): { harness: HarnessId; runner: LiveClient; info: HarnessInfo } {
     if (!this.o.live.agentRunners().length) throw new Refusal(409, noRunnerText(this.o.live.runners()), 'no-runner');
-    // none chosen: the first that can be sealed, else the first found (whose refusal then says why)
-    const sealed = HARNESSES.filter((id) => this.runnerFor(id)?.info.sealed);
-    const ids = wanted ? [wanted] : sealed.length ? sealed : HARNESSES.filter((id) => this.runnerFor(id));
+    // none chosen: the first that can be sealed, else the first found (whose refusal then says why);
+    // never one that runs only when it's chosen
+    const any = HARNESSES.filter((id) => !CHOSEN_ONLY.has(id));
+    const sealed = any.filter((id) => this.runnerFor(id)?.info.sealed);
+    const ids = wanted ? [wanted] : sealed.length ? sealed : any.filter((id) => this.runnerFor(id));
     const harness = ids[0];
     const found = harness ? this.runnerFor(harness) : null;
     if (!harness || !found)
@@ -418,7 +425,9 @@ export class Jobs implements AgentHooks {
         409,
         wanted
           ? `${HARNESS_NAMES[wanted]} isn’t on this computer: pick another harness in Settings › Agent`
-          : 'No harness is on this computer: install Claude Code, Codex or Cursor',
+          : [...CHOSEN_ONLY].some((id) => this.runnerFor(id))
+            ? 'Choose a harness in Settings › Agent: Antigravity runs only once it’s chosen there'
+            : 'No harness is on this computer: install Claude Code, Codex or Cursor',
         'no-harness',
       );
     // signed out, with its seal not yet checked (it asks for its sign-in first): the sign-in is what's missing

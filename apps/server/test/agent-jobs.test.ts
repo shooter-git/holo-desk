@@ -116,6 +116,51 @@ describe('a request', () => {
     expect((await ask()).json()).toMatchObject({ reason: 'signed-out' });
   });
 
+  it('never runs Antigravity unless it’s chosen in Settings › Agent', async () => {
+    const t = await agentApp();
+    close = t.close;
+    const antigravity = { id: 'antigravity', name: 'Antigravity', found: true, sealed: true, signedIn: true };
+    const r = t.runner([antigravity]);
+    const { token } = await t.pair(r);
+    const s = await t.song();
+    t.studio(token, s.id);
+    const ask = () =>
+      t.app.inject({
+        method: 'POST',
+        url: '/api/agent/requests',
+        headers: auth(token),
+        payload: { project: s.id, text: 'hi' },
+      });
+    const set = (payload: Record<string, string>) =>
+      t.app.inject({ method: 'PUT', url: '/api/agent/settings', headers: auth(token), payload });
+    // the only harness there, sealed and signed in: still not picked on the user's behalf
+    const none = await ask();
+    expect(none.statusCode).toBe(409);
+    expect(none.json()).toEqual({
+      error: 'Choose a harness in Settings › Agent: Antigravity runs only once it’s chosen there',
+      reason: 'no-harness',
+    });
+    expect(r.got('agent-run')).toHaveLength(0);
+    // with another there too, the other is the one
+    const claude = t.runner([{ ...CLAUDE, mustChoose: false }], 'second');
+    expect((await ask()).statusCode).toBe(200);
+    expect(claude.got('agent-run')[0]).toMatchObject({ harness: 'claude' });
+    expect(r.got('agent-run')).toHaveLength(0);
+    // chosen: it runs
+    expect((await set({ harness: 'antigravity' })).statusCode).toBe(200);
+    // (on another song: the first song's request is still running)
+    const next = await t.song('Next');
+    t.studio(token, next.id, 'next tab');
+    const chosen = await t.app.inject({
+      method: 'POST',
+      url: '/api/agent/requests',
+      headers: auth(token),
+      payload: { project: next.id, text: 'hi again' },
+    });
+    expect(chosen.json()).toMatchObject({ job: expect.any(String) });
+    expect(r.got('agent-run')[0]).toMatchObject({ harness: 'antigravity' });
+  });
+
   it('asks for a model and an effort first when the harness lists no defaults', async () => {
     const t = await agentApp();
     close = t.close;

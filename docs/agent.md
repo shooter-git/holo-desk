@@ -3,7 +3,8 @@
 The **bar** (Ctrl /, the slash button in the control bar, or a swipe down on a phone's top bar) is
 HO[LO]'s command palette. When the **agent** is turned on in Settings › Agent and this device is allowed
 to use it, the bar also takes requests in plain words, with files dropped or pasted on it. The agent
-carries them out on the open song through a harness installed on the host: Claude Code, Codex or Cursor.
+carries them out on the open song through a harness installed on the host: Claude Code, Codex, Cursor or
+Antigravity.
 
 This page is the contract between the studio, the server, the runner and the agent's tools.
 
@@ -35,7 +36,7 @@ the job routes.
 The in-app agent lives in `packages/agent` (`@holo/agent`): the runner's side (`src/runner.ts`,
 `src/harness/`), the MCP server (`src/mcp.ts`) and its tools (`src/tools/`). The server's side is
 `apps/server/src/agent/`. It never reads or writes the user's own harness configuration (`~/.claude`,
-`~/.codex`, `~/.cursor`).
+`~/.codex`, `~/.cursor`, `~/.gemini`).
 
 ## Rules
 
@@ -104,7 +105,7 @@ Turning the agent off cancels every job, so the job-scoped routes answer 403.
 | `POST /api/agent/devices/requests/:id/approve` and `/deny` | | `{ok}`; 404 if none of that id is waiting. |
 | `DELETE /api/agent/devices/:id` | | `{ok}`; 404. It takes effect at once: the device's studios get `agent-removed` and lose agent access, its jobs (running or waiting for a click) are cancelled, and allowed devices get `agent-devices`. |
 | `GET /api/agent/settings` | | `{enabled, harness, model, effort, harnesses:[HarnessInfo], relays:[…]}`. `relays` are the sign-ins, updates and installs under way, each as its runner last told it (its `agent-harness` message, less `type`), for a studio that opens Settings later or reloads; one is let go when it ends, after 15 minutes, or when its runner goes. |
-| `PUT /api/agent/settings` | `{enabled?, harness?, model?, effort?}` | The settings, as GET. `harness` is an id or null (the first that can be sealed). `model` and `effort` must match `^[A-Za-z0-9][\w.:\-\[\]=]{0,79}$` or be empty (the harness's own default; Claude Code has none, and refuses requests until both are set). Off stops every job; on sends `agent-on` to the runners; any change is announced as `agent-settings`. |
+| `PUT /api/agent/settings` | `{enabled?, harness?, model?, effort?}` | The settings, as GET. `harness` is an id or null (the first that can be sealed, never Antigravity: it runs only once it's chosen, and with none chosen a request is refused `no-harness`, saying so, when it's the only one). `model` and `effort` must match `^[A-Za-z0-9][\w.:\-\[\]=]{0,79}$` or be empty (the harness's own default; Claude Code has none, and refuses requests until both are set). Off stops every job; on sends `agent-on` to the runners; any change is announced as `agent-settings`. |
 | `POST /api/agent/harnesses/refresh` | | `{ok}`. **Look again**: the runners look again (`agent-refresh`), a seal check that failed for a version included. 409 `no-runner`. |
 | `POST /api/agent/harnesses/look` | | `{ok, asked}`. Settings › Agent was opened: each runner whose last look (its last `harnesses`, or the last time it was asked) is an hour old or more is sent `agent-refresh {light:true}`; `asked` is how many. At most once an hour per runner, and only when a studio asks. |
 | `POST /api/agent/harnesses/:id/login` | | `{ok}`. Sent to the runner that has it; progress arrives as `agent-harness` live messages. 404 for an unknown harness; 409 `no-harness`, `busy` (a job runs on it), or no reason when it's signed in already (HO[LO] never signs out or switches accounts). |
@@ -133,12 +134,13 @@ server). Scan's own Read in, which needs no agent, uses `GET /api/scans/:id/engi
 step. That isn't an agent route.
 
 **`HarnessInfo`** is:
-`{id:'claude'|'codex'|'cursor', name, found, version?, signedIn?, account?, update?:{available, latest?}, sealed, sealUnknown?, reason?, models?:string[], efforts?:string[], defaultModel?, defaultEfforts?:{[model]:effort}, aliases?:{[alias]:model}, mustChoose?, host?, installer?}`.
-- The runner reports all three, found or not.
+`{id:'claude'|'codex'|'cursor'|'antigravity', name, found, version?, signedIn?, account?, update?:{available, latest?}, sealed, sealUnknown?, reason?, models?:string[], efforts?:string[], defaultModel?, defaultEfforts?:{[model]:effort}, aliases?:{[alias]:model}, mustChoose?, host?, installer?}`.
+- The runner reports all four, found or not.
 - `sealed: false` means the harness can't be locked down to HO[LO]'s tools. The studio shows it as
   unavailable, with `reason`.
 - `sealUnknown: true` (with `signedIn: false`) means the seal couldn't be checked yet: the harness asks
-  for its sign-in before it reads its options (Cursor 2026.11.11-b912975). The studio offers Sign in;
+  for its sign-in before it reads its options (Cursor 2026.11.11-b912975), or its check would start a
+  browser sign-in (Antigravity). The studio offers Sign in;
   a request is refused `signed-out`, not `not-sealed`. The first look after the sign-in checks the seal.
 - `host` is the runner's computer (its host name: letters, digits, `.`, `-`, `_`, ≤ 64).
 - `installer` is given only when the harness isn't found and the runner can run its installer (Linux
@@ -146,13 +148,14 @@ step. That isn't an agent route.
 - `update` is looked up at most every 6 hours, and never installed unasked. Claude Code's is read from
   its `stable` channel (npm's `stable` tag for an npm install, `downloads.claude.ai/claude-code-releases/stable`
   for the native one), so Update never offers a version `claude update` won't install. Codex's is
-  npm's `latest`; Cursor's is what `cursor-agent about` says.
+  npm's `latest`; Cursor's is what `cursor-agent about` says; Antigravity's is the manifest its installer
+  reads.
 - At most 500 `models` and 50 `efforts` are kept, each checked as settings check them. They're the
   harness's own lists, read on the host (docs/agent-harnesses.md, "Models and efforts"): HO[LO]'s server
   never asks a vendor for them, it keeps what the runner reports.
 - `defaultModel` is what a run uses when the agent's Model is empty, and `defaultEfforts` the effort
   each model runs at when Effort is empty (docs/agent-harnesses.md, "Defaults"), as Codex and Cursor
-  list them. Claude Code lists none (`mustChoose: true`): a request needs a model and an effort chosen,
+  list them. Antigravity names neither, and runs with its own. Claude Code lists none (`mustChoose: true`): a request needs a model and an effort chosen,
   and is refused without (409 `choose`), by the server and again by the runner, rather than run with
   whatever it picks. `aliases` say what each alias stood for at its last run (`opus` → the
   full name its `init` gave). Up to 500 `defaultEfforts` and 50 `aliases` are kept, names and
@@ -160,7 +163,7 @@ step. That isn't an agent route.
 
 ### Settings › Agent
 
-An allowed device's Settings › Agent lists Claude Code, Codex and Cursor as the host has them, a row
+An allowed device's Settings › Agent lists Claude Code, Codex, Cursor and Antigravity as the host has them, a row
 each (`apps/web/src/ui/harness-row.ts`), through a harness's whole life:
 
 1. **Not installed**, with **Install** when the runner gave an `installer`. Install asks first: "This
@@ -172,9 +175,14 @@ each (`apps/web/src/ui/harness-row.ts`), through a harness's whole life:
    runner doesn't see: run `pnpm run runner-service on` again on the host".
 3. **Signed out**: **Sign in**, whatever the seal (a harness that can't be sealed keeps Sign in, and says
    why it can't be used). The sign-in is each harness's own relay: Claude Code's page and a pasted code,
-   Codex's page and a one-time code, Cursor's page while it waits. A harness signed out isn't offered
-   as **Use**.
+   Codex's page and a one-time code, Cursor's page while it waits, Google's page and a pasted code for
+   Antigravity. A harness signed out isn't offered as **Use**.
 4. **Signed in**: **Use**, or **In use** for the one the agent runs with.
+
+For Antigravity, **Sign in** and **Use** ask first (`caution` in `harness-row.ts`): Google's FAQ says
+running `agy` inside another app "is not supported under consumer plans", and that third-party software
+with an Antigravity sign-in can get the account suspended, Gemini CLI included; it links the FAQ, then
+**Sign in anyway** or **Use it anyway**, or **Not now**. The server never picks it on the user's behalf.
 5. **Update to x.y** when a newer version is out; it asks first ("This updates the *Harness* your
    terminal uses too"), then shows its lines. The runner looks again before it says `done`, so the new
    version's models and efforts show with it. **Up to date** otherwise.
@@ -190,6 +198,8 @@ is polled.
 longer offered. Such a model or effort stays selected, labeled "(no longer offered)", with a line saying
 so, and a run uses the harness's default instead of failing (the adapter drops it before the run).
 Cursor has no Effort list: its model names carry their effort, and the row says "Comes with the model".
+Antigravity's model names carry theirs too (`gemini-3.8-flash-low`), but the runner shows each model's
+variants as one model with those efforts, so it has both pickers.
 
 Each picker's empty choice names the default, value first: "Gpt-6.1-sol (Codex's default)", and for
 Effort the default of the model a run uses. Claude Code has no defaults to name, so its pickers have no
@@ -599,7 +609,7 @@ the last "…and N more changes" when there are more:
 ## The agent's tools (`@holo/agent`)
 
 `packages/agent/src/tools/index.ts` lists 43 tools (at most 48: Claude Code, Codex and Cursor each list and
-call 48 sealed, docs/agent-harnesses.md), named for MCP (lower-case letters, digits and `_`). Changing and
+call 48 sealed, docs/agent-harnesses.md; Antigravity has them all up front), named for MCP (lower-case letters, digits and `_`). Changing and
 asking tools run one at a time, in the order they're called; seeing and playing tools run alongside. A
 change may also post a line under the bar (`…/progress`).
 

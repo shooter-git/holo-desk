@@ -1,5 +1,5 @@
 /**
- * Settings › Agent's harness rows through a harness's whole life, for each of the three: not installed
+ * Settings › Agent's harness rows through a harness's whole life, for each of the four: not installed
  * → Install (asked first) → installing → installed and signed out → Sign in (each one's own relay) →
  * signed in → Use / In use → Update to x.y (asked first) → updating → up to date.
  */
@@ -7,6 +7,7 @@ import { beforeAll, describe, expect, it, vi } from 'vitest';
 import type * as AgentModule from '../src/app/agent.ts';
 import type { HarnessEvent, HarnessId, HarnessInfo } from '../src/app/agent.ts';
 import {
+  caution,
   choices,
   defaultLabel,
   harnessRow,
@@ -82,7 +83,29 @@ const HARNESSES: {
     shows: { url: 'https://cursor.com/loginDeepControl?challenge=abc', askCode: false },
     sealUnknown: true,
   },
+  {
+    id: 'antigravity',
+    name: 'Antigravity',
+    installer: 'curl -fsSL https://antigravity.google/cli/install.sh | bash',
+    version: '1.5.13',
+    latest: '1.5.14',
+    // a Google link, then the code its page shows, pasted
+    signin: { url: 'https://accounts.google.com/o/oauth2/auth?state=xyz', ask: 'code' },
+    shows: { url: 'https://accounts.google.com/o/oauth2/auth?state=xyz', askCode: true },
+    // its check would start a browser sign-in: checked once it's signed in
+    sealUnknown: true,
+  },
 ];
+
+describe('a harness its vendor doesn’t support HO[LO] running', () => {
+  it('asks before Sign in and Use for Antigravity, with Google’s own words and where it says them; none for the others', () => {
+    const warning = caution({ id: 'antigravity' });
+    expect(warning?.text).toContain('“is not supported under consumer plans”');
+    expect(warning?.text).toContain('suspended');
+    expect(warning?.link).toBe('https://antigravity.google/docs/faq/');
+    for (const id of ['claude', 'codex', 'cursor'] as const) expect(caution({ id })).toBeNull();
+  });
+});
 
 describe('a harness’s row, through its whole life', () => {
   for (const x of HARNESSES) {

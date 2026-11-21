@@ -12,7 +12,7 @@ import type { Ready } from './attach.ts';
 import { type Command, selectionSpan } from './commands.ts';
 import { type AppState, store as studio } from './store.ts';
 
-export type HarnessId = 'claude' | 'codex' | 'cursor';
+export type HarnessId = 'claude' | 'codex' | 'cursor' | 'antigravity';
 
 /** A harness on the runner's computer, as the runner reports it. */
 export interface HarnessInfo {
@@ -25,7 +25,10 @@ export interface HarnessInfo {
   update?: { available: boolean; latest?: string };
   /** It can be limited to HO[LO]'s tools; when not, it can't be used, and `reason` says why. */
   sealed: boolean;
-  /** Whether it can be limited is checked once it's signed in (Cursor asks for its sign-in first). */
+  /**
+   * Whether it can be limited is checked once it's signed in (Cursor asks for its sign-in first;
+   * Antigravity's check would start a browser sign-in).
+   */
   sealUnknown?: boolean;
   reason?: string;
   models?: string[];
@@ -83,7 +86,7 @@ export function runnerProblem(runner: AgentInfo['runner'] | undefined): string |
     return `${it} can’t read HO[LO]’s runner key: run it from the checkout whose data folder HO[LO] uses (or give it HOLO_RUNNER_KEY).`;
   if (state === 'wrong-key')
     return `${it} has another HO[LO]’s runner key: point its HOLO_DATA_DIR at this HO[LO]’s data folder.`;
-  return 'No runner is connected: start it on the computer HO[LO] runs on (pnpm runner; on Linux, pnpm run runner-service on keeps it running). It finds Claude Code, Codex and Cursor.';
+  return 'No runner is connected: start it on the computer HO[LO] runs on (pnpm runner; on Linux, pnpm run runner-service on keeps it running). It finds Claude Code, Codex, Cursor and Antigravity.';
 }
 
 export type JobState = 'waiting' | 'running' | 'awaiting' | 'done' | 'failed' | 'cancelled';

@@ -131,8 +131,13 @@ function coerce(def: ArgDef, value: unknown): { value: unknown } | { error: stri
       return { value: v };
     }
     case 'array': {
-      const v = typeof value === 'string' && value.trim().startsWith('[') ? parseJson(value) : value;
-      if (!Array.isArray(v)) return { error: `${name} must be a list, e.g. [1, 2]` };
+      const parsed = typeof value === 'string' && value.trim().startsWith('[') ? parseJson(value) : value;
+      if (!Array.isArray(parsed)) return { error: `${name} must be a list, e.g. [1, 2]` };
+      // a list of text forgives a number among it, as a text argument does ([2] is ["2"])
+      const v =
+        def.items === 'string'
+          ? parsed.map((x) => (typeof x === 'number' && Number.isFinite(x) ? String(x) : x))
+          : parsed;
       if (def.maxLength !== undefined && v.length > def.maxLength)
         return { error: `${name} has ${v.length} items; at most ${def.maxLength}` };
       if (def.items) {

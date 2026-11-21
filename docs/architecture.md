@@ -319,7 +319,7 @@ the studio that asked ◄── server ◄── /api/agent/jobs/:job/* ◄─�
   shows (view, selection, playhead, cycle, an open scan), what was attached, then the request. It hands
   the job, with a token of its own, to a runner that said the key.
 - **The runner** (`packages/agent/src/runner.ts`) starts the harness chosen in Settings (Claude Code,
-  Codex or Cursor) in the conversation's workspace, `${XDG_CACHE_HOME:-~/.cache}/holo/agent/<thread>`,
+  Codex, Cursor or Antigravity) in the conversation's workspace, `${XDG_CACHE_HOME:-~/.cache}/holo/agent/<thread>`,
   with HO[LO]'s MCP server (`packages/agent/src/mcp.ts`) as its only tools, the prompt on stdin and the
   token in a file there. Each harness's command line is in [agent-harnesses.md](agent-harnesses.md).
   Tripwires stop the run at the first tool that isn't HO[LO]'s.

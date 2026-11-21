@@ -8,12 +8,19 @@
 import type { DatabaseSync } from 'node:sqlite';
 import type { Go, View } from '@holo/agent/view';
 
-export type HarnessId = 'claude' | 'codex' | 'cursor';
-export const HARNESSES: readonly HarnessId[] = ['claude', 'codex', 'cursor'];
+export type HarnessId = 'claude' | 'codex' | 'cursor' | 'antigravity';
+export const HARNESSES: readonly HarnessId[] = ['claude', 'codex', 'cursor', 'antigravity'];
+
+/**
+ * Harnesses used only once they're chosen in Settings › Agent, never as whichever is available:
+ * Google's terms don't support another app running Antigravity on a consumer plan, so the studio asks
+ * before it's signed in or used, and nothing picks it on the user's behalf.
+ */
+export const CHOSEN_ONLY: ReadonlySet<HarnessId> = new Set(['antigravity']);
 
 export interface AgentSettings {
   enabled: boolean;
-  /** null: whichever is available (Claude Code, then Codex, then Cursor). */
+  /** null: whichever is available (Claude Code, then Codex, then Cursor; never one that's CHOSEN_ONLY). */
   harness: HarnessId | null;
   /** Empty: the harness's own default. */
   model: string;

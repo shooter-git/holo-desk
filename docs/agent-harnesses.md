@@ -4,7 +4,8 @@ This page records what step C0 of the agent plan found by running each harness h
 server of ours as its only tools. The adapters in `packages/agent/src/harness/` follow it.
 
 - **Where:** Linux x64, 2026-11-11. Claude Code 2.1.322, Codex CLI 0.167.1, Cursor CLI 2026.11.10-731fb78
-  (it updated itself to 2026.11.11-043ef28 during the spike; see Cursor below).
+  (it updated itself to 2026.11.11-043ef28 during the spike; see Cursor below). Antigravity CLI 1.5.13 on
+  2026-11-21, by hand (see Antigravity below).
 - **How:** `tools/agent-spike.mjs`. It has a stub MCP server (`echo`, `image` returning a 64×64 PNG of one
   colour, `slow {ms}`) and runs a harness once in `${XDG_CACHE_HOME:-~/.cache}/holo/agent-spike/<harness>`,
   prompt on stdin, saving the raw stream. Cheapest models: Claude `haiku` (one `sonnet` run), Codex
@@ -16,29 +17,29 @@ server of ours as its only tools. The adapters in `packages/agent/src/harness/` 
 
 ## Summary
 
-| Check | Claude Code | Codex | Cursor |
-|---|---|---|---|
-| Only our MCP tools | Yes: `--tools=` removes every built-in tool; `init` lists only `mcp__holo__*` | Nearly: no shell, file read, web or apps; `apply_patch` remains but is refused (read-only sandbox, approvals never) | Yes, with the hidden `--allowed-tools`: the model gets only GetDynamicTools and CallDynamicTool |
-| User's MCP servers kept out | Yes (`--strict-mcp-config`; claude.ai connectors off) | Yes (`--ignore-user-config`; none configured here to prove it) | Only with a private `HOME`; account-enabled plugins' servers still connect and are visible, but calls are rejected |
-| Shell/read attempt | Nothing to call; with built-ins on, `dontAsk` denies at once | Nothing to call (`exec_command` gone); a forced write is refused | Denied by the workspace `cli.json`, no hang, no `--force` |
-| Tool calls run without a prompt | `--allowedTools=mcp__holo__*` | needs `default_tools_approval_mode="approve"` | `--approve-mcps` plus `allow: Mcp(holo:*)` |
-| Prompt on stdin | Yes (`-p`, no argument) | Yes (`-`) | Yes (`-p`, no argument) |
-| The agent's instructions | `--append-system-prompt-file` | the workspace's `AGENTS.md`, after the user's global `$CODEX_HOME/AGENTS.md` | the workspace's `AGENTS.md` |
-| Session id | `init.session_id` | `thread.started.thread_id` | `init.session_id` |
-| Resume | `--resume=<id>`: works | `exec resume … <id> -`: works; `--ephemeral` breaks it | `--resume=<id>`: works only with the same private `HOME` |
-| MCP image reaches the model | Yes (named the colour) | Yes | Yes |
-| MCP tool timeout | per-server `"timeout"` (ms) in the MCP config | `mcp_servers.holo.tool_timeout_sec` | **fixed at 60 s** in print mode |
-| Model / effort | `--model=<alias>` `--effort=<low…max>` | `--model=<id>` `-c model_reasoning_effort="…"` | effort is part of the model id |
-| Signed-in check | `claude auth status` (JSON, exit 0/1) | `codex login status` (stderr text, exit 0/1) | `cursor-agent status --format json` (exit 0 both) |
-| Sign-in without a TTY | URL printed, pasted `code#state` on stdin (source) | `codex login --device-auth`: URL + one-time code (source) | `NO_OPEN_BROWSER=1`: URL printed, then polls (source) |
-| Check for an update without installing | the `stable` channel file on downloads.claude.ai | npm registry / GitHub releases | `cursor-agent about --format json` |
-| Official installer (Install) | `curl -fsSL https://claude.ai/install.sh \| bash` | `curl -fsSL https://chatgpt.com/codex/install.sh \| sh` | `curl https://cursor.com/install -fsS \| bash` |
-| Models / efforts from | `--help` (aliases; `--effort`'s choices), per version | `codex debug models`, per version and hourly | `cursor-agent models` at each look; effort is in the model id |
-| Defaults from | none listed: a run needs both chosen | the same catalog: lowest `priority`, `default_reasoning_level` | `models`' "(default)" |
-| Updates itself during a run | not with `DISABLE_AUTOUPDATER=1` | not seen | **yes, unless `--disable-auto-update`** |
-| Startup to first event | 0.3–0.5 s | 0.06–0.5 s | 3–7 s warm, 15–34 s cold |
-| Stop | process-group SIGTERM: all gone | same | same; also needed after a normal exit (worker daemon) |
-| Verdict | **Sealed** | **Sealed, with caveats** | **Sealed, with caveats** |
+| Check | Claude Code | Codex | Cursor | Antigravity |
+|---|---|---|---|---|
+| Only our MCP tools | Yes: `--tools=` removes every built-in tool; `init` lists only `mcp__holo__*` | Nearly: no shell, file read, web or apps; `apply_patch` remains but is refused (read-only sandbox, approvals never) | Yes, with the hidden `--allowed-tools`: the model gets only GetDynamicTools and CallDynamicTool | Yes, as a workspace custom agent with `excludeDefaultComponents: true` and `tools: []`, HO[LO]'s tools `eager`: the model has `mcp_holo_*`, `list_resources`, `read_resource` and `manage_task`; `init` still lists every built-in |
+| User's MCP servers kept out | Yes (`--strict-mcp-config`; claude.ai connectors off) | Yes (`--ignore-user-config`; none configured here to prove it) | Only with a private `HOME`; account-enabled plugins' servers still connect and are visible, but calls are rejected | Only with a private `HOME` (the user's servers, plugins, hooks, rules and settings are all under `~/.gemini`; no flag) |
+| Shell/read attempt | Nothing to call; with built-ins on, `dontAsk` denies at once | Nothing to call (`exec_command` gone); a forced write is refused | Denied by the workspace `cli.json`, no hang, no `--force` | Nothing to call, says so; without the agent, `run_command` is denied by the `--settings` deny rule |
+| Tool calls run without a prompt | `--allowedTools=mcp__holo__*` | needs `default_tools_approval_mode="approve"` | `--approve-mcps` plus `allow: Mcp(holo:*)` | `--settings` with `allow: mcp(holo/*)`; without it, refused (`denied_actions`) |
+| Prompt on stdin | Yes (`-p`, no argument) | Yes (`-`) | Yes (`-p`, no argument) | Only as one stream-json line (`--input-format=stream-json`); `-p` takes the prompt as its value |
+| The agent's instructions | `--append-system-prompt-file` | the workspace's `AGENTS.md`, after the user's global `$CODEX_HOME/AGENTS.md` | the workspace's `AGENTS.md` | the custom agent's body: its system prompt |
+| Session id | `init.session_id` | `thread.started.thread_id` | `init.session_id` | `conversation_id`, on every event |
+| Resume | `--resume=<id>`: works | `exec resume … <id> -`: works; `--ephemeral` breaks it | `--resume=<id>`: works only with the same private `HOME` | `--conversation=<id>`: works with the same private `HOME`; an unknown id starts a new conversation (a warning on stderr) |
+| MCP image reaches the model | Yes (named the colour) | Yes | Yes | Yes (named the colour) |
+| MCP tool timeout | per-server `"timeout"` (ms) in the MCP config | `mcp_servers.holo.tool_timeout_sec` | **fixed at 60 s** in print mode | per-server `timeoutSeconds` in `mcp_config.json` (the start too); 180 s by default |
+| Model / effort | `--model=<alias>` `--effort=<low…max>` | `--model=<id>` `-c model_reasoning_effort="…"` | effort is part of the model id | `--model=<slug>`; a model's effort variants (`…-low`) or `--effort` with the model's family name |
+| Signed-in check | `claude auth status` (JSON, exit 0/1) | `codex login status` (stderr text, exit 0/1) | `cursor-agent status --format json` (exit 0 both) | none: `agy models` lists (exit 0), or says "Please sign in" (exit 1) |
+| Sign-in without a TTY | URL printed, pasted `code#state` on stdin (source) | `codex login --device-auth`: URL + one-time code (source) | `NO_OPEN_BROWSER=1`: URL printed, then polls (source) | hidden `agy acp --login`: URL printed, pasted code (or landing URL) on stdin |
+| Check for an update without installing | the `stable` channel file on downloads.claude.ai | npm registry / GitHub releases | `cursor-agent about --format json` | the manifest `install.sh` reads (`…/manifests/<os>_<arch>.json`) |
+| Official installer (Install) | `curl -fsSL https://claude.ai/install.sh \| bash` | `curl -fsSL https://chatgpt.com/codex/install.sh \| sh` | `curl https://cursor.com/install -fsS \| bash` | `curl -fsSL https://antigravity.google/cli/install.sh \| bash` |
+| Models / efforts from | `--help` (aliases; `--effort`'s choices), per version | `codex debug models`, per version and hourly | `cursor-agent models` at each look; effort is in the model id | `agy models` at each look; a model's `-low`…`-max` variants are one model with those efforts |
+| Defaults from | none listed: a run needs both chosen | the same catalog: lowest `priority`, `default_reasoning_level` | `models`' "(default)" | none said (a run without `--model` doesn't name its model); none needed |
+| Updates itself during a run | not with `DISABLE_AUTOUPDATER=1` | not seen | **yes, unless `--disable-auto-update`** | **yes, in the background, unless its home's `last_check.timestamp` is under 15 minutes old** |
+| Startup to first event | 0.3–0.5 s | 0.06–0.5 s | 3–7 s warm, 15–34 s cold | not measured; about 4 s to the first tool call |
+| Stop | process-group SIGTERM: all gone | same | same; also needed after a normal exit (worker daemon) | process-group SIGTERM: `agy` and the MCP server gone |
+| Verdict | **Sealed** | **Sealed, with caveats** | **Sealed, with caveats** | **Sealed, with caveats** (below) |
 
 ## Every harness's environment
 
@@ -67,7 +68,7 @@ Each run, sign-in, update and probe gets an environment built by `harnessEnv`
 
 ## Install
 
-Settings › Agent lists all three harnesses. One the runner doesn't find has **Install**, which runs its
+Settings › Agent lists all four harnesses. One the runner doesn't find has **Install**, which runs its
 vendor's official installer, as the vendor's docs give it:
 
 | Harness | Command | Puts it in |
@@ -75,6 +76,7 @@ vendor's official installer, as the vendor's docs give it:
 | Claude Code | `curl -fsSL https://claude.ai/install.sh \| bash` | `~/.local/bin/claude` |
 | Codex | `curl -fsSL https://chatgpt.com/codex/install.sh \| sh` | `~/.local/bin/codex` |
 | Cursor | `curl https://cursor.com/install -fsS \| bash` | `~/.local/bin/cursor-agent` |
+| Antigravity | `curl -fsSL https://antigravity.google/cli/install.sh \| bash` | `~/.local/bin/agy` (it then runs `agy install`, which adds `~/.local/bin` to the shell's PATH) |
 
 How it runs (`install` in `packages/agent/src/harness/adapter.ts`, the command in each adapter's spec):
 - **A fixed string, run by bash:** `bash -o pipefail -c '<command>'`, with bash found on PATH or in
@@ -107,6 +109,7 @@ each harness lists its own on the host, the runner reports the result (`HarnessI
 | Claude Code | the aliases `--help` names for `--model`, plus `sonnet`, `opus`, `haiku` | the choices `--help` lists for `--effort` (`low…max` if it lists none) | with each new version (`--help` is read once per version) |
 | Codex | `codex debug models` (visible ones; `--bundled` offline) | per model, from the same catalog (`ultra` left out) | with each new version, and when the catalog is an hour old |
 | Cursor | `cursor-agent models` | none: the model id carries it (`…-low`, `…[fast=true]`) | at every look |
+| Antigravity | `agy models`, each model's effort variants as one model | per model: its variants' endings (`low`, `medium`, `high`, `xhigh`, `max`) | at every look |
 
 When the runner looks:
 - when the agent is turned on, or a runner joins while it's on (`agent-on`);
@@ -132,6 +135,7 @@ Settings › Agent says what a run uses when Model or Effort is left empty (`Har
 | Claude Code | none: a model must be chosen | none: an effort must be chosen |
 | Codex | the visible model with the lowest `priority` in `codex debug models` | the model's `default_reasoning_level` in the same catalog |
 | Cursor | the one `cursor-agent models` marks "(default)" (`auto`) | none: the model id carries it |
+| Antigravity | none said: the account's, unnamed | none said: the model's own |
 
 - **Codex.** Its app server (`codex app-server`, `model/list`) marks the lowest-priority model
   `isDefault`, and keeps marking it with `-c model=…` set: it's the built-in default, which a run has,
@@ -141,6 +145,9 @@ Settings › Agent says what a run uses when Model or Effort is left empty (`Har
   cli-config.json. A run's `--model` is saved as its thread's default (the workspace home's
   cli-config.json, "Cursor" below), so a run given no model starts without that file, as a new thread
   does, and gets Cursor's default rather than the model an earlier run of the thread had.
+- **Antigravity.** A run without `--model` runs, but its `init` then has no `model`, and `models` marks
+  none, so Settings says "Antigravity's default model and effort". A family given without an effort
+  (`--model=gemini-3.8-flash`) runs at the model's own effort, also unnamed.
 - **Claude Code.** Its default model follows the account (its plan) and its default effort a per-model
   list Anthropic serves, so neither can be read before a run, and nothing it prints says the effort
   (only its private transcript does). So it has none here (`mustChoose`): Settings asks for both, and a
@@ -692,6 +699,127 @@ Cursor unavailable when they fail. What it does instead is the flag probe below.
   environment"), and its worker starts a TypeScript language server with `npx -y typescript-language-server
   --stdio`, which npm downloads into the private home on first use. Neither is offered to the model as a tool.
 
+## Antigravity
+
+Google's Antigravity CLI (`agy`), 1.5.13, on 2026-11-21, signed in with a free personal Google account.
+Recorded by hand (the binary in a scratch folder with a HOME of its own, the stub MCP server of
+`tools/agent-spike.mjs`), not with the spike tool. The cheapest model, `gemini-3.8-flash-low`.
+
+**Google's terms.** Antigravity's FAQ says that "wrapping `agy` inside third-party coding agents or
+applications" "is not supported under consumer plans", and that using third-party software with an
+Antigravity sign-in can get the account suspended (Antigravity and Gemini CLI). HO[LO] runs the official
+program, unmodified, and never reads its sign-in, but that's what the FAQ describes. So the studio asks
+before Sign in and Use (Google's words, with a link to the FAQ), and the server never picks Antigravity by
+itself: it runs only once it's chosen in Settings › Agent (`CHOSEN_ONLY` in `apps/server/src/agent/store.ts`).
+Since June 2026 Gemini CLI no longer serves Google AI Pro, Ultra or free accounts, so Antigravity is the
+only way a Google subscription reaches a coding agent.
+
+**What it reads, and the private home.** Everything of the user's is under `~/.gemini`: settings
+(`antigravity-cli/settings.json`), MCP servers (`config/mcp_config.json`), hooks, plugins, rules
+(`AGENTS.md`, `GEMINI.md`, `config/rules/`), conversations. No flag or variable moves that folder or keeps
+any of it out: `ANTIGRAVITY_GEMINI_DIR`, `ANTIGRAVITY_APP_DATA_DIR`, `JETSKI_APP_DATA_DIR` and
+`ANTIGRAVITY_CONFIG_REL_DIR` changed nothing (seen with strace). So a run's `HOME` is `<ws>/home`, with
+the XDG folders inside it, as Cursor's is.
+- **The sign-in** is in the desktop's keyring (Secret Service, over the session bus: `DBUS_SESSION_BUS_ADDRESS`
+  is passed, and `XDG_RUNTIME_DIR` stays the user's) or, without one, in
+  `~/.gemini/antigravity-cli/antigravity-oauth-token` (mode 0600). The private home gets a link to that file
+  in the user's home, made again before each run (a token renewed in there may replace the link with a
+  file). HO[LO] never reads it. With a keyring the link points at nothing and isn't used.
+- **Its sign-in has the `cloud-platform` scope**, besides the email and Antigravity's own.
+- **No API key:** `GEMINI_API_KEY` (and `AGY_ADC_AUTH`) aren't passed. They'd need `"modelProvider": "gemini"`
+  in settings anyway; HO[LO] runs on the subscription only.
+
+**The seal.**
+- **A custom agent:** `<ws>/.agents/agents/holo.md`, run with `--agent=holo`, with
+  `excludeDefaultComponents: true` and `tools: []` (added in the changelog: "opt out of default prompt
+  sections and built-in tools"), `subagent: false`, and the agent's instructions as its body (its system
+  prompt; obeyed in a run). Asked to list its tools, the model named `mcp_holo_echo`, `mcp_holo_image`,
+  `mcp_holo_slow`, `list_resources`, `read_resource` and `manage_task`, and its prompt fell from about 9,300
+  input tokens to 880. Asked for a shell, a write and a web fetch, it said it has no such tools. `tools:`
+  takes built-in names only: `mcp_holo_echo` and `call_mcp_tool` there are refused ("not found in registry").
+- **HO[LO]'s tools up front:** each listed in the MCP config as `"tools": {"<name>": {"eager": true}}`. Left
+  lazy, the model gets `call_mcp_tool` and reads each tool's schema with the built-in `read_file` from
+  `~/.gemini/antigravity-cli/mcp/<server>/<tool>.json`, which the agent doesn't have. `"*"` doesn't work
+  (the tools stay lazy), so the adapter names each of HO[LO]'s tools (`TOOLS`).
+- **Settings for the run only** (`--settings=<json>`, never saved): `allow: mcp(holo/*)`, and `deny`
+  `command(*)`, `read_file(*)`, `write_file(*)`, `read_url(*)`, `execute_url(*)`. Without the agent, they
+  hold on their own: `run_command` was refused ("Matches user-configured deny rule"). Without the allow,
+  HO[LO]'s calls are refused too (headless can't ask), listed in the result's `denied_actions`. An unknown
+  settings key stops it at once (`--settings: unknown setting`).
+- **`init` can't vouch for it:** it lists every built-in tool (about 60) whatever the agent has. So once per
+  version the adapter runs a probe that costs nothing: an agent naming a tool no Antigravity has
+  (`holo_probe_not_a_tool`) is refused before any model is asked ("unknown component: tool … not found in
+  registry", exit 3, no tokens). That shows this version reads the workspace's agent and holds it to its
+  `tools`, with the run's own switches and settings. A probe that isn't refused, or a settings key it no
+  longer knows, leaves it unsealed.
+- **The rest:** `--disable-slash-commands` (without it, a prompt starting `/model x` is taken as its command:
+  "/model takes no arguments", exit 2); rules files in the folders above the workspace weren't read.
+- **Tripwire** (`antigravityReader`): any tool step but `mcp_holo_*`, `call_mcp_tool` or the resource tools
+  for the `holo` server, and `manage_task` (its own background tasks, of which it can start none); any
+  `subagent_info`; any `denied_actions`; an `init` whose `agent` isn't `holo`; one of HO[LO]'s tools refused
+  for a permission. A tool's own error (state `ERROR`, "No such track") isn't a trip.
+
+**The prompt.** `-p` takes the prompt as its value ("-p took "--output-format" as its prompt"), so it's
+passed with `--input-format=stream-json` as one line, `{"event":"user","message":{"content":"…"}}`, and
+stdin is closed: one turn, then it exits 0.
+
+**The stream** (`--output-format=stream-json`): `{"event":"init","conversation_id",init:{model?,cwd,agent,tools,permission_mode}}`,
+then `step_update` events (`step_index`, `state` `ACTIVE`/`DONE`/`ERROR`, `step_type` `user_input`,
+`agent_response` with `text_delta`, `tool` with `tool_name` and `tool_info`, `system_message`, `unknown`),
+then one `{"event":"result",result:{status,response,error?,denied_actions?,usage,…}}`. `status` is `SUCCESS`,
+or `ERROR`, `CANCELED` and the like with `error`. A run refused before it starts (a model it doesn't know)
+prints only the result and `error: …` and `AGY_ERROR: {…}` on stderr, and exits 1. An MCP image is offloaded
+to a file in its conversation's folder and reaches the model (it named the colour).
+
+**Signed out.** `agy models` says "Please sign in to view available models" at once (exit 1). A print-mode
+run doesn't: it starts its browser sign-in and waits, silently, with nothing on stdout or stderr (its log
+says "triggering interactive OAuth"). So the probe runs only once `models` lists, the server refuses a
+signed-out harness, and a run that prints nothing for two minutes is stopped ("may be waiting for a
+sign-in"; `startup` in the adapter spec), never tried again without its session.
+
+**Sign-in.** It has no `login` command; the TUI's needs a terminal (`bubbletea: could not open TTY`). The
+ACP server's `authenticate` answers "No browser is available here … Run `agy acp --login` in a terminal".
+`agy acp --login` needs no terminal: it prints "Open this link in a browser to log in with Google:", the
+link (redirect `https://antigravity.google/oauth-callback`), then "Then paste the authorization code, or the
+full URL of the page you land on, and press Enter:", and reads it on stdin (a bad one: "couldn't log in:
+token exchange failed: …", exit 1). Run with the user's own home, so it's the sign-in the terminal uses.
+Asked while signed in, it starts a new sign-in; HO[LO] never asks then. No account name is given anywhere
+but its logs and the token file, so the row says "Signed in" without one.
+
+**Updates.** It updates itself in the background when it starts a session (`models`, a run, its ACP
+server), unless `<home>/.gemini/antigravity-cli/last_check.timestamp` was touched less than 15 minutes ago
+(its log: "skipping update (fast path)"). No flag, setting or variable turns that off, so the adapter
+touches it in the private home before every run and probe. `agy update` updates on a click ("You are
+already on the latest version"). The newest version is in the manifest `install.sh` reads,
+`https://antigravity-cli-auto-updater-974169037036.us-central1.run.app/manifests/<os>_<arch>.json`
+(`version`, `url`, `sha512`).
+
+**Models and efforts.** `agy models` prints "Fetching available models..." then `slug<tab>Name` lines, which
+follow the account's plan (a free account: `gemini-3.8-flash-high`, `-medium`, `-low`, `claude-sonnet-4-6`,
+`claude-opus-4-6-thinking`, `gpt-oss-120b-medium`). The variants of a model that differ only by their
+ending (`low`, `medium`, `high`, `xhigh`, `max`, `--effort`'s values) are one model in the picker, with
+those efforts. A run with an effort passes the variant's own name (`--model=gemini-3.8-flash-low`); one
+without, the family's (`--model=gemini-3.8-flash`, which runs; so does `gpt-oss-120b --effort medium`). A
+variant with another `--effort` is refused ("conflicts with --effort=low"), and so is an unknown model,
+with the list (exit 1).
+
+**Schemas.** Gemini refuses the whole request if any tool's schema has a list whose items have no type
+("…properties[parts].items: missing field", 400): `import`'s `parts` (names or numbers) had none. It's a
+list of text now (a number among it is taken as text, and the import reads "2" as the second part), and
+a test keeps every list's items typed. Objects without listed properties are accepted. With that, a run
+with HO[LO]'s own MCP server had all its tools and called `song_status`.
+
+**Resume.** `--conversation=<id>`, in the same private home: it remembered a number. An unknown id prints
+`warning: conversation "…" not found` and starts a new conversation, whose id the `init` gives.
+
+**Stop.** Its process group is `agy` and the MCP server; SIGTERM ends both. Nothing outlived it.
+
+**Caveats.**
+- The consumer-plan terms, above.
+- A HO[LO] MCP server that can't start isn't seen: neither the stream nor the log says so, and the model
+  answers that it has no such tool. The reply says so, and nothing else happens.
+- Linux only, so far: on macOS the keyring and the private home are unchecked.
+
 ## Tool count
 
 Can the agent have more than 40 tools? Tried on 2026-11-12 with `tools/agent-spike-tools.mjs`: Claude Code
@@ -806,7 +934,16 @@ All are in `packages/agent/test/fixtures/`.
 | `cursor-shell-denied.jsonl` | the same without `--allowed-tools`: shell, read and edit denied by `cli.json` |
 | `cursor-other-server-rejected.jsonl` | a second loaded server not in `allow`: call rejected |
 | `cursor-timeout.jsonl` | `slow 70000`: cut at 60 s |
+| `antigravity-normal.jsonl` | echo + image, final answer, as the `holo` agent |
+| `antigravity-resume.jsonl` | `--conversation` of an earlier one: "what number did I ask you to remember?" |
+| `antigravity-shell-denied.jsonl` | asked for `ls /` without the agent: `run_command` refused by the deny rule |
+| `antigravity-mcp-denied.jsonl` | no agent, no settings, lazy tools: `read_file` of a schema, then `call_mcp_tool` refused (`denied_actions`) |
+| `antigravity-bad-model.jsonl` (and `.stderr.txt`) | an unknown `--model`: refused before it starts, with the list |
+| `antigravity-probe.jsonl` (and `.stderr.txt`) | the seal probe: the agent's made-up tool refused, no tokens |
+| `antigravity-slash.jsonl` | `/model x` as the prompt, without `--disable-slash-commands`: taken as its command |
 
 The Claude shell fixtures were recorded with an earlier prompt (`ls ~` and `/etc/hostname`, no write). The
 Claude fixtures predate `--settings`, so their `init` still has `memory_paths`. `cursor-shell-denied.jsonl` and
-`cursor-other-server-rejected.jsonl` were recorded without `--allowed-tools`.
+`cursor-other-server-rejected.jsonl` were recorded without `--allowed-tools`. `antigravity-shell-denied.jsonl` and
+`antigravity-mcp-denied.jsonl` were recorded without the agent (their `init` has no `agent`: the tripwire stops
+them there; the tests run them as the agent to reach the tool).

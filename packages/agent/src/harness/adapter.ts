@@ -1,5 +1,5 @@
 /**
- * What the three adapters share: finding the program, asking its version and sign-in, looking up
+ * What the adapters share: finding the program, asking its version and sign-in, looking up
  * updates (at most every 6 hours, never installing one unasked), relaying a sign-in, an update or an
  * install (the vendor's official installer, a fixed command, on a click only), and running a turn: the prompt on stdin, the event stream read line by line, each event checked
  * against the tripwire, and the whole process group stopped on a tripwire, a cancel, the time
@@ -101,6 +101,13 @@ export interface Spec {
   reader(): Reader;
   /** A run that failed at once for a reason a second try without it avoids (Cursor's sandbox). */
   retry?(ctx: Context, job: Job, output: string): boolean;
+  /** What a run reads on stdin, when it isn't the prompt as it is (Antigravity's is one JSON line). */
+  input?(job: Job): string;
+  /**
+   * A run that says nothing for this long has stalled before it began (Antigravity waits, silently,
+   * for a browser sign-in when its own has lapsed): it's stopped, and `error` says why.
+   */
+  startup?: { limitMs: number; error: string };
 }
 
 export interface AdapterOptions {
@@ -678,6 +685,8 @@ export function defineHarness(spec: Spec, o: AdapterOptions): Harness {
       let note: string | null = null;
       let ended = false;
       let busy = false;
+      /** Whether the harness has said anything yet (an event on stdout). */
+      let heard = false;
       let lastLine = '';
       let reply: string | undefined;
       const secrets = [job.prompt.length > 40 ? job.prompt : ''];
@@ -735,8 +744,10 @@ export function defineHarness(spec: Spec, o: AdapterOptions): Harness {
         } catch {
           return;
         }
-        if (typeof event === 'object' && event !== null && !Array.isArray(event))
+        if (typeof event === 'object' && event !== null && !Array.isArray(event)) {
+          heard = true;
           handle(reader.event(event as Record<string, unknown>));
+        }
       });
       eachLine(child.stderr, (line) => {
         stderrTail.push(line);
@@ -744,7 +755,7 @@ export function defineHarness(spec: Spec, o: AdapterOptions): Harness {
         if (reader.stderr) handle(reader.stderr(line));
       });
       child.stdin?.on('error', () => undefined);
-      child.stdin?.end(job.prompt);
+      child.stdin?.end(spec.input ? spec.input(job) : job.prompt);
 
       let timedOut = false;
       const limit = setTimeout(() => {
@@ -753,6 +764,16 @@ export function defineHarness(spec: Spec, o: AdapterOptions): Harness {
         stopGroup(child);
       }, runLimit);
       limit.unref?.();
+      const startup = spec.startup;
+      const silent = startup
+        ? setTimeout(() => {
+            if (heard) return;
+            timedOut = true;
+            failure = startup.error;
+            stopGroup(child);
+          }, startup.limitMs)
+        : null;
+      silent?.unref?.();
       let exited = false;
       child.on('exit', () => {
         exited = true;
@@ -765,6 +786,7 @@ export function defineHarness(spec: Spec, o: AdapterOptions): Harness {
         if (closed) return;
         closed = true;
         clearTimeout(limit);
+        if (silent) clearTimeout(silent);
         // after every run, whatever it started goes (Cursor's worker outlives it otherwise)
         stopGroup(child, 500);
         if (tripped) {

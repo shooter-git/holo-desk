@@ -256,7 +256,7 @@ describe('every harness’s environment: no ssh, no scripts folders', () => {
 
   it('sets git’s switches last and drops every SSH_ variable, for every harness and whatever an adapter adds', () => {
     s = sandbox();
-    for (const id of ['claude', 'codex', 'cursor'] as const) {
+    for (const id of ['claude', 'codex', 'cursor', 'antigravity'] as const) {
       const env = harnessEnv(
         id,
         { GIT_SSH_COMMAND: 'ssh', SSH_AUTH_SOCK: '/tmp/agent.sock', HOME: s.home },

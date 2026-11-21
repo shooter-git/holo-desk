@@ -90,6 +90,23 @@ export function harnessRow(h: HarnessInfo, event: HarnessEvent | undefined, curr
   };
 }
 
+/**
+ * What Sign in and Use ask first for a harness whose vendor doesn't support HO[LO] running it on a
+ * consumer plan (Antigravity: Google's FAQ), with where the vendor says so; null for the others. The
+ * server never picks such a harness by itself either: it runs only once it's chosen.
+ */
+export function caution(h: Pick<HarnessInfo, 'id'>): { text: string; link: string; source: string } | null {
+  if (h.id !== 'antigravity') return null;
+  return {
+    text:
+      'Google’s Antigravity FAQ says running agy inside another app “is not supported under consumer plans”, ' +
+      'and that using third-party software with an Antigravity sign-in can get the account suspended, ' +
+      'Gemini CLI included. HO[LO] would run it as you, on your Google AI plan.',
+    link: 'https://antigravity.google/docs/faq/',
+    source: 'Google’s FAQ',
+  };
+}
+
 /** What Install asks before it runs: what runs, where, as the vendor's docs give it. */
 export function installQuestion(h: HarnessInfo): { text: string; command: string } {
   return {

@@ -168,9 +168,9 @@ Claude reads and writes notation too (`holo score show`, `holo score write`).
 
 The studio can take requests in plain words too, in its bar (<kbd>Ctrl /</kbd>). This is off until you
 turn it on in **Settings › Agent**, and while it's off nothing in the studio mentions it. The agent runs
-your own Claude Code, Codex or Cursor on the host, signed in as you, with the runner going there
+your own Claude Code, Codex, Cursor or Antigravity on the host, signed in as you, with the runner going there
 (`pnpm runner`, the one that also renders [creations](docs/creations.md); on Linux,
-`pnpm run runner-service on` keeps it running as a service). Settings › Agent lists all three: one the
+`pnpm run runner-service on` keeps it running as a service). Settings › Agent lists all four: one the
 host doesn't have has an **Install** button, which runs its vendor's official installer there once you
 confirm (it says what runs, and where). One you install yourself in a terminal shows up with **Look
 again**, or, if it went somewhere the runner doesn't look, once you run `pnpm run runner-service on`
@@ -190,8 +190,10 @@ an update runs only when you click it and confirm, and it's the same harness you
 models and efforts are the harness's own, as it lists them on the host, and they're looked at again
 when you open Settings › Agent an hour or more after the last look. Requests use, under them, says which
 model and effort a request uses. Codex and Cursor run with their own defaults when you choose none, and
-it names them; Claude Code has none it can say, so choose its model and effort there before its first
-request. The choice is kept on the host, so every device you use runs the agent the same way.
+it names them; Antigravity does too, without naming them; Claude Code has none it can say, so choose its
+model and effort there before its first request. Antigravity runs on your Google AI plan, but Google's FAQ
+says running it inside another app isn't supported on consumer plans and can get the account suspended:
+Settings › Agent says so before you sign in or use it, and HO[LO] never picks it unless you do. The choice is kept on the host, so every device you use runs the agent the same way.
 
 Type a request and press Enter. A picture, a recording, a MIDI or MusicXML file or a text file dropped
 or pasted on the bar goes with it (a picture is redrawn on your device first, without its location
@@ -376,8 +378,8 @@ secret, an email address or a home-folder path.
 ## Privacy and security
 
 HO[LO] has no accounts and sends nothing anywhere. The agent is off unless you turn it on, and off, no
-harness is run and nothing is looked up for it. On, it runs your own Claude Code, Codex or Cursor, which sends what
-it reads (the song, a scanned page, a file you attached) to Anthropic, OpenAI or Cursor as any session
+harness is run and nothing is looked up for it. On, it runs your own Claude Code, Codex, Cursor or Antigravity, which sends what
+it reads (the song, a scanned page, a file you attached) to Anthropic, OpenAI, Cursor or Google as any session
 of yours does, as you, and only the devices you've allowed can ask it anything. HO[LO] binds to
 `127.0.0.1`, and only devices on your own tailnet can reach it when you turn that on. HO[LO] Engine
 listens on `127.0.0.1:47830` only, and lets in a studio served from this computer, the local network or

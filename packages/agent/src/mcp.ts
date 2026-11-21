@@ -23,7 +23,7 @@ import { TOOLS } from './tools/index.ts';
 
 /**
  * The protocol versions understood, newest first; a client asking for another gets the newest.
- * Claude Code and Cursor ask for 2025-11-25, Codex for 2025-06-18 (docs/agent-harnesses.md).
+ * Claude Code, Cursor and Antigravity ask for 2025-11-25, Codex for 2025-06-18 (docs/agent-harnesses.md).
  */
 export const PROTOCOL_VERSIONS = ['2025-11-25', '2025-06-18', '2025-03-26', '2024-11-05'] as const;
 

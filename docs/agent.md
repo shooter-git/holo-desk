@@ -52,7 +52,8 @@ The in-app agent lives in `packages/agent` (`@holo/agent`): the runner's side (`
   Only the request and `packages/agent/AGENT.md` tell the agent what to do.
 - **Only `finish` reaches the user.** Every turn ends with it, a question's too: a reply of a sentence
   or two of plain text, and the details in the view. What the harness writes in its own chat isn't
-  shown, except as a plain stand-in for a turn that never called `finish` (`agent-done`, below).
+  shown. A turn that ends without `finish` is carried on once, in the same conversation, asking for it;
+  only when that doesn't bring it are the harness's last words a plain stand-in (`agent-done`, below).
 - **Asking ends the turn.** What only the user can allow (a pack, sending to a creation, a screenshot,
   a photo, a recording) is asked with one button; the user's click starts the next turn.
 - **They press play.** The agent shows its work under its reply, in a view it composes (below): buttons
@@ -364,7 +365,7 @@ agent's other traffic uses the existing `state`, `played`, `ack`, `transport`, `
 - `agent-progress {job, line}`
 - `agent-session {job, session}`
 - `agent-done {job, reply?}`. `reply`, the harness's last chat message, stands as the reply only when
-  the agent never called `finish`. It's often markdown, so it's made plain first (`plainReply` in
+  the agent never called `finish`, even once asked for it (below, "End of the turn"). It's often markdown, so it's made plain first (`plainReply` in
   `apps/server/src/agent/plain.ts`): its markup goes, paragraphs, headings, list items and table rows
   keep a line each, and past 600 characters it's cut at the end of a sentence, with "…".
 - `agent-failed {job, error}`
@@ -484,6 +485,10 @@ of the stretch `played` asked for); `length` is ms (null while still held).
    for the requester's studio, which merges it into the job's undo step.
 4. **End of the turn.** The agent calls `finish {label, reply}` (and `ask_permission`, `look` or
    `hand_off` before it if it needs to), then the harness exits.
+   - A run that ends well without calling `finish` (the harness answered in its own chat) is carried on
+     once in its conversation, with only `FINISH_NOW` (`packages/agent/src/harness/adapter.ts`) as the
+     prompt, under the same job and token: one turn, one undo step. If that go doesn't call `finish`
+     either, or fails, the first go's last words stand; a tripwire still stops it.
    - The runner sends `agent-done` and removes the token file.
    - The server revokes the token, asks the studio to save, then stores the song as saved as the
      thread's `seen_doc`.

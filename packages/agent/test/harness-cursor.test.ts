@@ -2,7 +2,7 @@ import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { remember } from '../src/harness/adapter.ts';
+import { FINISH_NOW, remember } from '../src/harness/adapter.ts';
 import {
   cursorFlagsWork,
   cursorHarness,
@@ -68,7 +68,9 @@ afterEach(() => s?.cleanup());
 const probes = () =>
   existsSync(join(s.rec, 'probes')) ? readFileSync(join(s.rec, 'probes'), 'utf8').split('\n').length - 1 : 0;
 
-function fake(o: { run?: string; signedIn?: boolean; probe?: string; probeSignedOut?: string } = {}) {
+function fake(
+  o: { run?: string; signedIn?: boolean; probe?: string; probeSignedOut?: string; askToFinish?: boolean } = {},
+) {
   const signed = q(join(s.rec, 'signed-in'));
   if (o.signedIn) writeFileSync(join(s.rec, 'signed-in'), '');
   const path = fakeBinary(
@@ -106,6 +108,8 @@ exit 0`,
     platform: 'linux',
     root: s.root,
     repo: REPO,
+    // the recorded streams never call finish: no turn is carried on to ask for it
+    askToFinish: o.askToFinish ?? false,
   });
 }
 
@@ -448,6 +452,74 @@ sleep 300`,
     expect(read('cursor-other-server-rejected').find((x) => x.kind === 'trip')).toEqual({
       kind: 'trip',
       why: 'Cursor called a tool of another server (other)',
+    });
+  });
+});
+
+describe('Cursor: a turn that ends without finish', () => {
+  const SESSION = '4da7463b-469a-41bf-86ad-c56bdcee7187';
+  const say = (...events: object[]) => events.map((e) => `echo ${q(JSON.stringify(e))}`).join('\n');
+  const init = { type: 'system', subtype: 'init', session_id: SESSION };
+  const text = (t: string) => ({ type: 'assistant', message: { content: [{ type: 'text', text: t }] } });
+  const tool = (name: string) => ({
+    type: 'tool_call',
+    subtype: 'started',
+    tool_call: { mcpToolCall: { args: { providerIdentifier: 'holo', toolName: name } } },
+  });
+  const ok = { type: 'result', subtype: 'success', is_error: false };
+  const ANSWER = '**No.** The bass has no sends, and the piano goes to the hall.';
+  /** A first go that answers in its own chat, then `asked` for the go that's asked for finish. */
+  const run = (asked: string) =>
+    `case "$*" in *--resume=*) ${asked};; *) ${say(init, tool('song_show'), text(ANSWER), ok)};; esac`;
+  const runs = () => [0, 1, 2].filter((n) => recorded(s, n).argv.length > 0).length;
+
+  it('is carried on once, in its conversation, asked only for finish', async () => {
+    s = sandbox();
+    const events = await runToEnd(
+      fake({ askToFinish: true, run: run(`${say(init, tool('finish'), text('Done.'), ok)}\nexit 0`) }),
+      job(s),
+    );
+    expect(runs()).toBe(2);
+    expect(recorded(s, 1).argv.at(-1)).toBe(`--resume=${SESSION}`);
+    expect(recorded(s, 1).stdin).toBe(FINISH_NOW);
+    expect(events.filter((e) => e.type === 'progress').map((e) => (e as { line: string }).line)).toEqual([
+      'Reading the song',
+      'Finishing',
+    ]);
+    // its finish is the reply; the words that go with done are only the stand-in the server ignores then
+    expect(events.at(-1)).toEqual({ type: 'done', reply: ANSWER });
+  });
+
+  it('keeps the turn’s own words when, asked, it still doesn’t finish, or that go fails', async () => {
+    for (const asked of [`${say(init, text('Called it.'), ok)}\nexit 0`, 'echo "boom" >&2; exit 1']) {
+      s = sandbox();
+      const events = await runToEnd(fake({ askToFinish: true, run: run(asked) }), job(s));
+      expect(runs(), asked).toBe(2);
+      expect(events.at(-1), asked).toEqual({ type: 'done', reply: ANSWER });
+      s.cleanup();
+    }
+  });
+
+  it('isn’t carried on when it called finish, and still stops at the tripwire when it is', async () => {
+    s = sandbox();
+    const finished = await runToEnd(
+      fake({ askToFinish: true, run: `${say(init, tool('finish'), text('Done.'), ok)}\nexit 0` }),
+      job(s),
+    );
+    expect(runs()).toBe(1);
+    expect(finished.at(-1)).toEqual({ type: 'done', reply: 'Done.' });
+    s.cleanup();
+
+    s = sandbox();
+    const shell = {
+      type: 'tool_call',
+      subtype: 'started',
+      tool_call: { shellToolCall: { args: { command: 'ls' } } },
+    };
+    const tripped = await runToEnd(fake({ askToFinish: true, run: run(`${say(init, shell)}\nsleep 300`) }), job(s));
+    expect(tripped.at(-1)).toMatchObject({
+      type: 'failed',
+      error: expect.stringMatching(/^Stopped: Cursor tried a tool/),
     });
   });
 });

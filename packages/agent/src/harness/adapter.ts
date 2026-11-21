@@ -125,6 +125,11 @@ export interface AdapterOptions {
   now?: () => number;
   /** The longest a run may take (the server's own clock is shorter: this is the backstop). */
   runLimitMs?: number;
+  /**
+   * Whether a turn that ended without `finish` is carried on once, asking for it (true unless said:
+   * the tests that replay recorded streams, which never call it, turn it off).
+   */
+  askToFinish?: boolean;
 }
 
 /** What a seal check found. */
@@ -258,6 +263,13 @@ const TOOL_WORDS: Record<string, string> = {
   finish: 'Finishing',
 };
 
+/**
+ * Said to a harness that ended its turn without calling `finish`, in the same conversation: whatever it
+ * wrote in its own chat never reached the person (the server shows its last words only as a stand-in).
+ */
+export const FINISH_NOW =
+  "Your turn ended without calling finish, so the person saw nothing you wrote: only finish reaches them. Call finish now, without doing the work again: a short label, and as the reply one or two short sentences of plain text (no markdown) with your answer or what you did; put any details in finish's view. Then stop.";
+
 export function toolWords(name: string): string {
   return TOOL_WORDS[name] ?? 'Working';
 }
@@ -284,6 +296,7 @@ export function defineHarness(spec: Spec, o: AdapterOptions): Harness {
   const fetchText = o.fetchText ?? defaultFetchText;
   const memory = remember(o.root);
   const runLimit = o.runLimitMs ?? 60 * 60_000;
+  const askToFinish = o.askToFinish ?? true;
   let known: { bin: Binary; version: string | null } | null = null;
   let unresolved: string | null = null;
   let login: { child: ChildProcess; asksCode: boolean } | null = null;
@@ -650,10 +663,25 @@ export function defineHarness(spec: Spec, o: AdapterOptions): Harness {
         const checked = await checkJob(spec, ctx, job, offered?.version === ctx.version ? offered.models : null);
         if ('error' in checked) return report({ type: 'failed', error: checked.error });
         let attempt: Job = checked.job;
+        /** Set once the turn has been carried on to ask for finish: what the turn itself last said. */
+        let asked: { said: string } | null = null;
         for (let tries = 0; tries < 3 && !cancelled; tries++) {
-          const outcome = await once(ctx, attempt, report, (c) => {
-            current = c;
-          });
+          const outcome = await once(
+            ctx,
+            attempt,
+            report,
+            (c) => {
+              current = c;
+            },
+            asked,
+          );
+          if (outcome.again === 'finish' && !asked) {
+            // the same conversation, asked only for finish (not a retry: it doesn't count as one)
+            asked = { said: outcome.said ?? '' };
+            attempt = { ...attempt, session: outcome.session, prompt: FINISH_NOW };
+            tries--;
+            continue;
+          }
           if (outcome.again === 'fresh' && attempt.session) {
             // the harness no longer has that session: start the conversation again
             attempt = { ...attempt };
@@ -676,13 +704,18 @@ export function defineHarness(spec: Spec, o: AdapterOptions): Harness {
     },
   };
 
-  /** One go at a turn; `again` asks for another (without the session, or as it was). */
+  /**
+   * One go at a turn; `again` asks for another (without the session, or as it was), or for the turn to
+   * be carried on in `session` to ask for finish, which it never called (`said`: its last words).
+   * `asked` is set on that go: the turn's own last words, which stand if this go doesn't finish either.
+   */
   function once(
     ctx: Context,
     job: Job,
     report: (e: RunEvent) => void,
     started: (c: ChildProcess) => void,
-  ): Promise<{ again?: 'fresh' | 'same' }> {
+    asked: { said: string } | null,
+  ): Promise<{ again?: 'fresh' | 'same' } | { again: 'finish'; session: string; said?: string }> {
     return new Promise((resolve) => {
       const { args, env: extra } = spec.prepare(ctx, job);
       const runEnv = harnessEnv(spec.id, extra, env, platform);
@@ -703,6 +736,8 @@ export function defineHarness(spec: Spec, o: AdapterOptions): Harness {
       let heard = false;
       let lastLine = '';
       let reply: string | undefined;
+      /** Whether it called finish. */
+      let finished = false;
       const secrets = [job.prompt.length > 40 ? job.prompt : ''];
 
       const handle = (seen: Seen[]) => {
@@ -720,6 +755,7 @@ export function defineHarness(spec: Spec, o: AdapterOptions): Harness {
               break;
             case 'tool': {
               busy = true;
+              if (s.name === 'finish') finished = true;
               const line = toolWords(s.name);
               if (line !== lastLine) {
                 lastLine = line;
@@ -807,6 +843,11 @@ export function defineHarness(spec: Spec, o: AdapterOptions): Harness {
           report({ type: 'failed', error: `Stopped: ${tripped}` });
           return resolve({});
         }
+        if (asked && (spawnError || failure || !(code === 0 || (ended && exited && code === null)))) {
+          // only asked for finish: the turn itself went well, so its own last words stand
+          report(asked.said ? { type: 'done', reply: asked.said } : { type: 'done' });
+          return resolve({});
+        }
         if (spawnError) {
           report({ type: 'failed', error: cleanError(`${spec.name} couldn’t start: ${spawnError}`, secrets) });
           return resolve({});
@@ -823,14 +864,19 @@ export function defineHarness(spec: Spec, o: AdapterOptions): Harness {
           return resolve({});
         }
         if (code === 0 || (ended && exited && code === null)) {
-          if (!busy && spec.toolsStarted && !spec.toolsStarted(job)) {
+          if (!asked && !busy && spec.toolsStarted && !spec.toolsStarted(job)) {
             report({
               type: 'failed',
               error: `HO[LO]’s tools didn’t start in ${spec.name}, so it answered without them`,
             });
             return resolve({});
           }
-          report(reply ? { type: 'done', reply } : { type: 'done' });
+          const carryOn = session ?? job.session;
+          if (!finished && !asked && askToFinish && carryOn) {
+            return resolve({ again: 'finish', session: carryOn, ...(reply ? { said: reply } : {}) });
+          }
+          const said = asked?.said || reply;
+          report(said ? { type: 'done', reply: said } : { type: 'done' });
           return resolve({});
         }
         const why = note ?? (tailError(stderrTail) || `${spec.name} stopped (exit ${code ?? 'signal'})`);

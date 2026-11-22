@@ -239,6 +239,20 @@ describe('the agent runner', () => {
     expect(parseRun(run(9, { workspace: undefined }))).toMatchObject({ job: 'agj_000000000009' });
   });
 
+  it('hands the harness the server’s ceiling for the job; one that isn’t a number of ms is left out', async () => {
+    s = sandbox();
+    const { r, claude } = runner();
+    r.handle(run(1, { limitMs: 2 * 3_600_000 }));
+    await until(() => claude.runs.length === 1);
+    expect(claude.runs[0]?.job.limitMs).toBe(2 * 3_600_000);
+    for (const limitMs of ['7200000', -1, 0, Number.NaN, null])
+      expect(parseRun(run(2, { limitMs })), String(limitMs)).not.toHaveProperty('limitMs');
+    // (a day at most)
+    expect(parseRun(run(3, { limitMs: 1e12 }))).toMatchObject({ limitMs: 86_400_000 });
+    // an older server says none: the adapter's own limit applies
+    expect(parseRun(run(4))).not.toHaveProperty('limitMs');
+  });
+
   it('runs at most two jobs at once, one per thread; the rest wait their turn', async () => {
     s = sandbox();
     const { r, claude, codex } = runner();

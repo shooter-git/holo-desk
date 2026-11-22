@@ -14,6 +14,7 @@ import {
   parseCursorModels,
 } from '../src/harness/cursor.ts';
 import { GIT_ENV, harnessEnv, harnessPath } from '../src/harness/env.ts';
+import type { RunEvent } from '../src/harness/types.ts';
 import { FINISHED_FILE } from '../src/harness/workspace.ts';
 import {
   alive,
@@ -70,7 +71,14 @@ const probes = () =>
   existsSync(join(s.rec, 'probes')) ? readFileSync(join(s.rec, 'probes'), 'utf8').split('\n').length - 1 : 0;
 
 function fake(
-  o: { run?: string; signedIn?: boolean; probe?: string; probeSignedOut?: string; askToFinish?: boolean } = {},
+  o: {
+    run?: string;
+    signedIn?: boolean;
+    probe?: string;
+    probeSignedOut?: string;
+    askToFinish?: boolean;
+    now?: () => number;
+  } = {},
 ) {
   const signed = q(join(s.rec, 'signed-in'));
   if (o.signedIn) writeFileSync(join(s.rec, 'signed-in'), '');
@@ -111,6 +119,7 @@ exit 0`,
     repo: REPO,
     // the recorded streams never call finish: no turn is carried on to ask for it
     askToFinish: o.askToFinish ?? false,
+    ...(o.now ? { now: o.now } : {}),
   });
 }
 
@@ -527,6 +536,30 @@ describe('Cursor: a turn that ends without finish', () => {
       const events = await runToEnd(fake({ askToFinish: true, run: run(asked) }), job(s));
       expect(runs(), asked).toBe(2);
       expect(events.at(-1), asked).toEqual({ type: 'done', reply: ANSWER });
+      s.cleanup();
+    }
+  });
+
+  it('is stopped a minute past the server’s ceiling, counted from the turn’s start: the go asked for finish too', async () => {
+    const LIMIT = 1000;
+    for (const [later, stopped] of [
+      // within the minute past the ceiling: the go asked for finish runs, and finishes
+      [LIMIT + 30_000, false],
+      // past it: that go is stopped at once (not after its 30 s), and the turn's own words stand
+      [LIMIT + 61_000, true],
+    ] as const) {
+      s = sandbox();
+      // the clock as the adapter reads it, moved on as the first go works (as a long one would)
+      let clock = 0;
+      const asked = `${say(init)}\n${stopped ? 'sleep 30\n' : ''}${finishes}\n${say(text('Done.'), ok)}\nexit 0`;
+      const events: RunEvent[] = [];
+      await fake({ askToFinish: true, run: run(asked), now: () => clock }).run(job(s, { limitMs: LIMIT }), (e) => {
+        events.push(e);
+        if (e.type === 'progress' && e.line === 'Reading the song') clock = later;
+      }).done;
+      const lines = events.filter((e) => e.type === 'progress').map((e) => (e as { line: string }).line);
+      expect(lines, String(later)).toEqual(stopped ? ['Reading the song'] : ['Reading the song', 'Finishing']);
+      expect(events.at(-1), String(later)).toEqual({ type: 'done', reply: ANSWER });
       s.cleanup();
     }
   });

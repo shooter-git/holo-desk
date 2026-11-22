@@ -315,10 +315,33 @@ const REFUSALS: Partial<Record<HarnessId, RegExp>> = {
 /**
  * What the same 400s also say that has nothing to do with the conversation, and is ordinary: the
  * account (billing, credits, a plan, a quota), where it is, a model it can't use, a sign-in. Another
- * conversation would be refused just the same, and this one is worth keeping.
+ * conversation would be refused just the same, and this one is worth keeping. Phrases only, never a
+ * bare word a refusal may quote from the conversation ("region", "plan", "access" and "not found" are
+ * all HO[LO]'s own words): Gemini's location refusal is `FAILED_PRECONDITION`, never matched anyway.
  */
-const ORDINARY =
-  /credit|billing|payment|\bplan\b|quota|usage limit|location|region|country|not supported|unsupported|not available|does not exist|not found|access|permission|unauthori[sz]ed|forbidden|api key|authenticat|log ?in|sign ?in/i;
+const ORDINARY = new RegExp(
+  [
+    'credit balance',
+    'billing',
+    'payment',
+    'quota',
+    'usage limit',
+    'upgrade (?:your )?plan',
+    'plans? (?:&|and) billing',
+    'user location is not supported',
+    'not (?:supported|available) in your (?:country|region|location)',
+    'model\\b[^.]{0,80}?(?:not supported|unsupported|not available|not found|does not exist)',
+    '(?:do|does) not have access to (?:the |this |that )?(?:model|it)\\b',
+    'not logged in',
+    '(?:log|sign) ?in again',
+    'please (?:log|sign) ?in',
+    'unauthori[sz]ed',
+    'permission denied',
+    'api key',
+    'authenticat',
+  ].join('|'),
+  'i',
+);
 
 /**
  * Whether a harness's own error (its result's, never a tool's answer or the model's words) says its

@@ -496,6 +496,12 @@ describe('Antigravity: a sealed run', () => {
           'codex',
           'unexpected status 400 Bad Request: {"error":{"message":"No tool output found for function call call_abc.","type":"invalid_request_error","param":"input","code":null}}',
         ],
+        // quoting the conversation: HO[LO]'s own words (a region, a plan, access, not found) don't make it ordinary
+        ['antigravity', 'INVALID_ARGUMENT (code 400): Invalid value at function_call.args.region: invalid value'],
+        [
+          'claude',
+          'API Error: 400 {"type":"error","error":{"type":"invalid_request_error","message":"messages.7: tool_use id not found for the region in the plan; access to it was cut"}}',
+        ],
       ];
       for (const [harness, said] of refusals) expect(refusedRequest(harness, said), said).toBe(true);
       // the same words from another harness aren't how it says one

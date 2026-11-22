@@ -59,6 +59,9 @@ export class ApiError extends Error {
   }
 }
 
+/** How long a save may take before it's given up and made again. */
+export const SAVE_MS = 30_000;
+
 async function call<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(path, {
     ...init,
@@ -83,11 +86,20 @@ export const api = {
   revision: (id: string, revision: number) => call<Project>(`/api/projects/${id}/history/${revision}`),
   create: (title: string) => call<Project>('/api/projects', { method: 'POST', body: JSON.stringify({ title }) }),
   createFrom: (doc: Project) => call<Project>('/api/projects', { method: 'POST', body: JSON.stringify({ doc }) }),
-  save: (doc: Project, baseRevision: number) =>
-    call<{ revision: number; modified: string }>(`/api/projects/${doc.id}`, {
+  /**
+   * Save a song on the revision it was made on. Given up after SAVE_MS (a page frozen with it on its
+   * way, as a phone's is in the background), so it can be made again: one that got there anyway is
+   * then found to be the song as it is (actions.ts).
+   */
+  save: (doc: Project, baseRevision: number) => {
+    const stop = new AbortController();
+    const timer = setTimeout(() => stop.abort(), SAVE_MS);
+    return call<{ revision: number; modified: string }>(`/api/projects/${doc.id}`, {
       method: 'PUT',
       body: JSON.stringify({ doc, baseRevision }),
-    }),
+      signal: stop.signal,
+    }).finally(() => clearTimeout(timer));
+  },
   remove: (id: string) => call<{ ok: boolean }>(`/api/projects/${id}`, { method: 'DELETE' }),
   /** Set a song's artist or album (null clears one; one left out stays). */
   setDetails: (id: string, details: { artist?: string | null; album?: string | null }) =>

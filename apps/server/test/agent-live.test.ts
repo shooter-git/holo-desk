@@ -586,15 +586,12 @@ describe('the studio that asked, away a moment', () => {
       running: true,
       base: before,
       head: before + 2,
-      batches: [
-        { batch: 'b1', ops: title('One') },
-        { batch: 'b2', ops: title('Two') },
-      ],
+      batches: [{ batch: 'b1' }, { batch: 'b2' }],
       song: services.store.get(s.id),
     });
     expect(await away(before + 1)).toMatchObject({
       base: before + 1,
-      batches: [{ batch: 'b2', ops: title('Two') }],
+      batches: [{ batch: 'b2' }],
       song: { title: 'Two', revision: before + 2 },
     });
     // from before the run (the studio's save got here, its answer lost), all of it from the run's first
@@ -729,6 +726,38 @@ describe('the studio that asked, away a moment', () => {
     await until(() => read.done);
     const song = read.value as Awaited<ReturnType<typeof tool>>;
     expect([song.statusCode, song.json().id]).toEqual([200, s.id]);
+  });
+
+  it('keeps the revision a studio that’s back picks up, for a reload of it to read', async () => {
+    const { start, tool, s, token, desk, studio, services, save } = await setup();
+    await save(services.store.get(s.id) as Parameters<typeof save>[0]);
+    const { job, token: jobToken } = await start({ project: s.id, text: 'Change it' });
+    const before = (services.store.get(s.id) as { revision: number }).revision;
+    desk.say({
+      type: 'state',
+      state: {
+        project: s.id,
+        revision: before,
+        tick: 0,
+        selection: { track: null, regions: [], notes: 0 },
+        hidden: true,
+      },
+    });
+    desk.close();
+    const title = (t: string) => [{ op: 'setProject', patch: { title: t } }];
+    await tool(job, jobToken, 'POST', '/ops', { ops: title('One'), label: 'Title', batch: 'b1' });
+    await tool(job, jobToken, 'POST', '/ops', { ops: title('Two'), label: 'Title', batch: 'b2' });
+    // the run's first revision is kept; the ones after it aren't, one by one
+    expect(services.store.revision(s.id, before)).not.toBeNull();
+    expect(services.store.revision(s.id, before + 2)).toBeNull();
+    // back, it picks the run up: the revision it's at now is kept
+    const back = studio(token, s.id, 'desk');
+    back.say({
+      type: 'state',
+      state: { project: s.id, revision: before + 2, tick: 0, selection: { track: null, regions: [], notes: 0 } },
+    });
+    await settle();
+    expect(services.store.revision(s.id, before + 2)?.title).toBe('Two');
   });
 
   it('a page back in view as its change runs out of time isn’t taken as frozen: the next goes to it', async () => {

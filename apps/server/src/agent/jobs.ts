@@ -204,7 +204,9 @@ interface Hearing {
 export interface AwayRun {
   base: number;
   head: number;
-  batches: { batch: string; label: string; ops: Op[]; revision: number }[];
+  batches: { batch: string; label: string; revision: number }[];
+  /** The last revision of it the requester's studio has said it's at, kept in the song's history. */
+  kept?: number;
 }
 
 /** What a studio back on the song picks up of a run (`Jobs.awayFor`): the batches after its revision. */
@@ -215,12 +217,13 @@ export interface AwayChanges {
   running: boolean;
   /**
    * The revision the batches were made on: the studio's own, or (it was before the run) the run's
-   * first, which the studio takes them on only if its song is that one (its save got here unanswered).
+   * first (a save of the studio's got here, its answer lost).
    */
   base: number;
   /** The revision the song is at with them, and the song as it is then. */
   head: number;
-  batches: { batch: string; ops: Op[] }[];
+  /** By id: the studio puts its own changes onto the song as it is (merge-songs.ts), not the batches. */
+  batches: { batch: string }[];
   song: Project;
 }
 
@@ -1114,12 +1117,29 @@ export class Jobs implements AgentHooks {
       // a studio back with the song open (after a reload, its network back), or saying where it's got
       // to: the tools waiting for it look again
       for (const back of [...(this.comingBack.get(key) ?? [])]) back();
+      this.keepPickedUp(device, now, client.state?.revision);
     }
     if (!device || !was || was === now) return;
     for (const job of this.jobs.values()) {
       // a scan preset carries on without the studio (its changes are saved here, with a restore point)
       if (job.view.device !== device || job.view.project !== was || !isLive(job) || job.preset) continue;
       if (!this.o.live.studioFor(device, was)) this.end(job, 'cancelled', 'You opened another song', true);
+    }
+  }
+
+  /**
+   * The requester's studio says it's at the last revision of its job's run (it picked the run up):
+   * that revision is kept in the song's history, once, as the song its own changes from now on are
+   * made on, which a reload of it may read (actions.ts, picking up).
+   */
+  private keepPickedUp(device: string, project: string, revision: number | undefined): void {
+    for (const job of this.jobs.values()) {
+      const run = job.away;
+      if (!run || job.view.device !== device || job.view.project !== project) continue;
+      if (revision !== run.head || run.kept === run.head || run.head === run.base) continue;
+      if (this.o.store.row(project)?.revision !== run.head) continue;
+      this.o.store.snapshotNow(project, 'Agent');
+      run.kept = run.head;
     }
   }
 
@@ -1433,7 +1453,7 @@ export class Jobs implements AgentHooks {
     if (!saved) throw new Refusal(409, 'Changed while applying; try again');
     const away = run ?? { base: song.revision, head: song.revision, batches: [] };
     away.head = saved.revision;
-    away.batches.push({ batch, label, ops, revision: saved.revision });
+    away.batches.push({ batch, label, revision: saved.revision });
     job.away = away;
     job.batches.set(batch, saved.revision);
     this.o.live.tell({ type: 'saved', project: saved.id, revision: saved.revision });
@@ -1466,7 +1486,7 @@ export class Jobs implements AgentHooks {
       running: isLive(job),
       base: after === 0 ? run.base : from,
       head: run.head,
-      batches: batches.map(({ batch, ops }) => ({ batch, ops })),
+      batches: batches.map(({ batch }) => ({ batch })),
       song,
     };
   }

@@ -1,4 +1,4 @@
-import { applyOps, newProject, type Op, type Project } from '@holo/session';
+import { applyOps, newProject, newRegion, newTrack, type Op, type Project } from '@holo/session';
 import { beforeAll, describe, expect, it, vi } from 'vitest';
 import type * as ActionsModule from '../src/app/actions.ts';
 import type * as StoreModule from '../src/app/store.ts';
@@ -119,6 +119,8 @@ describe('the agent’s changes saved on the host while the studio was away', ()
         latest = { ...p, revision: latest.revision + 1 };
       },
       onAway: null as (() => void) | null,
+      /** How long the next answer of the away route takes (a slow network). */
+      slowAway: 0,
       running: true,
     };
     const json = (status: number, body: unknown) =>
@@ -128,6 +130,9 @@ describe('the agent’s changes saved on the host while the studio was away', ()
       if (path === '/api/agent') return json(200, { enabled: true, allowed: true, pairing: false, runner: {} });
       if (path === '/api/agent/devices') return json(200, { devices: [{ id: 'dev_me', current: true }], requests: [] });
       if (path.startsWith('/api/agent/away/')) {
+        const slow = h.slowAway;
+        h.slowAway = 0;
+        if (slow) await new Promise((done) => setTimeout(done, slow));
         const from = Number(new URL(path, 'http://h').searchParams.get('from'));
         const after = from <= base ? 0 : from - base;
         const left = run.slice(after);
@@ -178,7 +183,7 @@ describe('the agent’s changes saved on the host while the studio was away', ()
       { batch: 'b1', ops: title('Lifted') },
       { batch: 'b2', ops: key('E minor') },
     ]);
-    expect(await A.pickUpAgent()).toBe(true);
+    expect(await A.pickUpAgent()).toBe('picked');
     let s = S.store.get();
     expect(s.project).toEqual(h.latest());
     expect([s.serverRevision, s.saveState, s.agentJobs[JOB]]).toEqual([h.head(), 'saved', true]);
@@ -196,7 +201,7 @@ describe('the agent’s changes saved on the host while the studio was away', ()
     expect([s.project?.title, s.project?.tempo[0]?.bpm]).toEqual(['Lifted', 101]);
     expect(s.undo).toHaveLength(2);
     // nothing more to pick up
-    expect(await A.pickUpAgent()).toBe(false);
+    expect(await A.pickUpAgent()).toBe('none');
     A.undo();
     expect(S.store.get().project).toBe(song);
   });
@@ -286,7 +291,7 @@ describe('the agent’s changes saved on the host while the studio was away', ()
       const h = host(song, 400, [{ batch: 'g1', ops: key('A minor') }], 'Held');
       // a remote's fader, whose phone went away mid-move: the agent's queue is held
       A.beginGesture('Volume');
-      let picked: boolean | null = null;
+      let picked: string | null = null;
       void A.pickUpAgent().then((r) => {
         picked = r;
       });
@@ -299,7 +304,7 @@ describe('the agent’s changes saved on the host while the studio was away', ()
       expect(h.saves).toHaveLength(1);
       // let through after 15 s, like the agent's batches
       await vi.advanceTimersByTimeAsync(15_000);
-      expect(picked).toBe(true);
+      expect(picked).toBe('picked');
       await saving;
       await vi.advanceTimersByTimeAsync(1000);
       const s = S.store.get();
@@ -307,6 +312,204 @@ describe('the agent’s changes saved on the host while the studio was away', ()
       expect(h.latest()).toMatchObject({ title: 'Mine', key: 'A minor' });
     } finally {
       A.endGesture();
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe('the agent’s changes saved on the host, picked up when things go wrong on the way', () => {
+  const JOB = 'agj_00000000a0a1';
+  const key = (k: string): Op[] => [{ op: 'setProject', patch: { key: k } }];
+  const json = (status: number, body: unknown) =>
+    new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
+
+  /**
+   * The host: the agent on; the job's run from `base` (the song then) through `batches`, to `head`
+   * (the song as it is: `latest`, else the batches made again here); the run's first revision kept;
+   * saves refused on any revision but the latest; the first away answer `slow` ms late, and the first
+   * `hang` saves never answered, until they're given up.
+   */
+  function host(
+    base: number,
+    song: Project,
+    batches: { batch: string; ops: Op[] }[],
+    o: { slow?: number; hang?: number; latest?: Project } = {},
+  ) {
+    const head = base + batches.length;
+    let latest: Project = { ...(o.latest ?? batches.reduce((p, b) => applyOps(p, b.ops), song)), revision: head };
+    const saves: number[] = [];
+    let slow = o.slow ?? 0;
+    let hang = o.hang ?? 0;
+    vi.stubGlobal('fetch', async (url: string, init?: RequestInit) => {
+      const path = String(url);
+      if (path === '/api/agent') return json(200, { enabled: true, allowed: true, pairing: false, runner: {} });
+      if (path === '/api/agent/devices') return json(200, { devices: [{ id: 'dev_me', current: true }], requests: [] });
+      if (path.startsWith('/api/agent/away/')) {
+        const late = slow;
+        slow = 0;
+        if (late) await new Promise((done) => setTimeout(done, late));
+        const from = Number(new URL(path, 'http://h').searchParams.get('from'));
+        const after = from <= base ? 0 : from - base;
+        const left = batches.slice(after);
+        const away =
+          !left.length || latest.revision !== head
+            ? null
+            : { job: JOB, label: 'Lift', running: true, base: after ? from : base, head, batches: left, song: latest };
+        return json(200, { away });
+      }
+      if (path === `/api/projects/${song.id}/history/${base}`) return json(200, { ...song, revision: base });
+      if (path.startsWith(`/api/projects/${song.id}/history/`)) return json(404, { error: 'Not kept' });
+      if (path === `/api/projects/${song.id}` && init?.method === 'PUT') {
+        if (hang) {
+          hang--;
+          // (a request the page was frozen with: no answer, until it's given up)
+          return new Promise<Response>((_ok, fail) =>
+            init.signal?.addEventListener('abort', () => fail(new DOMException('Gave up', 'AbortError'))),
+          );
+        }
+        const body = JSON.parse(String(init.body)) as { doc: Project; baseRevision: number };
+        saves.push(body.baseRevision);
+        if (body.baseRevision !== latest.revision) return json(409, { error: 'Changed elsewhere', current: latest });
+        latest = { ...body.doc, revision: latest.revision + 1 };
+        return json(200, { revision: latest.revision, modified: '' });
+      }
+      if (path === `/api/projects/${song.id}`) return json(200, latest);
+      return json(404, { error: 'No such route' });
+    });
+    return { saves, latest: () => latest, head };
+  }
+
+  it('the host slow to say what the agent saved: no which-version-to-keep, and it’s asked again', async () => {
+    vi.useFakeTimers();
+    try {
+      const song = { ...newProject('Slow network'), revision: 1100 };
+      A.load(song);
+      const h = host(1100, song, [{ batch: 's1', ops: key('G minor') }], { slow: 20_000 });
+      // the user's change is saved a moment later: refused, as the agent saved since
+      A.apply([{ op: 'setProject', patch: { title: 'Mine' } }], 'Title');
+      await vi.advanceTimersByTimeAsync(16_000);
+      // (the pick-up gave up after 15 s: the change stays to be saved)
+      expect(S.store.get().saveState).toBe('dirty');
+      await vi.advanceTimersByTimeAsync(10_000);
+      const s = S.store.get();
+      expect([s.saveState, s.project?.title, s.project?.key]).toEqual(['saved', 'Mine', 'G minor']);
+      expect(h.latest()).toMatchObject({ title: 'Mine', key: 'G minor' });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('a save that got there unanswered, then a batch the woken page took in late: taken out, no conflict', async () => {
+    const song = { ...newProject('Woken'), revision: 1200 };
+    A.load(song);
+    // the user's change was saved as the page went (1201), but its answer never came back
+    A.apply([{ op: 'setProject', patch: { title: 'Mine' } }], 'Title');
+    const mine = S.store.get().project as Project;
+    S.store.set({ saveState: 'offline' });
+    const l1 = { batch: 'w1', ops: key('C minor') };
+    const l2 = { batch: 'w2', ops: [{ op: 'setProject', patch: { tempo: [{ tick: 0, bpm: 70 }] } }] as Op[] };
+    const h = host(1201, mine, [l1, l2]);
+    // the first batch, sent to the frozen page, comes in as it wakes, after the host had saved it too
+    expect(await A.applyJob(l1.ops, JOB, l1.batch, 'Lift')).toEqual({ ok: true });
+    // its save goes again a moment later: refused, the run picked up
+    await vi.waitFor(() => expect(S.store.get().saveState).toBe('saved'));
+    const s = S.store.get();
+    expect(s.serverRevision).toBe(h.head);
+    expect([s.project?.title, s.project?.key, s.project?.tempo[0]?.bpm]).toEqual(['Mine', 'C minor', 70]);
+    expect(h.saves).toEqual([1200]);
+    // one step for the job: Undo goes back to the user's change, before it
+    expect(s.undo.at(-1)).toMatchObject({ job: JOB });
+    A.undo();
+    expect(S.store.get().project).toBe(mine);
+    await vi.waitFor(() => expect(S.store.get().saveState).toBe('saved'));
+  });
+
+  it('a copy of bars the agent made, then changed, keeps the user’s unsaved change, the copy as the host has it', async () => {
+    const BAR = 3840;
+    const keys = newTrack('Piano', { type: 'synth', preset: 'Soft Keys' });
+    const verse = newRegion(0, 2 * BAR, 'Verse');
+    const song = {
+      ...applyOps(newProject('Copies'), [
+        { op: 'addTrack', track: keys },
+        { op: 'addRegion', track: keys.id, region: verse },
+        { op: 'addNotes', track: keys.id, region: verse.id, notes: [{ t: 0, d: 960, p: 60, v: 90 }] },
+      ]),
+      revision: 1300,
+    };
+    A.load(song);
+    // the agent copies the verse after itself, then names the copy, by the id the host gave it
+    const copy: Op[] = [{ op: 'arrange', edit: 'copy', from: 0, to: 2 * BAR, at: 2 * BAR }];
+    const copied = applyOps(song, copy);
+    const made = copied.tracks.find((t) => t.id === keys.id)?.regions.find((r) => r.start === 2 * BAR);
+    if (!made) throw new Error('no copy');
+    const name: Op[] = [{ op: 'updateRegion', track: keys.id, region: made.id, patch: { name: 'Verse 2' } }];
+    const h = host(
+      1300,
+      song,
+      [
+        { batch: 'c1', ops: copy },
+        { batch: 'c2', ops: name },
+      ],
+      { latest: applyOps(copied, name) },
+    );
+    // meanwhile the user turned the piano down, not saved yet: its save is refused, the run picked up
+    A.apply([{ op: 'updateChannel', target: keys.id, patch: { volume: -6 } }], 'Volume');
+    await vi.waitFor(() => expect(S.store.get().serverRevision).toBe(h.head + 1));
+    const piano = S.store.get().project?.tracks.find((t) => t.id === keys.id);
+    expect(piano?.channel.volume).toBe(-6);
+    expect(piano?.regions.map((r) => [r.id, r.name])).toEqual([
+      [verse.id, 'Verse'],
+      [made.id, 'Verse 2'],
+    ]);
+    expect(
+      S.store.get().toasts.some((t) => /touched the same things|changed what you were changing/.test(t.text)),
+    ).toBe(false);
+    expect(h.latest().tracks.find((t) => t.id === keys.id)?.channel.volume).toBe(-6);
+  });
+
+  it('a copy of bars that came late to the woken page too isn’t made twice', async () => {
+    const BAR = 3840;
+    const keys = newTrack('Organ', { type: 'synth', preset: 'Soft Keys' });
+    const verse = newRegion(0, 2 * BAR, 'Verse');
+    const song = {
+      ...applyOps(newProject('Late copy'), [
+        { op: 'addTrack', track: keys },
+        { op: 'addRegion', track: keys.id, region: verse },
+      ]),
+      revision: 1500,
+    };
+    A.load(song);
+    // the user's change, not saved before the page froze
+    A.apply([{ op: 'updateChannel', target: keys.id, patch: { volume: -4 } }], 'Volume');
+    S.store.set({ saveState: 'offline' });
+    const copy: Op[] = [{ op: 'arrange', edit: 'copy', from: 0, to: 2 * BAR, at: 2 * BAR }];
+    const copied = applyOps(song, copy);
+    const h = host(1500, song, [{ batch: 'k1', ops: copy }], { latest: copied });
+    // the host saved the copy (its ids); the page, waking, made it too (its own)
+    expect(await A.applyJob(copy, JOB, 'k1', 'Lift')).toEqual({ ok: true });
+    await vi.waitFor(() => expect(S.store.get().serverRevision).toBe(h.head + 1));
+    const organ = S.store.get().project?.tracks.find((t) => t.id === keys.id);
+    expect(organ?.regions.map((r) => r.id)).toEqual(
+      copied.tracks.find((t) => t.id === keys.id)?.regions.map((r) => r.id),
+    );
+    expect(organ?.channel.volume).toBe(-4);
+  });
+
+  it('a save the page was frozen with is given up, and made again', async () => {
+    vi.useFakeTimers();
+    try {
+      const song = { ...newProject('Hung'), revision: 1400 };
+      A.load(song);
+      const h = host(1400, song, [], { hang: 1 });
+      // saved a moment after the change: no answer
+      A.apply([{ op: 'setProject', patch: { title: 'Mine' } }], 'Title');
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(S.store.get().saveState).toBe('saving');
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(S.store.get().saveState).toBe('offline');
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect([S.store.get().saveState, h.saves]).toEqual(['saved', [1400]]);
+    } finally {
       vi.useRealTimers();
     }
   });

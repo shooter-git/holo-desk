@@ -274,7 +274,9 @@ revision they were made on, or, the song changed somewhere else since, asking wh
 If the host already has the song as they left it (their save got there just before the page went),
 they're let go and the history comes back. Another song opened before a save is saved in the
 background, after a save of it on its way. Unsaved changes are never let go to make room. A page that's
-hidden saves to the host too, while it still runs.
+hidden saves to the host too, while it still runs; a save with no answer within 30 s (a page frozen
+with it on its way) is given up and made again, and one refused because the host already has that very
+song is taken as saved.
 
 The agent may have saved its changes on the host while the page was away (docs/agent.md, "The studio
 that asked, away"). Then the history comes back with them as their job's step on top, and changes kept

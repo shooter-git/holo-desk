@@ -8,7 +8,7 @@
  * own, and goes only to HO[LO]'s host: as the bearer of the agent's routes, and in each live hello.
  */
 import type { Go, View } from '@holo/agent/view';
-import { type Op, type Project, parseProject } from '@holo/session';
+import { type Project, parseProject } from '@holo/session';
 import { useSyncExternalStore } from 'react';
 import type { Ready } from './attach.ts';
 import { type Command, selectionSpan } from './commands.ts';
@@ -970,10 +970,10 @@ export async function jobLabels(project: string, jobs: readonly string[]): Promi
 
 /**
  * What this device's request saved of its changes on the host while this studio was away (a phone in
- * another app, a closed tab), to pick up from revision `from` as its job's step: the batches after it
- * (`base`, the revision they were made on: a later one than `from` when this studio's own save got
- * there unanswered), the revision they bring the song to and the song then, the job's label. Null when
- * there's nothing to pick up, or the agent isn't on here.
+ * another app, a closed tab), to pick up from revision `from` as its job's step: the batches after it,
+ * by id (`base`, the revision they were made on: a later one than `from` when this studio's own save
+ * got there unanswered), the revision they bring the song to and the song then, the job's label. Null
+ * when there's nothing to pick up, or the agent isn't on here; thrown when the host doesn't answer.
  */
 export interface AwayChanges {
   job: string;
@@ -981,28 +981,35 @@ export interface AwayChanges {
   running: boolean;
   base: number;
   head: number;
-  batches: { batch: string; ops: Op[] }[];
+  batches: { batch: string }[];
   song: Project;
 }
 
 export async function awayChanges(project: string, from: number): Promise<AwayChanges | null> {
+  // (no answer from the host at all is thrown: what it would have said may be the agent's)
+  if (!state.info && !(await refreshAgent())) throw new Error('The host didn’t answer');
+  if (!isOn(state)) return null;
+  let away: AwayChanges | null | undefined;
   try {
-    if (!state.info) await refreshAgent();
-    if (!isOn(state)) return null;
-    const { away } = await call<{ away?: AwayChanges | null }>(
+    ({ away } = await call<{ away?: AwayChanges | null }>(
       'GET',
       `/api/agent/away/${encodeURIComponent(project)}?from=${from}`,
-    );
-    if (
-      !away ||
-      typeof away.job !== 'string' ||
-      typeof away.label !== 'string' ||
-      typeof away.base !== 'number' ||
-      typeof away.head !== 'number' ||
-      !Array.isArray(away.batches) ||
-      !away.batches.every((b) => typeof b?.batch === 'string' && Array.isArray(b.ops))
-    )
-      return null;
+    ));
+  } catch (err) {
+    if (err instanceof AgentError) return null;
+    throw err;
+  }
+  if (
+    !away ||
+    typeof away.job !== 'string' ||
+    typeof away.label !== 'string' ||
+    typeof away.base !== 'number' ||
+    typeof away.head !== 'number' ||
+    !Array.isArray(away.batches) ||
+    !away.batches.every((b) => typeof b?.batch === 'string')
+  )
+    return null;
+  try {
     // (the song, read as the studio reads any song from the host)
     return { ...away, song: parseProject(away.song) };
   } catch {

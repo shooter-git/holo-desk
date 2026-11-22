@@ -4,7 +4,8 @@
  * back, those it saved on the host while the studio was away included (`pickUp`). And the queue its
  * changes wait in while the user is in the middle of a gesture or a drag.
  */
-import { applyOps, type Op, type Project, parseProject } from '@holo/session';
+import type { Project } from '@holo/session';
+import { mergeSongs, same } from './merge-songs.ts';
 import type { Step } from './store.ts';
 
 /** How many steps Undo can go back. */
@@ -39,38 +40,38 @@ export function pushOrMergeJob(
   return push(h, { project: before, label, job, at });
 }
 
-/** A batch of the agent's changes that it saved on the host while this studio was away. */
-export interface AwayBatch {
-  batch: string;
-  ops: Op[];
-}
-
 /** What picking up the agent's changes made of the song: how they came in. */
 export interface PickedUp extends History {
   project: Project;
   /**
-   * `exact`: the song is the host's as they left it (this studio had nothing unsaved); `merged`: they
-   * went onto this studio's song, its own changes kept; `theirs`: they clashed with those, so the song
-   * is the host's, and the step's Undo brings this studio's own back.
+   * `exact`: the song is the host's as they left it (nothing of this studio's own was left to keep);
+   * `merged`: this studio's own changes were put onto it; `theirs`: they clashed with the agent's (both
+   * changed the same thing), so the song is the host's, and the step's Undo brings this studio's back.
    */
   how: 'exact' | 'merged' | 'theirs';
+}
+
+/** This studio's own changes the host doesn't have: its song (`song`), and the song they were made on (`base`). */
+export interface OwnChanges {
+  /** The song as the host had it at the revision the studio carries on from; null when it isn't known. */
+  base: Project | null;
+  song: Project;
 }
 
 /**
  * The agent's changes saved on the host while this studio was away (a phone in another app, a closed
  * tab), taken in as if they had come while it was there: they join the job's step on top, or open one
- * of their own, whose Undo goes back to `now`, this studio's song. When `now` is the song they were made
- * on (`exact`: nothing unsaved here), the song becomes the host's as they left it (`theirs`), as it is.
- * Otherwise each batch not already applied here goes onto `now`, keeping its changes; where one doesn't
- * apply, the song becomes the host's, and a step of its own holds `now` for Undo.
+ * of their own, whose Undo goes back to `now`, this studio's song. The song becomes the host's as they
+ * left it (`theirs`); with changes of this studio's own not saved yet (`mine`), those are put onto it
+ * (mergeSongs), so the agent's stay as the host has them, ids and all. Where both changed the same thing
+ * (or what they were made on isn't known), the song is the host's, and a step of its own holds `now`
+ * for Undo.
  */
 export function pickUp(
   h: History,
   now: Project,
   theirs: Project,
-  exact: boolean,
-  batches: readonly AwayBatch[],
-  applied: (batch: string) => boolean,
+  mine: OwnChanges | null,
   label: string,
   job: string,
   at = Date.now(),
@@ -80,16 +81,12 @@ export function pickUp(
     const { undo, redo } = pushOrMergeJob(h, now, label, job, true, at);
     return { undo, redo };
   };
-  if (exact) return { project: theirs, ...joined(), how: 'exact' };
-  let song = now;
-  try {
-    for (const b of batches) if (!applied(b.batch)) song = applyOps(song, b.ops);
-    // (what the agent makes must be a song the studio could open again)
-    parseProject(song);
-  } catch {
-    return { project: theirs, ...push(h, { project: now, label, job, at }), how: 'theirs' };
-  }
-  return { project: song, ...joined(), how: 'merged' };
+  if (!mine) return { project: theirs, ...joined(), how: 'exact' };
+  const merged = mine.base && mergeSongs(mine.base, mine.song, theirs);
+  if (!merged) return { project: theirs, ...push(h, { project: now, label, job, at }), how: 'theirs' };
+  // (all of this studio's own were the host's already: a save of them got there, its answer lost)
+  if (same(merged, theirs)) return { project: theirs, ...joined(), how: 'exact' };
+  return { project: merged, ...joined(), how: 'merged' };
 }
 
 /** A job's steps take its final name, undone or not. */

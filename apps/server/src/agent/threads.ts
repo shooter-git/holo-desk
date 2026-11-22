@@ -92,6 +92,14 @@ export class Threads {
     this.store.updateThread(threadId, { session });
   }
 
+  /**
+   * The harness's session isn't carried on: the thread's next request starts a new conversation. It
+   * never saw the song, so the song it last saw goes too: what changed since means nothing to it.
+   */
+  forgetSession(threadId: string): void {
+    this.store.updateThread(threadId, { session: null, seen_doc: null, seen_revision: null });
+  }
+
   /** "Start over": the song's next request starts a new thread. */
   reset(project: string): void {
     this.store.endThreads(project);

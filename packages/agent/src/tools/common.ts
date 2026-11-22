@@ -216,6 +216,47 @@ export const UNITS = Object.keys(DIVISIONS);
 
 // ---- changing the song ----
 
+/** The longest label an undo step takes: the server refuses a batch whose label is longer. */
+export const LABEL_MAX = 80;
+
+/**
+ * A change's label as the studio takes it: one line of at most LABEL_MAX characters. Tools make theirs
+ * from what they changed (a track's name and each send it set), which can run longer: it's cut at a
+ * word, with "…", rather than have the change refused for it.
+ */
+export function stepLabel(label: string): string {
+  const line =
+    label
+      .replace(/[\p{Cc}\u2028\u2029]+/gu, ' ')
+      .replace(/\s+/g, ' ')
+      .trim() || 'Agent change';
+  if (line.length <= LABEL_MAX) return line;
+  const cut = wholeCharacters(line, LABEL_MAX - 1);
+  const space = cut.lastIndexOf(' ');
+  return `${(space > LABEL_MAX / 2 ? cut.slice(0, space) : cut).replace(/[\s,;:–-]+$/u, '')}…`;
+}
+
+const graphemes =
+  typeof Intl.Segmenter === 'function' ? new Intl.Segmenter(undefined, { granularity: 'grapheme' }) : null;
+
+/**
+ * The start of `text`, at most `max` UTF-16 units (as the server counts), cut between characters as
+ * people see them: never inside an emoji (or its surrogate pair), nor between a letter and its accent.
+ */
+function wholeCharacters(text: string, max: number): string {
+  if (!graphemes) {
+    // at least never half of a surrogate pair
+    const unit = text.charCodeAt(max - 1);
+    return text.slice(0, unit >= 0xd800 && unit <= 0xdbff ? max - 1 : max);
+  }
+  let end = 0;
+  for (const { segment } of graphemes.segment(text)) {
+    if (end + segment.length > max) break;
+    end += segment.length;
+  }
+  return text.slice(0, end);
+}
+
 /**
  * Send changes to the requester's studio as one batch (a fresh id, so a retry can't apply it twice).
  * They're tried on this copy of the song first, so a change the studio would refuse is refused here,
@@ -234,7 +275,7 @@ export async function change(
   } catch (err) {
     throw new ToolError(`That change can't be made: ${err instanceof Error ? err.message : String(err)}`);
   }
-  const r = await ctx.api.ops(ops, label.slice(0, 120), crypto.randomUUID());
+  const r = await ctx.api.ops(ops, stepLabel(label), crypto.randomUUID());
   if (!r.ok) throw new ToolError('The studio refused the change');
   return r.revision;
 }

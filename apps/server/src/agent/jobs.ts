@@ -931,9 +931,10 @@ export class Jobs implements AgentHooks {
 
   /**
    * A job ends early: its runner is told to stop (when `cancel`), its token stops working, and the
-   * agent hears next time that its turn didn't finish.
+   * agent hears next time that its turn didn't finish (`fresh`: in a new conversation, as this one
+   * can't go on).
    */
-  private end(job: AgentJob, state: 'cancelled' | 'failed', why: string, cancel: boolean): void {
+  private end(job: AgentJob, state: 'cancelled' | 'failed', why: string, cancel: boolean, fresh = false): void {
     if (!isLive(job)) return;
     const runner = this.assigned.get(job);
     if (cancel && runner) this.o.live.sendTo(runner, { type: 'agent-cancel', job: job.view.id });
@@ -946,6 +947,7 @@ export class Jobs implements AgentHooks {
     this.o.threads.addEventTo(job.thread, {
       action: state === 'failed' ? 'failed' : 'stopped',
       label: job.view.error,
+      ...(fresh ? { fresh: true } : {}),
       at: Date.now(),
     });
     this.saveTurn(job);
@@ -1090,9 +1092,14 @@ export class Jobs implements AgentHooks {
         }
         void this.turnDone(job);
         break;
-      case 'agent-failed':
-        this.end(job, 'failed', typeof msg.error === 'string' && msg.error ? msg.error : 'The agent stopped', false);
+      case 'agent-failed': {
+        // its model service refused the conversation itself: carried on, it would be refused again
+        const fresh = msg.fresh === true;
+        if (fresh) this.o.threads.forgetSession(job.thread);
+        const why = typeof msg.error === 'string' && msg.error ? msg.error : 'The agent stopped';
+        this.end(job, 'failed', why, false, fresh);
         break;
+      }
     }
   }
 

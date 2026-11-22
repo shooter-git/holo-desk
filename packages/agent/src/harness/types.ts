@@ -104,13 +104,15 @@ export interface Job {
  * What a run reports, in order: progress lines, its session, then exactly one of done or failed.
  * `aliases` comes before the end when the run said its model under another name than it was given
  * (Claude Code's `opus` ran under its full name): every alias the harness's runs have said so far.
+ * A failure with `fresh` leaves a session not to carry on: its model service refused the request
+ * itself, so the next turn starts a new conversation.
  */
 export type RunEvent =
   | { type: 'progress'; line: string }
   | { type: 'session'; session: string }
   | { type: 'aliases'; aliases: Record<string, string> }
   | { type: 'done'; reply?: string }
-  | { type: 'failed'; error: string };
+  | { type: 'failed'; error: string; fresh?: true };
 
 export interface Run {
   /** Settles once the harness and everything it started are gone. */

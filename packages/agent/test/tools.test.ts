@@ -1,12 +1,12 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Scan } from '@holo/score';
-import { newRegion, PLUGINS, PPQ, parseNoteName, SYNTH_MACROS, SYNTH_PRESETS } from '@holo/session';
+import { newBus, newRegion, PLUGINS, PPQ, parseNoteName, SYNTH_MACROS, SYNTH_PRESETS } from '@holo/session';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ApiError, type PlayedNote } from '../src/api.ts';
 import { toolWords } from '../src/harness/adapter.ts';
 import { notationLength } from '../src/index.ts';
-import { describeTool, type Tool } from '../src/tools/common.ts';
+import { describeTool, LABEL_MAX, stepLabel, type Tool } from '../src/tools/common.ts';
 import { TOOLS, toolNamed } from '../src/tools/index.ts';
 import { checkGo, checkView } from '../src/view.ts';
 import { allOps, BAR, call, lastOps, memoryOf, refused, setup } from './helpers.ts';
@@ -378,6 +378,33 @@ describe('tracks', () => {
     ]);
     expect(ops[1]).toEqual({ op: 'updateTrack', track: 'trk_bass', patch: { name: 'Low' } });
     expect(await refused(api, 'track_set', { track: 'Low' })).toContain('Say what to change');
+  });
+
+  it('names its undo step within what the studio takes, however much it set (a long name, many sends)', async () => {
+    const api = setup();
+    api.project.buses.push(newBus('Small Room'), newBus('Long Hall'), newBus('Tape Delay'));
+    const long = 'Bass, with a name long enough to matter';
+    await call(api, 'track_set', { track: 'Bass', name: long });
+    const said = await call(api, 'track_set', {
+      track: long,
+      volume: -3,
+      sends: { 'Small Room': -9, 'Long Hall': -14, 'Tape Delay': -16 },
+    });
+    // the tool's own answer says all of it; the step's label is cut to fit, at a word
+    expect(said.text).toContain('send to Tape Delay -16 dB');
+    const label = api.batches.at(-1)?.label ?? '';
+    expect(label.length).toBeLessThanOrEqual(LABEL_MAX);
+    expect(label.startsWith(`${long}: volume -3 dB`)).toBe(true);
+    expect(label.endsWith('…')).toBe(true);
+    expect(stepLabel('Strings:\nvolume -4 dB')).toBe('Strings: volume -4 dB');
+    expect(stepLabel(`${'x'.repeat(100)}`)).toBe(`${'x'.repeat(79)}…`);
+    // no spaces to cut at: between whole characters, never inside an emoji's surrogate pair or sequence
+    const keys = String.fromCodePoint(0x1f3b9);
+    const cut = stepLabel(keys.repeat(60));
+    expect(cut).toBe(`${keys.repeat(39)}…`);
+    expect(() => encodeURIComponent(cut)).not.toThrow();
+    const family = String.fromCodePoint(0x1f468, 0x200d, 0x1f469, 0x200d, 0x1f467);
+    expect(stepLabel(family.repeat(20))).toBe(`${family.repeat(9)}…`);
   });
 
   it('switches a track off (disarmed: it records nothing) and on again', async () => {

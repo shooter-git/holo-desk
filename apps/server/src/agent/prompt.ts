@@ -94,7 +94,9 @@ export function eventLine(e: ThreadEvent): string {
     case 'stopped':
       return `Your last turn was stopped before it finished (${oneLine(e.label)}); what it changed may still be in the song or undone.`;
     case 'failed':
-      return `Your last turn failed (${oneLine(e.label)}); what it changed may still be in the song.`;
+      return e.fresh
+        ? `This is a new conversation: the last one couldn't go on, as its last turn was refused (${oneLine(e.label)}). What that turn changed may still be in the song: read the song as it is now before you change it.`
+        : `Your last turn failed (${oneLine(e.label)}); what it changed may still be in the song.`;
     case 'denied':
       return `The user said "Not now" to: ${oneLine(e.label)}.`;
   }

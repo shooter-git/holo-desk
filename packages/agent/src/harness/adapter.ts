@@ -294,6 +294,64 @@ export function cleanError(text: string, secrets: readonly string[] = []): strin
   return out.length > 400 ? `${out.slice(0, 399)}…` : out;
 }
 
+/**
+ * How each harness says, in the error its own result carries, that its model service refused the
+ * request itself as malformed (HTTP 400): the request is the conversation so far, so carried on, much
+ * the same one is sent again and refused again (seen with Antigravity: a conversation refused once was
+ * refused again on the next turn's first request, though what was asked had changed). Each is the
+ * whole error's start, as the harness writes it from the API's answer:
+ * - Antigravity: Gemini's `INVALID_ARGUMENT (code 400): …` (not `FAILED_PRECONDITION (code 400)`, a
+ *   location the API doesn't serve);
+ * - Claude Code: `API Error: 400 {…"type":"invalid_request_error"…}` from the Anthropic API;
+ * - Codex: `unexpected status 400 Bad Request: {…"type":"invalid_request_error"…}` from the OpenAI API.
+ * Cursor's wording for one hasn't been seen: none of its failures counts.
+ */
+const REFUSALS: Partial<Record<HarnessId, RegExp>> = {
+  antigravity: /^INVALID_ARGUMENT \(code 400\):/,
+  claude: /^API Error: 400 [\s\S]*"type":\s*"invalid_request_error"/,
+  codex: /^unexpected status 400 Bad Request: [\s\S]*"type":\s*"invalid_request_error"/,
+};
+
+/**
+ * What the same 400s also say that has nothing to do with the conversation, and is ordinary: the
+ * account (billing, credits, a plan, a quota), where it is, a model it can't use, a sign-in. Another
+ * conversation would be refused just the same, and this one is worth keeping. Phrases only, never a
+ * bare word a refusal may quote from the conversation ("region", "plan", "access" and "not found" are
+ * all HO[LO]'s own words): Gemini's location refusal is `FAILED_PRECONDITION`, never matched anyway.
+ */
+const ORDINARY = new RegExp(
+  [
+    'credit balance',
+    'billing',
+    'payment',
+    'quota',
+    'usage limit',
+    'upgrade (?:your )?plan',
+    'plans? (?:&|and) billing',
+    'user location is not supported',
+    'not (?:supported|available) in your (?:country|region|location)',
+    'model\\b[^.]{0,80}?(?:not supported|unsupported|not available|not found|does not exist)',
+    '(?:do|does) not have access to (?:the |this |that )?(?:model|it)\\b',
+    'not logged in',
+    '(?:log|sign) ?in again',
+    'please (?:log|sign) ?in',
+    'unauthori[sz]ed',
+    'permission denied',
+    'api key',
+    'authenticat',
+  ].join('|'),
+  'i',
+);
+
+/**
+ * Whether a harness's own error (its result's, never a tool's answer or the model's words) says its
+ * model service refused the conversation itself.
+ */
+export function refusedRequest(harness: HarnessId, error: string): boolean {
+  const said = error.trim();
+  return !!REFUSALS[harness]?.test(said) && !ORDINARY.test(said);
+}
+
 /** The last lines of stderr that say something, for an error. */
 function tailError(lines: readonly string[]): string {
   const said = lines.map((l) => plain(l).trim()).filter((l) => l && !/^\s*at\s/.test(l));
@@ -755,6 +813,8 @@ export function defineHarness(spec: Spec, o: AdapterOptions): Harness {
       let model: string | null = null;
       let tripped: string | null = null;
       let failure: string | null = null;
+      /** The error the harness's own result said (its reader's `failed`), not one of HO[LO]'s limits. */
+      let harnessError: string | null = null;
       let note: string | null = null;
       let ended = false;
       let busy = false;
@@ -799,6 +859,7 @@ export function defineHarness(spec: Spec, o: AdapterOptions): Harness {
               break;
             case 'failed':
               failure = s.error;
+              harnessError = s.error;
               break;
             case 'note':
               note = s.text;
@@ -888,11 +949,18 @@ export function defineHarness(spec: Spec, o: AdapterOptions): Harness {
         if (early && spec.retry?.(ctx, job, said)) return resolve({ again: 'same' });
         // a session the harness no longer has fails before anything starts
         if (early && job.session) return resolve({ again: 'fresh' });
+        // its model service refused the conversation itself: carried on, it's refused again. A resumed
+        // one that hadn't called a tool yet starts again, once, as a new conversation; else the turn
+        // fails, and the next one starts a new conversation
+        const succeeded = code === 0 || (ended && exited && code === null);
+        const refused = !timedOut && harnessError !== null && refusedRequest(spec.id, harnessError);
+        if (refused && job.session && !busy) return resolve({ again: 'fresh' });
+        const fresh = refused ? { fresh: true as const } : {};
         if (failure) {
-          report({ type: 'failed', error: cleanError(failure, secrets) });
+          report({ type: 'failed', error: cleanError(failure, secrets), ...fresh });
           return resolve({});
         }
-        if (code === 0 || (ended && exited && code === null)) {
+        if (succeeded) {
           if (!asked && !busy && spec.toolsStarted && !spec.toolsStarted(job)) {
             report({
               type: 'failed',
@@ -909,7 +977,7 @@ export function defineHarness(spec: Spec, o: AdapterOptions): Harness {
           return resolve({});
         }
         const why = note ?? (tailError(stderrTail) || `${spec.name} stopped (exit ${code ?? 'signal'})`);
-        report({ type: 'failed', error: cleanError(why, secrets) });
+        report({ type: 'failed', error: cleanError(why, secrets), ...fresh });
         resolve({});
       };
       child.on('error', (err) => finish(null, err.message));

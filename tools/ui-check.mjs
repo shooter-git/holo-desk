@@ -18,6 +18,8 @@
 //     three long-ish labels, each with a row of three buttons) and one with everything at once (a
 //     choice of six, five long buttons, a table of six columns, long-named sliders, toggles, a list, a
 //     chart, notes, a waveform, a group in a group);
+//   - a reply's view is measured and laid out again while one of its sliders moves (it's laid out when
+//     what it shows changes, or its width: not each time the page renders again);
 //   - Settings › Agent's Tell me outside HO[LO] isn't whole: its three choices side by side, in the dialog;
 //   - with a reply that has a dock read and the page closed, a phone shows no tray, or one that isn't a
 //     row of its own (or × leaves it there); a tablet or a desktop shows one;
@@ -490,7 +492,50 @@ function viewFits() {
   return out;
 }
 
-const CHECKS = { transportClear, solid, workingFits, windowClear, wide, noticesFit, tray, noTray, viewFits };
+/**
+ * A reply's view is laid out again only when what it shows changes, or its width: not each time the page
+ * renders again. Moving one of its sliders (the song changes, the page renders again with it) lays out
+ * nothing (ui/view-fit.ts marks each time it measures with data-measuring).
+ */
+async function fitsOnce() {
+  const view = document.querySelector('.talk.newest .agent-view, .bar .talk .agent-view');
+  const slider = view?.querySelector('.v-slider input');
+  if (!slider) return ['the newest reply has no slider to move'];
+  let passes = 0;
+  const count = (records) => {
+    for (const r of records) if (r.oldValue === null) passes++;
+  };
+  const watch = new MutationObserver(count);
+  watch.observe(view, { attributes: true, attributeFilter: ['data-measuring'], attributeOldValue: true });
+  const was = slider.value;
+  slider.focus();
+  for (let i = 0; i < 5; i++) {
+    slider.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true, cancelable: true }));
+    await new Promise((ok) => requestAnimationFrame(() => setTimeout(ok, 30)));
+  }
+  // (and the gesture ends, after its idle time)
+  await new Promise((ok) => setTimeout(ok, 500));
+  count(watch.takeRecords());
+  watch.disconnect();
+  slider.blur();
+  const out = [];
+  if (slider.value === was) out.push('the reply’s slider didn’t move');
+  if (passes) out.push(`moving a reply’s slider laid its view out again ${passes} times`);
+  return out;
+}
+
+const CHECKS = {
+  transportClear,
+  solid,
+  workingFits,
+  windowClear,
+  wide,
+  noticesFit,
+  tray,
+  noTray,
+  viewFits,
+  fitsOnce,
+};
 
 // ---- the agent's host, played here: on, this device allowed, and a song's conversation ----
 
@@ -960,7 +1005,7 @@ function agentViews(page, layout, finger, running) {
     ? [[`${where}: working turn`, open, shut, [...checks, 'workingFits']]]
     : [
         settings,
-        [`${where} with a thread`, open, shut, [...checks, 'viewFits']],
+        [`${where} with a thread`, open, shut, [...checks, 'viewFits', 'fitsOnce']],
         // an earlier turn opened: its view drawn
         [
           `${where} with a thread, a turn opened`,

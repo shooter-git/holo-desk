@@ -670,7 +670,7 @@ export function AgentView({ view, job, busy }: { view: View; job: string; busy: 
   const [why, setWhy] = useState('');
   const checked = useMemo(() => checkView(view.blocks, true), [view]);
   const root = useRef<HTMLDivElement>(null);
-  useFitView(root, checked.ok);
+  useFitView(root, checked.ok ? checked.blocks : null);
   if (!checked.ok) return null;
   const ctx: Ctx = { view, job, busy, say: setWhy };
   return (

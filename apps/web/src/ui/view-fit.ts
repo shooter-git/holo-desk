@@ -74,16 +74,18 @@ export function fitView(view: HTMLElement): void {
 }
 
 /**
- * Keep a view laid out: after it renders, and as its width changes (one observer a view, gone with it:
- * nothing runs while the page or the bar is closed), and once a font still loading has come. `shown`:
- * whether the view is drawn at all (one that doesn't pass its check isn't).
+ * Keep a view laid out: when what it shows changes (`blocks`, the checked blocks it draws, the same
+ * object for as long as the view is; null when it draws nothing), as its width changes (one observer a
+ * view, gone with it: nothing runs while the page or the bar is closed), and once a font still loading
+ * has come. Not each time it renders: the page renders again with every change to the studio (a slider
+ * of the view's moving, the playhead), and each layout here costs the browser two.
  */
-export function useFitView(ref: RefObject<HTMLElement | null>, shown: boolean): void {
+export function useFitView(ref: RefObject<HTMLElement | null>, blocks: object | null): void {
   useLayoutEffect(() => {
-    if (ref.current) fitView(ref.current);
-  });
+    if (blocks && ref.current) fitView(ref.current);
+  }, [ref, blocks]);
   useEffect(() => {
-    const view = shown ? ref.current : null;
+    const view = blocks ? ref.current : null;
     if (!view) return;
     let width = view.clientWidth;
     let frame = 0;
@@ -104,5 +106,5 @@ export function useFitView(ref: RefObject<HTMLElement | null>, shown: boolean): 
       cancelAnimationFrame(frame);
       document.fonts?.removeEventListener('loadingdone', again);
     };
-  }, [ref, shown]);
+  }, [ref, blocks]);
 }

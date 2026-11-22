@@ -3532,11 +3532,14 @@ button.list-item {
 }
 
 /* what a reply shows under it, composed by the agent from the studio's own pieces (ui/AgentView.tsx):
-   its buttons, switches and rows, in its own colours */
+   its buttons, switches and rows, in its own colours. One rhythm throughout: --v-gap between the pieces
+   of a view or a group (a group's title and its first control, and the lines of a choice or a row that
+   wraps, too), and twice that around a group */
 .convo .agent-view {
+  --v-gap: 8px;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: var(--v-gap);
   margin-top: -6px;
   padding: 0 16px 14px;
   font-size: 12.5px;
@@ -3554,20 +3557,33 @@ button.list-item {
   font-size: 12px;
 }
 
+/* the studio's buttons, as tall as their words: words too long for their place go onto another line,
+   never past its edge, and never cut short */
+.convo .agent-view .btn.small {
+  height: auto;
+  min-height: 24px;
+  max-width: 100%;
+  padding-block: 3px;
+  line-height: 1.25;
+  text-align: center;
+  white-space: normal;
+  overflow-wrap: break-word;
+  text-wrap: balance;
+}
+
+/* a button or a choice on its own is as wide as its words, at the start */
 .convo .agent-view > .btn,
 .convo .v-group > .btn,
 .convo .agent-view .seg {
   align-self: flex-start;
   max-width: 100%;
-  overflow-x: auto;
-  overscroll-behavior-x: contain;
 }
 
 .convo .v-row {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 6px;
+  gap: var(--v-gap);
 }
 
 .convo .v-row > .v-slider,
@@ -3576,16 +3592,94 @@ button.list-item {
   flex: 1 1 180px;
 }
 
+/* (sliders side by side line up by their sliders, whatever the lines of their names) */
+.convo .v-row > .v-slider {
+  align-self: flex-end;
+}
+
+/* groups side by side share their row, and go one under another where it has no room for them */
+.convo .v-row > .v-group {
+  flex: 1 1 240px;
+  min-width: 0;
+}
+
 .convo .v-group {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: var(--v-gap);
+}
+
+/* a group stands apart from what's before and after it, in a view or in a group */
+.convo .agent-view > .v-group + *,
+.convo .agent-view > * + .v-group,
+.convo .v-group > .v-group + *,
+.convo .v-group > * + .v-group {
+  margin-top: var(--v-gap);
 }
 
 .convo .v-title {
   color: var(--text-2);
   font-size: 11.5px;
   font-weight: 600;
+  overflow-wrap: break-word;
+}
+
+/* a choice that doesn't fit on one line (ui/view-fit.ts): its options in even columns (--cols) that fill
+   every row, the whole width of its place, a line between each; in one column, options one under
+   another. It's still one control, the option chosen lit. In columns, a choice's words and a row's are
+   centred; one under another, both start at the start, so a group's controls line up */
+.convo .agent-view .seg[data-cols] {
+  display: flex;
+  flex-wrap: wrap;
+  align-self: stretch;
+  width: 100%;
+  gap: 1px;
+  background: var(--line);
+}
+
+.convo .agent-view .seg[data-cols] > .btn {
+  flex: 1 1 calc((100% - (var(--cols) - 1) * 1px) / var(--cols) - 1px);
+  min-width: 0;
+  border-left: 0;
+}
+
+.convo .agent-view :is(.seg, .v-row)[data-cols="1"] > .btn {
+  justify-content: flex-start;
+  text-align: start;
+}
+
+/* a row of buttons that doesn't fit on one line: even columns that fill every row, every button as wide as
+   the others; in one column, one under another the whole width */
+.convo .agent-view .v-row[data-cols] {
+  display: grid;
+  grid-template-columns: repeat(var(--cols), minmax(0, 1fr));
+}
+
+.convo .agent-view .v-row[data-cols] > .btn {
+  min-width: 0;
+}
+
+/* measured (ui/view-fit.ts, a moment that's never drawn): each option and button as wide as its words
+   on one line */
+.convo .agent-view[data-measuring] .seg,
+.convo .agent-view[data-measuring] .v-row.buttons {
+  display: flex;
+}
+
+.convo .agent-view[data-measuring] :is(.seg, .v-row.buttons) > .btn {
+  flex: none;
+  width: auto;
+  max-width: none;
+  white-space: nowrap;
+}
+
+.convo .agent-view[data-measuring] .seg > .btn {
+  border-left: 0;
+}
+
+.convo .agent-view[data-measuring] .v-slider .v-label {
+  width: max-content;
+  white-space: nowrap;
 }
 
 .convo .v-list {
@@ -3602,6 +3696,32 @@ button.list-item {
   text-align: left;
 }
 
+/* a row's words, and its detail beside them or, where they don't fit side by side, under them: both go
+   onto more lines rather than being cut short */
+.convo .v-list .v-words {
+  display: flex;
+  flex: 1 1 auto;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 8px;
+  min-width: 0;
+  padding-block: 3px;
+}
+
+.convo .v-list .item .title {
+  flex: 1 1 auto;
+  overflow: visible;
+  white-space: normal;
+  overflow-wrap: break-word;
+}
+
+.convo .v-list .item .hint {
+  flex: 0 1 auto;
+  margin-left: 0;
+  white-space: normal;
+  overflow-wrap: break-word;
+}
+
 .convo .v-list button.item:hover,
 .convo .v-list button.item:focus-visible {
   background: var(--bg-3);
@@ -3616,14 +3736,10 @@ button.list-item {
   color: var(--text-2);
 }
 
-/* after the hint when there is one, else at the row's end */
+/* at the row's end */
 .convo .v-list .item > .go {
   margin-left: auto;
   color: var(--text-3);
-}
-
-.convo .v-list .item > .hint + .go {
-  margin-left: 0;
 }
 
 .convo .v-list .item.on {
@@ -3667,20 +3783,28 @@ button.list-item {
   text-align: right;
 }
 
-/* a label column of its own, so sliders one under another line up */
+/* a table that's wider than its place scrolls sideways: what's in its cells stays on one line */
+.convo .v-table .btn.small {
+  white-space: nowrap;
+}
+
+/* a setting on a slider: its name in a column of its own, so sliders one under another line up. A name
+   longer than its column (ui/view-fit.ts), or a slider with little room (a phone, a sheet, two sliders
+   side by side): its name and value on a line, the name onto more lines if it must, and the slider the
+   whole width under them */
 .convo .v-slider {
+  container: v-slider / inline-size;
   display: grid;
-  grid-template-columns: minmax(0, 112px) minmax(80px, 1fr) auto;
+  grid-template-columns: 112px minmax(80px, 1fr) auto;
   align-items: center;
-  gap: 8px;
+  gap: 2px 8px;
   min-width: 0;
 }
 
 .convo .v-slider .v-label {
-  overflow: hidden;
+  min-width: 0;
   color: var(--text-2);
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: break-word;
 }
 
 .convo .v-slider input {
@@ -3693,6 +3817,42 @@ button.list-item {
   font-family: var(--mono);
   font-size: 11.5px;
   text-align: right;
+  white-space: nowrap;
+}
+
+.convo .v-slider[data-stack] .v-label {
+  grid-column: 1 / 3;
+}
+
+.convo .v-slider[data-stack] .v-value {
+  grid-column: 3;
+  grid-row: 1;
+  min-width: 0;
+}
+
+.convo .v-slider[data-stack] input {
+  grid-column: 1 / -1;
+  grid-row: 2;
+}
+
+@container v-slider (max-width: 399px) {
+  .convo .v-slider .v-label {
+    grid-column: 1 / 3;
+  }
+  .convo .v-slider .v-value {
+    grid-column: 3;
+    grid-row: 1;
+    min-width: 0;
+  }
+  .convo .v-slider input {
+    grid-column: 1 / -1;
+    grid-row: 2;
+  }
+}
+
+/* (in a table's cell, laid out as it is wherever it has room: the cell is as wide as it needs) */
+.convo .v-table .v-slider {
+  container-type: normal;
 }
 
 .convo .v-chart canvas {
@@ -3741,14 +3901,17 @@ button.list-item {
   font-size: 12px;
 }
 
-/* a finger's rows and controls */
+/* a finger's controls: 44 px tall at least */
 @media (pointer: coarse) {
   .convo .agent-view .btn.small {
-    height: 34px;
-    padding: 0 12px;
+    min-height: 44px;
+    padding-inline: 12px;
+  }
+  .convo .v-list .item {
+    min-height: 44px;
   }
   .convo .v-slider input {
-    min-height: 34px;
+    min-height: 44px;
   }
 }
 

@@ -1,0 +1,4 @@
+{"type":"thread.started","thread_id":"01a204ef-1c04-7583-8c6c-b14ad3935860"}
+{"type":"turn.started"}
+{"type":"error","message":"The model `gpt-holo-nope` does not exist or you do not have access to it."}
+{"type":"turn.failed","error":{"message":"The model `gpt-holo-nope` does not exist or you do not have access to it."}}

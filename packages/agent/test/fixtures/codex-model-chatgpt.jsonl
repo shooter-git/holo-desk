@@ -1,0 +1,4 @@
+{"type":"thread.started","thread_id":"01a204ef-1a4b-70b0-a70c-382aff04b27d"}
+{"type":"turn.started"}
+{"type":"error","message":"{\"detail\":\"The 'gpt-holo-nope' model is not supported when using Codex with a ChatGPT account.\"}"}
+{"type":"turn.failed","error":{"message":"{\"detail\":\"The 'gpt-holo-nope' model is not supported when using Codex with a ChatGPT account.\"}"}}

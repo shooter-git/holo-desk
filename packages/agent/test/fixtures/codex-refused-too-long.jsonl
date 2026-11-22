@@ -1,0 +1,4 @@
+{"type":"thread.started","thread_id":"01a204ef-1804-7ca1-b654-e51c7a15b738"}
+{"type":"turn.started"}
+{"type":"error","message":"{\"error\":{\"message\":\"Your input exceeds the context window of this model. Please adjust your input and try again.\",\"type\":\"invalid_request_error\",\"param\":\"input\",\"code\":\"context_length_exceeded\"}}"}
+{"type":"turn.failed","error":{"message":"{\"error\":{\"message\":\"Your input exceeds the context window of this model. Please adjust your input and try again.\",\"type\":\"invalid_request_error\",\"param\":\"input\",\"code\":\"context_length_exceeded\"}}"}}

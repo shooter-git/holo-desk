@@ -296,28 +296,36 @@ export function cleanError(text: string, secrets: readonly string[] = []): strin
 
 /**
  * How each harness says, in the error its own result carries, that its model service refused the
- * request itself as malformed (HTTP 400): the request is the conversation so far, so carried on, much
- * the same one is sent again and refused again (seen with Antigravity: a conversation refused once was
- * refused again on the next turn's first request, though what was asked had changed). Each is the
- * whole error's start, as the harness writes it from the API's answer:
- * - Antigravity: Gemini's `INVALID_ARGUMENT (code 400): …` (not `FAILED_PRECONDITION (code 400)`, a
- *   location the API doesn't serve);
- * - Claude Code: `API Error: 400 {…"type":"invalid_request_error"…}` from the Anthropic API;
- * - Codex: `unexpected status 400 Bad Request: {…"type":"invalid_request_error"…}` from the OpenAI API.
- * Cursor's wording for one hasn't been seen: none of its failures counts.
+ * conversation itself: the request is the conversation so far, so carried on, much the same one is
+ * sent again and refused again (seen with Antigravity: a conversation refused once was refused again on
+ * the next turn's first request, though what was asked had changed). Each is the whole error's start,
+ * as the harness writes it (docs/agent-harnesses.md, "A refused conversation", has where each was seen):
+ * - Antigravity: Gemini's `INVALID_ARGUMENT (code 400): …` (seen in real use; not
+ *   `FAILED_PRECONDITION (code 400)`, a location the API doesn't serve);
+ * - Claude Code: `API Error: 400 …`, the API's message or its own words for a broken history ("due to
+ *   tool use concurrency issues", "orphaned tool_result…"), never the API's JSON; and `Prompt is too
+ *   long` or `Request too large`, said only once it couldn't compact the conversation to fit;
+ * - Codex: the API's own JSON body, as it came (`{"error":{…"type":"invalid_request_error"…}}`, or over
+ *   its WebSocket `{"type":"error","status":400,…}`): a 400 is the only status it shows that way. An
+ *   older Codex put `unexpected status 400 Bad Request: ` first. Its context-window error ("Codex ran out
+ *   of room…") isn't one: Codex compacts the conversation before the next turn's first request.
+ * Cursor's isn't in its stream at all (a failed run has no `result`; it prints the error on stderr):
+ * none of its failures counts.
  */
 const REFUSALS: Partial<Record<HarnessId, RegExp>> = {
   antigravity: /^INVALID_ARGUMENT \(code 400\):/,
-  claude: /^API Error: 400 [\s\S]*"type":\s*"invalid_request_error"/,
-  codex: /^unexpected status 400 Bad Request: [\s\S]*"type":\s*"invalid_request_error"/,
+  claude: /^(?:API Error: 400 |Prompt is too long\b|Request too large\b)/,
+  codex: /^(?:unexpected status 400 Bad Request: )?\{[\s\S]*"type":\s*"invalid_request_error"/,
 };
 
 /**
  * What the same 400s also say that has nothing to do with the conversation, and is ordinary: the
- * account (billing, credits, a plan, a quota), where it is, a model it can't use, a sign-in. Another
- * conversation would be refused just the same, and this one is worth keeping. Phrases only, never a
- * bare word a refusal may quote from the conversation ("region", "plan", "access" and "not found" are
- * all HO[LO]'s own words): Gemini's location refusal is `FAILED_PRECONDITION`, never matched anyway.
+ * account (billing, credits, a plan, a quota, a disabled organization), where it is, a model it can't
+ * use or a setting it doesn't take, a sign-in. Another conversation would be refused just the same, and
+ * this one is worth keeping.
+ * Phrases only, never a bare word a refusal may quote from the conversation ("region", "plan", "access"
+ * and "not found" are all HO[LO]'s own words): Gemini's location refusal is `FAILED_PRECONDITION`, never
+ * matched anyway.
  */
 const ORDINARY = new RegExp(
   [
@@ -328,9 +336,13 @@ const ORDINARY = new RegExp(
     'usage limit',
     'upgrade (?:your )?plan',
     'plans? (?:&|and) billing',
+    'organization has been disabled',
+    'disabled organization',
     'user location is not supported',
     'not (?:supported|available) in your (?:country|region|location)',
     'model\\b[^.]{0,80}?(?:not supported|unsupported|not available|not found|does not exist)',
+    'invalid model name',
+    '"code":\\s*"(?:model_not_found|unsupported_parameter)"',
     '(?:do|does) not have access to (?:the |this |that )?(?:model|it)\\b',
     'not logged in',
     '(?:log|sign) ?in again',

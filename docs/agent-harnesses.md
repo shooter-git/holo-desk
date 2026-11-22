@@ -841,7 +841,87 @@ with HO[LO]'s own MCP server had all its tools and called `song_status`.
   ran. The next turn, carried on with another request, was refused the same way on its first reply.
   So a refused request isn't carried on: docs/agent.md, "Ending early". (A turn stopped mid-reply
   isn't one: Antigravity leaves the stopped step out of what it sends next, and the conversation
-  went on.)
+  went on.) How each harness says one: "A refused conversation", below.
+
+## A refused conversation
+
+A conversation the model service refused outright isn't carried on (docs/agent.md, "Ending early").
+`refusedRequest` in `packages/agent/src/harness/adapter.ts` knows one by the start of the error in the
+harness's own result, never a tool's answer, the model's words or stderr. Checked on 2026-11-22.
+
+**How it was seen.** Antigravity's in real use. Claude Code's and Codex's by running each as a sealed run
+is (the adapter's argv, output format and environment switches, an empty config folder of its own, HO[LO]'s
+server replaced by a one-tool stand-in) against a stand-in for its model API on 127.0.0.1 that answered as
+the real API answers each case: a 400 for a broken history, for an invalid argument and for a prompt too
+long, and for contrast low credit, a 401, 403, 404, 429 and 529 (for Codex also a quota, a model a ChatGPT
+plan doesn't have, and the context-window error inside a stream that began well). Claude Code was pointed at
+it with `ANTHROPIC_BASE_URL` and a dummy `ANTHROPIC_API_KEY`; Codex with `-c model_provider=…` and a provider
+of its own (`OPENAI_BASE_URL` isn't read: that first try reached the real API, whose 401 for a dummy key reads
+just as the stand-in's does). The versions run were Claude Code 2.1.322 and Codex 0.167.1; for 2.1.330 and
+0.171.0 the same code was read in Claude Code's strings and Codex's source, not run. A stand-in can't show
+Cursor's or Antigravity's: Cursor's words for an error come from its own server, and Antigravity asks nothing
+without a Google sign-in. Their programs were read instead.
+
+**Claude Code** (2.1.322 run, 2.1.330's strings the same). The `result` has `is_error: true`,
+`api_error_status` (the HTTP status) and `result`, its own words, never the API's JSON:
+- a broken history: `API Error: 400 due to tool use concurrency issues.` (a `tool_use` without its
+  `tool_result`; it repairs the history and asks again first), `API Error: 400 orphaned tool_result in
+  conversation history.`, `API Error: 400 duplicate tool_use ID in conversation history.`;
+- any other 400: `API Error: 400 ` and the API's message, such as `API Error: 400
+  messages.1.content.1.tool_use.input: Input should be a valid dictionary` or an invalid thinking signature;
+- too long: `Prompt is too long` (with ` · the request is ~N tokens (limit M) …` when it can measure), or for
+  the request's bytes (a 413) `Request too large (max 32MB). Accumulated images and attachments …`. Said only
+  once it couldn't compact the conversation to fit: the recorded run says `status: compacting`, then
+  `compact_result: failed`, then the error. Carried on, the next request is as long: these count too.
+- ordinary: `Credit balance is too low` (a 400 as well), `Invalid API key · Fix external API key` and
+  `Failed to authenticate. API Error: 403 …`, `There's an issue with the selected model (…). It may not exist
+  or you may not have access to it. …` (a 404), `API Error: Request rejected (429) · …`, `API Error: 529
+  Overloaded. …`, `Your ANTHROPIC_API_KEY belongs to a disabled organization · …`, and a 400 about the
+  account or the model in the API's words (`API Error: 400 invalid model name`, `… organization has been
+  disabled`), which `ORDINARY` excludes by phrase;
+- not one: `API Error: an image in the conversation could not be processed and was removed. …`: it took the
+  picture out itself, so the conversation can go on.
+
+So the pattern is `API Error: 400 `, `Prompt is too long` or `Request too large`, first. The earlier guess,
+`API Error: 400` with `"type":"invalid_request_error"` in the text, matched none of these.
+
+**Codex** (0.167.1 run, 0.171.0's source the same). `turn.failed`'s `error.message` is its error's text:
+- a 400 is the only status it shows as the API's own body, as it came (`CodexErr::InvalidRequest(body_text)`
+  in `codex-api/src/api_bridge.rs`): `{"error":{"message":"No tool output found for function call
+  call_….","type":"invalid_request_error","param":"input","code":null}}`, and an invalid argument the same
+  with its `param` and `code`. Over the WebSocket a ChatGPT sign-in uses, it's the error event as it came:
+  `{"type":"error","status":400,"error":{"type":"invalid_request_error",…}}` (by the source:
+  `responses_websocket.rs`). An older Codex put `unexpected status 400 Bad Request: ` first, still matched;
+- any other status: the message alone, with its address and ids: `unexpected status 401 Unauthorized:
+  Incorrect API key provided: …, url: …, request id: …`, ``The model `…` does not exist or you do not have
+  access to it.`` (404, and 403), `Quota exceeded. Check your plan and billing details.`, `exceeded retry limit,
+  last status: 429 Too Many Requests, request id: …`. A model a ChatGPT plan doesn't have is a raw 400 too,
+  `{"detail":"The '…' model is not supported when using Codex with a ChatGPT account."}`, but no
+  `invalid_request_error`: ordinary;
+- the context window: `Codex ran out of room in the model's context window. Start a new thread or clear
+  earlier history before retrying.`, from a `response.failed` with `context_length_exceeded`, and in 0.171.0
+  from a 400 with that code as well. Not one: Codex records the context as full in the thread, and at the
+  next turn, resumed or not, compacts the conversation before its first request, dropping the oldest items
+  if even that overflows (`core/src/session/turn.rs`, `core/src/compact.rs`), so the thread recovers.
+  0.167.1 shows that 400 raw (`"code":"context_length_exceeded"`) and marks nothing: that counts.
+
+So the pattern is a JSON body, with `unexpected status 400 Bad Request: ` or nothing first, that says
+`"type":"invalid_request_error"`. The earlier guess needed that prefix, which 0.167.1 and 0.171.0 never write
+for a 400.
+
+**Cursor** (2026.11.11-043ef28, and 2026.11.22-e9042b2, read in their bundles). A failed run writes no
+`result` (the ones it writes all say `is_error: false`): print mode prints the error as `String(error)` on
+stderr and exits 1. The error's words are Cursor's server's own (a title and a detail, with an error type:
+`BAD_REQUEST` and `CONVERSATION_TOO_LONG` among them), and one for a refused conversation hasn't been seen.
+So none of its failures counts: there's no error in its stream to go by, and a pattern for its stderr would
+be a guess. It summarizes its own context when it grows (a failure there says "Context summarization
+failed").
+
+**Antigravity** (1.5.14). The `result` has `status: ERROR` and `error` `INVALID_ARGUMENT (code 400): Request
+contains an invalid argument.` (seen in real use, under "Caveats" above). Its form is `%s (code %d): %s`,
+the API's status name first: a location the API doesn't serve is `FAILED_PRECONDITION (code 400)`, a quota
+`RESOURCE_EXHAUSTED (code 429)`. How it says a conversation too long for the model hasn't been seen (it
+compacts its conversation itself); one that reaches the result as an `INVALID_ARGUMENT` counts like the rest.
 
 ## Tool count
 
@@ -964,9 +1044,29 @@ All are in `packages/agent/test/fixtures/`.
 | `antigravity-bad-model.jsonl` (and `.stderr.txt`) | an unknown `--model`: refused before it starts, with the list |
 | `antigravity-probe.jsonl` (and `.stderr.txt`) | the seal probe: the agent's made-up tool refused, no tokens |
 | `antigravity-slash.jsonl` | `/model x` as the prompt, without `--disable-slash-commands`: taken as its command |
+| `claude-refused-history.jsonl` | stand-in API: a tool call, then a 400 for a `tool_use` without its `tool_result` |
+| `claude-refused-invalid.jsonl` | stand-in API: a 400 for an invalid argument, before any tool |
+| `claude-refused-too-long.jsonl` | stand-in API: a tool call, then "prompt is too long"; compacting fails too |
+| `claude-credit.jsonl` | stand-in API: a 400 for low credit |
+| `claude-unauthorized.jsonl` | stand-in API: a 401 for the key |
+| `claude-model-missing.jsonl` | stand-in API: a 404 for the model |
+| `claude-rate-limited.jsonl` | stand-in API: a 429 |
+| `codex-refused-tool-output.jsonl` | stand-in API: a 400, "No tool output found for function call …" |
+| `codex-refused-invalid.jsonl` | stand-in API: a 400 for an invalid argument |
+| `codex-refused-too-long.jsonl` | stand-in API: a 400, `context_length_exceeded` (shown raw by 0.167.1) |
+| `codex-context-window.jsonl` | stand-in API: `response.failed` with `context_length_exceeded` in a 200 stream |
+| `codex-quota.jsonl` | stand-in API: a 429, `insufficient_quota` |
+| `codex-unauthorized.jsonl` | stand-in API: a 401 for the key |
+| `codex-model-chatgpt.jsonl` | stand-in API: a 400 `{"detail":…}`, a model a ChatGPT plan doesn't have |
+| `codex-model-missing.jsonl` | stand-in API: a 404 for the model |
+| `codex-rate-limited.jsonl` | stand-in API: a 429, until its retries ran out |
 
 The Claude shell fixtures were recorded with an earlier prompt (`ls ~` and `/etc/hostname`, no write). The
 Claude fixtures predate `--settings`, so their `init` still has `memory_paths`. `cursor-shell-denied.jsonl` and
 `cursor-other-server-rejected.jsonl` were recorded without `--allowed-tools`. `antigravity-shell-denied.jsonl` and
 `antigravity-mcp-denied.jsonl` were recorded without the agent (their `init` has no `agent`: the tripwire stops
-them there; the tests run them as the agent to reach the tool).
+them there; the tests run them as the agent to reach the tool). The `claude-refused-*`, `claude-credit` and the
+like (Claude Code 2.1.322) and `codex-refused-*`, `codex-quota` and the like (Codex 0.167.1) were recorded
+against a stand-in for the model API ("A refused conversation"), with a one-tool stand-in for HO[LO]'s server
+(`song_status`); their paths are made neutral. A Codex run refused after one of HO[LO]'s calls is the recorded
+refusal with the recorded normal run's call put first.

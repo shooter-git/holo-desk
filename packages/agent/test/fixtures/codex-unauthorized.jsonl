@@ -1,0 +1,4 @@
+{"type":"thread.started","thread_id":"01a204ef-1ae3-7862-baf3-2cce04718981"}
+{"type":"turn.started"}
+{"type":"error","message":"unexpected status 401 Unauthorized: Incorrect API key provided: dummy. You can find your API key at https://platform.openai.com/account/api-keys., url: http://127.0.0.1:47911/v1/responses, request id: req_mock"}
+{"type":"turn.failed","error":{"message":"unexpected status 401 Unauthorized: Incorrect API key provided: dummy. You can find your API key at https://platform.openai.com/account/api-keys., url: http://127.0.0.1:47911/v1/responses, request id: req_mock"}}

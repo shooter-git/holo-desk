@@ -2,7 +2,7 @@ import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { FINISH_NOW, remember } from '../src/harness/adapter.ts';
+import { FINISH_NOW, refusedRequest, remember } from '../src/harness/adapter.ts';
 import {
   cursorFlagsWork,
   cursorHarness,
@@ -19,6 +19,7 @@ import { FINISHED_FILE } from '../src/harness/workspace.ts';
 import {
   alive,
   collect,
+  FIXTURES,
   fakeBinary,
   fixtureEvents,
   job,
@@ -395,6 +396,24 @@ describe('Cursor: a sealed run', () => {
     expect(recorded(s, 1).argv.some((a) => a.startsWith('--resume'))).toBe(false);
     expect(recorded(s, 1).stdin).toBe(`${PROMPT_MARK}\n`);
     expect(events.at(-1)?.type).toBe('done');
+  });
+
+  it('keeps a conversation whatever a failed run says: its stream has no error to know a refusal by', async () => {
+    s = sandbox();
+    // a run that began, then failed as Cursor fails: no `result`, the error printed on stderr, exit 1. The
+    // words are a Connect error's form only: Cursor's own for a refused conversation haven't been seen
+    const said = 'ConnectError: [invalid_argument] Request contains an invalid argument.';
+    const init = readFileSync(join(FIXTURES, 'cursor-resume.jsonl'), 'utf8').split('\n')[0];
+    const h = fake({
+      run: `case "$*" in *--resume=*) echo ${q(init ?? '')}; echo ${q(said)} >&2; exit 1;; esac\n${replay('cursor-normal')}\nexit 0`,
+    });
+    const events = await runToEnd(h, job(s, { session: '4da7463b-469a-41bf-86ad-c56bdcee7187' }));
+    expect(events).toEqual([
+      { type: 'session', session: '4da7463b-469a-41bf-86ad-c56bdcee7187' },
+      { type: 'failed', error: said },
+    ]);
+    expect(existsSync(join(s.rec, 'argv1'))).toBe(false);
+    expect(refusedRequest('cursor', said)).toBe(false);
   });
 
   it('runs without its sandbox where it can’t start, and remembers', async () => {

@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
+import { refusedRequest } from '../src/harness/adapter.ts';
 import {
   CLAUDE_EFFORTS,
   claudeArgs,
@@ -543,6 +544,120 @@ sleep 300`,
     ])
       expect(allowed('claude', no, 'linux'), no).toBe(false);
     expect(allowed('claude', 'SystemRoot', 'win32')).toBe(true);
+  });
+});
+
+/**
+ * Recorded from Claude Code 2.1.322, run as a sealed run is, against a stand-in for the Anthropic API
+ * that answered as it does (docs/agent-harnesses.md, "A refused conversation"). What each result says.
+ */
+const SAID = {
+  'claude-refused-history': 'API Error: 400 due to tool use concurrency issues.',
+  'claude-refused-invalid': 'API Error: 400 messages.1.content.1.tool_use.input: Input should be a valid dictionary',
+  'claude-refused-too-long': 'Prompt is too long',
+  'claude-credit': 'Credit balance is too low',
+  'claude-rate-limited':
+    'API Error: Request rejected (429) · This request would exceed the rate limit for your organization of 50 requests per minute.',
+  'claude-unauthorized': 'Invalid API key · Fix external API key',
+  'claude-model-missing':
+    "There's an issue with the selected model (claude-sonnet-4-6). It may not exist or you may not have access to it. Run --model to pick a different model.",
+} as const;
+
+describe('Claude Code: a conversation its model service refused', () => {
+  const OLD = 'c58564bc-c9a7-4e0d-ad72-6461accd9689';
+  const runs = () => [0, 1, 2].filter((n) => existsSync(join(s.rec, `argv${n}`))).length;
+  /** A resumed run that replays `fixture` and fails as Claude Code does (exit 1); a new one goes well. */
+  const resumed = (fixture: string) =>
+    fake({
+      signedIn: true,
+      run: `case "$*" in *--resume=*) ${replay(fixture)}; exit 1;; *) ${replay('claude-normal')};; esac\nexit 0`,
+    });
+  /** What a turn reported, but what its runs said an alias stood for (the stand-in API's model). */
+  const turn = async (h: ReturnType<typeof fake>, j: Job) => (await runToEnd(h, j)).filter((e) => e.type !== 'aliases');
+
+  it('reads each recorded failure as the error its result says, with no tripwire', () => {
+    for (const [name, error] of Object.entries(SAID)) {
+      const r = claudeReader();
+      const seen = fixtureEvents(name).flatMap((e) => r.event(e));
+      expect(
+        seen.filter((x) => x.kind === 'failed'),
+        name,
+      ).toEqual([{ kind: 'failed', error }]);
+      expect(
+        seen.some((x) => x.kind === 'trip'),
+        name,
+      ).toBe(false);
+    }
+  });
+
+  it('starts it again as a new conversation, once, when the turn hadn’t called a tool yet', async () => {
+    s = sandbox();
+    const events = await turn(resumed('claude-refused-invalid'), job(s, { session: OLD }));
+    expect(runs()).toBe(2);
+    expect(recorded(s, 0).argv.at(-1)).toBe(`--resume=${OLD}`);
+    expect(recorded(s, 1).argv.some((a) => a.startsWith('--resume'))).toBe(false);
+    expect(events[0]).toEqual({ type: 'session', session: '873b99a0-d173-4265-92de-5d8411f641a4' });
+    expect(events.at(-1)).toEqual({ type: 'done', reply: "Echoed: spike-42. Picture's main colour: blue." });
+    expect(events.some((e) => e.type === 'failed')).toBe(false);
+  });
+
+  it('fails a turn that had called a tool, saying the next starts a new conversation (a broken history, too long)', async () => {
+    for (const name of ['claude-refused-history', 'claude-refused-too-long'] as const) {
+      s = sandbox();
+      expect(await turn(resumed(name), job(s, { session: OLD })), name).toEqual([
+        { type: 'session', session: fixtureEvents(name).find((e) => e.subtype === 'init')?.session_id },
+        { type: 'progress', line: 'Reading the song' },
+        { type: 'failed', error: SAID[name], fresh: true },
+      ]);
+      // what it changed stands: the request isn't made again in this turn
+      expect(runs(), name).toBe(1);
+      s.cleanup();
+    }
+  });
+
+  it('keeps the conversation for an ordinary failure: credit, a rate limit, a sign-in, a model', async () => {
+    for (const name of [
+      'claude-credit',
+      'claude-rate-limited',
+      'claude-unauthorized',
+      'claude-model-missing',
+    ] as const) {
+      s = sandbox();
+      const events = await turn(resumed(name), job(s, { session: OLD }));
+      expect(events.at(-1), name).toEqual({ type: 'failed', error: SAID[name] });
+      expect(runs(), name).toBe(1);
+      s.cleanup();
+    }
+  });
+
+  it('knows a refusal by how Claude Code words it, and the account’s, the plan’s and the model’s as ordinary', () => {
+    // each as a recorded run's result said it (2.1.322)
+    for (const said of [
+      SAID['claude-refused-history'],
+      SAID['claude-refused-invalid'],
+      SAID['claude-refused-too-long'],
+      'API Error: 400 orphaned tool_result in conversation history.',
+      'API Error: 400 messages.1.content.0: Invalid `signature` in `thinking` block',
+      'Prompt is too long · the request is ~215347 tokens (limit 200000) but this conversation is only ~270 tokens — the rest is system prompt, tool definitions, and attachment content. A single-exchange conversation cannot be compacted; reduce attached files/tools or start with less context.',
+      'Request too large (max 32MB). Accumulated images and attachments in the conversation pushed the request over the limit. Remove older images or compact the conversation.',
+      // the API's JSON after the status, as earlier versions wrote it
+      'API Error: 400 {"type":"error","error":{"type":"invalid_request_error","message":"messages.3: `tool_use` ids were found without `tool_result` blocks immediately after"}}',
+    ])
+      expect(refusedRequest('claude', said), said).toBe(true);
+    for (const said of [
+      SAID['claude-credit'],
+      SAID['claude-rate-limited'],
+      SAID['claude-unauthorized'],
+      SAID['claude-model-missing'],
+      'API Error: 400 invalid model name',
+      'API Error: 400 This organization has been disabled.',
+      'Your ANTHROPIC_API_KEY belongs to a disabled organization · Update or unset the environment variable',
+      'Failed to authenticate. API Error: 403 Your API key does not have permission to use the specified resource.',
+      'API Error: 529 Overloaded. This is a server-side issue, usually temporary — try again in a moment.',
+      // its own words for a picture it took out of the conversation: carried on, the request is new
+      'API Error: an image in the conversation could not be processed and was removed. Re-read the file with a different approach if you still need it.',
+    ])
+      expect(refusedRequest('claude', said), said).toBe(false);
   });
 });
 

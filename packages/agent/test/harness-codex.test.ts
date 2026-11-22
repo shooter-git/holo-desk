@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
+import { refusedRequest } from '../src/harness/adapter.ts';
 import {
   CODEX_DISABLED,
   codexDefaults,
@@ -415,6 +416,141 @@ echo '{"type":"error","message":"unexpected status 401 Unauthorized"}'
 exit 1`,
     });
     expect((await runToEnd(h, job(s))).at(-1)).toEqual({ type: 'failed', error: 'unexpected status 401 Unauthorized' });
+  });
+});
+
+/**
+ * Recorded from Codex 0.167.1, run as a sealed run is, against a stand-in for the OpenAI Responses API
+ * that answered as it does (docs/agent-harnesses.md, "A refused conversation"). What each `turn.failed`
+ * says.
+ */
+const FAILED = {
+  'codex-refused-tool-output':
+    '{"error":{"message":"No tool output found for function call call_MockMockMockMock.","type":"invalid_request_error","param":"input","code":null}}',
+  'codex-refused-invalid':
+    '{"error":{"message":"Invalid \'input[3].name\': string does not match pattern. Expected a string that matches the pattern \'^[a-zA-Z0-9_-]+$\'.","type":"invalid_request_error","param":"input[3].name","code":"invalid_value"}}',
+  'codex-refused-too-long':
+    '{"error":{"message":"Your input exceeds the context window of this model. Please adjust your input and try again.","type":"invalid_request_error","param":"input","code":"context_length_exceeded"}}',
+  'codex-context-window':
+    "Codex ran out of room in the model's context window. Start a new thread or clear earlier history before retrying.",
+  'codex-quota': 'Quota exceeded. Check your plan and billing details.',
+  'codex-unauthorized':
+    'unexpected status 401 Unauthorized: Incorrect API key provided: dummy. You can find your API key at https://platform.openai.com/account/api-keys., url: http://127.0.0.1:47911/v1/responses, request id: req_mock',
+  'codex-model-chatgpt':
+    '{"detail":"The \'gpt-holo-nope\' model is not supported when using Codex with a ChatGPT account."}',
+  'codex-model-missing': 'The model `gpt-holo-nope` does not exist or you do not have access to it.',
+  'codex-rate-limited': 'exceeded retry limit, last status: 429 Too Many Requests, request id: req_mock',
+} as const;
+
+describe('Codex: a conversation its model service refused', () => {
+  const OLD = '01a1cbcd-f893-71a1-aa67-6013e3fe50b3';
+  const runs = () => [0, 1, 2].filter((n) => existsSync(join(s.rec, `argv${n}`))).length;
+  const threadOf = (name: string) => fixtureEvents(name).find((e) => e.type === 'thread.started')?.thread_id;
+  /** A resumed run that prints `stream` and fails as Codex does (exit 1); a new one goes well. */
+  const resumed = (stream: string) =>
+    fake({
+      signedIn: true,
+      run: `case "$*" in exec\\ resume*) cat <<'EOF'\n${stream}\nEOF\nexit 1;; *) ${replay('codex-normal')};; esac\nexit 0`,
+    });
+  const lines = (name: string) =>
+    readFileSync(join(FIXTURES, `${name}.jsonl`), 'utf8')
+      .trim()
+      .split('\n');
+  /**
+   * Not recorded as one: the recorded refusal with one of HO[LO]'s calls first (the stand-in API never
+   * asked for one), the call as the recorded normal run has it.
+   */
+  const afterACall = (name: string) => {
+    const [started, turn, ...rest] = lines(name);
+    const call = lines('codex-normal').filter((l) => l.includes('"mcp_tool_call"') && l.includes('"echo"'));
+    return [started, turn, ...call, ...rest].join('\n');
+  };
+
+  it('reads each recorded failure as the error its turn.failed says, with no tripwire', () => {
+    for (const [name, error] of Object.entries(FAILED)) {
+      const r = codexReader();
+      const seen = fixtureEvents(name).flatMap((e) => r.event(e));
+      expect(
+        seen.filter((x) => x.kind === 'failed'),
+        name,
+      ).toEqual([{ kind: 'failed', error }]);
+      expect(
+        seen.some((x) => x.kind === 'trip'),
+        name,
+      ).toBe(false);
+    }
+  });
+
+  it('starts it again as a new thread, once, when the turn hadn’t called a tool yet', async () => {
+    s = sandbox();
+    const events = await runToEnd(resumed(lines('codex-refused-tool-output').join('\n')), job(s, { session: OLD }));
+    expect(runs()).toBe(2);
+    expect(recorded(s, 0).argv.slice(0, 2)).toEqual(['exec', 'resume']);
+    expect(recorded(s, 1).argv[1]).not.toBe('resume');
+    // a new thread reads the rules from AGENTS.md: the prompt alone
+    expect(recorded(s, 1).stdin).toBe(`${PROMPT_MARK}\n`);
+    expect(events[0]).toEqual({ type: 'session', session: threadOf('codex-refused-tool-output') });
+    expect(events.at(-1)).toEqual({ type: 'done', reply: 'spike-42 — yellow.' });
+    expect(events.some((e) => e.type === 'failed')).toBe(false);
+  });
+
+  it('fails a turn that had called a tool, saying the next starts a new thread (a broken history, too long)', async () => {
+    for (const name of ['codex-refused-invalid', 'codex-refused-too-long'] as const) {
+      s = sandbox();
+      expect(await runToEnd(resumed(afterACall(name)), job(s, { session: OLD })), name).toEqual([
+        { type: 'session', session: threadOf(name) },
+        { type: 'progress', line: 'Working' },
+        { type: 'failed', error: FAILED[name], fresh: true },
+      ]);
+      expect(runs(), name).toBe(1);
+      s.cleanup();
+    }
+  });
+
+  it('keeps the thread for an ordinary failure, and for its context window: Codex compacts it next turn', async () => {
+    for (const name of [
+      'codex-context-window',
+      'codex-quota',
+      'codex-unauthorized',
+      'codex-model-chatgpt',
+      'codex-model-missing',
+      'codex-rate-limited',
+    ] as const) {
+      s = sandbox();
+      const events = await runToEnd(resumed(lines(name).join('\n')), job(s, { session: OLD }));
+      expect(events.at(-1), name).toEqual({ type: 'failed', error: FAILED[name] });
+      expect(runs(), name).toBe(1);
+      s.cleanup();
+    }
+  });
+
+  it('knows a refusal by the API’s own body, as Codex shows it, and nothing else as one', () => {
+    for (const said of [
+      FAILED['codex-refused-tool-output'],
+      FAILED['codex-refused-invalid'],
+      FAILED['codex-refused-too-long'],
+      // by its source (0.171.0): a 400 over its WebSocket shows the error event as it came
+      '{"type":"error","status":400,"error":{"type":"invalid_request_error","message":"No tool output found for function call call_abc."}}',
+      // an older Codex, which put the status first
+      'unexpected status 400 Bad Request: {"error":{"message":"No tool output found for function call call_abc.","type":"invalid_request_error","param":"input","code":null}}',
+    ])
+      expect(refusedRequest('codex', said), said).toBe(true);
+    for (const said of [
+      FAILED['codex-context-window'],
+      FAILED['codex-quota'],
+      FAILED['codex-unauthorized'],
+      FAILED['codex-model-chatgpt'],
+      FAILED['codex-model-missing'],
+      FAILED['codex-rate-limited'],
+      'Invalid prompt: your prompt was flagged as potentially violating our usage policy.',
+      '{"error":{"message":"The model `gpt-6` does not exist or you do not have access to it.","type":"invalid_request_error","param":null,"code":"model_not_found"}}',
+      // a setting the model doesn't take: another thread is sent it too
+      '{"error":{"message":"Unsupported parameter: \'reasoning.effort\' is not supported with this model.","type":"invalid_request_error","param":"reasoning.effort","code":"unsupported_parameter"}}',
+      '{"error":{"message":"You exceeded your current quota, please check your plan and billing details.","type":"invalid_request_error","param":null,"code":null}}',
+      // a 400 seen in a tool's answer is the tool's, not the API's
+      'HTTP 400: {"error":{"type":"invalid_request_error"}}',
+    ])
+      expect(refusedRequest('codex', said), said).toBe(false);
   });
 });
 

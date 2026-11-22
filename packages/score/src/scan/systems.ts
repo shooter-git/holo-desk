@@ -70,8 +70,14 @@ export function measureLines(ink: Uint8Array, w: number, h: number): { thickness
   return { thickness, gap };
 }
 
+/** A staff line candidate: its row, and how much of the page's middle it crosses (0 to 1). */
+interface LineRow {
+  y: number;
+  cover: number;
+}
+
 /** Rows of ink that run across most of the page's middle: staff line candidates, merged into lines. */
-function lineRows(ink: Uint8Array, w: number, h: number, thickness: number): number[] {
+function lineRows(ink: Uint8Array, w: number, h: number, thickness: number): LineRow[] {
   const x0 = Math.floor(w * 0.2);
   const x1 = Math.floor(w * 0.8);
   const span = x1 - x0;
@@ -86,7 +92,7 @@ function lineRows(ink: Uint8Array, w: number, h: number, thickness: number): num
     counts.push(n);
   }
   const rows = counts.map((n) => n > span * 0.4);
-  const lines: number[] = [];
+  const lines: LineRow[] = [];
   for (let y = 0; y < h; ) {
     if (!rows[y]) {
       y++;
@@ -94,7 +100,9 @@ function lineRows(ink: Uint8Array, w: number, h: number, thickness: number): num
     }
     let end = y;
     while (end + 1 < h && rows[end + 1]) end++;
-    if (end - y + 1 <= thickness * 3 + 4) lines.push((y + end) / 2);
+    if (end - y + 1 <= thickness * 3 + 4) {
+      lines.push({ y: (y + end) / 2, cover: Math.max(...counts.slice(y, end + 1)) / span });
+    }
     y = end + 1;
   }
   return lines;
@@ -102,40 +110,59 @@ function lineRows(ink: Uint8Array, w: number, h: number, thickness: number): num
 
 /**
  * Five lines evenly spaced make a staff. A faint line a photo lost leaves four, one gap twice the
- * others: that's a staff too, its missing line put back.
+ * others: that's a staff too, its missing line put back. Dense writing adds strays among a staff's
+ * lines (a long beam, a dash, a line of curled paper caught at a second height), so a staff's five
+ * may pass over up to two strays between them. Where the staves found overlap, five lines win over
+ * four, then the lines that cross more of the page (a stray is a stroke, a staff line runs across):
+ * no line belongs to two staves, and a stray just above or below a staff doesn't take its place.
  */
-function staves(lines: number[], spacing: number): number[][] {
-  const out: number[][] = [];
+function staves(lines: LineRow[], spacing: number): number[][] {
   const near = (g: number, want: number) => Math.abs(g - want) <= Math.max(2, want * 0.25);
-  for (let i = 0; i + 3 < lines.length; ) {
-    const five = lines.slice(i, i + 5);
-    if (five.length === 5) {
-      const gaps = five.slice(1).map((y, k) => y - (five[k] as number));
+  const gapsOf = (ys: number[]) => ys.slice(1).map((y, k) => y - (ys[k] as number));
+  const found: { lines: number[]; count: number; cover: number }[] = [];
+  const add = (picked: LineRow[], staff: number[]) =>
+    found.push({ lines: staff, count: picked.length, cover: picked.reduce((a, l) => a + l.cover, 0) });
+  // five from a line on, each of the next few passed over or taken (two strays at most)
+  const reach = spacing * 1.35 * 4 + 2;
+  const pick = (chosen: LineRow[], next: number, strays: number) => {
+    if (chosen.length === 5) {
+      const ys = chosen.map((l) => l.y);
+      const gaps = gapsOf(ys);
       const mean = gaps.reduce((a, b) => a + b, 0) / 4;
-      if (gaps.every((g) => near(g, mean)) && Math.abs(mean - spacing) <= spacing * 0.35) {
-        out.push(five);
-        i += 5;
-        continue;
-      }
+      if (gaps.every((g) => near(g, mean)) && Math.abs(mean - spacing) <= spacing * 0.35) add(chosen, ys);
+      return;
     }
+    const top = (chosen[0] as LineRow).y;
+    for (let j = next; j <= next + strays && j < lines.length; j++) {
+      const line = lines[j] as LineRow;
+      if (line.y - top > reach) break;
+      pick([...chosen, line], j + 1, strays - (j - next));
+    }
+  };
+  for (let i = 0; i < lines.length; i++) pick([lines[i] as LineRow], i + 1, 2);
+  // four in a row, one gap doubled
+  for (let i = 0; i + 3 < lines.length; i++) {
     const four = lines.slice(i, i + 4);
-    const gaps = four.slice(1).map((y, k) => y - (four[k] as number));
-    const span = ((four[3] as number) - (four[0] as number)) / 4;
+    const ys = four.map((l) => l.y);
+    const gaps = gapsOf(ys);
+    const span = ((ys[3] as number) - (ys[0] as number)) / 4;
     const double = gaps.findIndex((g) => near(g, span * 2));
     if (
       Math.abs(span - spacing) <= spacing * 0.35 &&
       double >= 0 &&
       gaps.every((g, k) => k === double || near(g, span))
     ) {
-      const staff = four.slice();
-      staff.splice(double + 1, 0, ((four[double] as number) + (four[double + 1] as number)) / 2);
-      out.push(staff);
-      i += 4;
-      continue;
+      ys.splice(double + 1, 0, ((ys[double] as number) + (ys[double + 1] as number)) / 2);
+      add(four, ys);
     }
-    i++;
   }
-  return out;
+  found.sort((a, b) => b.count - a.count || b.cover - a.cover || (a.lines[0] as number) - (b.lines[0] as number));
+  const out: number[][] = [];
+  for (const { lines: s } of found) {
+    const clear = out.every((o) => (s[0] as number) > (o[4] as number) || (s[4] as number) < (o[0] as number));
+    if (clear) out.push(s);
+  }
+  return out.sort((a, b) => (a[0] as number) - (b[0] as number));
 }
 
 /** Where a staff's lines start and end across the page. */
@@ -149,12 +176,28 @@ function extent(ink: Uint8Array, w: number, lines: number[]): { left: number; ri
   return { left, right };
 }
 
-/** Whether a column of ink runs from one staff's bottom line to the next one's top line. */
-function joined(ink: Uint8Array, w: number, x: number, from: number, to: number): boolean {
+/**
+ * Whether a line of ink runs from one staff's bottom line to the next one's top line, starting at
+ * column x. A photo of curled paper slants and bends it, so it's followed down a row at a time, a
+ * column either way at most; a faint print breaks it, so short gaps are passed over. Ink on four
+ * rows in five, no gap longer than half a staff space, is a line: a stem or a word at the left of
+ * two systems reaches only part of the way across, and leaves more paper than that.
+ */
+function joined(ink: Uint8Array, w: number, x: number, from: number, to: number, space: number): boolean {
   let n = 0;
   let total = 0;
-  for (let y = Math.round(from); y <= Math.round(to); y++, total++) n += ink[y * w + x] || ink[y * w + x + 1] ? 1 : 0;
-  return total > 0 && n / total > 0.95;
+  let gap = 0;
+  for (let y = Math.round(from); y <= Math.round(to); y++, total++) {
+    const at = [x, x - 1, x + 1].find((c) => c >= 0 && c < w && ink[y * w + c]);
+    if (at === undefined) {
+      if (++gap > space / 2) return false;
+      continue;
+    }
+    x = at;
+    gap = 0;
+    n++;
+  }
+  return total > 0 && n / total >= 0.8;
 }
 
 /**
@@ -256,7 +299,7 @@ export function findSystems(ink: Uint8Array, w: number, h: number): PageLayout {
       const x0 = Math.max(0, Math.min(above.left, s.left) - Math.round(spacing * 3));
       const x1 = Math.min(w - 2, Math.max(above.left, s.left) + Math.round(spacing * 1.5));
       let link = false;
-      for (let x = x0; x <= x1 && !link; x++) link = joined(ink, w, x, from, to);
+      for (let x = x0; x <= x1 && !link; x++) link = joined(ink, w, x, from, to, spacing);
       if (link) {
         prev.push(s);
         continue;

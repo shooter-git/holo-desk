@@ -3,7 +3,8 @@
  * studio's commands, tracks and markers, found by name. It's one of the studio's menus with a field on
  * top (the same glass, rows, blue highlight and key hints), so nothing looks bolted on. While it's open
  * the field has the keys: Up and Down choose, Enter runs, Escape closes, and the studio's shortcuts
- * wait. The song plays on.
+ * wait. A press outside closes it too, and on a touch screen a swipe up (ui/bar-swipe.ts). The song
+ * plays on.
  *
  * With the agent on for this device, the field takes requests too: what's typed can be sent ("Ask the
  * agent"), with files dropped or pasted on it (each a small chip), and under the field is the song's
@@ -52,6 +53,7 @@ import { isPhone, useLayout } from '../app/layout.ts';
 import { closeBar, openBar, store, useApp } from '../app/store.ts';
 import { installs, useInstalls } from '../audio/installs.ts';
 import { AgentView } from './AgentView.tsx';
+import { useShownRoom, useSwipeUpToClose } from './bar-swipe.ts';
 import { closeMenu } from './menu.tsx';
 import { Slash } from './slash.tsx';
 
@@ -391,6 +393,10 @@ function BarPanel() {
   const [dropping, setDropping] = useState(false);
   const field = useRef<HTMLInputElement>(null);
   const list = useRef<HTMLDivElement>(null);
+  const scrim = useRef<HTMLDivElement>(null);
+  const card = useRef<HTMLDivElement>(null);
+  useShownRoom(scrim);
+  useSwipeUpToClose(card);
   const id = useId();
   const playhead = playheadTick();
   const state = { ...app, playhead, phone };
@@ -543,8 +549,9 @@ function BarPanel() {
 
   return (
     // a press outside closes the bar and goes no further, as a menu's does
-    <div className="bar-scrim" onPointerDown={(e) => e.target === e.currentTarget && closeBar()}>
+    <div ref={scrim} className="bar-scrim" onPointerDown={(e) => e.target === e.currentTarget && closeBar()}>
       <div
+        ref={card}
         className={`bar${dropping ? ' dropping' : ''}`}
         role="dialog"
         aria-modal="true"
@@ -584,9 +591,13 @@ function BarPanel() {
             // a phone held upright has room for the start of it beside the selection's words
             placeholder={placeholder}
             autoComplete="off"
-            autoCorrect="off"
-            autoCapitalize="off"
-            spellCheck={false}
+            // with the agent on, what's typed is mostly a request: the keyboard corrects and capitalises
+            // it as it does a message, and its key says Send. A command is still found by its first
+            // letters (a correction only comes at a word's end, and case doesn't count)
+            autoCorrect={on ? 'on' : 'off'}
+            autoCapitalize={on ? 'sentences' : 'off'}
+            spellCheck={on}
+            enterKeyHint={on ? 'send' : undefined}
             value={query}
             onChange={(e) => {
               setQuery(e.target.value);

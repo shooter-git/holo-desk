@@ -3489,7 +3489,15 @@ button.list-item {
 
 /* on a phone it opens at the top too, the width of the screen less a margin (no wider than on a desktop
    when the phone is on its side), clear of the notch and the keyboard; the field's words are 16 px, so
-   the phone doesn't zoom in on it */
+   the phone doesn't zoom in on it. The scrim is what shows of the page (with the keyboard up, what's
+   above it: ui/bar-swipe.ts), and the card keeps within it */
+html[data-layout="phone-portrait"] .bar-scrim,
+html[data-layout="phone-landscape"] .bar-scrim {
+  top: var(--shown-top, 0px);
+  bottom: auto;
+  height: var(--shown-height, 100dvh);
+}
+
 html[data-layout="phone-portrait"] .bar,
 html[data-layout="phone-landscape"] .bar {
   top: calc(var(--safe-top) + 8px);
@@ -3497,12 +3505,36 @@ html[data-layout="phone-landscape"] .bar {
   left: calc(var(--safe-left) + 8px);
   width: auto;
   max-width: 600px;
-  max-height: calc(100dvh - var(--safe-top) - 16px);
+  max-height: calc(100% - var(--safe-top) - 16px);
+}
+
+/* held upright, it stops a finger's height above the home bar, or the keyboard, so there's always some
+   studio under it to tap (a long reply scrolls in the card); on its side, the studio beside it is there
+   to tap */
+html[data-layout="phone-portrait"] .bar {
+  max-height: calc(100% - var(--safe-top) - 8px - 56px - var(--safe-bottom));
+}
+
+html[data-layout="phone-portrait"] .bar-scrim[data-covered] .bar {
+  max-height: calc(100% - var(--safe-top) - 8px - 56px);
 }
 
 html[data-layout="phone-portrait"] .bar .field input,
 html[data-layout="phone-landscape"] .bar .field input {
   font-size: 16px;
+}
+
+/* a swipe up draws the card up with the finger; let go, it goes on up and away, or drops back */
+.bar[data-swipe] {
+  transform: translateY(var(--swipe, 0px));
+}
+
+.bar[data-swipe="back"] {
+  transition: transform 0.18s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.bar[data-swipe="away"] {
+  transition: transform 0.18s ease-out;
 }
 
 /* the agent's side of the bar, while it's on: the song's last request (quiet), then the work going on

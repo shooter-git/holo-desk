@@ -343,8 +343,8 @@ P Piano Roll, I Inspector, Y Library, Q quantize, Ctrl T split, Ctrl R repeat, C
 Musical Typing, A automation, Ctrl B bounce. N shows the Score and Shift N writes in it: letters for
 notes, 1–7 for values (as in MuseScore), Shift L lyrics, Shift Q chord symbols. Ctrl / opens the bar,
 where every command, track and marker is found by name (the slash button, /, in the control bar, or a
-swipe down on a phone's top bar). Press <kbd>?</kbd> in the studio for the whole
-list.
+swipe down on a phone's top bar); Escape, a tap outside it or, on a touch screen, a swipe up on it puts
+it away. Press <kbd>?</kbd> in the studio for the whole list.
 
 ## Development
 

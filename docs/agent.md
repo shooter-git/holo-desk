@@ -1,10 +1,10 @@
 # The bar and the agent: how they work
 
-The **bar** (Ctrl /, the slash button in the control bar, or a swipe down on a phone's top bar) is
-HO[LO]'s command palette. When the **agent** is turned on in Settings › Agent and this device is allowed
-to use it, the bar also takes requests in plain words, with files dropped or pasted on it. The agent
-carries them out on the open song through a harness installed on the host: Claude Code, Codex, Cursor or
-Antigravity.
+The **bar** (Ctrl /, the slash button in the control bar, or a swipe down on a phone's top bar; Escape,
+a press outside it or, on a touch screen, a swipe up on it closes it) is HO[LO]'s command palette. When
+the **agent** is turned on in Settings › Agent and this device is allowed to use it, the bar also takes
+requests in plain words, with files dropped or pasted on it. The agent carries them out on the open song
+through a harness installed on the host: Claude Code, Codex, Cursor or Antigravity.
 
 This page is the contract between the studio, the server, the runner and the agent's tools.
 

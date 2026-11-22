@@ -365,6 +365,7 @@ export function openBar(): void {
   if (!state.bar) store.set({ bar: true });
 }
 
+/** Close the bar (Escape, a press outside it, or a swipe up on it on a touch screen). */
 export function closeBar(): void {
   if (state.bar) store.set({ bar: false });
 }

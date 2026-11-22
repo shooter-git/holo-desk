@@ -351,6 +351,8 @@ const ORDINARY = new RegExp(
     'not (?:supported|available) in your (?:country|region|location)',
     'model\\b[^.]{0,80}?(?:not supported|unsupported|not available|not found|does not exist)',
     'invalid model name',
+    'unsupported parameter',
+    'organization must be verified',
     '"code":\\s*"(?:model_not_found|unsupported_parameter)"',
     '(?:do|does) not have access to (?:the |this |that )?(?:model|it)\\b',
     'not logged in',

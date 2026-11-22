@@ -546,6 +546,9 @@ describe('Codex: a conversation its model service refused', () => {
       'Your organization must have a payment method on file. Add one in Billing settings.',
       'The model `gpt-6` does not exist or you do not have access to it.',
       "The 'gpt-6' model is not supported when using Codex with a ChatGPT account.",
+      // a setting or the organization: another thread is sent the same
+      "Unsupported parameter: 'reasoning.effort' is not supported with this model.",
+      'Your organization must be verified to use the model `gpt-6`. Please go to your organization settings to verify it.',
     ]) {
       s = sandbox();
       const said = `unexpected status 400 Bad Request: ${message}${tail}`;

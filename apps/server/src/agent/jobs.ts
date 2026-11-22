@@ -21,6 +21,7 @@ import {
   AFTER,
   BEFORE,
   type Block,
+  DOCK_NEEDS_VIEW,
   type Go,
   PREVIOUS,
   LIMITS as VIEW_LIMITS,
@@ -968,9 +969,9 @@ export class Jobs implements AgentHooks {
     if (!isLive(job)) return;
     const song = this.o.store.get(job.view.project);
     if (song) this.o.threads.seen(job.thread, song);
-    // the song as the turn left it, when the reply's view plays or keeps it
+    // the song as the turn left it, when the reply's view (or its dock) plays or keeps it
     const view = job.view.view;
-    if (view && viewVersions(view.blocks).includes(AFTER)) {
+    if (view && viewVersions([...view.blocks, ...(view.dock ?? [])]).includes(AFTER)) {
       const after = this.o.store.snapshotNow(job.view.project, 'Agent');
       if (after !== null) view.versions[AFTER] = after;
     }
@@ -1572,14 +1573,16 @@ export class Jobs implements AgentHooks {
   /**
    * The undo step's label, the reply under the bar, and what it shows under it (blocks already checked,
    * every version they name one this job has: its revision goes with them; "after" once the turn is
-   * done) and where the studio goes as it arrives.
+   * done), where the studio goes as it arrives, and the view's dock (a few of its controls again, for a
+   * phone's tray: only with a view, its versions taken with the view's).
    */
-  finish(job: AgentJob, label: string, reply: string, blocks?: Block[], go?: Go): void {
+  finish(job: AgentJob, label: string, reply: string, blocks?: Block[], go?: Go, dock?: Block[]): void {
+    if (dock && !blocks) throw new Refusal(400, DOCK_NEEDS_VIEW);
     job.view.label = label;
     job.view.reply = reply;
     if (blocks) {
       const versions: Record<string, number> = {};
-      const named = viewVersions(blocks);
+      const named = viewVersions([...blocks, ...(dock ?? [])]);
       // (an A/B of two of the same song is no comparison)
       if (!job.changed && named.includes(BEFORE) && named.includes(AFTER))
         throw new Refusal(
@@ -1600,7 +1603,7 @@ export class Jobs implements AgentHooks {
           );
         versions[name] = revision;
       }
-      job.view.view = { blocks, versions };
+      job.view.view = { blocks, versions, ...(dock?.length ? { dock } : {}) };
     } else delete job.view.view;
     if (go) job.view.go = go;
     else delete job.view.go;

@@ -14,7 +14,7 @@
  */
 import { createReadStream } from 'node:fs';
 import { join } from 'node:path';
-import { checkGo, checkView } from '@holo/agent/view';
+import { checkDock, checkGo, checkView, DOCK_NEEDS_VIEW } from '@holo/agent/view';
 import { SCAN_ID, type Scan } from '@holo/score';
 import { describeProject, type Op } from '@holo/session';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
@@ -844,12 +844,17 @@ export function agentRoutes(app: FastifyInstance, o: AgentOptions): { jobs: Jobs
       if (view && !view.ok) throw bad(view.error);
       const go = b.go === undefined || b.go === null ? null : checkGo(b.go, true);
       if (go && !go.ok) throw bad(go.error);
+      // a few of the view's controls again, for a phone's tray: only with the view they come from
+      const dock = b.dock === undefined || b.dock === null ? null : checkDock(b.dock, true);
+      if (dock && !view) throw bad(DOCK_NEEDS_VIEW);
+      if (dock && !dock.ok) throw bad(dock.error);
       theJobs.finish(
         job,
         line(b.label, 'label', 80),
         text(b.reply, 'reply', 600),
         view?.ok ? view.blocks : undefined,
         go?.ok ? go.go : undefined,
+        dock?.ok ? dock.blocks : undefined,
       );
       return { ok: true };
     }),

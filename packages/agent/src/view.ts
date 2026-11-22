@@ -107,10 +107,15 @@ export type Block =
 /** A table's cell: words, a number, or a small block (text, a button, a slider or a toggle). */
 export type Cell = string | number | Block;
 
-/** A turn's view as it's kept and drawn: its blocks, and the revision of the song each version names. */
+/**
+ * A turn's view as it's kept and drawn: its blocks, the revision of the song each version names, and
+ * its dock: a few of its controls again, in one row a phone keeps at hand once the reply has been read
+ * (apps/web/src/ui/Tray.tsx).
+ */
 export interface View {
   blocks: Block[];
   versions: Record<string, number>;
+  dock?: Block[];
 }
 
 /**
@@ -165,6 +170,10 @@ export const LIMITS = {
   unit: 12,
   ref: 120,
   versions: 8,
+  /** A dock's controls: each button and toggle, and each option of a choice, is one. */
+  dock: 5,
+  /** A dock's labels, in characters. */
+  dockLabel: 20,
 } as const;
 
 /** A version's name: a few words of the agent's (not "before" or "after", which every turn has). */
@@ -536,6 +545,49 @@ export function checkGo(input: unknown, strict = false): { ok: true; go: Go } | 
   if (!r.ok) return { ok: false, error: r.error.replace(/^view\[0\]\.list\[0\]\.do\.go/, 'go') };
   const item = (r.blocks[0] as { list: ListItem[] }).list[0] as ListItem;
   return { ok: true, go: (item.do as { go: Go }).go };
+}
+
+// ---- a dock ----
+
+/** What a dock holds: controls only. */
+export const DOCK_KINDS = ['button', 'choice', 'toggle'] as const;
+
+/** Why a dock without a view is refused, said the same by the agent's tool and the server. */
+export const DOCK_NEEDS_VIEW = "a dock repeats a few of the view's controls: give the view too";
+
+/**
+ * A dock checked: its blocks as a view's are (problems said at `dock[1]…`), then buttons, choices and
+ * toggles only, at most LIMITS.dock controls (each button, toggle or option of a choice is one), each
+ * label at most LIMITS.dockLabel characters. Their actions are any a view's can be.
+ */
+export function checkDock(input: unknown, strict = false): ViewCheck {
+  const r = checkView(input, strict);
+  if (!r.ok) return { ok: false, error: r.error.replace(/^view/, 'dock') };
+  let controls = 0;
+  for (const [i, b] of r.blocks.entries()) {
+    const kind = blockKind(b);
+    if (!(DOCK_KINDS as readonly string[]).includes(kind))
+      return { ok: false, error: `dock[${i}]: a dock holds ${DOCK_KINDS.join(', ')} blocks only, not ${kind}` };
+    const labels: [string, string | undefined][] =
+      'button' in b
+        ? [[`dock[${i}]`, b.button]]
+        : 'choice' in b
+          ? b.choice.map((c, j): [string, string] => [`dock[${i}].choice[${j}]`, c.label])
+          : [[`dock[${i}]`, 'toggle' in b ? b.label : undefined]];
+    controls += labels.length;
+    for (const [at, label] of labels)
+      if (label !== undefined && label.length > LIMITS.dockLabel)
+        return {
+          ok: false,
+          error: `${at}: its label is ${label.length} characters; a dock's are at most ${LIMITS.dockLabel}`,
+        };
+  }
+  if (controls > LIMITS.dock)
+    return {
+      ok: false,
+      error: `dock: ${controls} controls; at most ${LIMITS.dock} (each button, toggle or option of a choice is one)`,
+    };
+  return r;
 }
 
 // ---- going through it ----

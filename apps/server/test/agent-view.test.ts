@@ -103,6 +103,57 @@ describe('what a reply shows under it', () => {
   });
 });
 
+describe('a reply’s dock', () => {
+  it('is kept with the view, in the turn and the thread, its versions taken with the view’s', async () => {
+    const { start, tool, s, desk, run, status, save, services, app, token } = await setup();
+    const { job, token: jobToken } = await start({ project: s.id, text: 'Two takes of the strings' });
+    await tool(job, jobToken, 'POST', '/ops', {
+      ops: [{ op: 'setProject', patch: { title: 'Take 1' } }],
+      label: 'Take 1',
+      batch: 'b1',
+    });
+    const take1 = await save({ ...(services.store.get(s.id) as Project), title: 'Take 1' });
+    expect((await tool(job, jobToken, 'POST', '/version', { name: 'Take 1' })).statusCode).toBe(200);
+    const view = [{ text: 'Two takes of the strings.' }];
+    // the dock alone names "Take 1" and "after": they're kept as the view's would be
+    const dock = [
+      {
+        choice: [
+          { label: 'Take 1', do: { play: { from: 1, to: 5, version: 'Take 1' } } },
+          { label: 'Take 2', do: { play: { from: 1, to: 5, version: 'after' } } },
+        ],
+      },
+      { button: 'Keep Take 1', do: { keep: 'Take 1' } },
+    ];
+
+    // refused: without a view, with a kind a dock doesn't hold, too many controls, or a version never kept
+    const finish = (body: Record<string, unknown>) =>
+      tool(job, jobToken, 'POST', '/finish', { label: 'Two takes', reply: 'Play them.', ...body });
+    const alone = await finish({ dock });
+    expect(alone.statusCode).toBe(400);
+    expect(alone.json().error).toMatch(/a dock repeats a few of the view's controls/);
+    const slider = await finish({ view, dock: [{ slider: { track: 'master', param: 'volume' } }] });
+    expect(slider.statusCode).toBe(400);
+    expect(slider.json().error).toMatch(/^dock\[0\]: a dock holds/);
+    const many = await finish({ view, dock: [...dock, ...dock] });
+    expect(many.statusCode).toBe(400);
+    expect(many.json().error).toMatch(/^dock: 6 controls/);
+    const never = await finish({ view, dock: [{ button: 'Hall', do: { keep: 'Hall' } }] });
+    expect(never.statusCode).toBe(400);
+    expect(never.json().error).toMatch(/No version "Hall"/);
+
+    const finished = await finish({ view, dock });
+    expect(finished.statusCode, finished.body).toBe(200);
+    const after = await save({ ...(services.store.get(s.id) as Project), title: 'Take 2' });
+    run.say({ type: 'agent-done', job });
+    await waitFor(() => status(desk, job)?.state === 'done');
+    const kept = { blocks: view, versions: { 'Take 1': take1.revision, after: after.revision }, dock };
+    expect(status(desk, job)?.view).toEqual(kept);
+    const thread = await app.inject({ method: 'GET', url: `/api/agent/threads/${s.id}`, headers: auth(token) });
+    expect(thread.json().thread.turns.at(-1)).toMatchObject({ job, view: kept });
+  });
+});
+
 describe('comparing an earlier change', () => {
   it('offers the song before the previous request, and refuses an A/B of two of the same song', async () => {
     const { start, tool, s, desk, run, status, services, save } = await setup();

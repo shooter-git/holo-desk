@@ -1,8 +1,8 @@
 /**
- * A reply's view (view.ts) as the agent writes it, in the song's own names ("Vocal", "pitch.amount",
- * a version it named), turned into the ids the studio draws it with, or a plain reason it can't be:
- * a track that isn't there, a setting it hasn't got, a version never made, a command the studio
- * doesn't have.
+ * A reply's view (view.ts), and its dock, as the agent writes them, in the song's own names ("Vocal",
+ * "pitch.amount", a version it named), turned into the ids the studio draws them with, or a plain
+ * reason they can't be: a track that isn't there, a setting it hasn't got, a version never made, a
+ * command the studio doesn't have.
  */
 import { type MiddleC, type Project, parseNoteName, pluginDef, type Track } from '@holo/session';
 import {
@@ -12,11 +12,14 @@ import {
   type Binding,
   type Block,
   bindingInfo,
+  checkDock,
   checkGo,
   checkView,
+  DOCK_NEEDS_VIEW,
   type Go,
   mapRefs,
   PREVIOUS,
+  type RefMap,
   viewCommands,
 } from '../view.ts';
 import { barTick, channelRef, position, type ToolContext, ToolError, trackRef } from './common.ts';
@@ -184,50 +187,64 @@ function checkBlock(refs: Refs, b: Block): void {
 }
 
 /**
- * The view and the go finish was given, in the song's ids, checked as the studio will check them.
- * Throws a ToolError saying what to fix.
+ * The view, the go and the dock finish was given, in the song's ids, checked as the studio will check
+ * them. Throws a ToolError saying what to fix.
  */
 export async function resolvePresentation(
   ctx: ToolContext,
   rawView: unknown,
   rawGo: unknown,
-): Promise<{ view?: Block[]; go?: Go }> {
-  if (rawView === undefined && rawGo === undefined) return {};
+  rawDock?: unknown,
+): Promise<{ view?: Block[]; go?: Go; dock?: Block[] }> {
+  if (rawView === undefined && rawGo === undefined && rawDock === undefined) return {};
+  if (rawDock !== undefined && rawView === undefined) throw new ToolError(DOCK_NEEDS_VIEW);
   const written = rawView === undefined ? null : checkView(rawView);
   if (written && !written.ok) throw new ToolError(written.error);
+  const writtenDock = rawDock === undefined ? null : checkDock(rawDock);
+  if (writtenDock && !writtenDock.ok) throw new ToolError(writtenDock.error);
   const writtenGo = rawGo === undefined ? null : checkGo(rawGo);
   if (writtenGo && !writtenGo.ok) throw new ToolError(writtenGo.error);
   const project = await ctx.api.song();
   const blocks = written?.ok ? written.blocks : [];
-  const wanted = viewCommands(blocks);
+  const docked = writtenDock?.ok ? writtenDock.blocks : [];
+  const wanted = viewCommands([...blocks, ...docked]);
   const commands = wanted.length ? (await ctx.api.commands()).commands : null;
   const refs: Refs = { project, middleC: ctx.middleC, versions: ctx.memory.versions, commands };
-  const out: { view?: Block[]; go?: Go } = {};
+  // (the view's names and the dock's resolve the same way)
+  const names: RefMap = {
+    track: (name) => trackRef(project, name).id,
+    binding: (b) => {
+      const track = channelRef(project, b.track).id;
+      return { track, param: bindingParam(project, track, b.param) };
+    },
+    go: (g) => goOf(refs, g),
+    version: (v) => {
+      if (v === BEFORE || v === AFTER || v === PREVIOUS || refs.versions.includes(v)) return v;
+      throw new ToolError(
+        `No version "${v}": the versions are "before", "after", "previous"${refs.versions.map((x) => `, "${x}"`).join('')} (the version tool names the song as it is)`,
+      );
+    },
+    command: (id) => {
+      if (refs.commands?.some((c) => c.id === id)) return id;
+      throw new ToolError(
+        `The studio has no command "${id}"${refs.commands?.length ? `: ${refs.commands.map((c) => c.id).join(', ')}` : ' it can run now'}`,
+      );
+    },
+  };
+  const out: { view?: Block[]; go?: Go; dock?: Block[] } = {};
   if (written?.ok) {
-    const resolved = mapRefs(blocks, {
-      track: (name) => trackRef(project, name).id,
-      binding: (b) => {
-        const track = channelRef(project, b.track).id;
-        return { track, param: bindingParam(project, track, b.param) };
-      },
-      go: (g) => goOf(refs, g),
-      version: (v) => {
-        if (v === BEFORE || v === AFTER || v === PREVIOUS || refs.versions.includes(v)) return v;
-        throw new ToolError(
-          `No version "${v}": the versions are "before", "after", "previous"${refs.versions.map((x) => `, "${x}"`).join('')} (the version tool names the song as it is)`,
-        );
-      },
-      command: (id) => {
-        if (refs.commands?.some((c) => c.id === id)) return id;
-        throw new ToolError(
-          `The studio has no command "${id}"${refs.commands?.length ? `: ${refs.commands.map((c) => c.id).join(', ')}` : ' it can run now'}`,
-        );
-      },
-    });
+    const resolved = mapRefs(blocks, names);
     for (const b of resolved) checkBlock(refs, b);
     const strict = checkView(resolved, true);
     if (!strict.ok) throw new ToolError(strict.error);
     out.view = strict.blocks;
+  }
+  if (writtenDock?.ok) {
+    const resolved = mapRefs(docked, names);
+    for (const b of resolved) checkBlock(refs, b);
+    const strict = checkDock(resolved, true);
+    if (!strict.ok) throw new ToolError(strict.error);
+    out.dock = strict.blocks;
   }
   if (writtenGo?.ok) {
     const strict = checkGo(goOf(refs, writtenGo.go), true);

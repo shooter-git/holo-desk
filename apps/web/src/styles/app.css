@@ -4241,6 +4241,81 @@ html[data-layout="tablet"] .talk-room[data-covered] .talk-page {
   visibility: hidden;
 }
 
+/* the tray (ui/Tray.tsx): a read reply's dock in one row of a phone's layout, above the transport held
+   upright and at the foot of the column on its side. Solid, the studio's own buttons, nothing of a
+   colour of its own; its controls scroll sideways when they don't fit, beside × and ^ */
+.tray {
+  min-width: 0;
+  overflow: hidden;
+  background: var(--bg-3);
+}
+
+html[data-layout="phone-portrait"] .tray {
+  border-bottom: 1px solid var(--line);
+}
+
+html[data-layout="phone-landscape"] .tray {
+  border-top: 1px solid var(--line);
+}
+
+/* what moves when it's swiped (the tray keeps it within the screen) */
+.tray-slide {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+  padding: 3px 2px 3px 8px;
+}
+
+.tray-row {
+  flex: 1;
+  min-width: 0;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scrollbar-width: none;
+}
+
+.dock-view {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: max-content;
+}
+
+.tray .dock-view .btn.small {
+  height: 34px;
+  padding: 0 11px;
+  font-size: 12.5px;
+}
+
+.tray .dock-view .v-why {
+  padding-right: 4px;
+  white-space: nowrap;
+}
+
+.tray-slide > .btn.icon {
+  flex: none;
+  width: 36px;
+  min-width: 36px;
+  height: 36px;
+}
+
+/* swiped across: it goes with the finger; let go, it goes on and away, or comes back */
+.tray-slide[data-swipe] {
+  transform: translateX(var(--swipe-x, 0px));
+}
+
+.tray-slide[data-swipe="back"] {
+  transition: transform 0.18s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.tray-slide[data-swipe="away"] {
+  transition:
+    transform 0.18s ease-out,
+    opacity 0.18s ease-out;
+  opacity: 0;
+}
+
 /* busy: the accent blue, a lit arc on a faint track, turning */
 .ring {
   flex: none;
@@ -5738,9 +5813,10 @@ html[data-layout="tablet"] .talk-room[data-covered] .talk-page {
   grid-template-rows: minmax(0, 1fr);
 }
 
+/* the transport row, the banners, the view, and (when it shows) the agent's tray */
 .phone-main {
   display: grid;
-  grid-template-rows: auto auto minmax(0, 1fr);
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
   min-height: 0;
   padding-bottom: var(--safe-bottom);
 }

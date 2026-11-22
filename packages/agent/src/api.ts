@@ -461,9 +461,10 @@ export interface JobApi {
   handoff(brief: string): Promise<{ ok: boolean }>;
   /**
    * POST …/finish: the undo step's label (≤ 80), the reply under the bar (≤ 600), and what it shows
-   * under it (`view`, resolved: view.ts) and where the studio goes as it arrives (`go`).
+   * under it (`view`, resolved: view.ts), where the studio goes as it arrives (`go`), and a few of the
+   * view's controls again for a phone's tray (`dock`, only with a view).
    */
-  finish(label: string, reply: string, view?: Block[], go?: Go): Promise<{ ok: boolean }>;
+  finish(label: string, reply: string, view?: Block[], go?: Go, dock?: Block[]): Promise<{ ok: boolean }>;
   /** POST …/version: the song as it is now kept as a version with this name, for the reply's view; its revision. */
   version(name: string): Promise<{ ok: boolean; revision: number }>;
   /** GET …/commands: the commands the requester's studio can run now (the bar's), by id, with their titles. */
@@ -571,8 +572,14 @@ export function httpJobApi(base: string, job: string, tokenFile: string): JobApi
     progress: (line) => json('POST', '/progress', { line: line.slice(0, 200) }),
     permission: (body) => json('POST', '/permission', body),
     handoff: (brief) => json('POST', '/handoff', { brief }),
-    finish: (label, reply, view, go) =>
-      json('POST', '/finish', { label, reply, ...(view ? { view } : {}), ...(go ? { go } : {}) }),
+    finish: (label, reply, view, go, dock) =>
+      json('POST', '/finish', {
+        label,
+        reply,
+        ...(view ? { view } : {}),
+        ...(go ? { go } : {}),
+        ...(dock ? { dock } : {}),
+      }),
     version: (name) => json('POST', '/version', { name }),
     commands: () => json('GET', '/commands'),
 
@@ -745,8 +752,9 @@ export function fakeJobApi(project: Project, options: FakeJobApiOptions = {}): F
       log('handoff', brief);
       return { ok: true };
     },
-    async finish(label, reply, view, go) {
-      log('finish', label, reply, ...(view || go ? [view, go] : []));
+    async finish(label, reply, view, go, dock) {
+      // (logged as far as it was given: a plain reply is [label, reply])
+      log('finish', label, reply, ...(view || go || dock ? [view, go] : []), ...(dock ? [dock] : []));
       return { ok: true };
     },
     async version(name) {

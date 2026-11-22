@@ -179,6 +179,58 @@ describe('finish, with what the reply shows', () => {
     expect(sent(api).view).toEqual(view);
   });
 
+  it('sends a dock in the song’s ids, after the view and the go', async () => {
+    const api = withReverb();
+    for (const name of ['Take 1', 'Take 2']) await call(api, 'version', { name });
+    const takes = {
+      choice: [
+        { label: 'Take 1', do: { play: { from: 1, to: 5, version: 'Take 1', solo: ['Strings'] } } },
+        { label: 'Take 2', do: { play: { from: 1, to: 5, version: 'Take 2' } } },
+      ],
+    };
+    await call(api, 'finish', {
+      label: 'Two string takes',
+      reply: 'Two takes of the strings: play them and keep one.',
+      view: [takes, { button: 'Keep Take 2', do: { keep: 'Take 2' } }],
+      dock: [
+        takes,
+        { button: 'Keep Take 2', do: { keep: 'Take 2' } },
+        { toggle: { track: 'Strings', param: 'reverb.on' }, label: 'Room' },
+      ],
+    });
+    const c = api.calls.findLast((x) => x.method === 'finish');
+    expect(c?.args).toHaveLength(5);
+    expect(c?.args[4]).toEqual([
+      {
+        choice: [
+          { label: 'Take 1', do: { play: { from: 1, to: 5, version: 'Take 1', solo: ['trk_strings'] } } },
+          { label: 'Take 2', do: { play: { from: 1, to: 5, version: 'Take 2' } } },
+        ],
+      },
+      { button: 'Keep Take 2', do: { keep: 'Take 2' } },
+      { toggle: { track: 'trk_strings', param: 'on:fx_rev' }, label: 'Room' },
+    ]);
+  });
+
+  it('refuses a dock that names what isn’t there, isn’t a dock’s, or comes without a view', async () => {
+    const api = withReverb();
+    const view = [{ button: 'Original', do: { play: { from: 1, to: 5, version: 'before' } } }];
+    const finish = (dock: unknown, v: unknown = view) =>
+      refused(api, 'finish', { label: 'x', reply: 'y', ...(v ? { view: v } : {}), dock });
+    expect(await finish([{ button: 'Keep', do: { keep: 'Take 9' } }])).toMatch(
+      /No version "Take 9": the versions are "before", "after"/,
+    );
+    expect(await finish([{ toggle: { track: 'Vocal', param: 'mute' } }])).toMatch(/No track "Vocal"/);
+    expect(await finish([{ toggle: { track: 'Strings', param: 'volume' } }])).toMatch(/use a slider/);
+    expect(await finish([{ slider: { track: 'Strings', param: 'volume' } }])).toMatch(
+      /dock\[0\]: a dock holds button, choice, toggle blocks only/,
+    );
+    const alone = await finish([{ button: 'Keep', do: { keep: 'before' } }], null);
+    expect(alone).toMatch(/a dock repeats a few of the view's controls: give the view too/);
+    expect(alone).toMatch(/give no dock/);
+    expect(api.calls.some((c) => c.method === 'finish')).toBe(false);
+  });
+
   it('finishes as before without one', async () => {
     const api = setup();
     await call(api, 'finish', { label: 'Bass line', reply: 'A walking bass under the verse.' });

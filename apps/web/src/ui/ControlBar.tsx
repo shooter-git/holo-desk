@@ -38,7 +38,7 @@ import {
 import { barSign, useAgent } from '../app/agent.ts';
 import { TYPING_PORT } from '../app/keys.ts';
 import { isPhone, useLayout } from '../app/layout.ts';
-import { openBar, openSettings, store, useApp, useShow } from '../app/store.ts';
+import { closeBar, openBar, openSettings, store, useApp, useShow } from '../app/store.ts';
 import { engine } from '../audio/engine.ts';
 import { useSoundsComing } from '../audio/loading.ts';
 import { midi } from '../audio/midi.ts';
@@ -608,7 +608,8 @@ export function BarButton() {
             : 'Commands (Ctrl /)'
       }
       aria-haspopup="dialog"
-      onClick={openBar}
+      // (the page leaves it in reach, beside or above it: a second press puts it away)
+      onClick={() => (store.get().bar ? closeBar() : openBar())}
     >
       {sign === 'busy' ? <span className="ring" aria-hidden="true" /> : <Slash />}
       {sign === 'done' && <span className="cb-dot" aria-hidden="true" />}

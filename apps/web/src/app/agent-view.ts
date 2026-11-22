@@ -37,7 +37,8 @@ import { api } from './api.ts';
 import { ACTIONS, barState, studioCommands } from './bar-actions.ts';
 import { commandTable } from './commands.ts';
 import { isPhone, layoutNow } from './layout.ts';
-import { type AppState, closeBar, store } from './store.ts';
+import { closeForStudio } from './page-layout.ts';
+import { type AppState, store } from './store.ts';
 
 // ---- versions ----
 
@@ -368,11 +369,14 @@ export function commandInfo(id: string): { title: string; available: boolean; ke
   return c ? { title: c.title, available: c.available?.(s) ?? true, keepOpen: !!c.keepOpen } : null;
 }
 
-/** Run one of the bar's commands, as the bar would (it closes unless the command keeps it open). */
+/**
+ * Run one of the bar's commands from a reply, as the bar would: it closes unless the command keeps it
+ * open (and a sheet beside the studio stays, page-layout.ts).
+ */
 export function runCommand(id: string): boolean {
   const c = studioCommands().find((x) => x.id === id);
   if (!c) return false;
-  if (!c.keepOpen) closeBar();
+  if (!c.keepOpen) closeForStudio();
   c.run();
   return true;
 }

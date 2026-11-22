@@ -52,9 +52,11 @@
   --safe-bottom: env(safe-area-inset-bottom, 0px);
   --safe-left: env(safe-area-inset-left, 0px);
   --safe-right: env(safe-area-inset-right, 0px);
-  /* what floats over what: plugin windows, then dialogs, then the bar (Ctrl /, which opens over a dialog
-     too), then menus and popovers, then toasts, then the start screen */
+  /* what floats over what: plugin windows, then the agent's page (a phone's or a tablet's bar), then
+     dialogs, then the bar (Ctrl /, which opens over a dialog too), then menus and popovers, then toasts,
+     then the start screen */
   --z-window: 90;
+  --z-page: 95;
   --z-dialog: 100;
   --z-bar: 150;
   --z-popover: 200;
@@ -3370,9 +3372,10 @@ button.list-item {
 
 /* ---------- the bar (Ctrl /): the studio's commands, found by name ---------- */
 
-/* a menu with a field on top: the same glass, radius, rows, blue highlight and plain key hints. It
-   hangs near the top, over the control bar's side of the tracks, so what it acts on stays in view;
-   the scrim is clear, and only catches the press outside that closes it */
+/* a desktop's: a menu with a field on top, the same glass, radius, rows, blue highlight and plain key
+   hints. It hangs near the top, over the control bar's side of the tracks, so what it acts on stays in
+   view; the scrim is clear, and only catches the press outside that closes it. What's inside (.convo)
+   is the page's too (a phone's or a tablet's: below) */
 .bar-scrim {
   position: fixed;
   inset: 0;
@@ -3397,7 +3400,7 @@ button.list-item {
   animation: rise 0.12s ease-out;
 }
 
-.bar .field {
+.convo .field {
   display: flex;
   flex: none;
   align-items: center;
@@ -3407,14 +3410,14 @@ button.list-item {
   border-bottom: 1px solid var(--line);
 }
 
-.bar .field > svg {
+.convo .field > svg {
   flex: none;
   width: 15px;
   height: 15px;
   color: var(--text-3);
 }
 
-.bar .field input {
+.convo .field input {
   flex: 1;
   min-width: 0;
   padding: 12px 0;
@@ -3425,21 +3428,21 @@ button.list-item {
   line-height: 1.45;
 }
 
-.bar .field input::placeholder {
+.convo .field input::placeholder {
   color: var(--text-3);
 }
 
-.bar .list {
+.convo .list {
   min-height: 0;
   padding: 5px;
   overflow-y: auto;
 }
 
-.bar .list:empty {
+.convo .list:empty {
   display: none;
 }
 
-.bar .item {
+.convo .item {
   display: flex;
   flex: none;
   align-items: center;
@@ -3452,19 +3455,19 @@ button.list-item {
   cursor: pointer;
 }
 
-.bar .item .title {
+.convo .item .title {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.bar .item.hl {
+.convo .item.hl {
   background: var(--accent-2);
   color: white;
 }
 
-.bar .item .hint {
+.convo .item .hint {
   flex: none;
   margin-left: auto;
   color: var(--text-3);
@@ -3472,56 +3475,20 @@ button.list-item {
   white-space: nowrap;
 }
 
-.bar .item.hl .hint {
+.convo .item.hl .hint {
   color: rgba(255, 255, 255, 0.72);
 }
 
-/* rows for a finger, as a menu's are; no keys to press on a touch screen, so no key hints */
+/* rows for a finger, as a menu's are; no keys to press on a touch screen, so no key hints (the page's:
+   a touch screen is never laid out as a desktop, so the bar keeps its mouse's rows) */
 @media (pointer: coarse) {
-  .bar .item {
+  .convo .item {
     min-height: 42px;
     font-size: 14px;
   }
-  .bar .item .hint.keys {
+  .convo .item .hint.keys {
     display: none;
   }
-}
-
-/* on a phone it opens at the top too, the width of the screen less a margin (no wider than on a desktop
-   when the phone is on its side), clear of the notch and the keyboard; the field's words are 16 px, so
-   the phone doesn't zoom in on it. The scrim is what shows of the page (with the keyboard up, what's
-   above it: ui/bar-swipe.ts), and the card keeps within it */
-html[data-layout="phone-portrait"] .bar-scrim,
-html[data-layout="phone-landscape"] .bar-scrim {
-  top: var(--shown-top, 0px);
-  bottom: auto;
-  height: var(--shown-height, 100dvh);
-}
-
-html[data-layout="phone-portrait"] .bar,
-html[data-layout="phone-landscape"] .bar {
-  top: calc(var(--safe-top) + 8px);
-  right: calc(var(--safe-right) + 8px);
-  left: calc(var(--safe-left) + 8px);
-  width: auto;
-  max-width: 600px;
-  max-height: calc(100% - var(--safe-top) - 16px);
-}
-
-/* held upright, it stops a finger's height above the home bar, or the keyboard, so there's always some
-   studio under it to tap (a long reply scrolls in the card); on its side, the studio beside it is there
-   to tap */
-html[data-layout="phone-portrait"] .bar {
-  max-height: calc(100% - var(--safe-top) - 8px - 56px - var(--safe-bottom));
-}
-
-html[data-layout="phone-portrait"] .bar-scrim[data-covered] .bar {
-  max-height: calc(100% - var(--safe-top) - 8px - 56px);
-}
-
-html[data-layout="phone-portrait"] .bar .field input,
-html[data-layout="phone-landscape"] .bar .field input {
-  font-size: 16px;
 }
 
 /* a swipe up draws the card up with the finger; let go, it goes on up and away, or drops back */
@@ -3537,14 +3504,15 @@ html[data-layout="phone-landscape"] .bar .field input {
   transition: transform 0.18s ease-out;
 }
 
-/* the agent's side of the bar, while it's on: the song's last request (quiet), then the work going on
-   or the reply, then at most the button it needs. The studio's own blue, nothing of a colour of its own */
+/* the agent's side of the bar and the page, while it's on: a request (quiet), then the work going on or
+   the reply, then at most the button it needs. The studio's own blue, nothing of a colour of its own.
+   The bar's last exchange scrolls in the card; the page's thread scrolls as a whole */
 .bar .talk {
   min-height: 0;
   overflow-y: auto;
 }
 
-.bar .you {
+.convo .you {
   padding: 12px 16px 0;
   color: var(--text-3);
   font-size: 12.5px;
@@ -3552,7 +3520,7 @@ html[data-layout="phone-landscape"] .bar .field input {
   overflow-wrap: anywhere;
 }
 
-.bar .reply {
+.convo .reply {
   padding: 6px 16px 14px;
   color: var(--text);
   font-size: 13px;
@@ -3565,7 +3533,7 @@ html[data-layout="phone-landscape"] .bar .field input {
 
 /* what a reply shows under it, composed by the agent from the studio's own pieces (ui/AgentView.tsx):
    its buttons, switches and rows, in its own colours */
-.bar .agent-view {
+.convo .agent-view {
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -3574,59 +3542,59 @@ html[data-layout="phone-landscape"] .bar .field input {
   font-size: 12.5px;
 }
 
-.bar .v-text {
+.convo .v-text {
   color: var(--text);
   line-height: 1.5;
   white-space: pre-line;
   overflow-wrap: anywhere;
 }
 
-.bar .v-text.quiet {
+.convo .v-text.quiet {
   color: var(--text-3);
   font-size: 12px;
 }
 
-.bar .agent-view > .btn,
-.bar .v-group > .btn,
-.bar .agent-view .seg {
+.convo .agent-view > .btn,
+.convo .v-group > .btn,
+.convo .agent-view .seg {
   align-self: flex-start;
   max-width: 100%;
   overflow-x: auto;
   overscroll-behavior-x: contain;
 }
 
-.bar .v-row {
+.convo .v-row {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 6px;
 }
 
-.bar .v-row > .v-slider,
-.bar .v-row > .v-chart,
-.bar .v-row > .v-span {
+.convo .v-row > .v-slider,
+.convo .v-row > .v-chart,
+.convo .v-row > .v-span {
   flex: 1 1 180px;
 }
 
-.bar .v-group {
+.convo .v-group {
   display: flex;
   flex-direction: column;
   gap: 6px;
 }
 
-.bar .v-title {
+.convo .v-title {
   color: var(--text-2);
   font-size: 11.5px;
   font-weight: 600;
 }
 
-.bar .v-list {
+.convo .v-list {
   display: flex;
   flex-direction: column;
   margin: 0 -9px;
 }
 
-.bar .v-list .item {
+.convo .v-list .item {
   width: 100%;
   border: 0;
   background: none;
@@ -3634,50 +3602,50 @@ html[data-layout="phone-landscape"] .bar .field input {
   text-align: left;
 }
 
-.bar .v-list button.item:hover,
-.bar .v-list button.item:focus-visible {
+.convo .v-list button.item:hover,
+.convo .v-list button.item:focus-visible {
   background: var(--bg-3);
 }
 
-.bar .v-list .item.static {
+.convo .v-list .item.static {
   cursor: default;
 }
 
-.bar .v-list .item > svg {
+.convo .v-list .item > svg {
   flex: none;
   color: var(--text-2);
 }
 
 /* after the hint when there is one, else at the row's end */
-.bar .v-list .item > .go {
+.convo .v-list .item > .go {
   margin-left: auto;
   color: var(--text-3);
 }
 
-.bar .v-list .item > .hint + .go {
+.convo .v-list .item > .hint + .go {
   margin-left: 0;
 }
 
-.bar .v-list .item.on {
+.convo .v-list .item.on {
   background: var(--bg-3);
 }
 
-.bar .v-list .item:disabled {
+.convo .v-list .item:disabled {
   opacity: 0.45;
   cursor: default;
 }
 
-.bar .v-table {
+.convo .v-table {
   overflow-x: auto;
   overscroll-behavior-x: contain;
 }
 
-.bar .v-table table {
+.convo .v-table table {
   border-collapse: collapse;
   min-width: 100%;
 }
 
-.bar .v-table th {
+.convo .v-table th {
   padding: 2px 8px 4px 0;
   color: var(--text-3);
   font-size: 11px;
@@ -3686,7 +3654,7 @@ html[data-layout="phone-landscape"] .bar .field input {
   white-space: nowrap;
 }
 
-.bar .v-table td {
+.convo .v-table td {
   padding: 3px 8px 3px 0;
   border-top: 1px solid var(--line-2);
   color: var(--text);
@@ -3694,13 +3662,13 @@ html[data-layout="phone-landscape"] .bar .field input {
   white-space: nowrap;
 }
 
-.bar .v-table td.num {
+.convo .v-table td.num {
   font-variant-numeric: tabular-nums;
   text-align: right;
 }
 
 /* a label column of its own, so sliders one under another line up */
-.bar .v-slider {
+.convo .v-slider {
   display: grid;
   grid-template-columns: minmax(0, 112px) minmax(80px, 1fr) auto;
   align-items: center;
@@ -3708,18 +3676,18 @@ html[data-layout="phone-landscape"] .bar .field input {
   min-width: 0;
 }
 
-.bar .v-slider .v-label {
+.convo .v-slider .v-label {
   overflow: hidden;
   color: var(--text-2);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.bar .v-slider input {
+.convo .v-slider input {
   min-width: 0;
 }
 
-.bar .v-slider .v-value {
+.convo .v-slider .v-value {
   min-width: 64px;
   color: var(--text-2);
   font-family: var(--mono);
@@ -3727,20 +3695,20 @@ html[data-layout="phone-landscape"] .bar .field input {
   text-align: right;
 }
 
-.bar .v-chart canvas {
+.convo .v-chart canvas {
   display: block;
   width: 100%;
   border-radius: var(--radius);
   background: var(--bg-1);
 }
 
-.bar .v-chart-note {
+.convo .v-chart-note {
   padding-top: 3px;
   color: var(--text-3);
   font-size: 11.5px;
 }
 
-.bar .v-span {
+.convo .v-span {
   display: block;
   width: 100%;
   height: 44px;
@@ -3752,11 +3720,11 @@ html[data-layout="phone-landscape"] .bar .field input {
   cursor: pointer;
 }
 
-.bar .v-span:hover {
+.convo .v-span:hover {
   border-color: var(--line-3);
 }
 
-.bar .v-span.muted {
+.convo .v-span.muted {
   display: flex;
   align-items: center;
   padding: 0 10px;
@@ -3764,27 +3732,27 @@ html[data-layout="phone-landscape"] .bar .field input {
   cursor: default;
 }
 
-.bar .v-span canvas {
+.convo .v-span canvas {
   display: block;
 }
 
-.bar .v-why {
+.convo .v-why {
   color: var(--text-3);
   font-size: 12px;
 }
 
 /* a finger's rows and controls */
 @media (pointer: coarse) {
-  .bar .agent-view .btn.small {
+  .convo .agent-view .btn.small {
     height: 34px;
     padding: 0 12px;
   }
-  .bar .v-slider input {
+  .convo .v-slider input {
     min-height: 34px;
   }
 }
 
-.bar .status {
+.convo .status {
   display: flex;
   align-items: center;
   gap: 10px;
@@ -3793,14 +3761,14 @@ html[data-layout="phone-landscape"] .bar .field input {
   font-size: 13px;
 }
 
-.bar .bar-line {
+.convo .bar-line {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.bar .btns {
+.convo .btns {
   display: flex;
   align-items: center;
   justify-content: flex-end;
@@ -3808,28 +3776,28 @@ html[data-layout="phone-landscape"] .bar .field input {
   padding: 0 14px 14px;
 }
 
-.bar .btns .bar-line {
+.convo .btns .bar-line {
   font-size: 12px;
 }
 
-.bar .btn.small {
+.convo .btn.small {
   height: 24px;
   font-size: 12px;
 }
 
 /* files going with the next request: small chips in the field, before what's typed */
-.bar .field.has-chips {
+.convo .field.has-chips {
   flex-wrap: wrap;
   row-gap: 6px;
   padding-block: 8px;
 }
 
-.bar .field.has-chips input {
+.convo .field.has-chips input {
   min-width: 160px;
   padding-block: 4px;
 }
 
-.bar .att {
+.convo .att {
   display: inline-flex;
   flex: none;
   align-items: center;
@@ -3845,20 +3813,20 @@ html[data-layout="phone-landscape"] .bar .field input {
   white-space: nowrap;
 }
 
-.bar .att > svg {
+.convo .att > svg {
   flex: none;
   width: 13px;
   height: 13px;
   color: var(--text-2);
 }
 
-.bar .att-name {
+.convo .att-name {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
-.bar .att-x {
+.convo .att-x {
   display: inline-flex;
   flex: none;
   align-items: center;
@@ -3873,24 +3841,24 @@ html[data-layout="phone-landscape"] .bar .field input {
   cursor: pointer;
 }
 
-.bar .att-x:hover {
+.convo .att-x:hover {
   background: var(--bg-5);
   color: var(--text);
 }
 
-.bar .att-x svg {
+.convo .att-x svg {
   width: 12px;
   height: 12px;
 }
 
 /* a file dragged over the bar: it's where it can be let go */
-.bar.dropping {
+.convo.dropping {
   outline: 1px dashed var(--accent);
   outline-offset: -4px;
 }
 
 /* why a file was turned away */
-.bar .bar-note {
+.convo .bar-note {
   padding: 6px 16px;
   border-bottom: 1px solid var(--line);
   color: var(--text-2);
@@ -3898,25 +3866,25 @@ html[data-layout="phone-landscape"] .bar .field input {
 }
 
 /* a screenshot or a photo, shown before it's sent */
-.bar .shot {
+.convo .shot {
   flex-basis: 100%;
   display: flex;
   justify-content: flex-end;
 }
 
-.bar .shot img {
+.convo .shot img {
   max-width: 100%;
   max-height: 160px;
   border: 1px solid var(--line-2);
   border-radius: var(--radius);
 }
 
-.bar .btns {
+.convo .btns {
   flex-wrap: wrap;
 }
 
 /* a brief for the user's own harness, in full; the lines that run something or link somewhere are marked */
-.bar .brief {
+.convo .brief {
   max-height: 220px;
   margin: 0 16px 12px;
   padding: 8px 10px;
@@ -3932,18 +3900,339 @@ html[data-layout="phone-landscape"] .bar .field input {
   -webkit-user-select: text;
 }
 
-.bar .brief .flag {
+.convo .brief .flag {
   margin-left: -10px;
   padding-left: 8px;
   border-left: 2px solid var(--warn);
   color: var(--text);
 }
 
-.bar .brief .why {
+.convo .brief .why {
   margin-left: 10px;
   color: var(--warn);
   font: 600 10px var(--font);
   white-space: nowrap;
+}
+
+/* ---------- the page: the bar on a phone or a tablet (ui/TalkPage.tsx) ---------- */
+
+/* the room is the whole screen (what shows of it, with a keyboard up: --shown-top and --shown-height,
+   ui/bar-swipe.ts) and takes no touches; only the page does. Where the studio's control bar and
+   transport are is measured (--studio-top, --studio-bottom, --studio-left), and the page keeps clear of
+   them. It's solid, the studio's own surface: nothing shows through, and nothing is blurred */
+.talk-room {
+  position: fixed;
+  top: var(--shown-top, 0px);
+  right: 0;
+  left: 0;
+  height: var(--shown-height, 100dvh);
+  z-index: var(--z-page);
+  pointer-events: none;
+}
+
+.talk-page {
+  position: absolute;
+  top: max(0px, calc(var(--studio-top, 0px) - var(--shown-top, 0px)));
+  right: 0;
+  bottom: 0;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+  background: rgb(32 36 43);
+  pointer-events: auto;
+}
+
+/* held upright: the whole width between the control bar and the transport, which stay in sight and in
+   reach (with the keyboard up, down to it: the transport is under it then) */
+html[data-layout="phone-portrait"] .talk-page {
+  left: 0;
+  bottom: var(--studio-bottom, 0px);
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+}
+
+html[data-layout="phone-portrait"] .talk-room[data-covered] .talk-page {
+  bottom: 0;
+}
+
+/* on its side: a sheet down the right edge, under the transport row; while typing, across the column,
+   over the keyboard */
+html[data-layout="phone-landscape"] .talk-page {
+  width: calc(340px + var(--safe-right));
+  padding-right: var(--safe-right);
+  border-left: 1px solid var(--line);
+}
+
+html[data-layout="phone-landscape"] .talk-page[data-wide] {
+  width: auto;
+  left: var(--studio-left, 0px);
+}
+
+/* a tablet (or a window too narrow for the desktop's layout): a sheet a third of the width, under the
+   control bar, beside the studio */
+html[data-layout="tablet"] .talk-page {
+  width: clamp(340px, 33.333vw, 420px);
+  padding-right: var(--safe-right);
+  border-left: 1px solid var(--line);
+  box-shadow: var(--shadow);
+}
+
+html[data-layout="phone-landscape"] .talk-page,
+html[data-layout="tablet"] .talk-page {
+  padding-bottom: var(--safe-bottom);
+}
+
+html[data-layout="phone-landscape"] .talk-room[data-covered] .talk-page,
+html[data-layout="tablet"] .talk-room[data-covered] .talk-page {
+  padding-bottom: 0;
+}
+
+/* its header: the song, and Done. Held still, it lets the studio show through; drawn down (upright)
+   or across (a sheet), the page goes with it */
+.talk-head {
+  position: relative;
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  padding: 0 6px 0 14px;
+  border-bottom: 1px solid var(--line);
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+  touch-action: none;
+}
+
+.talk-grip {
+  position: absolute;
+  top: 5px;
+  left: 50%;
+  width: 36px;
+  height: 4px;
+  margin-left: -18px;
+  border-radius: 2px;
+  background: var(--line-3);
+}
+
+.talk-song {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-2);
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.talk-page[data-wide] .talk-head {
+  display: none;
+}
+
+/* the conversation, newest at the foot beside the field; it has what the list and the field leave */
+.talk-thread {
+  display: flex;
+  flex: 1 1 0;
+  flex-direction: column;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.talk-body {
+  margin-top: auto;
+  padding-bottom: 4px;
+}
+
+.talk-empty {
+  margin: 0;
+  padding: 16px;
+  color: var(--text-2);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.talk-earlier {
+  padding: 12px 16px 4px;
+  color: var(--text-2);
+  font-size: 11.5px;
+  font-weight: 600;
+}
+
+/* an earlier turn: a line, opened with a tap */
+.talk-turn {
+  border-bottom: 1px solid var(--line-2);
+}
+
+.talk-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 40px;
+  padding: 6px 16px 6px 12px;
+  border: 0;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.talk-row:hover,
+.talk-row:focus-visible {
+  background: var(--bg-3);
+}
+
+.talk-row .chev {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  color: var(--text-2);
+  transition: transform 0.12s ease-out;
+}
+
+.talk-turn.open .talk-row .chev {
+  transform: rotate(90deg);
+}
+
+.convo .talk-row .you {
+  flex: 0 1 auto;
+  max-width: 60%;
+  min-width: 0;
+  padding: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.talk-row .said {
+  flex: 1 1 0;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* open, the request is said whole on its line, and not again under it */
+.talk-turn.open .talk-row .you {
+  max-width: none;
+  white-space: normal;
+}
+
+.talk-turn.open .talk > .you {
+  display: none;
+}
+
+.talk-turn.open .talk .reply {
+  padding-top: 0;
+}
+
+.talk.newest {
+  padding-top: 2px;
+}
+
+/* the time a request has been working, beside its line */
+.talk-time {
+  flex: none;
+  color: var(--text-2);
+  font-family: var(--mono);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* the request and the list's hints in the secondary grey, which reads at 7:1 on the page */
+.talk-page .you,
+.talk-page .item .hint {
+  color: var(--text-2);
+}
+
+/* the list over the field, its first row nearest it */
+.convo .list.upward {
+  display: flex;
+  flex: 0 1 auto;
+  flex-direction: column-reverse;
+  max-height: 45%;
+  border-top: 1px solid var(--line);
+}
+
+.talk-page .bar-note {
+  border-top: 1px solid var(--line);
+  border-bottom: 0;
+}
+
+/* the field, at the foot: as tall as its words, to six lines (three across a phone on its side, with
+   its keyboard up); 16 px words, so a phone doesn't zoom in on it */
+.talk-page .field {
+  align-items: flex-end;
+  min-height: 48px;
+  border-top: 1px solid var(--line);
+  border-bottom: 0;
+}
+
+.talk-page .field > svg {
+  margin-bottom: 16px;
+}
+
+.talk-page .field textarea {
+  flex: 1;
+  min-width: 0;
+  max-height: calc(6lh + 24px);
+  padding: 12px 0;
+  border: 0;
+  outline: none;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  font-size: 16px;
+  line-height: 1.45;
+  resize: none;
+  overflow-y: auto;
+}
+
+.talk-page .field textarea::placeholder {
+  color: var(--text-3);
+}
+
+.talk-page[data-wide] .field textarea {
+  max-height: calc(3lh + 24px);
+}
+
+.talk-page .field.has-chips textarea {
+  min-width: 160px;
+  padding-block: 4px;
+}
+
+/* swiped: it goes with the finger; let go, it goes on and away, or comes back (moved only while it's
+   swiped, so it's an ordinary box the rest of the time) */
+.talk-page[data-swipe] {
+  transform: translate(var(--swipe-x, 0px), var(--swipe-y, 0px));
+}
+
+.talk-page[data-swipe="back"] {
+  transition: transform 0.18s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.talk-page[data-swipe="away"] {
+  transition:
+    transform 0.18s ease-out,
+    opacity 0.18s ease-out;
+  opacity: 0;
+}
+
+/* held to see through: almost clear, and it takes no taps (a look can't press a button) */
+.talk-page[data-peek] {
+  opacity: 0.13;
+  pointer-events: none;
+  transition: opacity 0.12s ease-out;
+}
+
+/* the views under the page on a phone held upright: out of sight, and not drawn (App.tsx) */
+.app[data-covered] > .phone-view {
+  visibility: hidden;
 }
 
 /* busy: the accent blue, a lit arc on a faint track, turning */
@@ -6864,6 +7153,8 @@ html[data-layout^="phone"] .view-item kbd {
   .dialog,
   .menu,
   .bar,
+  .talk-page,
+  .talk-row .chev,
   .toast,
   .plugin-window.sheet,
   .sheet-scrim {

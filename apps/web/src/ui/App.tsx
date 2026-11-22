@@ -2,16 +2,17 @@
 import { Library as LibraryIcon, Music2, Piano, Rows3, Settings, SlidersVertical } from 'lucide-react';
 import { lazy, type ReactNode, Suspense, useEffect, useRef, useState } from 'react';
 import { ensureAudio, resolveConflict } from '../app/actions.ts';
-import { clampEditorHeight, fitEditorHeight, isPhone, type Layout, useLayout } from '../app/layout.ts';
+import { clampEditorHeight, fitEditorHeight, isPhone, type Layout, layoutNow, useLayout } from '../app/layout.ts';
 import { otherStudioToDrive } from '../app/live.ts';
-import { type MobileTab, openSettings, store, useApp, useShow } from '../app/store.ts';
+import { pageCovers, paneCovered } from '../app/page-layout.ts';
+import { closeBar, type MobileTab, openSettings, store, useApp, useShow } from '../app/store.ts';
 import { useVersion } from '../app/version.ts';
 import { AudioEditor, AudioEditorBar } from './AudioEditor.tsx';
 import { Bar } from './Bar.tsx';
 import { BarButton, ControlBar, Lcd, SaveDot, TransportButtons } from './ControlBar.tsx';
 import { Wordmark } from './controls.tsx';
 import { Dialogs } from './Dialogs.tsx';
-import { keepAwake, wake } from './frame.ts';
+import { FramePause, keepAwake, wake } from './frame.ts';
 import { Mixer, PluginWindow, StageWindow, SynthWindow } from './Mixer.tsx';
 import { MenuHost } from './menu.tsx';
 import { Inspector, LibraryPanel } from './Panels.tsx';
@@ -386,7 +387,11 @@ function TabBar() {
           key={id}
           type="button"
           className={tab === id ? 'active' : ''}
-          onClick={() => store.set({ mobileTab: id })}
+          onClick={() => {
+            store.set({ mobileTab: id });
+            // (the page over the views, on a phone held upright, gives way to the one chosen)
+            if (pageCovers(layoutNow())) closeBar();
+          }}
           aria-current={tab === id}
         >
           <Icon />
@@ -504,6 +509,10 @@ function RailTools() {
 
 function PhoneLayout({ layout, inert }: { layout: Layout; inert: boolean }) {
   const nav = useShow('barNav');
+  // the agent's page over the views (a phone held upright): they're out of sight, so they're neither
+  // drawn nor shown until it closes, or is held to see through it (the transport's display, outside
+  // them, keeps going)
+  const covered = useApp((s) => paneCovered(layout, s.bar, s.barPeek));
   if (layout === 'phone-landscape') {
     return (
       <div className="app phone phone-landscape" inert={inert}>
@@ -528,10 +537,12 @@ function PhoneLayout({ layout, inert }: { layout: Layout; inert: boolean }) {
     );
   }
   return (
-    <div className="app phone phone-portrait" inert={inert}>
+    <div className="app phone phone-portrait" inert={inert} data-covered={covered ? '' : undefined}>
       <ControlBar />
       <Banners />
-      <PhoneView />
+      <FramePause paused={covered}>
+        <PhoneView />
+      </FramePause>
       <div className="phone-dock">
         <div className="phone-transport">
           <TransportButtons minimal />
@@ -575,6 +586,20 @@ export function App() {
   useEffect(() => {
     if (overlays && store.get().inspector) store.set({ inspector: false });
   }, []);
+
+  // on a tablet the agent's page is a sheet down the right edge, where the Library slides in: one goes
+  // as the other comes (the Inspector too, so the studio between them keeps its room)
+  useEffect(() => {
+    if (!overlays) return;
+    let was = store.get();
+    return store.subscribe(() => {
+      const s = store.get();
+      const before = was;
+      was = s;
+      if (s.bar && !before.bar && (s.inspector || s.library)) store.set({ inspector: false, library: false });
+      else if (s.bar && ((s.inspector && !before.inspector) || (s.library && !before.library))) closeBar();
+    });
+  }, [overlays]);
 
   // a tap outside an overlay closes it (the tap still lands: selecting a track closes the Library over it)
   useEffect(() => {

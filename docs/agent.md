@@ -6,6 +6,10 @@ the **agent** is turned on in Settings › Agent and this device is allowed to u
 requests in plain words, with files dropped or pasted on it. The agent carries them out on the open song
 through a harness installed on the host: Claude Code, Codex, Cursor or Antigravity.
 
+On a desktop the bar is a card that drops from the top and shows the song's last exchange. On a phone or
+a tablet the same openers bring up **the page** instead, with the song's whole conversation ("The page",
+below).
+
 This page is the contract between the studio, the server, the runner and the agent's tools.
 
 ## What doesn't change, and the terminal
@@ -123,7 +127,7 @@ Turning the agent off cancels every job, so the job-scoped routes answer 403.
 | `POST /api/agent/jobs/:job/cancel` | | `{ok}`. Any allowed device may stop a job; one waiting for a click is dismissed (`cancelled`). 404; 409 once it has ended. |
 | `POST /api/agent/jobs/:job/permission` | `{grant:boolean, result?, attachments?:[id]}` | `{ok, job?}`, `job` being the follow-up's id. Only the device that asked may answer (403), only while the job is `awaiting` (409). `result` is at most 1000 characters; `attachments` as in a request (a screenshot, a photo, a recording). Granting can be refused as a request is (`not-open`, `busy`, `no-harness`), and with 409 when the conversation was started over since the job asked. With a job token, the same path is the tools' (below). |
 | `POST /api/agent/jobs/:job/done-listening` | | `{ok}`. The user pressed Done. Only the device that asked (403); 409 once the job has ended. |
-| `GET /api/agent/threads/:project` | | `{thread, job}`. `thread` is `{id, harness, turns:[{job, request, reply, label, state, at, permission?, brief?, briefWarnings?, error?}]}`, or null. `job` is the song's job that's running or waiting for a click (a `JobView`), or null: after a reload, its button comes back. |
+| `GET /api/agent/threads/:project` | | `{thread, job, now}`. `thread` is `{id, harness, turns:[{job, request, reply, label, state, at, permission?, brief?, briefWarnings?, view?, go?, error?}]}`, or null. `job` is the song's job that's running or waiting for a click (a `JobView`), or null: after a reload, its button comes back. `now` is the host's time (ms). |
 | `GET /api/agent/away/:project` | `?from=` (a revision) | `{away}`: what this device's studio, back on the song at revision `from`, picks up of the changes its job saved on the server while it was away (below): `{job, label, running, base, head, batches:[{batch}], song}`, the batches after `from` by id, `head` the revision they bring the song to and `song` the song then, read together (no save comes between them), `label` the job's once it has finished (its last batch's before). From a revision before the run (a save of the studio's got there, its answer lost), the whole run, `base` its first revision; otherwise `base` is `from`. `away` is null when there's nothing to pick up from `from`: no such run of the song's latest job of this device's, `from` past its first revision but not one of its own, or the song saved since by someone else. 400 for a `from` that isn't a revision. |
 | `POST /api/agent/threads/:project/reset` | | `{ok}`. The next request starts a new thread. 409 `busy` while a job runs on the song. |
 | `POST /api/agent/attachments` | `?project=&name=&type=` and the file as the body (a recording ≤ 200 MB, anything else ≤ 25 MB, text ≤ 100 KB; 413) | `{id, name, type, size}`. Allowed types: `image/png`, `image/jpeg`, `image/webp`, `audio/wav`, `audio/x-wav`, `audio/flac`, `audio/aiff`, `audio/mpeg`, `audio/ogg`, `audio/mp4`, `audio/midi`, `application/vnd.recordare.musicxml+xml`, `application/vnd.recordare.musicxml` (`.mxl`), `text/plain`. The body goes to disk as it arrives, and is cut off at the type's limit (one whose `content-length` says it's over isn't read at all). Its first bytes must be what the type says (415): a recording's first 64 KB are checked; text must be UTF-8, MusicXML UTF-8 or UTF-16, and an `.mxl` a zip with a score in it. 404 for no such song. Kept 7 days, the device's own, for that song. |
@@ -477,8 +481,11 @@ taken only from the runner it was handed to, while it runs.
 
 **Server → studio**, told:
 - `play-notes {events, track, port:'Agent'}`, the existing message.
-- `agent-status {job:JobView}`, to allowed devices' studios: those of the requesting device, and those
-  with the job's song open.
+- `agent-status {job:JobView, now}`, to allowed devices' studios: those of the requesting device, and those
+  with the job's song open. `now` is the host's time (ms): a job's times are the host's, so the studio
+  keeps how far its own clock is from it (`skew`, changed only by a second or more) and counts how long
+  a request has worked on the host's clock (`serverNow`, `elapsedMs`). Its own requests are stamped
+  with it too, so the page orders the conversation by one clock.
 - `agent-listen {job, state:'on'|'off'}`. `on` goes to the requester's studios with the song open, `off`
   to all of the requester's studios. Nothing is sent between two parts of a listen; `off` follows when
   the listen is over.
@@ -711,10 +718,53 @@ checked again before it's drawn. A click does only what the user could do themse
   named for the setting ("Vocal: Volume").
 - `keep` replaces the song with the version, under its own id, as one undo step ("Keep “Lower”",
   "Keep the original").
-- A `go` or a `command` closes the bar, so the studio shows; the rest leave it open.
+- A `go` or a `command` closes the bar, and the page where it covers the studio (a phone held upright),
+  so the studio shows; a sheet beside the studio stays open. The rest leave it open.
 - A button that changes the song says how, in the studio's words: a `set` its setting and value, a
   `keep` its version, a `command` its own title, an `ask` its request.
 - `go` on `finish` runs once, on the device that asked, as the reply arrives (not after a reload).
+
+## The page (phones and tablets)
+
+On a phone or a tablet (`usesPage` in apps/web/src/app/page-layout.ts: every layout but a desktop's) the
+bar opens as the page (`apps/web/src/ui/TalkPage.tsx`). Every opener only sets `bar`, so Ctrl /, the
+slash button and the swipe down all bring it; a second press of the slash button puts it away.
+
+- **Where it goes.** On a phone held upright, a solid panel between the control bar and the transport,
+  the whole width; the transport and the tabs stay in sight and in reach. On a phone on its side, a
+  sheet 340 px wide down the right edge, under the transport row; while its field has the keyboard it
+  widens across the content column, its header goes, the newest turn folds to a line, and the field
+  shows three lines. On a tablet, a sheet a third of the width (340 to 420 px) under the control bar,
+  beside the studio; it and the Library or Inspector overlay close each other. A window narrower than
+  1180 px is a tablet to the studio (app/layout.ts), so it gets the sheet. Where the control bar, the
+  transport and the column are is measured while it's open; it keeps to what shows above a keyboard
+  that covers the page (iOS). On Android the keyboard makes the page shorter, so the field sits just
+  above the transport.
+- **What it holds.** A header (the song's name, Done), then the song's conversation, oldest first
+  (`conversation()` in apps/web/src/app/agent.ts: every turn the host keeps, the jobs it told of
+  standing for theirs, a request on its way and one turned down; its last is always what the bar would
+  show). Earlier turns are a line each, the request then the start of the reply, opened with a tap; a
+  reply's view is drawn only for a turn that's open. The newest is whole, at the foot beside the field.
+  A request working shows its line, how long it has worked (on the host's clock, a second at a time,
+  only while it's shown) and Stop. What's typed finds commands in a list over the field, its first row
+  nearest it; the field grows with the words to six lines, Enter sends or runs the row, Shift Enter
+  starts a new line. A row of the list closes the page, as the bar does.
+- **Opening and closing.** It opens at the foot of the conversation and reads it afresh (again if the
+  song changes while it's open). On a touch screen the field doesn't take the keyboard as it opens
+  when there's a conversation to read. Done closes it, and so do a swipe down from its header (held
+  upright) or to the right (a sheet), and a tab on a phone held upright. Holding the header still, or
+  drawing the page partway, fades it to almost clear (13%) while the finger stays, so the studio under
+  it shows; it takes no taps while faded (`apps/web/src/ui/page-swipe.ts`).
+- **Keys.** The page keeps the studio's keys while it covers the studio (held upright) or has the
+  keyboard; a sheet beside the studio leaves them to it otherwise. It's under dialogs (`--z-page`), so
+  Ctrl / doesn't open it while one is up, and a dialog opened over it makes it inert.
+- **Solid.** It's the studio's own surface, opaque, with nothing blurred behind it: no cost on a
+  phone's GPU or memory beyond its own drawing.
+- **The panes under it rest.** Held upright, the views under the page are hidden and their frames
+  skipped (`FramePause` in apps/web/src/ui/frame.ts; docs/architecture.md); the transport's display
+  keeps going. They draw again as it
+  closes or while it's held to see through.
+- What's typed is lost if the window crosses between the desktop's and the tablet's layouts.
 
 ## Threads ("since your last reply")
 

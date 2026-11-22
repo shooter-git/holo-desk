@@ -505,9 +505,10 @@ export function agentRoutes(app: FastifyInstance, o: AgentOptions): { jobs: Jobs
     }),
   );
 
+  // (with the host's time, as agent-status has it: the studio counts a job's time on the host's clock)
   app.get(
     '/api/agent/threads/:project',
-    forDevice(async (req) => theJobs.threadView((req.params as Params).project ?? '')),
+    forDevice(async (req) => ({ ...theJobs.threadView((req.params as Params).project ?? ''), now: Date.now() })),
   );
   // what this device's studio, back on a song, picks up of the changes its job saved here while it was away
   app.get(

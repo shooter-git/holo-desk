@@ -155,8 +155,15 @@ export interface AppState {
   bouncing: string | null;
   /** Which parts of the studio show (View: the eye's menu, and Settings › View): everything, until you hide some. */
   show: Record<ShowKey, boolean>;
-  /** The bar is open (Ctrl /): the studio's commands, tracks and markers, found by name. Never remembered. */
+  /**
+   * The bar is open (Ctrl /): the studio's commands, tracks and markers, found by name, and the agent's
+   * conversation (on a phone or a tablet, the page: ui/TalkPage.tsx). Never remembered.
+   */
   bar: boolean;
+  /** The page is held to see through it (its header held, or drawn partway): the studio under it shows. Never remembered. */
+  barPeek: boolean;
+  /** The turn (its job) the page opens at, shown open, when it was opened for one; null: the newest. Never remembered. */
+  barTurn: string | null;
   /** Words for the Library's search to show (the bar asked it to find a sound); null once it has them. */
   librarySearch: string | null;
 }
@@ -274,6 +281,8 @@ const initial: AppState = {
   toasts: [],
   bouncing: null,
   bar: false,
+  barPeek: false,
+  barTurn: null,
   librarySearch: null,
   ...stored,
   // parts added since this device last saved its view start shown
@@ -360,14 +369,17 @@ export function toast(text: string, kind: Toast['kind'] = 'info', ms = 3500, act
   window.setTimeout(() => store.set((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) })), ms);
 }
 
-/** Open the bar (Ctrl /, the slash button, or a swipe down on a phone's top bar). */
-export function openBar(): void {
-  if (!state.bar) store.set({ bar: true });
+/**
+ * Open the bar (Ctrl /, the slash button, or a swipe down on a phone's top bar); `turn`, the job of a
+ * turn the page is to open at (shown open). Open already, it goes to that turn.
+ */
+export function openBar(turn?: string): void {
+  if (!state.bar || (turn && turn !== state.barTurn)) store.set({ bar: true, barTurn: turn ?? null });
 }
 
-/** Close the bar (Escape, a press outside it, or a swipe up on it on a touch screen). */
+/** Close the bar (Escape, a press outside it, Done, or a swipe on it on a touch screen). */
 export function closeBar(): void {
-  if (state.bar) store.set({ bar: false });
+  if (state.bar) store.set({ bar: false, barPeek: false, barTurn: null });
 }
 
 /** Open Settings on the tab named (the DSP meter on Audio, say), or on the last one shown. */

@@ -57,24 +57,34 @@ function on(): AgentState {
   return A.reduce(A.reduce(A.EMPTY, { type: 'me', id: 'dev_me' }), { type: 'info', info: ON });
 }
 
+/**
+ * The song's last exchange, as the bar shows it under its field. Every time it's read here, the page's
+ * whole conversation is read too, and ends with the very same exchange.
+ */
+function exchange(a: AgentState, project: string): AgentModule.Exchange | null {
+  const last = A.exchange(a, project);
+  expect(A.conversation(a, project).at(-1) ?? null).toEqual(last);
+  return last;
+}
+
 describe('with the agent off', () => {
   it('shows nothing, and keeps nothing to show', () => {
     let a = on();
     a = A.reduce(a, { type: 'status', job: job({ state: 'running' }), barOpen: false });
     a = A.reduce(a, { type: 'thread', project: 'prj_a', turns: [] });
-    expect(A.exchange(a, 'prj_a')).not.toBeNull();
+    expect(exchange(a, 'prj_a')).not.toBeNull();
     expect(A.barSign(a, 'prj_a')).toBe('busy');
     // turned off (on another device, say): the jobs and the conversation go with it
     a = A.reduce(a, { type: 'info', info: OFF });
     expect(A.isOn(a)).toBe(false);
     expect(a.jobs).toEqual({});
     expect(a.thread).toBeNull();
-    expect(A.exchange(a, 'prj_a')).toBeNull();
+    expect(exchange(a, 'prj_a')).toBeNull();
     expect(A.barSign(a, 'prj_a')).toBeNull();
     // a device that isn't allowed sees nothing either, on or not
     const stranger = A.reduce(A.EMPTY, { type: 'info', info: { ...ON, allowed: false } });
     expect(A.isOn(stranger)).toBe(false);
-    expect(A.exchange(stranger, 'prj_a')).toBeNull();
+    expect(exchange(stranger, 'prj_a')).toBeNull();
   });
 
   it('ignores the agent’s messages and reports nothing', () => {
@@ -104,14 +114,14 @@ describe('a job, as the host tells it', () => {
   it('works, then replies, under the field', () => {
     let a = on();
     a = A.reduce(a, { type: 'sending', project: 'prj_a', request: 'Add a bass line', at: 999 });
-    let ex = A.exchange(a, 'prj_a');
+    let ex = exchange(a, 'prj_a');
     expect(ex).toMatchObject({ job: null, request: 'Add a bass line', working: true, reply: null });
     expect(A.barSign(a, 'prj_a')).toBe('busy');
 
     a = A.reduce(a, { type: 'status', job: job(), barOpen: true });
     expect(a.sending).toBeNull();
     a = A.reduce(a, { type: 'status', job: job({ state: 'running', line: 'Writing bars 5–8' }), barOpen: true });
-    ex = A.exchange(a, 'prj_a');
+    ex = exchange(a, 'prj_a');
     expect(ex).toMatchObject({ job: 'agj_000000000001', working: true, line: 'Writing bars 5–8', mine: true });
 
     a = A.reduce(a, {
@@ -119,7 +129,7 @@ describe('a job, as the host tells it', () => {
       job: job({ state: 'done', label: 'Bass line', reply: 'Added a bass line in bars 5–8.' }),
       barOpen: true,
     });
-    ex = A.exchange(a, 'prj_a');
+    ex = exchange(a, 'prj_a');
     expect(ex).toMatchObject({ working: false, reply: 'Added a bass line in bars 5–8.', permission: null });
     expect(A.barSign(a, 'prj_a')).toBeNull();
     // (the bar was open: nothing waits to be seen)
@@ -180,16 +190,16 @@ describe('a job, as the host tells it', () => {
     const view = { blocks: [{ text: 'Two takes.' }], versions: { before: 3 } };
     let a = on();
     a = A.reduce(a, { type: 'status', job: job({ state: 'running', view }), barOpen: true });
-    expect(A.exchange(a, 'prj_a')?.view).toBeNull();
+    expect(exchange(a, 'prj_a')?.view).toBeNull();
     a = A.reduce(a, { type: 'status', job: job({ state: 'done', reply: 'Done.', view }), barOpen: true });
-    expect(A.exchange(a, 'prj_a')?.view).toEqual(view);
+    expect(exchange(a, 'prj_a')?.view).toEqual(view);
     let b = on();
     b = A.reduce(b, {
       type: 'thread',
       project: 'prj_a',
       turns: [{ job: 'agj_x', request: 'A/B it', reply: 'Here.', label: 'x', state: 'done', at: 5, view }],
     });
-    expect(A.exchange(b, 'prj_a')?.view).toEqual(view);
+    expect(exchange(b, 'prj_a')?.view).toEqual(view);
   });
 
   it('asks for a permission with one button, on the device that asked only', () => {
@@ -200,12 +210,12 @@ describe('a job, as the host tells it', () => {
       permission: { kind: 'install-pack', detail: 'Iowa Flute', pack: 'iowa-flute' },
     });
     a = A.reduce(a, { type: 'status', job: asking, barOpen: true });
-    expect(A.exchange(a, 'prj_a')).toMatchObject({
+    expect(exchange(a, 'prj_a')).toMatchObject({
       permission: { kind: 'install-pack', pack: 'iowa-flute' },
       mine: true,
     });
     const elsewhere = A.reduce(on(), { type: 'status', job: { ...asking, device: 'dev_other' }, barOpen: true });
-    expect(A.exchange(elsewhere, 'prj_a')?.mine).toBe(false);
+    expect(exchange(elsewhere, 'prj_a')?.mine).toBe(false);
   });
 
   it('shows a brief with the lines to read twice, and why a job stopped', () => {
@@ -223,7 +233,7 @@ describe('a job, as the host tells it', () => {
       }),
       barOpen: true,
     });
-    const ex = A.exchange(a, 'prj_a');
+    const ex = exchange(a, 'prj_a');
     expect(ex?.brief).toContain('pnpm test');
     expect([...(ex?.flagged ?? [])]).toEqual([
       [1, 'command'],
@@ -234,20 +244,20 @@ describe('a job, as the host tells it', () => {
       job: job({ id: 'agj_000000000002', state: 'cancelled', started: 2000 }),
       barOpen: true,
     });
-    expect(A.exchange(a, 'prj_a')).toMatchObject({ job: 'agj_000000000002', reply: 'Stopped' });
+    expect(exchange(a, 'prj_a')).toMatchObject({ job: 'agj_000000000002', reply: 'Stopped' });
     a = A.reduce(a, {
       type: 'status',
       job: job({ id: 'agj_000000000003', state: 'failed', error: 'The runner disconnected', started: 3000 }),
       barOpen: true,
     });
-    expect(A.exchange(a, 'prj_a')?.reply).toBe('The runner disconnected');
+    expect(exchange(a, 'prj_a')?.reply).toBe('The runner disconnected');
   });
 
   it('says why a request was turned down, as its reply', () => {
     let a = on();
     a = A.reduce(a, { type: 'sending', project: 'prj_a', request: 'Add strings', at: 5000 });
     a = A.reduce(a, { type: 'refused', project: 'prj_a', request: 'Add strings', error: 'Start the runner', at: 5000 });
-    expect(A.exchange(a, 'prj_a')).toMatchObject({ request: 'Add strings', working: false, reply: 'Start the runner' });
+    expect(exchange(a, 'prj_a')).toMatchObject({ request: 'Add strings', working: false, reply: 'Start the runner' });
   });
 
   it('shows the conversation’s last turn until a newer job comes, and forgets it on a new conversation', () => {
@@ -260,16 +270,16 @@ describe('a job, as the host tells it', () => {
         { job: 'agj_00000000000b', request: 'Second', reply: 'Two', label: 'Two', state: 'done', at: 20 },
       ],
     });
-    expect(A.exchange(a, 'prj_a')).toMatchObject({ request: 'Second', reply: 'Two' });
+    expect(exchange(a, 'prj_a')).toMatchObject({ request: 'Second', reply: 'Two' });
     a = A.reduce(a, { type: 'status', job: job({ request: 'Third', started: 30 }), barOpen: true });
-    expect(A.exchange(a, 'prj_a')?.request).toBe('Third');
+    expect(exchange(a, 'prj_a')?.request).toBe('Third');
     a = A.reduce(a, {
       type: 'status',
       job: job({ request: 'Third', started: 30, state: 'done', reply: '3' }),
       barOpen: true,
     });
     a = A.reduce(a, { type: 'reset', project: 'prj_a' });
-    expect(A.exchange(a, 'prj_a')).toBeNull();
+    expect(exchange(a, 'prj_a')).toBeNull();
   });
 
   it('lets this device go when it is removed', () => {
@@ -446,7 +456,7 @@ describe('the host’s word on the settings', () => {
         },
       ],
     });
-    const ex = A.exchange(a, 'prj_a');
+    const ex = exchange(a, 'prj_a');
     expect(ex?.permission?.pack).toBe('iowa-flute');
     expect(ex?.brief).toBe('pnpm test');
     expect([...(ex?.flagged ?? [])]).toEqual([[0, 'command']]);
@@ -487,7 +497,7 @@ describe('the bar’s permission and brief', () => {
       }),
       barOpen: true,
     });
-    expect([...(A.exchange(a, 'prj_a')?.flagged ?? [])]).toEqual([
+    expect([...(exchange(a, 'prj_a')?.flagged ?? [])]).toEqual([
       [1, 'secret'],
       [2, 'url'],
     ]);
@@ -666,7 +676,7 @@ describe('the live channel back', () => {
     expect(effects).toEqual([{ job: 'agj_000000000001', running: false }]);
     const a = A.agent.get();
     expect(a.jobs.agj_000000000001?.state).toBe('failed');
-    expect(A.exchange(a, 'prj_a')).toMatchObject({
+    expect(exchange(a, 'prj_a')).toMatchObject({
       working: false,
       reply: 'HO[LO]’s host restarted before it was done',
     });
@@ -686,7 +696,7 @@ describe('the live channel back', () => {
         return [200, { thread: null, job: job({ state: 'running', line: 'Writing bars 9–12' }) }];
     });
     expect(await A.catchUp()).toEqual([{ job: 'agj_000000000001', running: true }]);
-    expect(A.exchange(A.agent.get(), 'prj_a')).toMatchObject({ working: true, line: 'Writing bars 9–12' });
+    expect(exchange(A.agent.get(), 'prj_a')).toMatchObject({ working: true, line: 'Writing bars 9–12' });
 
     A.forgetToken();
     const asked = host((r) => (r.path === '/api/agent' ? [200, { ...ON, allowed: false }] : undefined));
@@ -845,5 +855,149 @@ describe('a sign-in under way', () => {
     // none under way: nothing is added
     A.agent.dispatch({ type: 'settings', settings: { ...settings, relays: [] } });
     expect(A.agent.get().harness.codex).toBeUndefined();
+  });
+});
+
+describe('the song’s whole conversation, for the page', () => {
+  const turn = (job: string, at: number, patch: Partial<AgentModule.Turn> = {}): AgentModule.Turn => ({
+    job,
+    request: `Request ${job.slice(-1)}`,
+    reply: `Reply ${job.slice(-1)}`,
+    label: `Step ${job.slice(-1)}`,
+    state: 'done',
+    at,
+    ...patch,
+  });
+
+  it('is every turn, oldest first, then a request on its way', () => {
+    let a = on();
+    a = A.reduce(a, {
+      type: 'thread',
+      project: 'prj_a',
+      // (as the host keeps them, in any order)
+      turns: [turn('agj_00000000000b', 20), turn('agj_00000000000a', 10), turn('agj_00000000000c', 30)],
+    });
+    a = A.reduce(a, { type: 'sending', project: 'prj_a', request: 'Fourth', at: 40 });
+    const all = A.conversation(a, 'prj_a');
+    expect(all.map((x) => x.request)).toEqual(['Request a', 'Request b', 'Request c', 'Fourth']);
+    expect(all[0]).toMatchObject({ job: 'agj_00000000000a', at: 10, started: 10, label: 'Step a', reply: 'Reply a' });
+    expect(all[3]).toMatchObject({ job: null, working: true, mine: true, label: null });
+    // another song's, or with the agent off: none
+    expect(A.conversation(a, 'prj_b')).toEqual([]);
+    expect(A.conversation(A.reduce(a, { type: 'info', info: OFF }), 'prj_a')).toEqual([]);
+    expect(A.conversation(a, null)).toEqual([]);
+  });
+
+  it('has the host’s news of a job stand for its turn, kept where the turn was', () => {
+    let a = on();
+    a = A.reduce(a, {
+      type: 'thread',
+      project: 'prj_a',
+      turns: [turn('agj_00000000000a', 10), turn('agj_00000000000b', 20, { state: 'running', reply: null })],
+    });
+    a = A.reduce(a, {
+      type: 'status',
+      job: job({ id: 'agj_00000000000b', started: 20, request: 'Request b', state: 'running', line: 'Bar 5' }),
+      barOpen: true,
+    });
+    let all = A.conversation(a, 'prj_a');
+    expect(all).toHaveLength(2);
+    expect(all[1]).toMatchObject({ job: 'agj_00000000000b', working: true, line: 'Bar 5', started: 20 });
+    a = A.reduce(a, {
+      type: 'status',
+      job: job({
+        id: 'agj_00000000000b',
+        started: 20,
+        request: 'Request b',
+        state: 'done',
+        reply: 'Done now',
+        label: 'B',
+      }),
+      barOpen: true,
+    });
+    all = A.conversation(a, 'prj_a');
+    expect(all[1]).toMatchObject({ working: false, reply: 'Done now', label: 'B' });
+    // a job of another song's isn't this one's
+    a = A.reduce(a, {
+      type: 'status',
+      job: job({ id: 'agj_00000000000z', project: 'prj_b', started: 50 }),
+      barOpen: true,
+    });
+    expect(A.conversation(a, 'prj_a')).toHaveLength(2);
+  });
+
+  it('says a request turned down where it was asked, and a new conversation leaves only what still works', () => {
+    let a = on();
+    a = A.reduce(a, { type: 'thread', project: 'prj_a', turns: [turn('agj_00000000000a', 10)] });
+    a = A.reduce(a, { type: 'refused', project: 'prj_a', request: 'Too soon', error: 'Start the runner', at: 15 });
+    a = A.reduce(a, { type: 'status', job: job({ started: 30, state: 'running' }), barOpen: true });
+    expect(A.conversation(a, 'prj_a').map((x) => x.reply ?? (x.working ? 'working' : ''))).toEqual([
+      'Reply a',
+      'Start the runner',
+      'working',
+    ]);
+    a = A.reduce(a, { type: 'reset', project: 'prj_a' });
+    expect(A.conversation(a, 'prj_a').map((x) => x.job)).toEqual([job().id]);
+  });
+
+  it('ends with what the bar shows, two at the same time included', () => {
+    let a = on();
+    a = A.reduce(a, { type: 'thread', project: 'prj_a', turns: [turn('agj_00000000000a', 10)] });
+    a = A.reduce(a, { type: 'status', job: job({ started: 10, state: 'done', reply: 'Same time' }), barOpen: true });
+    a = A.reduce(a, { type: 'refused', project: 'prj_a', request: 'Also then', error: 'No', at: 10 });
+    expect(exchange(a, 'prj_a')?.request).toBe('Also then');
+    expect(A.conversation(a, 'prj_a').map((x) => x.request)).toEqual(['Request a', 'Add a bass line', 'Also then']);
+  });
+});
+
+describe('the host’s clock', () => {
+  it('is kept from what the host says, and a difference under a second is let be', () => {
+    let a = on();
+    expect(a.skew).toBe(0);
+    a = A.reduce(a, { type: 'clock', skew: 400 });
+    expect(a.skew).toBe(0);
+    a = A.reduce(a, { type: 'clock', skew: 5000 });
+    expect(a.skew).toBe(5000);
+    expect(A.reduce(a, { type: 'clock', skew: 5600 })).toBe(a);
+    a = A.reduce(a, { type: 'clock', skew: -3000 });
+    expect(a.skew).toBe(-3000);
+    // (kept as the agent is turned off and on: it's the host's clock, not the agent's)
+    expect(A.reduce(a, { type: 'info', info: OFF }).skew).toBe(-3000);
+  });
+
+  it('comes with a status and with the song’s conversation, and requests are stamped with it', async () => {
+    vi.useFakeTimers({ now: 1_000_000, toFake: ['Date'] });
+    A.agent.dispatch({ type: 'me', id: 'dev_me' });
+    A.agent.dispatch({ type: 'info', info: ON });
+    A.agentMessage({ type: 'agent-status', job: job({ state: 'running', started: 1_050_000 }), now: 1_060_000 });
+    expect(A.agent.get().skew).toBe(60_000);
+    expect(A.serverNow()).toBe(1_060_000);
+    host((r) => {
+      if (r.path === '/api/agent/threads/prj_a') return [200, { thread: { turns: [] }, job: null, now: 990_000 }];
+      if (r.path === '/api/agent/requests') return [200, { job: 'agj_000000000777' }];
+    });
+    await A.loadThread('prj_a');
+    expect(A.agent.get().skew).toBe(-10_000);
+    const context = {
+      view: 'tracks',
+      selection: { track: null, regions: [], notes: 0 },
+      playhead: 0,
+      cycle: { on: false, start: 0, end: 0 },
+    };
+    await A.ask('Lift it', 'prj_a', context);
+    expect(A.agent.get().jobs.agj_000000000777?.started).toBe(990_000);
+    A.agent.dispatch({ type: 'clock', skew: 0 });
+    A.agent.dispatch({ type: 'info', info: OFF });
+  });
+
+  it('counts how long a request has worked on the host’s clock', () => {
+    // started at 1000 on the host, whose clock is 5 s ahead: 2 s later here is 7 s of work
+    expect(A.elapsedMs(1000, 3000, 5000)).toBe(7000);
+    expect(A.elapsedMs(10_000, 3000, 0)).toBe(0);
+    expect(A.elapsedClock(0)).toBe('0:00');
+    expect(A.elapsedClock(7_400)).toBe('0:07');
+    expect(A.elapsedClock(65_000)).toBe('1:05');
+    expect(A.elapsedClock(3_729_000)).toBe('1:02:09');
+    expect(A.elapsedClock(-50)).toBe('0:00');
   });
 });

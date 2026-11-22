@@ -1,16 +1,22 @@
 // `pnpm ui:check`: the studio's layout, looked at in a real browser at a desktop's size, a tablet's
-// and a phone's (upright and on its side). It opens every main view and the two big dialogs, and
-// fails when:
+// and a phone's (upright and on its side). It opens every main view, the two big dialogs and the
+// commands (the bar on a desktop, the agent's page elsewhere: with the agent off, and with it on and
+// a conversation to show), and fails when:
 //
 //   - the page itself scrolls (something is wider or taller than the screen);
 //   - a control can't be reached: cut off by its pane with no scroll that would bring it in;
 //   - a control is covered by something that isn't a menu, a dialog or a window;
 //   - the mixer's strips don't line up (pan, level, fader, buttons and name start at the same
 //     height on every strip), or a fader has less than its least travel;
+//   - with the page open, the transport or the tabs are covered (no dialog excuses it), or the page
+//     lets the studio show through (it's solid: no blur, nothing see-through);
+//   - a request's working line, its time and Stop don't fit beside each other;
 //   - the page throws.
 //
 // It starts a studio of its own (a server on a free port, a data folder that's removed after) with a
 // small song made here, on the built-in synths, so nothing is fetched and nobody's songs are touched.
+// The agent's host is played by the check itself (its routes answered in the browser), so no runner
+// or harness is needed.
 //
 //   pnpm build && pnpm ui:check
 //
@@ -192,7 +198,7 @@ function problems() {
   };
   const controls =
     'button, a[href], input, select, textarea, [role=button], [role=slider], [role=tab], [role=switch], [role=checkbox], [tabindex]:not([tabindex="-1"])';
-  const over = '[role=dialog], [role=menu], .view-menu, .scrim, .toast, .banner, .overlay-panel';
+  const over = '[role=dialog], [role=menu], .view-menu, .scrim, .bar-scrim, .toast, .banner, .overlay-panel';
   const said = new Set();
   for (const el of document.querySelectorAll(controls)) {
     if (el.disabled || !shown(el)) continue;
@@ -239,6 +245,179 @@ function problems() {
   return out;
 }
 
+// ---- checks some views make besides (each runs in the page, and says what's wrong) ----
+
+/** With the page open, the transport and the tabs are still in reach: nothing is over them, a dialog neither. */
+function transportClear() {
+  const out = [];
+  const parts = '.phone-transport button, .tabbar button, .app > .control-bar .transport button';
+  for (const el of document.querySelectorAll(parts)) {
+    const r = el.getBoundingClientRect();
+    if (r.width < 4 || r.height < 4 || !el.checkVisibility()) continue;
+    const top = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+    if (top && (top === el || el.contains(top))) continue;
+    const what = (el.getAttribute('aria-label') || el.getAttribute('title') || el.textContent || '')
+      .trim()
+      .slice(0, 30);
+    out.push(
+      `the page covers “${what}”${top ? ` (${top.tagName.toLowerCase()}.${String(top.className).split(' ')[0]} is over it)` : ''}`,
+    );
+  }
+  return out;
+}
+
+/** The page (or the bar) is solid: nothing blurred behind it, and nothing of the studio shows through. */
+function solid() {
+  const el = document.querySelector('.talk-page') ?? document.querySelector('.bar');
+  if (!el) return ['the commands didn’t open'];
+  const s = getComputedStyle(el);
+  const out = [];
+  if (s.backdropFilter && s.backdropFilter !== 'none') out.push(`it blurs what's behind it (${s.backdropFilter})`);
+  // (an opaque colour is computed as rgb(r, g, b); one that isn't says its alpha last)
+  const alpha = s.backgroundColor.match(/^rgba\((?:[^,]+,){3}\s*([\d.]+)\)$/);
+  const a = alpha ? Number(alpha[1]) : 1;
+  if (s.backgroundColor === 'transparent' || a < 1)
+    out.push(`its background lets the studio through (${s.backgroundColor})`);
+  if (Number(s.opacity) < 1) out.push(`it's see-through (opacity ${s.opacity})`);
+  return out;
+}
+
+/** A request working: its line, how long it has worked and Stop sit side by side, within the page. */
+function workingFits() {
+  const status = document.querySelector('.talk-page .talk.newest .status, .bar .talk .status');
+  if (!status) return ['no request shows as working'];
+  const page = (status.closest('.talk-page') ?? status.closest('.bar')).getBoundingClientRect();
+  const line = status.querySelector('.bar-line');
+  const time = status.querySelector('.talk-time');
+  const stop = [...status.querySelectorAll('button')].find((b) => b.textContent.trim() === 'Stop');
+  const out = [];
+  if (!line || !stop) return ['the working line or Stop is missing'];
+  if (document.querySelector('.talk-page') && !/^1:0\d$/.test(time?.textContent ?? ''))
+    out.push(`the time it has worked says “${time?.textContent ?? ''}” (1:05 or so)`);
+  const parts = [line, time, stop].filter(Boolean).map((e) => e.getBoundingClientRect());
+  for (const r of parts)
+    if (r.left < page.left - 1 || r.right > page.right + 1) out.push('a part of it is outside the page');
+  for (let i = 1; i < parts.length; i++)
+    if (parts[i].left < parts[i - 1].right - 1) out.push('its line, its time and Stop overlap');
+  if (line.getBoundingClientRect().width < 60) out.push('its line has no room to say anything');
+  return out;
+}
+
+const CHECKS = { transportClear, solid, workingFits };
+
+// ---- the agent's host, played here: on, this device allowed, and a song's conversation ----
+
+/** A conversation of three turns (a list, a brief, a choice with sliders); `running`, a fourth that has worked 65 s. */
+function conversation(doc, id, running) {
+  const now = Date.now();
+  const [keys, , , bass, drums] = doc.tracks.map((t) => t.id);
+  const turns = [
+    {
+      job: 'agj_00000000000a',
+      request: 'Tighten the hats in bars 3–4',
+      reply: 'Quantized the hats in bars 3–4 to sixteenths at 70% strength.',
+      label: 'Tighten hats',
+      state: 'done',
+      at: now - 600_000,
+      view: {
+        blocks: [
+          {
+            list: [
+              { text: 'Bars 3–4 before', detail: 'loose', do: { play: { from: 3, to: 5, version: 'before' } } },
+              { text: 'Bars 3–4 after', detail: 'tight', do: { play: { from: 3, to: 5, version: 'after' } } },
+              { text: 'The drums', do: { go: { track: drums } } },
+            ],
+          },
+        ],
+        versions: { before: 1, after: 2 },
+      },
+    },
+    {
+      job: 'agj_00000000000b',
+      request: 'Write a brief for my own agent to add a tempo map',
+      reply: 'Here is a brief for your harness.',
+      label: 'Brief',
+      state: 'done',
+      at: now - 400_000,
+      brief: 'Add a tempo map to the song.\nRun `pnpm test` when done.\nThe format is at https://example.com/tempo.',
+      briefWarnings: [
+        { line: 1, kind: 'command' },
+        { line: 2, kind: 'url' },
+      ],
+    },
+    {
+      job: 'agj_00000000000c',
+      request: 'Write three bass lines for the verse, and let me hear each against the drums before I pick',
+      reply: 'I wrote three bass takes for the verse, each kept as a version: play them and keep the one you like.',
+      label: 'Three bass takes',
+      state: 'done',
+      at: now - 200_000,
+      view: {
+        blocks: [
+          { text: 'Bars 5–12, with the drums', quiet: true },
+          {
+            choice: [
+              { label: 'Take 1', do: { play: { from: 5, to: 13, solo: [bass, drums] } } },
+              { label: 'Take 2', do: { play: { from: 5, to: 13 } } },
+              { label: 'Take 3', do: { play: { from: 5, to: 13 } } },
+            ],
+          },
+          { slider: { track: bass, param: 'volume' }, label: 'Bass level' },
+          { slider: { track: keys, param: 'volume' }, label: 'Keys level' },
+        ],
+        versions: { before: 2, after: 3 },
+      },
+    },
+  ];
+  const job = running
+    ? {
+        id: 'agj_00000000000d',
+        project: id,
+        device: 'dev_uicheck0000',
+        state: 'running',
+        request: 'Make the chorus lift: double the keys an octave up and open the filter over the last two bars',
+        line: 'Writing the keys an octave up in bars 13–20',
+        started: now - 65_000,
+      }
+    : null;
+  if (job)
+    turns.push({ job: job.id, request: job.request, reply: null, label: null, state: 'running', at: job.started });
+  return { thread: { id: 'agt_uicheck', harness: 'claude', turns }, job, now };
+}
+
+/**
+ * A browser where the agent is on and this device allowed: its token is kept as a paired device's is,
+ * and the agent's routes are answered here (the live channel's hello with a token the host doesn't
+ * know is only that: no device).
+ */
+async function withAgent(ctx, doc, id, running) {
+  await ctx.addInitScript(() => {
+    localStorage.setItem('holo:agent-token', 'ui-check-token');
+    localStorage.setItem('holo:agent-device', 'dev_uicheck0000');
+  });
+  await ctx.route('**/api/agent**', (route) => {
+    const path = new URL(route.request().url()).pathname;
+    const json = (body) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(body) });
+    if (path === '/api/agent')
+      return json({
+        enabled: true,
+        allowed: true,
+        pairing: false,
+        runner: { connected: true, keyed: true, state: 'ready' },
+      });
+    if (path === '/api/agent/settings')
+      return json({ enabled: true, harness: 'claude', model: '', effort: '', harnesses: [] });
+    if (path === '/api/agent/devices')
+      return json({
+        devices: [{ id: 'dev_uicheck0000', name: 'UI check', added: 1, seen: 1, current: true }],
+        requests: [],
+      });
+    if (path === '/api/agent/harnesses/look') return json({ ok: true });
+    if (path.startsWith('/api/agent/threads/')) return json(conversation(doc, id, running));
+    return route.fulfill({ status: 404, contentType: 'application/json', body: '{"error":"Not here"}' });
+  });
+}
+
 // ---- the screens, and what's opened on each ----
 
 const touch = { hasTouch: true, isMobile: true };
@@ -257,8 +436,75 @@ const SCREENS = [
 const control = (page, text) =>
   page.locator(`button[title^="${text}"]:visible, button[aria-label^="${text}"]:visible`).first();
 
-/** What to look at on a screen: each opens something, and says how to close it again. */
-function views(page, phone, finger) {
+/**
+ * The commands: on a desktop the bar (Ctrl /), elsewhere the page (the slash button, Done to close).
+ * Each says what's checked besides.
+ */
+function commands(page, layout, press) {
+  const page_ = layout !== 'desktop';
+  const open = () => (page_ ? press(control(page, 'Commands')) : page.keyboard.press('Control+/'));
+  // (across a phone on its side, typing, the sheet has no header: the slash button, beside it, puts it away)
+  const shut = () =>
+    !page_
+      ? page.keyboard.press('Escape')
+      : layout === 'phone-landscape'
+        ? press(control(page, 'Commands'))
+        : press(page.locator('.talk-head button', { hasText: 'Done' }));
+  const field = () => page.locator('.talk-page .field textarea, .bar .field input').first();
+  const name = layout === 'desktop' ? 'Commands' : layout === 'phone-portrait' ? 'Commands page' : 'Commands sheet';
+  const checks = page_ ? ['transportClear', 'solid'] : ['solid'];
+  const typed = [
+    `${name}, typed`,
+    async () => {
+      await open();
+      await field().fill('mix');
+    },
+    shut,
+    checks,
+  ];
+  if (layout === 'phone-portrait') return [[name, open, shut, checks], typed];
+  // on its side, typing widens the sheet across the column
+  if (layout === 'phone-landscape')
+    return [
+      [name, open, shut, checks],
+      [
+        `${name}, typing`,
+        async () => {
+          await open();
+          await field().focus();
+        },
+        shut,
+        checks,
+      ],
+    ];
+  return [[name, open, shut, checks]];
+}
+
+/** With the agent on: the page (or the bar) with the song's conversation, or a request working. */
+function agentViews(page, layout, finger, running) {
+  const press = (loc) => (finger ? loc.tap() : loc.click());
+  const [, open, shut, checks] = commands(page, layout, press)[0];
+  const where = layout === 'desktop' ? 'Bar' : 'Page';
+  return running
+    ? [[`${where}: working turn`, open, shut, [...checks, 'workingFits']]]
+    : [
+        [`${where} with a thread`, open, shut, checks],
+        // an earlier turn opened: its view drawn
+        [
+          `${where} with a thread, a turn opened`,
+          async () => {
+            await open();
+            if (layout !== 'desktop') await press(page.locator('.talk-row').last());
+          },
+          shut,
+          checks,
+        ],
+      ];
+}
+
+/** What to look at on a screen: each opens something, and says how to close it again (and what's checked besides). */
+function views(page, layout, finger) {
+  const phone = layout.startsWith('phone');
   const press = (loc) => (finger ? loc.tap() : loc.click());
   const dialogs = [
     ['Songs', () => press(control(page, 'Songs')), () => page.keyboard.press('Escape')],
@@ -280,6 +526,7 @@ function views(page, phone, finger) {
       tab('Library'),
       tab('Tracks'),
       ...dialogs,
+      ...commands(page, layout, press),
     ];
   }
   const key = (label, k) => [label, () => page.keyboard.press(k), () => page.keyboard.press(k)];
@@ -291,6 +538,7 @@ function views(page, phone, finger) {
     key('Library', 'y'),
     key('Automation', 'a'),
     ...dialogs,
+    ...commands(page, layout, press),
   ];
 }
 
@@ -310,8 +558,10 @@ try {
     args: ['--autoplay-policy=no-user-gesture-required'],
     ...(process.env.PLAYWRIGHT_CHROMIUM ? { executablePath: process.env.PLAYWRIGHT_CHROMIUM } : {}),
   });
-  for (const { name, ...screen } of SCREENS) {
+  // a screen's studio, opened and started, in a browser of its own; what's wrong on each view is said
+  const look = async (name, screen, list, agent) => {
     const ctx = await browser.newContext(screen);
+    if (agent) await withAgent(ctx, doc, id, agent.running);
     const page = await ctx.newPage();
     // (a view that can't be opened is a finding, not something to wait half a minute for)
     page.setDefaultTimeout(8000);
@@ -324,23 +574,35 @@ try {
     await (screen.hasTouch ? start.tap() : start.click());
     await page.locator('.track-row').first().waitFor();
     await page.waitForTimeout(600);
-    const phone = (await page.evaluate(() => document.documentElement.dataset.layout ?? '')).startsWith('phone');
+    const layout = await page.evaluate(() => document.documentElement.dataset.layout ?? '');
     let looked = 0;
-    for (const [label, open, shut] of views(page, phone, !!screen.hasTouch)) {
-      view = label;
+    for (const [what, open, shut, checks = []] of list(page, layout, !!screen.hasTouch)) {
+      view = what;
       try {
         if (open) await open();
         await page.waitForTimeout(450);
-        for (const what of await page.evaluate(problems)) fail(label, what);
+        for (const problem of await page.evaluate(problems)) fail(what, problem);
+        for (const check of checks) for (const problem of await page.evaluate(CHECKS[check])) fail(what, problem);
         if (shut) await shut();
         if (shut) await page.waitForTimeout(250);
         looked++;
       } catch (e) {
-        fail(label, `couldn’t be opened: ${String(e.message).split('\n')[0]}`);
+        fail(what, `couldn’t be opened: ${String(e.message).split('\n')[0]}`);
       }
     }
-    console.log(`${name} (${screen.viewport.width}×${screen.viewport.height}): ${looked} views looked at`);
     await ctx.close();
+    return looked;
+  };
+  for (const { name, ...screen } of SCREENS) {
+    let looked = await look(name, screen, views);
+    // the agent on: its conversation, and a request working
+    looked += await look(name, screen, (page, layout, finger) => agentViews(page, layout, finger, false), {
+      running: false,
+    });
+    looked += await look(name, screen, (page, layout, finger) => agentViews(page, layout, finger, true), {
+      running: true,
+    });
+    console.log(`${name} (${screen.viewport.width}×${screen.viewport.height}): ${looked} views looked at`);
   }
 } catch (e) {
   failures.push(String(e?.message ?? e));

@@ -538,8 +538,10 @@ describe('the studio that asked, away a moment', () => {
   });
 
   it('isn’t waited for when its page was hidden as it went: changes are saved here, once each, for it to pick up', async () => {
-    const { start, tool, s, token, desk, admit, studio, app, run, status, services } = await setup();
+    const { start, tool, s, token, desk, admit, studio, app, run, status, services, save } = await setup();
     const phone = await admit(token);
+    // (the studio saved it once already)
+    await save(services.store.get(s.id) as Parameters<typeof save>[0]);
     const R = (services.store.get(s.id) as { revision: number }).revision;
     const { job, token: jobToken } = await start({ project: s.id, text: 'Brighter chorus' });
     const before = (services.store.get(s.id) as { revision: number }).revision;
@@ -577,17 +579,26 @@ describe('the studio that asked, away a moment', () => {
     // what the studio picks up when it's back: the batches after its revision, for its device alone
     const away = async (from: number, as = token) =>
       (await app.inject({ method: 'GET', url: `/api/agent/away/${s.id}?from=${from}`, headers: auth(as) })).json().away;
+    // (with the song as the host has it with them, read at the same time)
     expect(await away(before)).toEqual({
       job,
       label: 'Chorus lift',
       running: true,
+      base: before,
       head: before + 2,
       batches: [
         { batch: 'b1', ops: title('One') },
         { batch: 'b2', ops: title('Two') },
       ],
+      song: services.store.get(s.id),
     });
-    expect((await away(before + 1)).batches).toEqual([{ batch: 'b2', ops: title('Two') }]);
+    expect(await away(before + 1)).toMatchObject({
+      base: before + 1,
+      batches: [{ batch: 'b2', ops: title('Two') }],
+      song: { title: 'Two', revision: before + 2 },
+    });
+    // from before the run (the studio's save got here, its answer lost), all of it from the run's first
+    expect(await away(before - 1)).toMatchObject({ base: before, batches: [{ batch: 'b1' }, { batch: 'b2' }] });
     expect(await away(before + 2)).toBeNull();
     expect(await away(before + 7)).toBeNull();
     expect(await away(before, phone.token)).toBeNull();
@@ -718,5 +729,36 @@ describe('the studio that asked, away a moment', () => {
     await until(() => read.done);
     const song = read.value as Awaited<ReturnType<typeof tool>>;
     expect([song.statusCode, song.json().id]).toEqual([200, s.id]);
+  });
+
+  it('a page back in view as its change runs out of time isn’t taken as frozen: the next goes to it', async () => {
+    const { start, tool, s, desk, services } = await setup();
+    const { job, token: jobToken } = await start({ project: s.id, text: 'Change it' });
+    const R = (services.store.get(s.id) as { revision: number }).revision;
+    const shown = (revision: number, hidden: boolean) =>
+      desk.say({
+        type: 'state',
+        state: { project: s.id, revision, tick: 0, selection: { track: null, regions: [], notes: 0 }, hidden },
+      });
+    shown(R, true);
+    desk.answer = (msg) => (msg.type === 'agent-ops' ? null : { ok: true, revision: R });
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    const title = (t: string) => [{ op: 'setProject', patch: { title: t } }];
+    const one = pending(tool(job, jobToken, 'POST', '/ops', { ops: title('One'), label: 'Title', batch: 'b1' }));
+    await until(() => desk.got('agent-ops').length === 1);
+    await vi.advanceTimersByTimeAsync(7_000);
+    // the user is back: the page says so just before the change it was sent runs out of time
+    shown(R, false);
+    await vi.advanceTimersByTimeAsync(1_000);
+    await until(() => one.done);
+    expect((one.value as Awaited<ReturnType<typeof tool>>).json()).toEqual({ ok: true, revision: R + 1 });
+    // it's there, before it says anything more
+    desk.answer = () => ({ ok: true, revision: R + 1 });
+    expect((await tool(job, jobToken, 'POST', '/transport', { action: 'stop' })).json()).toEqual({ ok: true });
+    // it picks up what was saved here: the next change goes to it
+    shown(R + 1, false);
+    const two = await tool(job, jobToken, 'POST', '/ops', { ops: title('Two'), label: 'Title', batch: 'b2' });
+    expect(two.json()).toEqual({ ok: true, revision: R + 1 });
+    expect(desk.got('agent-ops').map((m) => m.batch)).toEqual(['b1', 'b2']);
   });
 });

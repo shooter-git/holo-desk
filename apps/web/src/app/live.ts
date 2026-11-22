@@ -22,10 +22,10 @@ import {
   locate,
   moveBars,
   openProject,
-  pickUpAgent,
   play,
   redo,
   relabelJob,
+  savedElsewhere,
   saveNow,
   saveSoon,
   selectTrack,
@@ -336,27 +336,12 @@ async function onMessage(msg: Record<string, unknown>): Promise<void> {
       listening = Date.now() + Number(msg.ms ?? 0);
       toast('The AI is listening: play something', 'info', Number(msg.ms ?? 4000));
       return;
-    case 'saved': {
-      const s = store.get();
-      const project = String(msg.project);
-      const newer = () => {
-        const now = store.get();
-        return now.project?.id === project && Number(msg.revision) > now.serverRevision;
-      };
-      if (!newer()) return;
-      if (s.saveState === 'saved') {
-        // saved somewhere else while this one had nothing unsaved: the agent's changes, saved there while
-        // this studio was away, come in as its job's step; anyone else's (another device, a creation)
-        // open as the song now is
-        void pickUpAgent().then((picked) => {
-          if (!picked && newer() && store.get().saveState === 'saved') void openProject(project);
-        });
-      } else if (s.saveState === 'dirty' || s.saveState === 'offline' || s.saveState === 'error') {
-        // this studio's changes go now: on top of the agent's, picked up, or asking which version to keep
-        void saveNow();
-      }
+    case 'saved':
+      // saved somewhere else: the agent's changes saved there while this studio was away come in as
+      // its job's step; anyone else's open as the song now is (or this studio's own unsaved changes
+      // are saved now, on top of the agent's, or asking which version to keep)
+      await savedElsewhere(String(msg.project), Number(msg.revision));
       return;
-    }
     case 'peers': {
       // a session the host hasn't yet seen go (a reload's) would show a device twice
       const seen = new Set<string>();

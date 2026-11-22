@@ -213,9 +213,15 @@ export interface AwayChanges {
   /** The job's label once it has finished, else its last batch's. */
   label: string;
   running: boolean;
-  /** The revision the song is at with them. */
+  /**
+   * The revision the batches were made on: the studio's own, or (it was before the run) the run's
+   * first, which the studio takes them on only if its song is that one (its save got here unanswered).
+   */
+  base: number;
+  /** The revision the song is at with them, and the song as it is then. */
   head: number;
   batches: { batch: string; ops: Op[] }[];
+  song: Project;
 }
 
 /** A device's studio that left a song: when, whether its page was hidden then, and what it showed. */
@@ -778,14 +784,21 @@ export class Jobs implements AgentHooks {
       { type: 'agent-flush' },
       hidden ? Math.min(this.limits.flushMs, this.limits.hiddenMs) : this.limits.flushMs,
     );
-    // (a hidden page that doesn't answer was frozen by its browser: it's away)
-    if (hidden && answer.error === NO_ANSWER) this.frozen.add(studio);
+    if (hidden && answer.error === NO_ANSWER) this.unanswered(studio);
   }
 
   /** A device's studio with a song open, unless its browser froze it (`frozen`). */
   private studioOf(device: string, project: string): LiveClient | null {
     const studio = this.o.live.studioFor(device, project);
     return studio && !this.frozen.has(studio) ? studio : null;
+  }
+
+  /**
+   * A studio asked while its page was hidden didn't answer: its browser froze it, and it's away, unless
+   * it has said since that it's in view again (it may answer late, as it wakes).
+   */
+  private unanswered(studio: LiveClient): void {
+    if (isHidden(studio)) this.frozen.add(studio);
   }
 
   // ---- the user's answers ----
@@ -1349,8 +1362,9 @@ export class Jobs implements AgentHooks {
 
   /**
    * A batch of the job's changes, for the requester's studio (one undo step with the rest of the
-   * job's), answered once it's applied. Never applied here, except for a scan preset whose studio
-   * went away: then it's saved as a revision of the agent's, as a scan read always was.
+   * job's), answered once it's applied. While that studio is away (or back, but not yet caught up with
+   * what was saved here meanwhile), it's saved here as a revision by "Agent", for the studio to pick
+   * up as the job's step (`saveHere`, `awayFor`). Each batch goes in once, here or there.
    */
   async ops(job: AgentJob, ops: Op[], label: string, batch: string): Promise<{ ok: true; revision?: number }> {
     const arrived = Date.now();
@@ -1376,7 +1390,7 @@ export class Jobs implements AgentHooks {
         return typeof answer.revision === 'number' ? { ok: true, revision: answer.revision } : { ok: true };
       }
       // (should it wake and apply the batch after all, its id has it go in there once)
-      this.frozen.add(studio);
+      this.unanswered(studio);
     }
     return this.saveHere(job, ops, label, batch);
   }
@@ -1428,17 +1442,21 @@ export class Jobs implements AgentHooks {
 
   /**
    * What a device's studio, back on a song at revision `from`, picks up of the changes the song's job
-   * saved here while it was away: the batches after `from`, the revision they bring the song to, and
-   * the job's label. Only for the device that asked for the job; null when there's nothing to pick up
-   * from `from` (no run, `from` not in it, or the song saved since by someone else).
+   * saved here while it was away: the batches after `from` (all of them from before the run), the
+   * revision they bring the song to and the song then, and the job's label. Only for the device that
+   * asked for the job; null when there's nothing to pick up from `from` (no run, `from` past it but not
+   * one of its revisions, or the song saved since by someone else).
    */
   awayFor(device: string, project: string, from: number): AwayChanges | null {
     let job: AgentJob | null = null;
     for (const j of this.jobs.values()) if (j.view.project === project && j.view.device === device && j.away) job = j;
     const run = job?.away;
-    if (!job || !run || this.o.store.row(project)?.revision !== run.head) return null;
-    const after = from === run.base ? 0 : run.batches.findIndex((b) => b.revision === from) + 1;
-    if (after === 0 && from !== run.base) return null;
+    // (read with the song as it is, at once: no save can come between them)
+    const song = run ? this.o.store.get(project) : null;
+    if (!job || !run || song?.revision !== run.head) return null;
+    // from before the run, all of it: the studio takes it only if its song is the run's first
+    const after = from <= run.base ? 0 : run.batches.findIndex((b) => b.revision === from) + 1;
+    if (after === 0 && from > run.base) return null;
     const batches = run.batches.slice(after);
     const last = batches.at(-1);
     if (!last) return null;
@@ -1446,8 +1464,10 @@ export class Jobs implements AgentHooks {
       job: job.view.id,
       label: job.view.label ?? last.label,
       running: isLive(job),
+      base: after === 0 ? run.base : from,
       head: run.head,
       batches: batches.map(({ batch, ops }) => ({ batch, ops })),
+      song,
     };
   }
 
@@ -1554,7 +1574,7 @@ export class Jobs implements AgentHooks {
       const wait = hidden ? Math.min(this.limits.flushMs, this.limits.hiddenMs) : this.limits.flushMs;
       const answer = await this.o.live.request(studio, { type: 'agent-flush' }, wait, true);
       // (a hidden page that doesn't answer was frozen by its browser: the song as saved here it is)
-      if (hidden && answer.error === NO_ANSWER) this.frozen.add(studio);
+      if (hidden && answer.error === NO_ANSWER) this.unanswered(studio);
       else {
         awayIfGone(answer);
         if (!answer.ok)

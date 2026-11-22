@@ -124,7 +124,7 @@ Turning the agent off cancels every job, so the job-scoped routes answer 403.
 | `POST /api/agent/jobs/:job/permission` | `{grant:boolean, result?, attachments?:[id]}` | `{ok, job?}`, `job` being the follow-up's id. Only the device that asked may answer (403), only while the job is `awaiting` (409). `result` is at most 1000 characters; `attachments` as in a request (a screenshot, a photo, a recording). Granting can be refused as a request is (`not-open`, `busy`, `no-harness`), and with 409 when the conversation was started over since the job asked. With a job token, the same path is the tools' (below). |
 | `POST /api/agent/jobs/:job/done-listening` | | `{ok}`. The user pressed Done. Only the device that asked (403); 409 once the job has ended. |
 | `GET /api/agent/threads/:project` | | `{thread, job}`. `thread` is `{id, harness, turns:[{job, request, reply, label, state, at, permission?, brief?, briefWarnings?, error?}]}`, or null. `job` is the song's job that's running or waiting for a click (a `JobView`), or null: after a reload, its button comes back. |
-| `GET /api/agent/away/:project` | `?from=` (a revision) | `{away}`: what this device's studio, back on the song at revision `from`, picks up of the changes its job saved on the server while it was away (below): `{job, label, running, head, batches:[{batch, ops}]}`, the batches after `from`, `head` the revision they bring the song to, `label` the job's once it has finished (its last batch's before). `away` is null when there's nothing to pick up from `from`: no such run of the song's latest job of this device's, `from` not in it, or the song saved since by someone else. 400 for a `from` that isn't a revision. |
+| `GET /api/agent/away/:project` | `?from=` (a revision) | `{away}`: what this device's studio, back on the song at revision `from`, picks up of the changes its job saved on the server while it was away (below): `{job, label, running, base, head, batches:[{batch, ops}], song}`, the batches after `from`, `head` the revision they bring the song to and `song` the song then, read together (no save comes between them), `label` the job's once it has finished (its last batch's before). From a revision before the run, the whole run, `base` its first revision (the studio takes it only if its own song is that one: its save got there, its answer lost); otherwise `base` is `from`. `away` is null when there's nothing to pick up from `from`: no such run of the song's latest job of this device's, `from` past its first revision but not one of its own, or the song saved since by someone else. 400 for a `from` that isn't a revision. |
 | `POST /api/agent/threads/:project/reset` | | `{ok}`. The next request starts a new thread. 409 `busy` while a job runs on the song. |
 | `POST /api/agent/attachments` | `?project=&name=&type=` and the file as the body (a recording ≤ 200 MB, anything else ≤ 25 MB, text ≤ 100 KB; 413) | `{id, name, type, size}`. Allowed types: `image/png`, `image/jpeg`, `image/webp`, `audio/wav`, `audio/x-wav`, `audio/flac`, `audio/aiff`, `audio/mpeg`, `audio/ogg`, `audio/mp4`, `audio/midi`, `application/vnd.recordare.musicxml+xml`, `application/vnd.recordare.musicxml` (`.mxl`), `text/plain`. The body goes to disk as it arrives, and is cut off at the type's limit (one whose `content-length` says it's over isn't read at all). Its first bytes must be what the type says (415): a recording's first 64 KB are checked; text must be UTF-8, MusicXML UTF-8 or UTF-16, and an `.mxl` a zip with a score in it. 404 for no such song. Kept 7 days, the device's own, for that song. |
 | `PUT /api/agent/attachments/:id/meta` | JSON object (≤ 64 KB) | `{ok}`. The browser stores what it measured here. Only the device's own (403). |
@@ -238,7 +238,8 @@ neither does the studio going: the job runs on, its changes land, and its reply 
 - **Away, or a moment away.** The requester's studio is away when its connection has closed, or when
   its page is hidden (the studio reports `hidden`) and doesn't answer within 8 s (`hiddenMs`): the
   browser froze it, as a phone's does in the background, though its connection may close only later.
-  It's back once it reports the song open from a page in view. A studio that went with its page in
+  It's back once it reports the song open from a page in view (one that says so just before what it
+  was sent runs out of time isn't taken as frozen). A studio that went with its page in
   view (a reload, its network) may be back in a moment: routes that need it wait up to 15 s (`awayMs`)
   from when it went, for that device's studio to report the song open again, then go on there.
   Meanwhile the job's line under the bar says "Waiting for the studio that asked to come back" (the
@@ -266,11 +267,18 @@ neither does the studio going: the job runs on, its changes land, and its reply 
   hears the song was saved since its revision (`saved`, or the `saved` the host sends a studio that
   joins behind), when its own save is refused for that (409), and as the song opens after a reload
   (its history kept at an earlier revision: `behind`). It asks `GET /api/agent/away/:project` with its
-  revision, and takes the batches in as the job's step, in turn with the job's batches and after a
-  gesture under way: below, "Undo grouping".
+  revision, which answers the batches with the song as they left it, and takes them in as the job's
+  step, in turn with the job's batches and after a gesture under way (one that never ends holds it 15
+  s at most, as it does a batch): below, "Undo grouping". A pick-up asked for while one is under way
+  joins it, and it looks again after; what the studio does next (open the song as it now is, save its
+  own changes on top) goes by the revision it's at then. A save refused while a pick-up moved the
+  studio on is made again on top; a save refused because the server has this very song (an earlier
+  save got there, its answer lost) is taken as saved; and a run that begins on such a save is picked
+  up when the studio's song is that save's.
 
 A scan preset, which carries on without its studio, isn't waited for: the routes that need the studio
-answer it 403 at once. The command line's own requests to a studio are as they were.
+answer it 403 at once. `…/version` and an import read on the server don't need it, and answer it as
+they answer any job. The command line's own requests to a studio are as they were.
 
 | Method and path | Body / query | Answer |
 |---|---|---|
@@ -601,9 +609,11 @@ of the stretch `played` asked for); `length` is ms (null while still held).
     on top: nobody's changes are lost;
   - when a batch doesn't apply onto them (both changed the same thing), the song becomes the server's,
     the step's Undo brings this studio's own back, and a notice says so;
-  - after a reload, the history kept at the revision the run began on comes back with the step on top
-    (its Undo reads that revision from the song's history); kept at another, it starts afresh as
-    before.
+  - after a reload, the history kept at a revision of the run comes back with the step on top: joined
+    to the job's step on top when it has one (it keeps the song from before the job), else a step whose
+    Undo reads the revision the history leads to from the song's history; the song is as the server
+    has it with the run, if the agent saved again as the page opened. Kept at another revision, or at
+    one the song's history doesn't have with no job's step on top, it starts afresh as before.
 
   The studio then carries on from the server's revision; the job's later batches come live again and
   merge into the step. A batch already applied (the last 500 remembered, those picked up included)

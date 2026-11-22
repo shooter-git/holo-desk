@@ -355,6 +355,9 @@ describe('the job’s changes', () => {
     expect(status(desk, job)).toMatchObject({ state: 'waiting' });
     expect((await tool(job, jobToken, 'POST', '/transport', { action: 'play' })).statusCode).toBe(403);
     expect((await tool(job, jobToken, 'GET', '/state')).statusCode).toBe(403);
+    // a version is kept from the song as saved here, which is where its changes go
+    const kept = await tool(job, jobToken, 'POST', '/version', { name: 'As found' });
+    expect(kept.json()).toEqual({ ok: true, revision: (services.store.get(s.id) as Project).revision });
     const before = services.store.get(s.id) as Project;
     const ops = [{ op: 'setProject', patch: { title: 'Hymn' } }];
     const res = await tool(job, jobToken, 'POST', '/ops', { ops, label: 'Read system 0.0', batch: 'b1' });

@@ -12,6 +12,17 @@ export interface MiniNote {
   p: number;
 }
 
+/**
+ * A range at least an octave tall with the notes in its middle: a line on one or two pitches is drawn
+ * mid-strip rather than along its floor (a reply's strip, which has nothing around it to place it by).
+ */
+export function centredRange(r: { lo: number; hi: number }): { lo: number; hi: number } {
+  const tall = r.hi - r.lo + 1;
+  if (tall >= 12 || tall < 1) return r;
+  const pad = (12 - tall) / 2;
+  return { lo: r.lo - pad, hi: r.hi + pad };
+}
+
 /** The lowest and highest pitch of some notes. */
 export function rangeOf(notes: readonly MiniNote[]): { lo: number; hi: number } {
   let lo = 127;

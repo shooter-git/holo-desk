@@ -14,12 +14,13 @@ import {
   bindingText,
   type Cell,
   checkView,
+  type ListItem,
   type Point,
   type Span,
   type View,
 } from '@holo/agent/view';
 import { barToTick, firstBar, type Project } from '@holo/session';
-import { Play, Square } from 'lucide-react';
+import { ChevronRight, Play, Square } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   askNext,
@@ -45,7 +46,7 @@ import { recordingNotes } from '../audio/notes.ts';
 import { editableNotes } from './AudioNotes.tsx';
 import { dbToFader, faderToDb } from './controls.tsx';
 import { prepare, useFrame, useSize } from './frame.ts';
-import { drawMiniNotes, type MiniNote, rangeOf } from './mini-notes.ts';
+import { centredRange, drawMiniNotes, type MiniNote, rangeOf } from './mini-notes.ts';
 import { drawClipWave } from './wave.ts';
 
 // a go to a recording's notes, and its notes drawn small, number them as the Notes view does
@@ -484,7 +485,7 @@ function SpanView({ ctx, span, wave }: { ctx: Ctx; span: Span; wave: boolean }) 
           if (Math.abs(n.pitch - n.sung) >= 0.05) sung.push({ ...at, p: n.sung });
         }
       }
-      const range = rangeOf([...played, ...sung]);
+      const range = centredRange(rangeOf([...played, ...sung]));
       const area = { x: 0, y: 4, w, h: SPAN_H - 8 };
       c.fillStyle = color;
       c.globalAlpha = 0.3;
@@ -493,7 +494,7 @@ function SpanView({ ctx, span, wave }: { ctx: Ctx; span: Span; wave: boolean }) 
       drawMiniNotes(c, played, to - from, area, range);
     } else {
       c.fillStyle = color;
-      drawMiniNotes(c, notes, to - from, { x: 0, y: 4, w, h: SPAN_H - 8 }, rangeOf(notes));
+      drawMiniNotes(c, notes, to - from, { x: 0, y: 4, w, h: SPAN_H - 8 }, centredRange(rangeOf(notes)));
     }
     if (done) drawn.current = { key, song };
   });
@@ -524,8 +525,51 @@ function CellView({ ctx, cell, at }: { ctx: Ctx; cell: Cell; at: string }) {
   return <BlockView ctx={ctx} block={cell} at={at} />;
 }
 
-function BlockView({ ctx, block: b, at }: { ctx: Ctx; block: Block; at: string }) {
+/** Rows, as a menu's: one with "do" is pressed. */
+function ListView({ ctx, items, at }: { ctx: Ctx; items: ListItem[]; at: string }) {
   const song = useApp((s) => s.project);
+  const playing = usePlaying();
+  return (
+    <div className="v-list">
+      {items.map((it, i) => {
+        const words = it.do ? actionWords(it.do, song) : {};
+        const detail = it.detail ?? (it.do && 'ask' in it.do ? it.do.ask : undefined);
+        const key = `${ctx.job}:${at}.${i}`;
+        const plays = !!it.do && 'play' in it.do;
+        const live = plays && playing === key;
+        const body = (
+          <>
+            {/* a row that plays shows it as a button does; one that does something else, a chevron:
+                without a pointer to hover with, nothing else says a row can be pressed */}
+            {plays && (live ? <Square size={11} aria-hidden="true" /> : <Play size={11} aria-hidden="true" />)}
+            <span className="title">{it.text}</span>
+            {detail && <span className="hint">{detail}</span>}
+            {it.do && !plays && <ChevronRight size={13} className="go" aria-hidden="true" />}
+          </>
+        );
+        return it.do ? (
+          <button
+            key={i}
+            type="button"
+            className={`item${live ? ' on' : ''}`}
+            title={words.title}
+            aria-pressed={plays ? live : undefined}
+            disabled={!actionReady(ctx, it.do)}
+            onClick={() => it.do && void run(ctx, it.do, key)}
+          >
+            {body}
+          </button>
+        ) : (
+          <div key={i} className="item static">
+            {body}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function BlockView({ ctx, block: b, at }: { ctx: Ctx; block: Block; at: string }) {
   if ('text' in b) return <div className={`v-text${b.quiet ? ' quiet' : ''}`}>{b.text}</div>;
   if ('row' in b)
     return (
@@ -544,37 +588,7 @@ function BlockView({ ctx, block: b, at }: { ctx: Ctx; block: Block; at: string }
         ))}
       </div>
     );
-  if ('list' in b)
-    return (
-      <div className="v-list">
-        {b.list.map((it, i) => {
-          const words = it.do ? actionWords(it.do, song) : {};
-          const detail = it.detail ?? (it.do && 'ask' in it.do ? it.do.ask : undefined);
-          const body = (
-            <>
-              <span className="title">{it.text}</span>
-              {detail && <span className="hint">{detail}</span>}
-            </>
-          );
-          return it.do ? (
-            <button
-              key={i}
-              type="button"
-              className="item"
-              title={words.title}
-              disabled={!actionReady(ctx, it.do)}
-              onClick={() => it.do && void run(ctx, it.do, `${ctx.job}:${at}.${i}`)}
-            >
-              {body}
-            </button>
-          ) : (
-            <div key={i} className="item static">
-              {body}
-            </div>
-          );
-        })}
-      </div>
-    );
+  if ('list' in b) return <ListView ctx={ctx} items={b.list} at={at} />;
   if ('table' in b)
     return (
       <div className="v-table">

@@ -22,6 +22,7 @@ import {
   locate,
   moveBars,
   openProject,
+  pickUpAgent,
   play,
   redo,
   relabelJob,
@@ -337,9 +338,22 @@ async function onMessage(msg: Record<string, unknown>): Promise<void> {
       return;
     case 'saved': {
       const s = store.get();
-      if (s.project?.id === msg.project && Number(msg.revision) > s.serverRevision && s.saveState === 'saved') {
-        // saved somewhere else (another device, or a creation) while this one had nothing unsaved
-        void openProject(String(msg.project));
+      const project = String(msg.project);
+      const newer = () => {
+        const now = store.get();
+        return now.project?.id === project && Number(msg.revision) > now.serverRevision;
+      };
+      if (!newer()) return;
+      if (s.saveState === 'saved') {
+        // saved somewhere else while this one had nothing unsaved: the agent's changes, saved there while
+        // this studio was away, come in as its job's step; anyone else's (another device, a creation)
+        // open as the song now is
+        void pickUpAgent().then((picked) => {
+          if (!picked && newer() && store.get().saveState === 'saved') void openProject(project);
+        });
+      } else if (s.saveState === 'dirty' || s.saveState === 'offline' || s.saveState === 'error') {
+        // this studio's changes go now: on top of the agent's, picked up, or asking which version to keep
+        void saveNow();
       }
       return;
     }

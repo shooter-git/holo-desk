@@ -6,8 +6,10 @@
  * the song is saved, so the song as it is then is that revision. It comes back only when the song
  * opens at that same revision: saved since somewhere else (another device, a creation, a scan read on
  * the host), its steps would undo to songs that no longer line up with it, and the history starts
- * afresh, as it always did. So it does when HO[LO] was updated with other code for songs (the session
- * and engine's fingerprint): its steps hold songs as the code before wrote them.
+ * afresh, as it always did. Unless what was saved since is the agent's, working on this device's
+ * request while the page was gone (`behind`): then it comes back with the agent's changes as their
+ * job's step on top (actions.ts). So it starts afresh when HO[LO] was updated with other code for songs
+ * (the session and engine's fingerprint): its steps hold songs as the code before wrote them.
  *
  * **Changes not saved yet.** The studio saves a moment after an edit, and can't while the host is out
  * of reach or the song was changed somewhere else. Until it has, the song as it is, with its history
@@ -119,6 +121,15 @@ export function restorable(kept: Kept | undefined, project: Project, made: strin
   return { undo: kept.undo, redo: kept.redo };
 }
 
+/**
+ * The kept history, if it's this song's at an earlier revision than it opened at, made by the same
+ * code: it comes back only if what was saved since is the agent's, picked up as its step on top of it.
+ */
+export function behind(kept: Kept | undefined, project: Project, made: string): Kept | null {
+  if (!kept || kept.project !== project.id || kept.revision >= project.revision || kept.made !== made) return null;
+  return Array.isArray(kept.undo) && Array.isArray(kept.redo) ? kept : null;
+}
+
 /** Whether two songs are the same but for their revision and when they were saved. */
 export function sameSong(a: Project, b: Project): boolean {
   const plain = (p: Project) => JSON.stringify({ ...parseProject(p), revision: 0, modified: '' });
@@ -149,7 +160,9 @@ export type Restored =
   /** Its history, at the revision it opened at. */
   | ({ kind: 'history' } & History)
   /** Its changes the host didn't get: the song with them, the revision they were made on, and its history. */
-  | ({ kind: 'unsaved'; song: Project; base: number } & History);
+  | ({ kind: 'unsaved'; song: Project; base: number } & History)
+  /** Its history at an earlier revision (saved since somewhere else: the agent, while the page was gone?). */
+  | ({ kind: 'behind'; revision: number } & History);
 
 /** One write of what's kept of a song. */
 type Keep =
@@ -301,8 +314,13 @@ export class Keeper {
         const back = await this.unsavedBack(shelf, project);
         if (back) return back;
       }
-      const h = restorable(await shelf.get(id), project, this.made);
-      if (!h) return null;
+      const kept = await shelf.get(id);
+      const h = restorable(kept, project, this.made);
+      if (!h) {
+        // (kept again only if it comes back: it's the studio's to say)
+        const old = behind(kept, project, this.made);
+        return old ? { kind: 'behind', revision: old.revision, undo: old.undo, redo: old.redo } : null;
+      }
       this.last.set(id, {
         kind: 'history',
         kept: { project: id, revision: project.revision, undo: h.undo, redo: h.redo, kept: 0, made: this.made },

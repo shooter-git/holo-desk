@@ -1,9 +1,10 @@
 /**
  * The studio's undo history, as plain functions over its two stacks. Most edits are a step each;
  * the agent's changes during one request (a job) merge into one step, so one Undo takes all of it
- * back. And the queue its changes wait in while the user is in the middle of a gesture or a drag.
+ * back, those it saved on the host while the studio was away included (`pickUp`). And the queue its
+ * changes wait in while the user is in the middle of a gesture or a drag.
  */
-import type { Project } from '@holo/session';
+import { applyOps, type Op, type Project, parseProject } from '@holo/session';
 import type { Step } from './store.ts';
 
 /** How many steps Undo can go back. */
@@ -36,6 +37,59 @@ export function pushOrMergeJob(
   // (a redo step would bring back a song without this batch)
   if (running && top?.job === job) return h.redo.length ? { undo: h.undo, redo: [] } : h;
   return push(h, { project: before, label, job, at });
+}
+
+/** A batch of the agent's changes that it saved on the host while this studio was away. */
+export interface AwayBatch {
+  batch: string;
+  ops: Op[];
+}
+
+/** What picking up the agent's changes made of the song: how they came in. */
+export interface PickedUp extends History {
+  project: Project;
+  /**
+   * `exact`: the song is the host's as they left it (this studio had nothing unsaved); `merged`: they
+   * went onto this studio's song, its own changes kept; `theirs`: they clashed with those, so the song
+   * is the host's, and the step's Undo brings this studio's own back.
+   */
+  how: 'exact' | 'merged' | 'theirs';
+}
+
+/**
+ * The agent's changes saved on the host while this studio was away (a phone in another app, a closed
+ * tab), taken in as if they had come while it was there: they join the job's step on top, or open one
+ * of their own, whose Undo goes back to `now`, this studio's song. When `now` is the song they were made
+ * on (`exact`: nothing unsaved here), the song becomes the host's as they left it (`theirs`), as it is.
+ * Otherwise each batch not already applied here goes onto `now`, keeping its changes; where one doesn't
+ * apply, the song becomes the host's, and a step of its own holds `now` for Undo.
+ */
+export function pickUp(
+  h: History,
+  now: Project,
+  theirs: Project,
+  exact: boolean,
+  batches: readonly AwayBatch[],
+  applied: (batch: string) => boolean,
+  label: string,
+  job: string,
+  at = Date.now(),
+): PickedUp {
+  // (only the history's own fields: merged into the step on top, `h` comes back as it was given)
+  const joined = (): History => {
+    const { undo, redo } = pushOrMergeJob(h, now, label, job, true, at);
+    return { undo, redo };
+  };
+  if (exact) return { project: theirs, ...joined(), how: 'exact' };
+  let song = now;
+  try {
+    for (const b of batches) if (!applied(b.batch)) song = applyOps(song, b.ops);
+    // (what the agent makes must be a song the studio could open again)
+    parseProject(song);
+  } catch {
+    return { project: theirs, ...push(h, { project: now, label, job, at }), how: 'theirs' };
+  }
+  return { project: song, ...joined(), how: 'merged' };
 }
 
 /** A job's steps take its final name, undone or not. */
@@ -119,7 +173,7 @@ export interface JobResult {
  */
 export class JobQueue<T extends { batch: string }> {
   private readonly run: (item: T) => JobResult;
-  private readonly remember: number;
+  private readonly most: number;
   private readonly holds = new Set<symbol>();
   private readonly queue: { item: T; answers: ((r: JobResult) => void)[] }[] = [];
   /** Batches that went in, oldest first (a Map keeps the order they were added in). */
@@ -128,7 +182,7 @@ export class JobQueue<T extends { batch: string }> {
 
   constructor(run: (item: T) => JobResult, remember = 500) {
     this.run = run;
-    this.remember = remember;
+    this.most = remember;
   }
 
   get held(): boolean {
@@ -155,6 +209,25 @@ export class JobQueue<T extends { batch: string }> {
     return this.queue.some((w) => w.item.batch === batch);
   }
 
+  /** Whether a batch has gone in. */
+  done(batch: string): boolean {
+    return this.applied.has(batch);
+  }
+
+  /** Batches that went in another way (picked up from the host): sent again, they're answered, not applied. */
+  remember(batches: readonly string[]): void {
+    for (const batch of batches) this.applied.set(batch, { ok: true });
+    this.forget();
+  }
+
+  /** Only the latest batches are remembered. */
+  private forget(): void {
+    for (const old of this.applied.keys()) {
+      if (this.applied.size <= this.most) break;
+      this.applied.delete(old);
+    }
+  }
+
   /** Apply a batch now, or once the queue isn't held: resolves with what became of it. */
   submit(item: T): Promise<JobResult> {
     return new Promise((resolve) => {
@@ -177,17 +250,17 @@ export class JobQueue<T extends { batch: string }> {
       while (!this.held) {
         const next = this.queue.shift();
         if (!next) break;
-        let result: JobResult;
-        try {
-          result = this.run(next.item);
-        } catch (err) {
-          result = { ok: false, error: err instanceof Error ? err.message : String(err) };
-        }
-        if (result.ok) {
-          this.applied.set(next.item.batch, result);
-          for (const old of this.applied.keys()) {
-            if (this.applied.size <= this.remember) break;
-            this.applied.delete(old);
+        // (one that went in another way while it waited is answered as it went)
+        let result = this.applied.get(next.item.batch);
+        if (!result) {
+          try {
+            result = this.run(next.item);
+          } catch (err) {
+            result = { ok: false, error: err instanceof Error ? err.message : String(err) };
+          }
+          if (result.ok) {
+            this.applied.set(next.item.batch, result);
+            this.forget();
           }
         }
         for (const answer of next.answers) answer(result);

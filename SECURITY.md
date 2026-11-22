@@ -51,7 +51,8 @@ keeps it to the open song:
   `/api/agent/jobs/:job/*`. The token works only while that job runs and only for the job's song (another
   song's scan or attachment is refused), and it's revoked when the job ends. Before each job the
   server takes a restore point of the song. The job's changes go only to the studio that asked, as one
-  undo step.
+  undo step; while that studio is away (its page in the background or closed), they're saved on the
+  server as revisions by "Agent", and only that device picks them up as that step when it's back.
 - **What a reply shows.** The view under a reply is data in a closed format (docs/agent.md, "What a
   reply shows"): plain text and a fixed set of pieces, with no markup, links, pictures from outside the
   song, or script. Its controls can only do what the user could do with a click (play some bars, go

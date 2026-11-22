@@ -950,6 +950,21 @@ describe('reading', () => {
     expect(r.text).toContain('Playhead: 9.1.1 (playing)');
     expect(r.text).toContain('Selected: track Strings, 1 region, 2 notes');
     expect(r.text).toContain('middle C (MIDI 60) is C3');
+    expect(r.text).not.toContain('background');
+  });
+
+  it('says when they’ve left for now, with where they were as they went', async () => {
+    const api = setup({
+      state: {
+        away: true,
+        playhead: BAR * 4,
+        playing: false,
+        selection: { track: 'trk_strings', regions: [], notes: 0 },
+      },
+    });
+    const r = await call(api, 'song_status', {}, 'C3');
+    expect(r.text).toContain('Their studio is in the background or closed: your changes still land');
+    expect(r.text).toContain('Playhead: 5.1.1 (stopped)');
   });
 
   it('lists instruments, plugins and packs', async () => {

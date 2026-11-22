@@ -1,12 +1,14 @@
 /**
  * The in-app agent, as the studio sees it (docs/agent.md): whether it's on for this device, its
- * settings and devices, the open song's conversation, and the jobs asked for here. While it's off, or
- * this device isn't allowed, nothing of it shows, reports or asks anything.
+ * settings and devices, the open song's conversation, and the jobs asked for here (followed across a
+ * reload, so a page the browser let go comes back to them). While it's off, or this device isn't
+ * allowed, nothing of it shows, reports or asks anything.
  *
  * The device's token is kept apart from the view this device remembers (`holo:view`), in a key of its
  * own, and goes only to HO[LO]'s host: as the bearer of the agent's routes, and in each live hello.
  */
 import type { Go, View } from '@holo/agent/view';
+import type { Op } from '@holo/session';
 import { useSyncExternalStore } from 'react';
 import type { Ready } from './attach.ts';
 import { type Command, selectionSpan } from './commands.ts';
@@ -623,10 +625,108 @@ const tokenChanged = () => {
   for (const fn of tokenListeners) fn();
 };
 
+// ---- this device's requests, followed across a reload ----
+
+const FOLLOW_KEY = 'holo:agent-follow';
+/** At most this many are followed (the latest). */
+const FOLLOW_MOST = 20;
+
+/** A request of this device's the studio follows: one still working, or one whose reply hasn't been seen. */
+export interface Followed {
+  id: string;
+  project: string;
+  device: string;
+  request: string;
+  started: number;
+}
+
+/** The requests kept as followed, checked (what isn't one is left out). */
+export function readFollowed(s: TokenStorage | null = storage()): Followed[] {
+  try {
+    const list = JSON.parse(s?.getItem(FOLLOW_KEY) ?? '[]') as unknown;
+    if (!Array.isArray(list)) return [];
+    return list
+      .filter(
+        (f): f is Followed =>
+          typeof f === 'object' &&
+          f !== null &&
+          typeof f.id === 'string' &&
+          /^agj_[0-9a-f]{12}$/.test(f.id) &&
+          typeof f.project === 'string' &&
+          typeof f.device === 'string' &&
+          typeof f.request === 'string' &&
+          typeof f.started === 'number',
+      )
+      .slice(-FOLLOW_MOST);
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Which of this device's requests are followed once the host has said how one goes: one that's
+ * working, or that ended while the bar was closed (its reply not seen yet), stays or comes in; one
+ * seen (the bar open as it ended, or opened since) goes. A page the browser let go (a phone in another
+ * app) comes back to them: the bar's button turns while they work, and shows a reply is waiting after.
+ */
+export function followed(list: readonly Followed[], a: AgentState, e: AgentEvent): Followed[] {
+  const of = (j: JobView): Followed => ({
+    id: j.id,
+    project: j.project,
+    device: j.device,
+    request: j.request,
+    started: j.started,
+  });
+  const without = (id: string) => list.filter((f) => f.id !== id);
+  switch (e.type) {
+    case 'sent':
+      return [...without(e.job.id), of(e.job)].slice(-FOLLOW_MOST);
+    case 'status': {
+      if (e.job.device !== a.me) return [...list];
+      // (`a` is as it is now: a reply that came while the bar was closed has left it unseen)
+      const seen = !isLive(e.job.state) && (e.barOpen || !a.unseen);
+      return seen ? without(e.job.id) : [...without(e.job.id), of(e.job)].slice(-FOLLOW_MOST);
+    }
+    case 'seen':
+      return list.filter((f) => a.jobs[f.id] && isLive(a.jobs[f.id]?.state ?? ''));
+    case 'reset':
+      return list.filter((f) => f.project !== e.project || isLive(a.jobs[f.id]?.state ?? ''));
+    case 'removed':
+      return [];
+    case 'info':
+      return isOn(a) ? [...list] : [];
+    default:
+      return [...list];
+  }
+}
+
+/** The followed requests, as the jobs the studio knows before the host has said how they stand: working. */
+function followedJobs(list: readonly Followed[]): Record<string, JobView> {
+  return Object.fromEntries(list.map((f) => [f.id, { ...f, state: 'running' as const }]));
+}
+
 // ---- the store ----
 
-let state: AgentState = { ...EMPTY, me: (() => storage()?.getItem(DEVICE_KEY) ?? null)() };
+let following = readFollowed();
+let state: AgentState = {
+  ...EMPTY,
+  me: (() => storage()?.getItem(DEVICE_KEY) ?? null)(),
+  // (the host is asked how each stands once the live channel opens: catchUp)
+  jobs: followedJobs(following),
+};
 const listeners = new Set<() => void>();
+
+/** Keep the followed requests as they now are (once, when they change). */
+function follow(e: AgentEvent): void {
+  const next = followed(following, state, e);
+  if (next.length === following.length && next.every((f, i) => f.id === following[i]?.id)) return;
+  following = next;
+  try {
+    storage()?.setItem(FOLLOW_KEY, JSON.stringify(next));
+  } catch {
+    // followed until the page goes
+  }
+}
 
 export const agent = {
   get: (): AgentState => state,
@@ -634,6 +734,7 @@ export const agent = {
     const next = reduce(state, e);
     if (next === state) return;
     state = next;
+    follow(e);
     // Undo and Redo are told to the host only while the agent is on for this device
     const on = isOn(state);
     if (studio.get().agentReport !== on) studio.set({ agentReport: on });
@@ -865,6 +966,43 @@ export async function jobLabels(project: string, jobs: readonly string[]): Promi
     // the steps keep the names they have
   }
   return labels;
+}
+
+/**
+ * What this device's request saved of its changes on the host while this studio was away (a phone in
+ * another app, a closed tab), to pick up from revision `from` as its job's step: the batches after it,
+ * the revision they bring the song to, the job's label. Null when there's nothing to pick up, or the
+ * agent isn't on here.
+ */
+export interface AwayChanges {
+  job: string;
+  label: string;
+  running: boolean;
+  head: number;
+  batches: { batch: string; ops: Op[] }[];
+}
+
+export async function awayChanges(project: string, from: number): Promise<AwayChanges | null> {
+  try {
+    if (!state.info) await refreshAgent();
+    if (!isOn(state)) return null;
+    const { away } = await call<{ away?: AwayChanges | null }>(
+      'GET',
+      `/api/agent/away/${encodeURIComponent(project)}?from=${from}`,
+    );
+    if (
+      !away ||
+      typeof away.job !== 'string' ||
+      typeof away.label !== 'string' ||
+      typeof away.head !== 'number' ||
+      !Array.isArray(away.batches) ||
+      !away.batches.every((b) => typeof b?.batch === 'string' && Array.isArray(b.ops))
+    )
+      return null;
+    return away;
+  } catch {
+    return null;
+  }
 }
 
 /** Send a file that goes with a request (or a permission's answer): its id. What was measured of it follows. */

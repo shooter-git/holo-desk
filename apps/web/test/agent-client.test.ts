@@ -711,6 +711,103 @@ describe('the live channel back', () => {
   });
 });
 
+describe('this device’s requests, followed across a reload', () => {
+  const asked = job({ id: 'agj_00000000f001', request: 'Brighter chorus' });
+
+  it('while they work, and until their reply has been seen', () => {
+    let a = on();
+    const step = (list: AgentModule.Followed[], e: AgentModule.AgentEvent) => {
+      a = A.reduce(a, e);
+      return A.followed(list, a, e);
+    };
+    let list = step([], { type: 'sent', job: asked });
+    expect(list.map((f) => f.id)).toEqual([asked.id]);
+    list = step(list, { type: 'status', job: { ...asked, state: 'running' }, barOpen: false });
+    expect(list).toHaveLength(1);
+    // it ends while the bar is closed (the phone in another app): followed until the bar is opened
+    list = step(list, { type: 'status', job: { ...asked, state: 'done', reply: 'Lifted.' }, barOpen: false });
+    expect(list).toEqual([
+      { id: asked.id, project: 'prj_a', device: 'dev_me', request: 'Brighter chorus', started: 1000 },
+    ]);
+    list = step(list, { type: 'seen' });
+    expect(list).toEqual([]);
+    // one that ends with the bar open was seen as it came; another device's isn't this one's to follow
+    list = step(list, { type: 'status', job: { ...asked, state: 'running' }, barOpen: true });
+    list = step(list, { type: 'status', job: { ...asked, state: 'done' }, barOpen: true });
+    expect(list).toEqual([]);
+    list = step(list, { type: 'status', job: { ...asked, device: 'dev_other', state: 'running' }, barOpen: false });
+    expect(list).toEqual([]);
+  });
+
+  it('come back after a reload: the button turns while one works, and says a reply waits once it has', async () => {
+    const keep = (list: unknown) => storage.setItem('holo:agent-follow', JSON.stringify(list));
+    storage.setItem('holo:agent-token', 'tok_me');
+    storage.setItem('holo:agent-device', 'dev_me');
+    keep([
+      { id: asked.id, project: 'prj_a', device: 'dev_me', request: 'Brighter chorus', started: 1000 },
+      { id: 'not a job', project: 'prj_a', device: 'dev_me', request: 'x', started: 1 },
+    ]);
+    const reload = async () => {
+      vi.resetModules();
+      return {
+        agent: await import('../src/app/agent.ts'),
+        store: (await import('../src/app/store.ts')).store,
+      };
+    };
+    const view = {
+      blocks: [{ button: 'After', do: { play: { from: 9, to: 17, version: 'after' } } }],
+      versions: { after: 12 },
+    };
+    let turn: Record<string, unknown> = {
+      job: asked.id,
+      request: 'Brighter chorus',
+      reply: null,
+      label: null,
+      state: 'running',
+      at: 1000,
+    };
+    let running: JobView | null = { ...asked, state: 'running', line: 'Lifting the chorus' };
+    host((r) => {
+      if (r.path === '/api/agent') return [200, ON];
+      if (r.path === '/api/agent/settings') return [200, SETTINGS];
+      if (r.path === '/api/agent/devices') return [200, DEVICES];
+      if (r.path === '/api/agent/threads/prj_a') return [200, { thread: { turns: [turn] }, job: running }];
+    });
+
+    // still working as the page comes back
+    let B = await reload();
+    B.store.set({ bar: false });
+    expect(Object.keys(B.agent.agent.get().jobs)).toEqual([asked.id]);
+    expect(await B.agent.catchUp()).toEqual([{ job: asked.id, running: true }]);
+    expect(B.agent.barSign(B.agent.agent.get(), 'prj_a')).toBe('busy');
+    expect(B.agent.exchange(B.agent.agent.get(), 'prj_a')).toMatchObject({ working: true, line: 'Lifting the chorus' });
+
+    // it ended while the page was gone again: its reply waits, with its view
+    turn = { ...turn, reply: 'The chorus lifts now.', label: 'Brighter chorus', state: 'done', view };
+    running = null;
+    B = await reload();
+    B.store.set({ bar: false });
+    expect(await B.agent.catchUp()).toEqual([{ job: asked.id, running: false, label: 'Brighter chorus' }]);
+    let a = B.agent.agent.get();
+    expect(B.agent.barSign(a, 'prj_a')).toBe('done');
+    expect(B.agent.exchange(a, 'prj_a')).toMatchObject({ working: false, reply: 'The chorus lifts now.', view });
+
+    // and again after another reload, until the bar is opened
+    B = await reload();
+    B.store.set({ bar: false });
+    await B.agent.catchUp();
+    expect(B.agent.barSign(B.agent.agent.get(), 'prj_a')).toBe('done');
+    B.agent.agent.dispatch({ type: 'seen' });
+    a = B.agent.agent.get();
+    expect(B.agent.barSign(a, 'prj_a')).toBeNull();
+    expect(JSON.parse(storage.getItem('holo:agent-follow') ?? '')).toEqual([]);
+    B = await reload();
+    expect(B.agent.agent.get().jobs).toEqual({});
+    storage.removeItem('holo:agent-token');
+    storage.removeItem('holo:agent-device');
+  });
+});
+
 describe('the agent’s live messages', () => {
   it('shows listening from on to off, and takes nothing it doesn’t know', () => {
     A.agent.dispatch({ type: 'me', id: 'dev_me' });

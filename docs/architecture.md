@@ -273,7 +273,12 @@ tab, a phone that let the page go, or another song opened), it opens with them a
 revision they were made on, or, the song changed somewhere else since, asking which version to keep.
 If the host already has the song as they left it (their save got there just before the page went),
 they're let go and the history comes back. Another song opened before a save is saved in the
-background, after a save of it on its way. Unsaved changes are never let go to make room.
+background, after a save of it on its way. Unsaved changes are never let go to make room. A page that's
+hidden saves to the host too, while it still runs.
+
+The agent may have saved its changes on the host while the page was away (docs/agent.md, "The studio
+that asked, away"). Then the history comes back with them as their job's step on top, and changes kept
+on the device go onto them, as if they had come while the page was there.
 
 ## The live channel
 
@@ -325,9 +330,10 @@ the studio that asked ◄── server ◄── /api/agent/jobs/:job/* ◄─�
   Tripwires stop the run at the first tool that isn't HO[LO]'s.
 - **The tools** (`packages/agent/src/tools`) call the job's routes, which check the token, that the job
   is running and, for what needs the studio, that the studio that asked still has the song open.
-  Changes go only to that studio, as batches it groups into one undo step, "Agent: …" (a scan read whose
-  studio has gone is saved on the host instead). Listening, what was just played and before and after
-  are asked of that studio too. Asking a permission (installing a pack, sending the song to its
+  Changes go only to that studio, as batches it groups into one undo step, "Agent: …". While it's away
+  (a phone switched to another app, the tab closed) they're saved on the host, and it picks them up as
+  that step when it's back. Listening, what was just played and before and after are asked of that
+  studio too, and wait for the reply's buttons while it's away. Asking a permission (installing a pack, sending the song to its
   creation, a screenshot, a photo, the microphone) ends the turn; the user's click starts the next one.
 - **The terminal** has all of it too: `holo regions`, `timeline`, `measure`, `played`, `details`,
   `import`, `packs` and `holo tool NAME` run the same tools on the song from a terminal, through the

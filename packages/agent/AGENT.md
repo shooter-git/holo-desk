@@ -119,12 +119,18 @@ listens for at most 40 seconds, and while the person is still playing it answers
 Call it again straight away (no arguments needed): the calls make one listen, and the last returns
 all of it. Split very large writes into a few calls.
 
-## When the studio is away
+## When they leave while you work
 
-If a tool says the studio that asked is away (the person reloaded the page, or their network dropped),
-call it again: each call waits a while for it to come back. Once it's back, read the song again before
-changing anything, because a change sent just as it went may or may not be in. If it still isn't back
-after three tries, end the turn with a reply saying you couldn't reach their studio.
+The person may send a request and go: switch to another app, put the phone down, close the tab. Carry
+on as if they were there. Your changes still land in the song as you make them, and they find them
+when they're back, as one step they can undo, with your reply waiting.
+
+What happens in their studio itself, in front of them (hearing it, playing it, listening to them,
+reading what they just played), can't happen while they're away, and a tool that needs it says so at
+once. Don't wait for them or keep trying: do the rest of the work, and put what there is to hear or
+see in your reply's view, for when they're back. A tool that says their studio went away before it
+answered may be tried once more; when a change may or may not have gone in, read the song before
+making it again.
 
 ## Measuring
 

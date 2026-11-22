@@ -217,8 +217,10 @@ function problems() {
     else if (w > 4 && h > 4 && w / c.r.width >= 0.98 && h / c.r.height >= 0.98) {
       const top = document.elementFromPoint((c.x0 + c.x1) / 2, (c.y0 + c.y1) / 2);
       if (!top || top === el || el.contains(top) || top.contains(el)) continue;
-      // (a label is its field's; what's over the studio on purpose isn't a fault of what's under it)
+      // (a label is its field's; what's over the studio on purpose isn't a fault of what's under it, and
+      // a plugin's or an instrument's window is over the agent's page on purpose too)
       if (top.closest('label')?.contains(el) || (top.closest(over) && !el.closest(over))) continue;
+      if (top.closest('.plugin-window, .sheet-scrim') && el.closest('.talk-page')) continue;
       say(`covered by ${name(top)}`);
     }
   }
@@ -282,8 +284,11 @@ function solid() {
   return out;
 }
 
-/** A request working: its line, how long it has worked and Stop sit side by side, within the page. */
-function workingFits() {
+/**
+ * A request working: its line, how long it has worked and Stop sit side by side, within the page, and
+ * the time (a minute or more, from a job started 65 s before) moves.
+ */
+async function workingFits() {
   const status = document.querySelector('.talk-page .talk.newest .status, .bar .talk .status');
   if (!status) return ['no request shows as working'];
   const page = (status.closest('.talk-page') ?? status.closest('.bar')).getBoundingClientRect();
@@ -292,8 +297,14 @@ function workingFits() {
   const stop = [...status.querySelectorAll('button')].find((b) => b.textContent.trim() === 'Stop');
   const out = [];
   if (!line || !stop) return ['the working line or Stop is missing'];
-  if (document.querySelector('.talk-page') && !/^1:0\d$/.test(time?.textContent ?? ''))
-    out.push(`the time it has worked says “${time?.textContent ?? ''}” (1:05 or so)`);
+  if (document.querySelector('.talk-page')) {
+    const said = time?.textContent ?? '';
+    const seconds = said.split(':').reduce((sum, part) => sum * 60 + Number(part), 0);
+    if (!/^\d+:\d\d(:\d\d)?$/.test(said) || !(seconds >= 60))
+      out.push(`the time it has worked says “${said}” (a minute or more)`);
+    await new Promise((ok) => setTimeout(ok, 1300));
+    if (time?.textContent === said) out.push(`the time it has worked stays at “${said}”`);
+  }
   const parts = [line, time, stop].filter(Boolean).map((e) => e.getBoundingClientRect());
   for (const r of parts)
     if (r.left < page.left - 1 || r.right > page.right + 1) out.push('a part of it is outside the page');
@@ -303,7 +314,50 @@ function workingFits() {
   return out;
 }
 
-const CHECKS = { transportClear, solid, workingFits };
+/**
+ * A window opened with the page's sheet open shows whole: on screen, and nothing over it (the sheet
+ * goes under it); the sheet is still open.
+ */
+function windowClear() {
+  const win = document.querySelector('.plugin-window');
+  if (!win) return ['no window opened'];
+  const out = [];
+  const r = win.getBoundingClientRect();
+  if (r.left < -1 || r.top < -1 || r.right > innerWidth + 1 || r.bottom > innerHeight + 1)
+    out.push('the window is partly off the screen');
+  const inset = 6;
+  const points = [
+    [r.left + inset, r.top + inset],
+    [r.right - inset, r.top + inset],
+    [r.left + inset, r.bottom - inset],
+    [r.right - inset, r.bottom - inset],
+    [(r.left + r.right) / 2, (r.top + r.bottom) / 2],
+  ];
+  for (const [x, y] of points) {
+    const top = document.elementFromPoint(x, y);
+    if (top && !win.contains(top))
+      out.push(
+        `something is over the window at (${Math.round(x)}, ${Math.round(y)}): ${top.tagName.toLowerCase()}.${String(top.className).split(' ')[0]}`,
+      );
+  }
+  if (!document.querySelector('.talk-page')) out.push('the sheet closed: it should only go under the window');
+  return out;
+}
+
+/** Typing on a phone on its side, with the keyboard up: the sheet is across the column, over it. */
+function wide() {
+  const sheet = document.querySelector('.talk-page');
+  if (!sheet?.hasAttribute('data-wide')) return ['the sheet didn’t widen across the column for the keyboard'];
+  const r = sheet.getBoundingClientRect();
+  const column = document.querySelector('.phone-main').getBoundingClientRect();
+  const out = [];
+  if (Math.abs(r.left - column.left) > 1)
+    out.push(`it starts at ${Math.round(r.left)}, not the column's ${Math.round(column.left)}`);
+  if (r.bottom > visualViewport.height + 1) out.push('it reaches under the keyboard');
+  return out;
+}
+
+const CHECKS = { transportClear, solid, workingFits, windowClear, wide };
 
 // ---- the agent's host, played here: on, this device allowed, and a song's conversation ----
 
@@ -463,7 +517,50 @@ function commands(page, layout, press) {
     checks,
   ];
   if (layout === 'phone-portrait') return [[name, open, shut, checks], typed];
-  // on its side, typing widens the sheet across the column
+  // a plugin's window opened beside the sheet: whole, over it. The mixer is shown first (on a phone its
+  // tab, elsewhere X), and the slot pressed is one the sheet leaves in sight
+  const mixer = () =>
+    layout === 'phone-landscape'
+      ? press(page.locator('.tabbar button', { hasText: 'Mixer' }).first())
+      : page.keyboard.press('x');
+  const windowed = [
+    `${name}, a plugin's window opened`,
+    async () => {
+      await mixer();
+      await page.waitForTimeout(300);
+      await open();
+      await page.waitForTimeout(300);
+      await page.evaluate(() => {
+        const sheet = document.querySelector('.talk-page').getBoundingClientRect().left;
+        const slot = [...document.querySelectorAll('.mixer .slot.filled')].find((el) => {
+          const r = el.getBoundingClientRect();
+          return r.width > 0 && r.right < sheet;
+        });
+        // (a phone on its side shows the strips' foot: their slots are scrolled up out of sight)
+        slot?.scrollIntoView({ block: 'center' });
+        slot?.setAttribute('data-ui-check', 'slot');
+      });
+      await press(page.locator('[data-ui-check="slot"] .grow'));
+    },
+    async () => {
+      await page.keyboard.press('Escape');
+      await page.waitForTimeout(250);
+      await shut();
+      await page.waitForTimeout(250);
+      if (layout === 'phone-landscape') await press(page.locator('.tabbar button', { hasText: 'Tracks' }).first());
+      else await page.keyboard.press('x');
+    },
+    ['windowClear'],
+  ];
+  // on its side, typing widens the sheet across the column, over the keyboard (one coming up is played:
+  // what shows of the page gets shorter, as on an iPhone)
+  const keyboard = (up) =>
+    page.evaluate((up) => {
+      const view = window.visualViewport;
+      if (up) Object.defineProperty(view, 'height', { configurable: true, get: () => Math.round(innerHeight / 2) });
+      else delete view.height;
+      view.dispatchEvent(new Event('resize'));
+    }, up);
   if (layout === 'phone-landscape')
     return [
       [name, open, shut, checks],
@@ -472,11 +569,17 @@ function commands(page, layout, press) {
         async () => {
           await open();
           await field().focus();
+          await keyboard(true);
         },
-        shut,
-        checks,
+        async () => {
+          await keyboard(false);
+          await shut();
+        },
+        [...checks, 'wide'],
       ],
+      windowed,
     ];
+  if (layout === 'tablet') return [[name, open, shut, checks], windowed];
   return [[name, open, shut, checks]];
 }
 

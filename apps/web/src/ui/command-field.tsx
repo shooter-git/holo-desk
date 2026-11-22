@@ -38,6 +38,7 @@ import {
 import { type AttachmentKind, classify, MAX_FILES, type Ready, ready } from '../app/attach.ts';
 import { ACTIONS } from '../app/bar-actions.ts';
 import { barRows, type Command, type Extra } from '../app/commands.ts';
+import { arrowsChooseRows, shownLines } from '../app/fields.ts';
 import { isPhone, isTouch, useLayout } from '../app/layout.ts';
 import { closeBar, store, useApp } from '../app/store.ts';
 import { closeMenu } from './menu.tsx';
@@ -60,6 +61,20 @@ const CHIP_ICON: Record<AttachmentKind, typeof ImageIcon> = {
 };
 
 let chipKey = 0;
+
+/**
+ * What's typed and the files going with it, while the bar is open: kept as it changes form (the window
+ * crossing between a desktop's layout and a tablet's swaps the bar for the page), let go as it closes.
+ */
+let draft: { query: string; chips: Chip[] } = { query: '', chips: [] };
+
+/** How many lines a field's words take as it shows them (a one-line input, one). */
+function linesOf(el: HTMLInputElement | HTMLTextAreaElement): number {
+  if (!(el instanceof HTMLTextAreaElement)) return 1;
+  const s = getComputedStyle(el);
+  const padding = Number.parseFloat(s.paddingTop) + Number.parseFloat(s.paddingBottom);
+  return shownLines(el.scrollHeight, padding || 0, Number.parseFloat(s.lineHeight));
+}
 
 /** Where the field is: the bar's one line, or the page's field that grows. */
 export type FieldMode = 'bar' | 'page';
@@ -113,9 +128,9 @@ export function useCommandField({ mode }: { mode: FieldMode }): CommandFieldStat
   const a = useAgent((x) => x);
   const layout = useLayout();
   const phone = isPhone(layout);
-  const [query, setQueryState] = useState('');
+  const [query, setQueryState] = useState(() => (store.get().bar ? draft.query : ''));
   const [active, setActive] = useState(0);
-  const [chips, setChips] = useState<Chip[]>([]);
+  const [chips, setChips] = useState<Chip[]>(() => (store.get().bar ? draft.chips : []));
   const [note, setNote] = useState('');
   const [dropping, setDropping] = useState(false);
   const field = useRef<HTMLInputElement | HTMLTextAreaElement>(null);
@@ -243,8 +258,14 @@ export function useCommandField({ mode }: { mode: FieldMode }): CommandFieldStat
     if (song) void loadThread(song);
     return () => {
       if (was instanceof HTMLElement && was.isConnected) was.focus({ preventScroll: true });
+      // closed: what was typed goes with it (still open, the bar is changing form, and it's kept)
+      if (!store.get().bar) draft = { query: '', chips: [] };
     };
   }, [mode]);
+
+  useEffect(() => {
+    draft = { query, chips };
+  }, [query, chips]);
 
   // the chosen row stays in sight where the list scrolls (a phone on its side, with its keyboard up)
   // biome-ignore lint/correctness/useExhaustiveDependencies: run when the chosen row or the rows change, read from the page
@@ -254,10 +275,11 @@ export function useCommandField({ mode }: { mode: FieldMode }): CommandFieldStat
 
   const onKey = (e: KeyboardEvent<HTMLInputElement | HTMLTextAreaElement>) => {
     if (e.nativeEvent.isComposing) return;
-    // the page's list is over the field, its first row nearest: Up goes on to the next. In more than
-    // one line of words, the arrows move the caret
-    const lines = mode === 'page' && query.includes('\n');
-    if ((e.key === 'ArrowDown' || e.key === 'ArrowUp') && !lines) {
+    // the page's list is over the field, its first row nearest: Up goes on to the next. Its field grows:
+    // there the arrows choose rows only while the list shows and the words are on one line, and move the
+    // caret otherwise
+    const caret = mode === 'page' && !arrowsChooseRows(rows.length, linesOf(e.currentTarget));
+    if ((e.key === 'ArrowDown' || e.key === 'ArrowUp') && !caret) {
       const next = (e.key === 'ArrowDown') === (mode === 'bar');
       if (rows.length) setActive((at + (next ? 1 : rows.length - 1)) % rows.length);
     } else if (e.key === 'Enter' && !(mode === 'page' && e.shiftKey)) {

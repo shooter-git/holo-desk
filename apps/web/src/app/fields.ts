@@ -25,3 +25,18 @@ export function spaceIsTransport(
   const el = e.target as HTMLElement | null;
   return !el?.closest?.('[role="menu"], .view-menu, [aria-modal="true"]');
 }
+
+/**
+ * How many lines the words in a box take as it shows them, wrapped ones counted: from how tall they
+ * are (its scrollHeight), its padding top and bottom, and its line height. Never less than one.
+ */
+export function shownLines(scrollHeight: number, padding: number, lineHeight: number): number {
+  if (!(lineHeight > 0)) return 1;
+  return Math.max(1, Math.round((scrollHeight - padding) / lineHeight));
+}
+
+/**
+ * Whether Up and Down in the page's field choose a row of the list over it: only while the list shows
+ * and the words are on one line. In more than one, they move the caret, as in any box of words.
+ */
+export const arrowsChooseRows = (rows: number, lines: number): boolean => rows > 0 && lines <= 1;

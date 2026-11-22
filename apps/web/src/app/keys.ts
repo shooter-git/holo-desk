@@ -203,13 +203,18 @@ function toggleBar(): void {
 }
 
 /**
- * Whether the bar keeps the studio's keys: the bar always; the page while it covers the studio (a
- * phone held upright) or has the keyboard. A sheet beside the studio leaves them to it otherwise.
+ * Whether the bar keeps the studio's keys: the bar always (it's over everything); the page while it
+ * covers the studio (a phone held upright) or has the keyboard, unless something is over it (a dialog,
+ * a window over the whole studio, or one of the studio's windows opened after it): that takes the keys
+ * first, Escape closing it before the page. A sheet beside the studio leaves them to it otherwise.
  */
 function barHasKeys(target: EventTarget | null): boolean {
   const layout = layoutNow();
-  if (!usesPage(layout) || pageCovers(layout)) return true;
-  return !!(target as Element | null)?.closest?.('.talk-page');
+  if (!usesPage(layout)) return true;
+  const s = store.get();
+  const under = (s.plugin || s.synth || s.stage) && document.querySelector('.talk-room[data-below]');
+  if (s.dialog || covered() || under) return false;
+  return pageCovers(layout) || !!(target as Element | null)?.closest?.('.talk-page');
 }
 
 function onKeyDown(e: KeyboardEvent): void {

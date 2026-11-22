@@ -185,6 +185,8 @@ export function useSwipeToClose(
       el.removeEventListener('touchcancel', end);
       el.removeEventListener('click', click, true);
       place(null);
+      // (gone mid-swipe, drawn partway: the studio isn't left seeing through a page that isn't there)
+      peek(page, false);
     };
   }, [handle, card, toward]);
 }

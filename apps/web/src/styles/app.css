@@ -52,9 +52,9 @@
   --safe-bottom: env(safe-area-inset-bottom, 0px);
   --safe-left: env(safe-area-inset-left, 0px);
   --safe-right: env(safe-area-inset-right, 0px);
-  /* what floats over what: plugin windows, then the agent's page (a phone's or a tablet's bar), then
-     dialogs, then the bar (Ctrl /, which opens over a dialog too), then menus and popovers, then toasts,
-     then the start screen */
+  /* what floats over what: plugin windows, then the agent's page (a phone's or a tablet's bar; under a
+     window opened after it), then dialogs, then the bar (Ctrl /, which opens over a dialog too), then
+     menus and popovers, then toasts, then the start screen */
   --z-window: 90;
   --z-page: 95;
   --z-dialog: 100;
@@ -3928,6 +3928,12 @@ button.list-item {
   height: var(--shown-height, 100dvh);
   z-index: var(--z-page);
   pointer-events: none;
+}
+
+/* a window opened (or pressed) after it is over it, whole: on a phone a sheet over everything, its scrim
+   dimming the page too; on a tablet a floating window. A press on the page brings it back over */
+.talk-room[data-below] {
+  z-index: calc(var(--z-window) - 2);
 }
 
 .talk-page {

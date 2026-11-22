@@ -755,16 +755,24 @@ slash button and the swipe down all bring it; a second press of the slash button
   upright) or to the right (a sheet), and a tab on a phone held upright. Holding the header still, or
   drawing the page partway, fades it to almost clear (13%) while the finger stays, so the studio under
   it shows; it takes no taps while faded (`apps/web/src/ui/page-swipe.ts`).
+- **Windows.** A window opened after it (a plugin's, an instrument's, a stage's) shows whole, over it:
+  on a phone the window is a sheet over everything, and the page waits under it; on a tablet it floats,
+  opening beside the sheet when there's room for it there, over it when there isn't. A press on the
+  page brings it back over; a press on a window, that window (`windowOpened`, `windowLeft`).
 - **Keys.** The page keeps the studio's keys while it covers the studio (held upright) or has the
-  keyboard; a sheet beside the studio leaves them to it otherwise. It's under dialogs (`--z-page`), so
-  Ctrl / doesn't open it while one is up, and a dialog opened over it makes it inert.
+  keyboard; a sheet beside the studio leaves them to it otherwise. What's over it takes them first: a
+  dialog, or a window opened after it, so Escape closes that before the page. It's under dialogs
+  (`--z-page`), so Ctrl / doesn't open it while one is up, and a dialog opened over it makes it inert.
+  In its field, Up and Down choose a row of the list only while the words are on one line; in more,
+  they move the caret.
 - **Solid.** It's the studio's own surface, opaque, with nothing blurred behind it: no cost on a
   phone's GPU or memory beyond its own drawing.
 - **The panes under it rest.** Held upright, the views under the page are hidden and their frames
   skipped (`FramePause` in apps/web/src/ui/frame.ts; docs/architecture.md); the transport's display
   keeps going. They draw again as it
   closes or while it's held to see through.
-- What's typed is lost if the window crosses between the desktop's and the tablet's layouts.
+- What's typed, and the files going with it, stay as the window crosses between the desktop's and
+  the tablet's layouts (the bar becoming the sheet, or back).
 
 ## Threads ("since your last reply")
 

@@ -19,6 +19,7 @@ import {
   parseAntigravityModels,
 } from '../src/harness/antigravity.ts';
 import { GIT_ENV } from '../src/harness/env.ts';
+import type { HarnessId } from '../src/harness/types.ts';
 import { TOOLS } from '../src/tools/index.ts';
 import {
   alive,
@@ -484,23 +485,83 @@ describe('Antigravity: a sealed run', () => {
       expect(runs()).toBe(1);
     });
 
-    it('knows a refused request as each harness says it, and nothing else as one', () => {
-      for (const said of [
-        REFUSED_ERROR,
-        'API Error: 400 {"type":"error","error":{"type":"invalid_request_error","message":"messages.3: tool_use ids were found without tool_result blocks"}}',
-        'unexpected status 400 Bad Request: {"error":{"message":"Invalid input","type":"invalid_request_error"}}',
-        '[invalid_argument] Error',
-      ])
-        expect(refusedRequest(said), said).toBe(true);
-      for (const said of [
-        'RESOURCE_EXHAUSTED (code 429): You have exhausted your capacity on this model.',
-        'API Error: 429 {"type":"error","error":{"type":"rate_limit_error","message":"Rate limited"}}',
-        'Not logged in · Please run /login',
-        'invalid model selection (--model "x" --effort ""): model x is not recognized',
-        'It took longer than 10 minutes',
-        'HO[LO]’s tools didn’t start in Antigravity, so it answered without them',
-      ])
-        expect(refusedRequest(said), said).toBe(false);
+    it('knows a refused conversation as each harness’s own error says it, and nothing else as one', () => {
+      const refusals: [HarnessId, string][] = [
+        ['antigravity', REFUSED_ERROR],
+        [
+          'claude',
+          'API Error: 400 {"type":"error","error":{"type":"invalid_request_error","message":"messages.3: `tool_use` ids were found without `tool_result` blocks immediately after"}}',
+        ],
+        [
+          'codex',
+          'unexpected status 400 Bad Request: {"error":{"message":"No tool output found for function call call_abc.","type":"invalid_request_error","param":"input","code":null}}',
+        ],
+      ];
+      for (const [harness, said] of refusals) expect(refusedRequest(harness, said), said).toBe(true);
+      // the same words from another harness aren't how it says one
+      expect(refusedRequest('claude', REFUSED_ERROR)).toBe(false);
+      expect(refusedRequest('cursor', '[invalid_argument] Error')).toBe(false);
+      const ordinary: [HarnessId, string][] = [
+        // the account, where it is, a model it can't use: another conversation fares no better
+        [
+          'claude',
+          'API Error: 400 {"type":"error","error":{"type":"invalid_request_error","message":"Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits."}}',
+        ],
+        ['antigravity', 'FAILED_PRECONDITION (code 400): User location is not supported for the API use.'],
+        ['antigravity', 'INVALID_ARGUMENT (code 400): User location is not supported for the API use.'],
+        [
+          'codex',
+          'unexpected status 400 Bad Request: {"detail":"The \'gpt-6\' model is not supported when using Codex with a ChatGPT account."}',
+        ],
+        [
+          'codex',
+          'unexpected status 400 Bad Request: {"error":{"message":"The model `gpt-6` does not exist or you do not have access to it.","type":"invalid_request_error"}}',
+        ],
+        // anything else that mentions a 400 or an invalid argument
+        ['antigravity', 'The studio refused the change (status 400)'],
+        ['codex', 'HTTP 400: the studio refused the change'],
+        ['antigravity', 'Error: invalid argument --foo'],
+        ['antigravity', 'RESOURCE_EXHAUSTED (code 429): You have exhausted your capacity on this model.'],
+        ['claude', 'API Error: 429 {"type":"error","error":{"type":"rate_limit_error","message":"Rate limited"}}'],
+        ['claude', 'Not logged in · Please run /login'],
+        ['antigravity', 'invalid model selection (--model "x" --effort ""): model x is not recognized'],
+      ];
+      for (const [harness, said] of ordinary) expect(refusedRequest(harness, said), said).toBe(false);
+    });
+
+    it('goes by the harness’s own error only: never a tool’s answer, the model’s words or stderr', async () => {
+      s = sandbox();
+      // a tool's answer and the model's reply that quote such a refusal, in a turn that went well
+      const quoted = [
+        {
+          step_index: 4,
+          state: 'DONE',
+          step_type: 'tool',
+          tool_name: 'mcp_holo_song_status',
+          tool_info: { output: REFUSED_ERROR },
+        },
+        { step_index: 5, state: 'DONE', step_type: 'agent_response', text_delta: REFUSED_ERROR },
+      ];
+      const ok = refusedStream(quoted).replace(
+        /"status":"ERROR","response":"","error":"[^"]*"/,
+        `"status":"SUCCESS","response":${JSON.stringify(REFUSED_ERROR)}`,
+      );
+      const h = fake({ signedIn: true, run: counted(resumeRefused(ok).replace('exit 1;;', 'exit 0;;')) });
+      expect((await runToEnd(h, job(s, { session: OLD }))).at(-1)).toEqual({ type: 'done', reply: REFUSED_ERROR });
+      expect(runs()).toBe(1);
+      // said on stderr only, the conversation resumed but no result: an ordinary failure
+      const init = JSON.stringify({ event: 'init', conversation_id: OLD, init: { agent: 'holo' } });
+      const stderr = fake({
+        signedIn: true,
+        run: counted(
+          `case "$*" in *--conversation=*) echo '${init}'; echo "error: ${REFUSED_ERROR}" >&2; exit 1;; *) ${replay('antigravity-normal')};; esac`,
+        ),
+      });
+      expect(await runToEnd(stderr, job(s, { session: OLD }))).toEqual([
+        { type: 'session', session: OLD },
+        { type: 'failed', error: REFUSED_ERROR },
+      ]);
+      expect(runs()).toBe(2);
     });
 
     it('leaves a conversation refused for anything else (a limit) to be carried on', async () => {

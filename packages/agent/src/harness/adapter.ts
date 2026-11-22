@@ -295,18 +295,38 @@ export function cleanError(text: string, secrets: readonly string[] = []): strin
 }
 
 /**
- * A model service refusing the request itself (HTTP 400): Gemini's `INVALID_ARGUMENT (code 400)` as
- * Antigravity says it, the Anthropic and OpenAI APIs' `invalid_request_error`, a Connect
- * `[invalid_argument]`. Not a limit (429), a sign-in (401, 403) or the network. The request is the
- * conversation so far: carried on, much the same one is sent again and refused again (seen with
- * Antigravity: a conversation refused once was refused again on the next turn's first request, though
- * what was asked had changed).
+ * How each harness says, in the error its own result carries, that its model service refused the
+ * request itself as malformed (HTTP 400): the request is the conversation so far, so carried on, much
+ * the same one is sent again and refused again (seen with Antigravity: a conversation refused once was
+ * refused again on the next turn's first request, though what was asked had changed). Each is the
+ * whole error's start, as the harness writes it from the API's answer:
+ * - Antigravity: Gemini's `INVALID_ARGUMENT (code 400): …` (not `FAILED_PRECONDITION (code 400)`, a
+ *   location the API doesn't serve);
+ * - Claude Code: `API Error: 400 {…"type":"invalid_request_error"…}` from the Anthropic API;
+ * - Codex: `unexpected status 400 Bad Request: {…"type":"invalid_request_error"…}` from the OpenAI API.
+ * Cursor's wording for one hasn't been seen: none of its failures counts.
  */
-const REFUSED =
-  /\binvalid[_ ](?:argument|request)(?:_error)?\b|\b400 Bad Request\b|\b(?:API error|HTTP|status|code)\W{0,3}400\b/i;
+const REFUSALS: Partial<Record<HarnessId, RegExp>> = {
+  antigravity: /^INVALID_ARGUMENT \(code 400\):/,
+  claude: /^API Error: 400 [\s\S]*"type":\s*"invalid_request_error"/,
+  codex: /^unexpected status 400 Bad Request: [\s\S]*"type":\s*"invalid_request_error"/,
+};
 
-export function refusedRequest(error: string): boolean {
-  return REFUSED.test(error);
+/**
+ * What the same 400s also say that has nothing to do with the conversation, and is ordinary: the
+ * account (billing, credits, a plan, a quota), where it is, a model it can't use, a sign-in. Another
+ * conversation would be refused just the same, and this one is worth keeping.
+ */
+const ORDINARY =
+  /credit|billing|payment|\bplan\b|quota|usage limit|location|region|country|not supported|unsupported|not available|does not exist|not found|access|permission|unauthori[sz]ed|forbidden|api key|authenticat|log ?in|sign ?in/i;
+
+/**
+ * Whether a harness's own error (its result's, never a tool's answer or the model's words) says its
+ * model service refused the conversation itself.
+ */
+export function refusedRequest(harness: HarnessId, error: string): boolean {
+  const said = error.trim();
+  return !!REFUSALS[harness]?.test(said) && !ORDINARY.test(said);
 }
 
 /** The last lines of stderr that say something, for an error. */
@@ -770,6 +790,8 @@ export function defineHarness(spec: Spec, o: AdapterOptions): Harness {
       let model: string | null = null;
       let tripped: string | null = null;
       let failure: string | null = null;
+      /** The error the harness's own result said (its reader's `failed`), not one of HO[LO]'s limits. */
+      let harnessError: string | null = null;
       let note: string | null = null;
       let ended = false;
       let busy = false;
@@ -814,6 +836,7 @@ export function defineHarness(spec: Spec, o: AdapterOptions): Harness {
               break;
             case 'failed':
               failure = s.error;
+              harnessError = s.error;
               break;
             case 'note':
               note = s.text;
@@ -907,7 +930,7 @@ export function defineHarness(spec: Spec, o: AdapterOptions): Harness {
         // one that hadn't called a tool yet starts again, once, as a new conversation; else the turn
         // fails, and the next one starts a new conversation
         const succeeded = code === 0 || (ended && exited && code === null);
-        const refused = !timedOut && refusedRequest(failure ?? (succeeded ? '' : (note ?? tailError(stderrTail))));
+        const refused = !timedOut && harnessError !== null && refusedRequest(spec.id, harnessError);
         if (refused && job.session && !busy) return resolve({ again: 'fresh' });
         const fresh = refused ? { fresh: true as const } : {};
         if (failure) {

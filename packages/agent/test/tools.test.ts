@@ -398,6 +398,13 @@ describe('tracks', () => {
     expect(label.endsWith('…')).toBe(true);
     expect(stepLabel('Strings:\nvolume -4 dB')).toBe('Strings: volume -4 dB');
     expect(stepLabel(`${'x'.repeat(100)}`)).toBe(`${'x'.repeat(79)}…`);
+    // no spaces to cut at: between whole characters, never inside an emoji's surrogate pair or sequence
+    const keys = String.fromCodePoint(0x1f3b9);
+    const cut = stepLabel(keys.repeat(60));
+    expect(cut).toBe(`${keys.repeat(39)}…`);
+    expect(() => encodeURIComponent(cut)).not.toThrow();
+    const family = String.fromCodePoint(0x1f468, 0x200d, 0x1f469, 0x200d, 0x1f467);
+    expect(stepLabel(family.repeat(20))).toBe(`${family.repeat(9)}…`);
   });
 
   it('switches a track off (disarmed: it records nothing) and on again', async () => {

@@ -1162,22 +1162,35 @@ describe('since your last reply', () => {
     const { start, s, desk, run, status, thread } = await setup();
     const first = await start({ project: s.id, text: 'A bass line' });
     run.say({ type: 'agent-session', job: first.job, session: 'sess-1' });
-    run.say({ type: 'agent-failed', job: first.job, error: 'Rate limited (429)' });
-    await waitFor(() => status(desk, first.job)?.state === 'failed');
-    expect(thread(s.id).session).toBe('sess-1');
-    const second = await start({ project: s.id, text: 'Continue' });
+    run.say({ type: 'agent-done', job: first.job });
+    await waitFor(() => status(desk, first.job)?.state === 'done');
+    expect(thread(s.id).seen_doc).not.toBeNull();
+    // a limit: the conversation is carried on, and the song it saw still counts
+    const second = await start({ project: s.id, text: 'Drums too' });
     expect(second.run).toMatchObject({ session: 'sess-1' });
+    run.say({ type: 'agent-failed', job: second.job, error: 'Rate limited (429)' });
+    await waitFor(() => status(desk, second.job)?.state === 'failed');
+    expect(thread(s.id).session).toBe('sess-1');
+    const third = await start({ project: s.id, text: 'Continue' });
+    expect(third.run).toMatchObject({ session: 'sess-1' });
+    expect(third.run.prompt).toContain(
+      '- Your last turn failed (Rate limited (429)); what it changed may still be in the song.',
+    );
+    expect(third.run.prompt).toContain('- The song is as you left it.');
     // refused as a request (the runner says so): carried on, it would be refused again
     const refused = 'INVALID_ARGUMENT (code 400): Request contains an invalid argument.';
-    run.say({ type: 'agent-failed', job: second.job, error: refused, fresh: true });
-    await waitFor(() => status(desk, second.job)?.state === 'failed');
-    expect(status(desk, second.job)).toMatchObject({ error: refused });
-    expect(thread(s.id).session).toBeNull();
-    // the same thread, a new conversation, told what happened
-    const third = await start({ project: s.id, text: 'Continue' });
-    expect(third.run.thread).toBe(second.run.thread);
-    expect(third.run.session).toBeUndefined();
-    expect(third.run.prompt).toContain(`- Your last turn failed (${refused});`);
+    run.say({ type: 'agent-failed', job: third.job, error: refused, fresh: true });
+    await waitFor(() => status(desk, third.job)?.state === 'failed');
+    expect(status(desk, third.job)).toMatchObject({ error: refused });
+    expect(thread(s.id)).toMatchObject({ session: null, seen_doc: null, seen_revision: null });
+    // the same thread, a new conversation: told it is one, and not how the song changed since one it never saw
+    const fourth = await start({ project: s.id, text: 'Continue' });
+    expect(fourth.run.thread).toBe(third.run.thread);
+    expect(fourth.run.session).toBeUndefined();
+    expect(fourth.run.prompt).toContain(
+      `## Since your last reply\n- This is a new conversation: the last one couldn't go on, as its last turn was refused (${refused}). What that turn changed may still be in the song: read the song as it is now before you change it.\n\n## What the studio shows`,
+    );
+    expect(fourth.run.prompt).not.toContain('as you left it');
   });
 });
 

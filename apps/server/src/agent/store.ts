@@ -54,6 +54,8 @@ export interface ThreadEvent {
   label: string;
   /** One of the agent's own steps (undone or redone). */
   agent?: boolean;
+  /** A failed turn whose conversation can't go on: the next request starts a new one. */
+  fresh?: boolean;
   at: number;
 }
 

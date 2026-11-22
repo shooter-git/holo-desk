@@ -231,9 +231,30 @@ export function stepLabel(label: string): string {
       .replace(/\s+/g, ' ')
       .trim() || 'Agent change';
   if (line.length <= LABEL_MAX) return line;
-  const cut = line.slice(0, LABEL_MAX - 1);
+  const cut = wholeCharacters(line, LABEL_MAX - 1);
   const space = cut.lastIndexOf(' ');
   return `${(space > LABEL_MAX / 2 ? cut.slice(0, space) : cut).replace(/[\s,;:–-]+$/u, '')}…`;
+}
+
+const graphemes =
+  typeof Intl.Segmenter === 'function' ? new Intl.Segmenter(undefined, { granularity: 'grapheme' }) : null;
+
+/**
+ * The start of `text`, at most `max` UTF-16 units (as the server counts), cut between characters as
+ * people see them: never inside an emoji (or its surrogate pair), nor between a letter and its accent.
+ */
+function wholeCharacters(text: string, max: number): string {
+  if (!graphemes) {
+    // at least never half of a surrogate pair
+    const unit = text.charCodeAt(max - 1);
+    return text.slice(0, unit >= 0xd800 && unit <= 0xdbff ? max - 1 : max);
+  }
+  let end = 0;
+  for (const { segment } of graphemes.segment(text)) {
+    if (end + segment.length > max) break;
+    end += segment.length;
+  }
+  return text.slice(0, end);
 }
 
 /**

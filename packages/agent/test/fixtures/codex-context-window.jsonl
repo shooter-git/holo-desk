@@ -1,0 +1,4 @@
+{"type":"thread.started","thread_id":"01a204ef-1892-7590-9521-a6eafc42e62f"}
+{"type":"turn.started"}
+{"type":"error","message":"Codex ran out of room in the model's context window. Start a new thread or clear earlier history before retrying."}
+{"type":"turn.failed","error":{"message":"Codex ran out of room in the model's context window. Start a new thread or clear earlier history before retrying."}}

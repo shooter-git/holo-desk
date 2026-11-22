@@ -22,7 +22,7 @@ import {
 } from './process.ts';
 import type { AuthStatus, Binary, Harness, HarnessEvent, HarnessId, HarnessInfo, Job, Run, RunEvent } from './types.ts';
 import { MODEL } from './types.ts';
-import { FINISHED_FILE, mcpServer, privateDir } from './workspace.ts';
+import { FAILED_ONCE_FILE, FINISHED_FILE, mcpServer, privateDir, writePrivate } from './workspace.ts';
 
 /** What reading one event (or one line of stderr) found. */
 export type Seen =
@@ -120,6 +120,13 @@ export interface Spec {
    * still has them.
    */
   rulesAtStartOnly?: boolean;
+  /**
+   * An error in its own result that the harness should get past by itself, so the conversation is kept
+   * (Codex's context window: it compacts the conversation before the next turn), but that counts as a
+   * refused conversation when a resumed run fails with it again in the conversation whose last run it
+   * ended: then it didn't get past it, and every turn would fail the same way.
+   */
+  refusedIfRepeated?: RegExp;
 }
 
 export interface AdapterOptions {
@@ -296,28 +303,38 @@ export function cleanError(text: string, secrets: readonly string[] = []): strin
 
 /**
  * How each harness says, in the error its own result carries, that its model service refused the
- * request itself as malformed (HTTP 400): the request is the conversation so far, so carried on, much
- * the same one is sent again and refused again (seen with Antigravity: a conversation refused once was
- * refused again on the next turn's first request, though what was asked had changed). Each is the
- * whole error's start, as the harness writes it from the API's answer:
- * - Antigravity: Gemini's `INVALID_ARGUMENT (code 400): …` (not `FAILED_PRECONDITION (code 400)`, a
- *   location the API doesn't serve);
- * - Claude Code: `API Error: 400 {…"type":"invalid_request_error"…}` from the Anthropic API;
- * - Codex: `unexpected status 400 Bad Request: {…"type":"invalid_request_error"…}` from the OpenAI API.
- * Cursor's wording for one hasn't been seen: none of its failures counts.
+ * conversation itself: the request is the conversation so far, so carried on, much the same one is
+ * sent again and refused again (seen with Antigravity: a conversation refused once was refused again on
+ * the next turn's first request, though what was asked had changed). Each is the whole error's start,
+ * as the harness writes it (docs/agent-harnesses.md, "A refused conversation", has where each was seen):
+ * - Antigravity: Gemini's `INVALID_ARGUMENT (code 400): …` (seen in real use; not
+ *   `FAILED_PRECONDITION (code 400)`, a location the API doesn't serve);
+ * - Claude Code: `API Error: 400 …`, the API's message or its own words for a broken history ("due to
+ *   tool use concurrency issues", "orphaned tool_result…"), never the API's JSON; and `Prompt is too
+ *   long` or `Request too large`, said only once it couldn't compact the conversation to fit;
+ * - Codex: the API's own JSON body, as it came (`{"error":{…"type":"invalid_request_error"…}}`, or over
+ *   its WebSocket `{"type":"error","status":400,…}`): a 400 is the only status it shows that way. It
+ *   shows any other as `unexpected status <status>: <the body's message>`, so a 400 in that form counts
+ *   too (an older Codex wrote it so, with the body). Its context-window error ("Codex ran out of room…")
+ *   counts only when it's repeated (`refusedIfRepeated` in codex.ts): Codex compacts the conversation
+ *   before the next turn's first request, which should be enough.
+ * Cursor's isn't in its stream at all (a failed run has no `result`; it prints the error on stderr):
+ * none of its failures counts.
  */
 const REFUSALS: Partial<Record<HarnessId, RegExp>> = {
   antigravity: /^INVALID_ARGUMENT \(code 400\):/,
-  claude: /^API Error: 400 [\s\S]*"type":\s*"invalid_request_error"/,
-  codex: /^unexpected status 400 Bad Request: [\s\S]*"type":\s*"invalid_request_error"/,
+  claude: /^(?:API Error: 400 |Prompt is too long\b|Request too large\b)/,
+  codex: /^(?:unexpected status 400 Bad Request: |\{[\s\S]*"type":\s*"invalid_request_error")/,
 };
 
 /**
  * What the same 400s also say that has nothing to do with the conversation, and is ordinary: the
- * account (billing, credits, a plan, a quota), where it is, a model it can't use, a sign-in. Another
- * conversation would be refused just the same, and this one is worth keeping. Phrases only, never a
- * bare word a refusal may quote from the conversation ("region", "plan", "access" and "not found" are
- * all HO[LO]'s own words): Gemini's location refusal is `FAILED_PRECONDITION`, never matched anyway.
+ * account (billing, credits, a plan, a quota, a disabled organization), where it is, a model it can't
+ * use or a setting it doesn't take, a sign-in. Another conversation would be refused just the same, and
+ * this one is worth keeping.
+ * Phrases only, never a bare word a refusal may quote from the conversation ("region", "plan", "access"
+ * and "not found" are all HO[LO]'s own words): Gemini's location refusal is `FAILED_PRECONDITION`, never
+ * matched anyway.
  */
 const ORDINARY = new RegExp(
   [
@@ -328,9 +345,15 @@ const ORDINARY = new RegExp(
     'usage limit',
     'upgrade (?:your )?plan',
     'plans? (?:&|and) billing',
+    'organization has been disabled',
+    'disabled organization',
     'user location is not supported',
     'not (?:supported|available) in your (?:country|region|location)',
     'model\\b[^.]{0,80}?(?:not supported|unsupported|not available|not found|does not exist)',
+    'invalid model name',
+    'unsupported parameter',
+    'organization must be verified',
+    '"code":\\s*"(?:model_not_found|unsupported_parameter)"',
     '(?:do|does) not have access to (?:the |this |that )?(?:model|it)\\b',
     'not logged in',
     '(?:log|sign) ?in again',
@@ -339,6 +362,8 @@ const ORDINARY = new RegExp(
     'permission denied',
     'api key',
     'authenticat',
+    // what Codex adds to an error when the sign-in was refused
+    'auth error(?: code)?:',
   ].join('|'),
   'i',
 );
@@ -779,6 +804,32 @@ export function defineHarness(spec: Spec, o: AdapterOptions): Harness {
     },
   };
 
+  /**
+   * What a run ended with, for an error that counts as a refusal only when repeated
+   * (`spec.refusedIfRepeated`): the conversation it failed in is noted in the workspace, and any other
+   * outcome clears it. True when this run resumed the conversation the last one failed in, and failed
+   * with it again.
+   */
+  function failedOnce(job: Job, session: string | null, error: string | null): boolean {
+    const file = join(job.workspace, FAILED_ONCE_FILE);
+    const repeated = error !== null && !!spec.refusedIfRepeated?.test(error.trim());
+    let before: string | null = null;
+    try {
+      before = existsSync(file) ? readFileSync(file, 'utf8').trim() : null;
+    } catch {
+      // as if it weren't there
+    }
+    const again = repeated && !!job.session && before === job.session;
+    const now = session ?? job.session;
+    try {
+      if (repeated && !again && now) writePrivate(file, now);
+      else rmSync(file, { force: true });
+    } catch {
+      // only a note: without it, the next failure counts as the first
+    }
+    return again;
+  }
+
   /** A resumed turn's prompt, for a harness that reads its instructions only when a conversation starts: the rules first. */
   function withRules(job: Job): Job {
     const rules = job.instructions?.trim();
@@ -929,6 +980,8 @@ export function defineHarness(spec: Spec, o: AdapterOptions): Harness {
         if (silent) clearTimeout(silent);
         // after every run, whatever it started goes (Cursor's worker outlives it otherwise)
         stopGroup(child, 500);
+        // whether it failed, again, in the same conversation, with an error that counts only then
+        const again = failedOnce(job, session, timedOut || tripped || spawnError ? null : harnessError);
         if (tripped) {
           report({ type: 'failed', error: `Stopped: ${tripped}` });
           return resolve({});
@@ -953,7 +1006,7 @@ export function defineHarness(spec: Spec, o: AdapterOptions): Harness {
         // one that hadn't called a tool yet starts again, once, as a new conversation; else the turn
         // fails, and the next one starts a new conversation
         const succeeded = code === 0 || (ended && exited && code === null);
-        const refused = !timedOut && harnessError !== null && refusedRequest(spec.id, harnessError);
+        const refused = !timedOut && harnessError !== null && (refusedRequest(spec.id, harnessError) || again);
         if (refused && job.session && !busy) return resolve({ again: 'fresh' });
         const fresh = refused ? { fresh: true as const } : {};
         if (failure) {

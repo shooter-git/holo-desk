@@ -488,20 +488,15 @@ describe('Antigravity: a sealed run', () => {
     it('knows a refused conversation as each harness’s own error says it, and nothing else as one', () => {
       const refusals: [HarnessId, string][] = [
         ['antigravity', REFUSED_ERROR],
-        [
-          'claude',
-          'API Error: 400 {"type":"error","error":{"type":"invalid_request_error","message":"messages.3: `tool_use` ids were found without `tool_result` blocks immediately after"}}',
-        ],
+        // as each says one (harness-claude and harness-codex have the recorded runs)
+        ['claude', 'API Error: 400 due to tool use concurrency issues.'],
         [
           'codex',
-          'unexpected status 400 Bad Request: {"error":{"message":"No tool output found for function call call_abc.","type":"invalid_request_error","param":"input","code":null}}',
+          '{"error":{"message":"No tool output found for function call call_abc.","type":"invalid_request_error","param":"input","code":null}}',
         ],
         // quoting the conversation: HO[LO]'s own words (a region, a plan, access, not found) don't make it ordinary
         ['antigravity', 'INVALID_ARGUMENT (code 400): Invalid value at function_call.args.region: invalid value'],
-        [
-          'claude',
-          'API Error: 400 {"type":"error","error":{"type":"invalid_request_error","message":"messages.7: tool_use id not found for the region in the plan; access to it was cut"}}',
-        ],
+        ['claude', 'API Error: 400 messages.7: tool_use id not found for the region in the plan; access to it was cut'],
       ];
       for (const [harness, said] of refusals) expect(refusedRequest(harness, said), said).toBe(true);
       // the same words from another harness aren't how it says one
@@ -511,24 +506,21 @@ describe('Antigravity: a sealed run', () => {
         // the account, where it is, a model it can't use: another conversation fares no better
         [
           'claude',
-          'API Error: 400 {"type":"error","error":{"type":"invalid_request_error","message":"Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits."}}',
+          'API Error: 400 Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits.',
         ],
         ['antigravity', 'FAILED_PRECONDITION (code 400): User location is not supported for the API use.'],
         ['antigravity', 'INVALID_ARGUMENT (code 400): User location is not supported for the API use.'],
+        ['codex', '{"detail":"The \'gpt-6\' model is not supported when using Codex with a ChatGPT account."}'],
         [
           'codex',
-          'unexpected status 400 Bad Request: {"detail":"The \'gpt-6\' model is not supported when using Codex with a ChatGPT account."}',
-        ],
-        [
-          'codex',
-          'unexpected status 400 Bad Request: {"error":{"message":"The model `gpt-6` does not exist or you do not have access to it.","type":"invalid_request_error"}}',
+          '{"error":{"message":"The model `gpt-6` does not exist or you do not have access to it.","type":"invalid_request_error"}}',
         ],
         // anything else that mentions a 400 or an invalid argument
         ['antigravity', 'The studio refused the change (status 400)'],
         ['codex', 'HTTP 400: the studio refused the change'],
         ['antigravity', 'Error: invalid argument --foo'],
         ['antigravity', 'RESOURCE_EXHAUSTED (code 429): You have exhausted your capacity on this model.'],
-        ['claude', 'API Error: 429 {"type":"error","error":{"type":"rate_limit_error","message":"Rate limited"}}'],
+        ['claude', 'API Error: Request rejected (429) · Rate limited'],
         ['claude', 'Not logged in · Please run /login'],
         ['antigravity', 'invalid model selection (--model "x" --effort ""): model x is not recognized'],
       ];

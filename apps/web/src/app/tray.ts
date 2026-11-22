@@ -7,11 +7,12 @@
  * then. A tablet or a desktop has none: its sheet or bar can stay open beside the studio.
  *
  * Which replies have been read, and which trays were put away, are kept on this device
- * (`holo:agent-tray`: job ids, the latest 20 of each), so a reload doesn't bring one back or lose it.
+ * (`holo:agent-tray`: job ids, the latest 20 of each), so a reload doesn't bring one back or lose it:
+ * as a song opens on a phone, its conversation is read quietly for it (trayWantsThread).
  */
 import { checkDock } from '@holo/agent/view';
 import { useSyncExternalStore } from 'react';
-import { type AgentState, type Exchange, exchange, type TokenStorage } from './agent.ts';
+import { type AgentState, type Exchange, exchange, isOn, type TokenStorage } from './agent.ts';
 import { isPhone, type Layout } from './layout.ts';
 
 const TRAY_KEY = 'holo:agent-tray';
@@ -89,6 +90,16 @@ const subscribe = (fn: () => void) => {
 
 export function useKept(): Kept {
   return useSyncExternalStore(subscribe, () => kept);
+}
+
+/**
+ * Whether the song's conversation is read as it opens, for its tray (after a reload, or another song):
+ * the agent is on, it isn't read yet, and a reply read here with a dock wasn't put away (with none, no
+ * tray can show, so nothing is asked). Once per song opened; the page reads it afresh as it opens.
+ */
+export function trayWantsThread(a: AgentState, project: string | null, read: Kept): boolean {
+  if (!project || !isOn(a) || a.thread?.project === project) return false;
+  return read.seen.some((job) => !read.gone.includes(job));
 }
 
 /**

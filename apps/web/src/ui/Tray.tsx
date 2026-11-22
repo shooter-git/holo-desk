@@ -4,15 +4,16 @@
  * upright, at the foot of the content column on its side. Its controls do what the view's do. ^ opens
  * the page; ×, or a swipe across it either way, puts it away, and the next request takes it.
  *
- * Hidden, it's nothing at all: no listeners, timers or observers until it shows.
+ * Hidden, it's nothing at all: no listeners, timers or observers until it shows; as a song opens, one
+ * quiet read of its conversation brings its tray back after a reload.
  */
 import type { View } from '@holo/agent/view';
 import { ChevronUp, X } from 'lucide-react';
 import { type RefObject, useEffect, useRef } from 'react';
-import { useAgent } from '../app/agent.ts';
+import { agent, isOn, loadThread, useAgent } from '../app/agent.ts';
 import type { Layout } from '../app/layout.ts';
 import { openBar, useApp } from '../app/store.ts';
-import { dismiss, trayFor, useKept } from '../app/tray.ts';
+import { dismiss, keptNow, trayFor, trayWantsThread, useKept } from '../app/tray.ts';
 import { DockView } from './AgentView.tsx';
 import { along, closes, drawnToward, judgeToward, reducedMotion, speedToward, type Toward } from './bar-swipe.ts';
 import { canScroll } from './page-swipe.ts';
@@ -167,18 +168,20 @@ function TrayRow({ job, view }: { job: string; view: View }) {
   );
 }
 
-/** The tray where it goes in a phone's layout: nothing unless it shows. */
+/**
+ * The tray where it goes in a phone's layout: nothing unless it shows. As a song opens (a reload, or
+ * another song), its conversation is read quietly, once, when a tray could come of it.
+ */
 export function Tray({ layout }: { layout: Layout }) {
   const project = useApp((s) => s.project?.id ?? null);
   const open = useApp((s) => s.bar);
   const read = useKept();
-  const ex = trayFor(
-    useAgent((a) => a),
-    project,
-    read,
-    layout,
-    open,
-  );
+  const a = useAgent((s) => s);
+  const on = isOn(a);
+  useEffect(() => {
+    if (on && project && trayWantsThread(agent.get(), project, keptNow())) void loadThread(project, false);
+  }, [on, project]);
+  const ex = trayFor(a, project, read, layout, open);
   if (!ex?.job || !ex.view) return null;
   return <TrayRow key={ex.job} job={ex.job} view={ex.view} />;
 }

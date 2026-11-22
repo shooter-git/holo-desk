@@ -21,10 +21,11 @@ class Storage {
 
 let A: typeof AgentModule;
 let T: typeof TrayModule;
+const browser = new Storage();
 
 beforeAll(async () => {
   // the modules read the browser's storage and the screen as they load: theirs are these
-  vi.stubGlobal('localStorage', new Storage());
+  vi.stubGlobal('localStorage', browser);
   vi.stubGlobal('window', globalThis);
   vi.stubGlobal('matchMedia', () => ({ matches: false, addEventListener() {}, removeEventListener() {} }));
   vi.stubGlobal('addEventListener', () => undefined);
@@ -179,5 +180,108 @@ describe('what the tray keeps on this device', () => {
     };
     T.markSeen('agj_0000000000ff', refusing);
     expect(T.keptNow().seen).toContain('agj_0000000000ff');
+  });
+});
+
+describe('the tray after a reload: the song’s conversation read quietly as it opens', () => {
+  it('is read only with the agent on, not read yet, and a tray that could come of it', () => {
+    const a = withTurns(turn());
+    const off = A.reduce(a, { type: 'info', info: { ...ON, enabled: false } });
+    expect(T.trayWantsThread(a, 'prj_b', SEEN)).toBe(true);
+    // read already (the page opened), another song not open, the agent off
+    expect(T.trayWantsThread(a, SONG, SEEN)).toBe(false);
+    expect(T.trayWantsThread(a, null, SEEN)).toBe(false);
+    expect(T.trayWantsThread(off, 'prj_b', SEEN)).toBe(false);
+    // no reply with a dock read here, or every one put away: no tray could show, nothing is asked
+    expect(T.trayWantsThread(a, 'prj_b', { seen: [], gone: [] })).toBe(false);
+    expect(T.trayWantsThread(a, 'prj_b', { seen: [TAKES], gone: [TAKES] })).toBe(false);
+  });
+
+  /** The host answers the song's conversation (its turns, and its job working or waiting); what's asked is kept. */
+  function host(turns: Turn[], job: JobView | null): string[] {
+    const asked: string[] = [];
+    vi.stubGlobal('fetch', async (path: string) => {
+      asked.push(path);
+      const body = path === `/api/agent/threads/${SONG}` ? { thread: { turns }, job, now: Date.now() } : {};
+      return { ok: true, status: 200, json: async () => body } as Response;
+    });
+    return asked;
+  }
+
+  /** A fresh page: the agent on for this device, another song's reply waiting (the dot), nothing read. */
+  function reloaded(): void {
+    A.agent.dispatch({ type: 'info', info: { ...ON, enabled: false } });
+    A.agent.dispatch({ type: 'me', id: 'dev_me' });
+    A.agent.dispatch({ type: 'info', info: ON });
+    const elsewhere: JobView = {
+      id: 'agj_0000000000e1',
+      project: 'prj_b',
+      device: 'dev_me',
+      state: 'done',
+      request: 'Tidy the drums',
+      started: 500,
+    };
+    A.agent.dispatch({ type: 'status', job: elsewhere, barOpen: false });
+  }
+
+  it('brings the tray back from what was read and put away here, and leaves the dot as it was', async () => {
+    reloaded();
+    browser.setItem('holo:agent-tray', JSON.stringify({ seen: [TAKES], gone: [] }));
+    const followed = A.readFollowed().map((f) => f.id);
+    expect(A.agent.get().unseen).toBe(true);
+    const asked = host([turn({ job: 'agj_00000000000a', at: 1000, view: undefined }), turn()], null);
+    expect(T.trayWantsThread(A.agent.get(), SONG, T.readKept())).toBe(true);
+    await A.loadThread(SONG, false);
+    expect(asked).toEqual([`/api/agent/threads/${SONG}`]);
+    expect(A.agent.get().unseen).toBe(true);
+    expect(A.readFollowed().map((f) => f.id)).toEqual(followed);
+    expect(T.trayFor(A.agent.get(), SONG, T.readKept(), 'phone-portrait', false)?.job).toBe(TAKES);
+    // read once: not again for that song
+    expect(T.trayWantsThread(A.agent.get(), SONG, T.readKept())).toBe(false);
+    // put away before the reload, it stays away
+    browser.setItem('holo:agent-tray', JSON.stringify({ seen: [TAKES], gone: [TAKES] }));
+    expect(T.trayFor(A.agent.get(), SONG, T.readKept(), 'phone-portrait', false)).toBeNull();
+  });
+
+  it('doesn’t take the song’s job working or waiting for a click as seen, nor as a reply waiting', async () => {
+    for (const state of ['running', 'awaiting'] as const) {
+      reloaded();
+      // this device's request on the song, followed across the reload
+      const id = 'agj_0000000000f1';
+      A.agent.dispatch({
+        type: 'sent',
+        job: { id, project: SONG, device: 'dev_me', state: 'waiting', request: 'Bounce it', started: 3000 },
+      });
+      const followed = A.readFollowed().map((f) => f.id);
+      expect(followed, state).toContain(id);
+      const now: JobView = {
+        id,
+        project: SONG,
+        device: 'dev_me',
+        state,
+        request: 'Bounce it',
+        started: 3000,
+        ...(state === 'awaiting' ? { permission: { kind: 'bounce' as const, detail: 'Bounce the song' } } : {}),
+      };
+      host([turn(), turn({ job: id, at: 3000, state, view: undefined, reply: null })], now);
+      await A.loadThread(SONG, false);
+      // read quietly: the job isn't told of from here, the dot stays, and it's still followed
+      expect(A.agent.get().jobs[id]?.state, state).toBe('waiting');
+      expect(A.agent.get().unseen, state).toBe(true);
+      expect(
+        A.readFollowed().map((f) => f.id),
+        state,
+      ).toEqual(followed);
+      // the newest is that job's turn: no tray
+      expect(T.trayFor(A.agent.get(), SONG, SEEN, 'phone-portrait', false), state).toBeNull();
+      // the page, opening, reads it as before: the job's button comes back, and one waiting for a
+      // click is seen there
+      await A.loadThread(SONG);
+      expect(A.agent.get().jobs[id]?.state, state).toBe(state);
+      expect(
+        A.readFollowed().some((f) => f.id === id),
+        state,
+      ).toBe(state === 'running');
+    }
   });
 });

@@ -818,9 +818,14 @@ the page, and × or a swipe across it (either way, unless the row would scroll t
 - **Kept.** `holo:agent-tray` in the browser's storage, `{seen, gone}`: the jobs whose reply with a dock
   the page showed, and those whose tray was put away, as job ids (`agj_` and 12 hex digits; anything
   else is dropped as it's read), the latest 20 of each.
-- **Cost.** Hidden, it's nothing: no listeners, timers or observers until it shows. A reload keeps
-  what's kept, and the tray comes back once the song's conversation has been read again (the page
-  opened).
+- **After a reload.** As a song opens on a phone (a reload, or another song), its conversation is
+  read once, quietly, when a reply read here with a dock wasn't put away (`trayWantsThread`;
+  `loadThread(project, false)`): only its turns are kept. The song's job that's working or waiting for
+  a click isn't told of from there, so it's neither taken as seen nor as a reply waiting: the bar's
+  button's ring and dot, and the requests followed, stay as they are. So the tray comes back without
+  the page being opened, and nothing is asked when no tray could show.
+- **Cost.** Hidden, it's nothing: no listeners, timers or observers until it shows, and that one read
+  as a song opens.
 
 ## Threads ("since your last reply")
 

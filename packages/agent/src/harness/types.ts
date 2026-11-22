@@ -93,6 +93,11 @@ export interface Job {
   base: string;
   /** How the studio names middle C. */
   middleC: 'C3' | 'C4';
+  /**
+   * The longest the server lets the job take (ms), its ceiling: the turn is stopped a minute past it,
+   * if the server hasn't stopped it first. Without it, the adapter's own limit.
+   */
+  limitMs?: number;
 }
 
 /**

@@ -130,7 +130,10 @@ export interface AdapterOptions {
   node?: string;
   fetchText?: (url: string) => Promise<string>;
   now?: () => number;
-  /** The longest a run may take (the server's own clock is shorter: this is the backstop). */
+  /**
+   * The longest a turn may take when its job doesn't say (an older server; the job's `limitMs`, the
+   * server's ceiling, otherwise). This is the backstop: the server ends the job first.
+   */
   runLimitMs?: number;
   /**
    * Whether a turn that ended without `finish` is carried on once, asking for it (true unless said:
@@ -159,6 +162,8 @@ const ALIASES_MOST = 50;
 
 export const HOUR = 3_600_000;
 const UPDATE_TTL = 6 * HOUR;
+/** How long past the server's ceiling a turn is stopped here: the server's own end comes first. */
+const PAST_CEILING_MS = 60_000;
 const LOGIN_LIMIT_MS = 15 * 60_000;
 const UPDATE_LIMIT_MS = 10 * 60_000;
 const INSTALL_LIMIT_MS = 10 * 60_000;
@@ -673,6 +678,9 @@ export function defineHarness(spec: Spec, o: AdapterOptions): Harness {
         let attempt: Job = withRules(given);
         /** Set once the turn has been carried on to ask for finish: what the turn itself last said. */
         let asked: { said: string } | null = null;
+        // one limit for the whole turn, the go asked for finish included: a minute past the server's ceiling
+        const ms = given.limitMs ?? runLimit;
+        const deadline = { at: now() + (given.limitMs !== undefined ? ms + PAST_CEILING_MS : ms), ms };
         for (let tries = 0; tries < 3 && !cancelled; tries++) {
           const outcome = await once(
             ctx,
@@ -682,6 +690,7 @@ export function defineHarness(spec: Spec, o: AdapterOptions): Harness {
               current = c;
             },
             asked,
+            deadline,
           );
           if (outcome.again === 'finish' && !asked) {
             // the same conversation, asked only for finish (not a retry: it doesn't count as one)
@@ -723,6 +732,7 @@ export function defineHarness(spec: Spec, o: AdapterOptions): Harness {
    * One go at a turn; `again` asks for another (without the session, or as it was), or for the turn to
    * be carried on in `session` to ask for finish, which it never called (`said`: its last words).
    * `asked` is set on that go: the turn's own last words, which stand if this go doesn't finish either.
+   * `deadline` is the turn's: when every go must be over (`at`, on `now()`), and the limit it says (`ms`).
    */
   function once(
     ctx: Context,
@@ -730,6 +740,7 @@ export function defineHarness(spec: Spec, o: AdapterOptions): Harness {
     report: (e: RunEvent) => void,
     started: (c: ChildProcess) => void,
     asked: { said: string } | null,
+    deadline: { at: number; ms: number },
   ): Promise<{ again?: 'fresh' | 'same' } | { again: 'finish'; session: string; said?: string }> {
     return new Promise((resolve) => {
       const { args, env: extra } = spec.prepare(ctx, job);
@@ -823,11 +834,14 @@ export function defineHarness(spec: Spec, o: AdapterOptions): Harness {
       child.stdin?.end(spec.input ? spec.input(job) : job.prompt);
 
       let timedOut = false;
-      const limit = setTimeout(() => {
-        timedOut = true;
-        failure = `It took longer than ${Math.round(runLimit / 60_000)} minutes`;
-        stopGroup(child);
-      }, runLimit);
+      const limit = setTimeout(
+        () => {
+          timedOut = true;
+          failure = `It took longer than ${Math.round(deadline.ms / 60_000)} minutes`;
+          stopGroup(child);
+        },
+        Math.max(0, deadline.at - now()),
+      );
       limit.unref?.();
       const startup = spec.startup;
       const silent = startup

@@ -72,9 +72,13 @@ export interface AgentRun {
   token: string;
   session?: string;
   middleC?: 'C3' | 'C4';
+  /** The server's ceiling for the job (ms). */
+  limitMs?: number;
 }
 
 const MAX_PROMPT = 400_000;
+/** The longest ceiling taken from the server: a day (HO[LO]'s own are hours). */
+const MAX_LIMIT_MS = 86_400_000;
 
 /** An `agent-run` message as the runner will run it, or why not. */
 export function parseRun(msg: Record<string, unknown>): AgentRun | string {
@@ -95,6 +99,10 @@ export function parseRun(msg: Record<string, unknown>): AgentRun | string {
   const run: AgentRun = { job, thread, harness: harness as HarnessId, model, effort, prompt, token };
   if (typeof session === 'string') run.session = session;
   if (msg.middleC === 'C3' || msg.middleC === 'C4') run.middleC = msg.middleC;
+  // (one that isn't a number of ms is left out: the adapter's own limit applies)
+  const limit = msg.limitMs;
+  if (typeof limit === 'number' && Number.isFinite(limit) && limit > 0)
+    run.limitMs = Math.min(Math.ceil(limit), MAX_LIMIT_MS);
   return run;
 }
 
@@ -215,6 +223,7 @@ export function startAgentRunner(o: AgentRunnerOptions): AgentRunner {
         base: o.base,
         middleC: run.middleC ?? (await middleC()),
         ...(run.session ? { session: run.session } : {}),
+        ...(run.limitMs ? { limitMs: run.limitMs } : {}),
       };
       if (cancelled) return;
       log(

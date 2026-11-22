@@ -132,8 +132,8 @@ Positions are ticks. Each part is checked; a `scan` that isn't the song's is lef
 
 **`preset`** is `{kind:'scan', task:'read'|'check'|'fix', scan}`. The bar shows it as "Read this scan",
 "Check this scan" or "Fix what was flagged". Its prompt is fixed words with only the checked scan id in
-them. A preset gets 45 minutes, and carries on if its studio goes (its changes are then saved on the
-server). Scan's own Read in, which needs no agent, uses `GET /api/scans/:id/engines/reading`
+them. A preset may take up to 3 hours (a request, 2: "Ending early", below), and carries on if its
+studio goes (its changes are then saved on the server). Scan's own Read in, which needs no agent, uses `GET /api/scans/:id/engines/reading`
 (`apps/server/src/omr.ts`): the recognition engines' reading as ops the studio applies as one undo
 step. That isn't an agent route.
 
@@ -381,9 +381,10 @@ taken only from the runner it was handed to, while it runs.
   on, and to every such runner when the agent is turned on (`PUT /settings`, or a pairing while it's
   off). Only then does the runner look for the harnesses. There is no `agent-off`: with the agent off,
   the runner is handed nothing.
-- `agent-run {job, thread, harness, model, effort, middleC, prompt, token, session?, workspace, base}`.
+- `agent-run {job, thread, harness, model, effort, middleC, prompt, token, session?, workspace, base, limitMs}`.
   `workspace` is the thread's id; `base` is where the tools reach the server
-  (`http://127.0.0.1:<port>`); `middleC` is `'C3'` or `'C4'`, as the studio names notes.
+  (`http://127.0.0.1:<port>`); `middleC` is `'C3'` or `'C4'`, as the studio names notes; `limitMs` is
+  the job's ceiling (below), which the runner's own limit is set a minute past.
 - `agent-cancel {job}`
 - `agent-login {harness}`
 - `agent-login-code {harness, code}`
@@ -475,8 +476,9 @@ of the stretch `played` asked for); `length` is ms (null while still held).
    5. "The request": the user's words, or a preset's fixed words.
 
    It makes the job (`agj_…`, `waiting`) and its token, and sends `agent-run` to the runner that has
-   the harness. It adds the turn, clears the thread's events, and starts the clock: 10 minutes, or 45
-   for a scan preset. A permission still waiting on that song is passed over (`done`).
+   the harness. It adds the turn, clears the thread's events, and starts the job's two limits: its
+   quiet and its ceiling ("Ending early", below). A permission still waiting on that song is passed
+   over (`done`).
 3. **Runner.** It runs at most two jobs at once, one per thread. It opens the thread's workspace
    (`${XDG_CACHE_HOME:-~/.cache}/holo/agent/<thread>`, mode 0700) and puts the token in
    `<workspace>/.holo-job` (mode 0600). It starts the harness sealed, with `@holo/agent`'s MCP server as
@@ -485,7 +487,9 @@ of the stretch `played` asked for); `length` is ms (null while still held).
    them (a system prompt, or the workspace's `AGENTS.md`), not in the prompt too; a harness that reads
    `AGENTS.md` only when a conversation starts (Cursor, Codex) gets them at the head of a resumed turn's
    prompt, so the rules as they are now reach it. Each change the tools make is an `agent-ops` batch
-   for the requester's studio, which merges it into the job's undo step.
+   for the requester's studio, which merges it into the job's undo step. The runner stops the harness a
+   minute past the job's `limitMs`, counted from the turn's start (the go asked for `finish` below
+   included), if the server hasn't ended the job by then; a job without one gets an hour.
 4. **End of the turn.** The agent calls `finish {label, reply}` (and `ask_permission`, `look` or
    `hand_off` before it if it needs to), then the harness exits.
    - A run that ends well without a `finish` that went through (the harness answered in its own chat,
@@ -519,11 +523,16 @@ of the stretch `played` asked for); `length` is ms (null while still held).
    lists the attachments. `{grant:false}` ends the job `done` with the reply "Not now", and the agent
    hears so next time.
 6. **Ending early.** The job ends `cancelled` or `failed`, and its token is revoked, when:
-   - someone presses Stop;
+   - someone presses Stop on the bar, at any time, whatever the limits below;
    - the requester opens another song (not for a scan preset, which carries on);
    - the requester undoes a step of the running job;
    - the requester's device is removed, or the agent is turned off;
-   - the clock runs out;
+   - it goes quiet for 15 minutes (`idleMs`): no tool call, no line under the bar, no message from its
+     runner about it. A tool call under way (a render, a measurement) counts until it answers, so a
+     long one never makes a job quiet. "It went quiet for 15 minutes"; "It didn’t start in 15 minutes"
+     for one never heard from (the runner may be busy with other songs' jobs);
+   - it reaches its ceiling, however busy it is, against a run that never ends: 2 hours (`clockMs`), 3
+     for a scan preset (`scanClockMs`). "It took longer than 2 hours";
    - the runner drops for 15 s, or the harness fails.
 
    The runner is sent `agent-cancel`, except when the harness failed or the runner dropped. The agent

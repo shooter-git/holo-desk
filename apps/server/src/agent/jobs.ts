@@ -7,8 +7,9 @@
  *
  * A job is `waiting` until the runner or its tools are first heard from, then `running`. It ends
  * `done`, `awaiting` (it asked for a permission: the user's click starts the follow-up), `failed`
- * (the harness failed, the runner dropped, it ran out of time) or `cancelled` (Stop, the requester
- * opened another song or undid the job's change, the device was removed, the agent turned off).
+ * (the harness failed, the runner dropped, it went quiet for 15 minutes or ran past its ceiling) or
+ * `cancelled` (Stop, the requester opened another song or undid the job's change, the device was
+ * removed, the agent turned off).
  */
 import { randomBytes } from 'node:crypto';
 import {
@@ -131,9 +132,15 @@ export interface AgentJob {
   asked: Permission | null;
   /** Batches applied here (a scan preset whose studio went away), each once: their revisions. */
   batches: Map<string, number>;
-  /** Its wall clock, and the countdown once its runner dropped. */
+  /** Its ceiling, and the countdown once its runner dropped. */
   clock: NodeJS.Timeout | null;
   dropped: NodeJS.Timeout | null;
+  /**
+   * The quiet that ends it, started again each time it's heard from, and its tool calls under way:
+   * while one is, it isn't quiet.
+   */
+  quiet: NodeJS.Timeout | null;
+  calls: number;
   /** Its turn is over: the studio is saving, and the song is being read. */
   ending: boolean;
   /** The attachments its request carried (its tools may read these, and earlier ones on its thread). */
@@ -209,6 +216,11 @@ export const MODEL = /^[A-Za-z0-9][\w.:\-[\]=]{0,79}$/;
 export const JOB_ID = /^agj_[0-9a-f]{12}$/;
 
 const MINUTE = 60_000;
+const HOUR = 60 * MINUTE;
+
+/** A limit in words: "15 minutes", "2 hours". */
+const inWords = (ms: number) =>
+  ms >= 2 * HOUR && ms % HOUR === 0 ? `${ms / HOUR} hours` : `${Math.round(ms / MINUTE)} minutes`;
 
 /** What a tool hears when the requester's studio is away, and doesn't come back while it waits. */
 export const AWAY =
@@ -218,7 +230,16 @@ export const WENT =
   'The studio that asked went away before saying whether this change went in: once it’s back, read the song again, and make the change again only if it isn’t there';
 
 export interface Limits {
-  /** A request's wall clock, and a scan preset's. */
+  /**
+   * How long a job may go unheard from before it's ended: no tool call, no line under the bar, no
+   * message from its runner about it. A tool call under way (a render, a measurement) counts until it
+   * answers.
+   */
+  idleMs: number;
+  /**
+   * The longest a request may take, and a scan preset, however busy: a ceiling for a run that never
+   * ends. The runner is told it (`agent-run`'s `limitMs`) and stops the harness a little past it.
+   */
   clockMs: number;
   scanClockMs: number;
   /** How long a job outlives its runner's connection. */
@@ -242,8 +263,10 @@ export interface Limits {
 }
 
 export const LIMITS: Limits = {
-  clockMs: 10 * MINUTE,
-  scanClockMs: 45 * MINUTE,
+  idleMs: 15 * MINUTE,
+  clockMs: 2 * HOUR,
+  // (a scan preset reads a whole score: longer than a request, as ever)
+  scanClockMs: 3 * HOUR,
   droppedMs: 15_000,
   flushMs: 10_000,
   opsMs: 60_000,
@@ -586,6 +609,7 @@ export class Jobs implements AgentHooks {
     prompt: (now: Project) => Promise<string>,
   ): Promise<string> {
     this.starting.add(project);
+    const ceiling = preset ? this.limits.scanClockMs : this.limits.clockMs;
     let job: AgentJob;
     try {
       await this.flush(device, project);
@@ -615,6 +639,8 @@ export class Jobs implements AgentHooks {
         batches: new Map(),
         clock: null,
         dropped: null,
+        quiet: null,
+        calls: 0,
         ending: false,
         attachments: [...attachments],
         listen: null,
@@ -647,6 +673,8 @@ export class Jobs implements AgentHooks {
         ...(current?.session ? { session: current.session } : {}),
         workspace: thread.id,
         base: this.o.base(),
+        // its ceiling: the runner's own limit is set a little past it, so this one comes first
+        limitMs: ceiling,
       });
     } finally {
       this.starting.delete(project);
@@ -663,17 +691,10 @@ export class Jobs implements AgentHooks {
       at: job.view.started,
       extra: turnExtra(job),
     });
-    job.clock = setTimeout(
-      () =>
-        this.end(
-          job,
-          'failed',
-          `It took longer than ${Math.round((preset ? this.limits.scanClockMs : this.limits.clockMs) / MINUTE)} minutes`,
-          true,
-        ),
-      preset ? this.limits.scanClockMs : this.limits.clockMs,
-    );
+    // it runs while it's heard from, up to its ceiling
+    job.clock = setTimeout(() => this.end(job, 'failed', `It took longer than ${inWords(ceiling)}`, true), ceiling);
     job.clock.unref?.();
+    this.heard(job);
     // a permission still waiting on this song is passed over by the new request
     for (const other of this.jobs.values()) {
       if (other !== job && other.view.project === project && other.view.state === 'awaiting') {
@@ -869,8 +890,27 @@ export class Jobs implements AgentHooks {
   private clearTimers(job: AgentJob): void {
     if (job.clock) clearTimeout(job.clock);
     if (job.dropped) clearTimeout(job.dropped);
+    if (job.quiet) clearTimeout(job.quiet);
     job.clock = null;
     job.dropped = null;
+    job.quiet = null;
+  }
+
+  /**
+   * The job was heard from (a tool call, a line under the bar, a message from its runner): its quiet
+   * starts again, unless a tool call is under way, which keeps it from being quiet until it answers.
+   */
+  private heard(job: AgentJob): void {
+    if (job.quiet) clearTimeout(job.quiet);
+    job.quiet = null;
+    if (!isLive(job) || job.ending || job.calls > 0) return;
+    const idle = inWords(this.limits.idleMs);
+    job.quiet = setTimeout(() => {
+      // (one never heard from at all hasn't started: the runner may be busy with other songs' jobs)
+      const started = job.view.state !== 'waiting';
+      this.end(job, 'failed', started ? `It went quiet for ${idle}` : `It didn’t start in ${idle}`, true);
+    }, this.limits.idleMs);
+    job.quiet.unref?.();
   }
 
   /** The studios that hear how a job goes: the requester's, and allowed devices with its song open. */
@@ -919,6 +959,7 @@ export class Jobs implements AgentHooks {
     const job = typeof msg.job === 'string' ? this.jobs.get(msg.job) : undefined;
     // only from the runner it was handed to, and only while it runs
     if (!job || this.assigned.get(job) !== client || !isLive(job) || job.ending) return;
+    this.heard(job);
     switch (msg.type) {
       case 'agent-progress':
         job.view.state = 'running';
@@ -1092,6 +1133,22 @@ export class Jobs implements AgentHooks {
     return job;
   }
 
+  /**
+   * A tool call began: the job isn't quiet until it answers (a render or a measurement may take a
+   * while), and its quiet starts again then. What it gives back is called once the call has answered.
+   */
+  toolCall(job: AgentJob): () => void {
+    job.calls++;
+    this.heard(job);
+    let open = true;
+    return () => {
+      if (!open) return;
+      open = false;
+      job.calls--;
+      this.heard(job);
+    };
+  }
+
   /** The requester's studio, while it has the job's song open. */
   studio(job: AgentJob): LiveClient | null {
     return this.o.live.studioFor(job.view.device, job.view.project);
@@ -1246,6 +1303,7 @@ export class Jobs implements AgentHooks {
   /** A line under the bar while the agent works (nothing once the job is over). */
   progress(job: AgentJob, line: string): void {
     if (!isLive(job) || job.ending) return;
+    this.heard(job);
     job.view.state = 'running';
     job.view.line = oneLine(line, 200);
     this.tell(job);

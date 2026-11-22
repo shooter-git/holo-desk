@@ -87,23 +87,31 @@ function readPushJwk(text: string): PushKey | null {
 }
 
 /**
- * The push key in `dataDir/push.key`, made (a new P-256 key pair, its JWK, mode 0600) the first time
- * it's asked for (an allowed device's Settings › Agent reads it, to subscribe with), not as the server
- * starts. Like the runner key, one made by hand or
- * copied with looser permissions is closed to its owner, and a damaged one is replaced (subscriptions
- * made for the old one then fail until each device turns its notices on again, or opens HO[LO]).
+ * The push key in `dataDir/push.key`, if it has been made (closed to its owner as it's read: one made
+ * by hand, or copied with looser permissions); null when there's none, or it's damaged.
  */
-export function pushKey(dataDir: string): PushKey {
+export function madePushKey(dataDir: string): PushKey | null {
   const file = join(dataDir, 'push.key');
   try {
     const kept = readPushJwk(readFileSync(file, 'utf8'));
-    if (kept) {
-      chmodSync(file, 0o600);
-      return kept;
-    }
+    if (kept) chmodSync(file, 0o600);
+    return kept;
   } catch {
     // not made yet
+    return null;
   }
+}
+
+/**
+ * The push key in `dataDir/push.key`, made (a new P-256 key pair, its JWK, mode 0600) if there's none:
+ * only when a device turns its notices on, and asks for the key to subscribe with. Never as the server
+ * or a studio starts. Like the runner key, a damaged one is replaced (subscriptions made for the old
+ * one then fail until each device opens HO[LO] again, which subscribes it afresh).
+ */
+export function pushKey(dataDir: string): PushKey {
+  const file = join(dataDir, 'push.key');
+  const kept = madePushKey(dataDir);
+  if (kept) return kept;
   mkdirSync(dataDir, { recursive: true });
   const { privateKey } = generateKeyPairSync('ec', { namedCurve: 'prime256v1' });
   const jwk = privateKey.export({ format: 'jwk' });

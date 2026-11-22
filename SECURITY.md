@@ -125,8 +125,9 @@ See `apps/server/src/agent/push.ts`.
   browser installation it's for (the subscription's endpoint), a topic header that's a hash of the
   song's id, HO[LO]'s VAPID public key and the JWT's `sub`, which is the project's URL
   (`https://github.com/shooter-git/holo-desk`), never an email address. Never what a notice says.
-- **Keys.** The VAPID key pair (RFC 8292, P-256) is made the first time an allowed device opens
-  Settings › Agent (it reads the public key there, to subscribe with), as `push.key` in the data folder (a JWK, mode 0600, closed to its owner again whenever it's read, like
+- **Keys.** The VAPID key pair (RFC 8292, P-256) is made the first time a device turns notices on
+  (it asks for the public key to subscribe with; until then the host makes none, however often a studio
+  starts or Settings opens), as `push.key` in the data folder (a JWK, mode 0600, closed to its owner again whenever it's read, like
   `runner.key`). Each device's subscription (its endpoint, public key and auth secret) and the
   replies it hasn't seen are kept in HO[LO]'s database, per device, and deleted when the device turns
   notices off or is removed. A notice goes only to the device whose request it was.

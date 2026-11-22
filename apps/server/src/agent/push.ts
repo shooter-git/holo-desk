@@ -234,6 +234,8 @@ export function notice(
   let what: string;
   if (job.state === 'awaiting') what = 'it needs your OK to go on.';
   else if (job.state === 'done' || job.state === 'failed') {
+    // (this turn's own time: what follows an OK is a job of its own, begun at the click (Jobs.permit),
+    // so the wait for the OK never counts)
     const took = (job.finished ?? Date.now()) - job.started;
     if (mode === 'long' && !(took > LONG_MS)) return null;
     what = job.state === 'done' ? 'a reply is ready.' : 'the request stopped.';

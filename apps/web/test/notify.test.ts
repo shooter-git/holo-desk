@@ -1,12 +1,18 @@
-import { beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import type * as NotifyModule from '../src/app/notify.ts';
 import type { SupportFacts } from '../src/app/notify.ts';
 
 let N: typeof NotifyModule;
+/** The browser's storage, as the studio uses it. */
+const items = new Map<string, string>();
+
+afterAll(() => {
+  vi.unstubAllEnvs();
+  vi.unstubAllGlobals();
+});
 
 beforeAll(async () => {
   // (the studio's modules read the browser's storage as they load)
-  const items = new Map<string, string>();
   vi.stubGlobal('localStorage', {
     getItem: (k: string) => items.get(k) ?? null,
     setItem: (k: string, v: string) => items.set(k, String(v)),
@@ -84,5 +90,155 @@ describe('whether a browser can have the agent’s notices', () => {
     expect(N.isIosLike(mac, 0)).toBe(false);
     expect(N.isIosLike(android, 5)).toBe(false);
     expect(N.isIosLike(windows, 10)).toBe(false);
+  });
+});
+
+// ---- keeping notices going: a renewed subscription, given to the host again as HO[LO] opens ----
+
+/** The host's key, as the host gives it (65 bytes, base64url). */
+const KEY = Buffer.concat([Buffer.from([4]), Buffer.alloc(64, 7)]).toString('base64url');
+const OLD = 'https://updates.push.services.mozilla.com/wpush/v2/old';
+const RENEWED = 'https://updates.push.services.mozilla.com/wpush/v2/renewed';
+
+interface Call {
+  method: string;
+  url: string;
+  body?: { mode: string; subscription: { endpoint: string } };
+}
+
+/** A browser subscription, made for the host's key. */
+function subscriptionAt(endpoint: string) {
+  return {
+    endpoint,
+    options: { applicationServerKey: new Uint8Array(Buffer.from(KEY, 'base64url')).buffer },
+    toJSON: () => ({ endpoint, keys: { p256dh: 'p', auth: 'a' } }),
+    unsubscribe: vi.fn(async () => true),
+  };
+}
+
+/**
+ * This device as a browser with HO[LO]'s service worker (its push subscription at `endpoint`, or
+ * none), the permission as given, and a host whose copy of the device's notices is `host`.
+ */
+function device(endpoint: string | null, host: { mode: string; endpoint?: string }, permission = 'granted') {
+  let sub = endpoint ? subscriptionAt(endpoint) : null;
+  const reg = {
+    pushManager: {
+      getSubscription: async () => sub,
+      subscribe: vi.fn(async () => {
+        sub = subscriptionAt(RENEWED);
+        return sub;
+      }),
+    },
+  };
+  const calls: Call[] = [];
+  vi.stubEnv('PROD', true);
+  vi.stubGlobal('isSecureContext', true);
+  vi.stubGlobal('matchMedia', () => ({ matches: false }));
+  vi.stubGlobal('PushManager', class {});
+  vi.stubGlobal('Notification', { permission, requestPermission: async () => permission });
+  vi.stubGlobal('navigator', {
+    userAgent: 'Mozilla/5.0 (X11; Linux x86_64; rv:140.0) Gecko/20100101 Firefox/140.0',
+    maxTouchPoints: 0,
+    serviceWorker: { getRegistration: async () => reg, ready: Promise.resolve(reg) },
+  });
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (url: string, init?: RequestInit) => {
+      const method = init?.method ?? 'GET';
+      const body = init?.body ? (JSON.parse(String(init.body)) as Call['body']) : undefined;
+      calls.push({ method, url, ...(body ? { body } : {}) });
+      if (method === 'PUT' && body) Object.assign(host, { mode: body.mode, endpoint: body.subscription.endpoint });
+      if (method === 'DELETE') Object.assign(host, { mode: 'off', endpoint: undefined });
+      const view = { key: KEY, mode: host.mode, ...(host.endpoint ? { endpoint: host.endpoint } : {}), unseen: 0 };
+      return new Response(JSON.stringify(view), { status: 200, headers: { 'content-type': 'application/json' } });
+    }),
+  );
+  items.set('holo:agent-token', 'token');
+  items.set('holo:agent-device', 'dev_me');
+  return { calls, reg, puts: () => calls.filter((c) => c.method === 'PUT') };
+}
+
+/** The choice as kept on this device (as the device `as`), or none. */
+const choose = (mode: string | null, as = 'dev_me') => {
+  if (mode) items.set('holo:notices', JSON.stringify({ device: as, mode }));
+  else items.delete('holo:notices');
+};
+
+describe('keeping a device’s notices going', () => {
+  it('gives the host the renewed subscription after it let the old one go (410), with the choice kept here', async () => {
+    choose('long');
+    // the browser renewed it; a notice to the old one got 410, and the host deleted the device's row
+    const d = device(RENEWED, { mode: 'off' });
+    await N.syncPush();
+    expect(d.puts()).toEqual([
+      expect.objectContaining({ body: { mode: 'long', subscription: expect.objectContaining({ endpoint: RENEWED }) } }),
+    ]);
+    // (the key was asked for: subscribing needs it)
+    expect(d.calls[0]?.url).toBe('/api/agent/push?key=1');
+  });
+
+  it('gives it again when the host has an older one, and asks nothing more once the host has it', async () => {
+    choose('every');
+    const host = { mode: 'every', endpoint: OLD };
+    const d = device(RENEWED, host);
+    await N.syncPush();
+    expect(d.puts().map((c) => c.body?.subscription.endpoint)).toEqual([RENEWED]);
+    const again = device(RENEWED, host);
+    await N.syncPush();
+    expect(again.puts()).toEqual([]);
+  });
+
+  it('subscribes the browser afresh if it has none (its site data was cleared, say), with the permission given', async () => {
+    choose('long');
+    const d = device(null, { mode: 'off' });
+    await N.syncPush();
+    expect(d.reg.pushManager.subscribe).toHaveBeenCalledTimes(1);
+    expect(d.puts().map((c) => c.body?.mode)).toEqual(['long']);
+  });
+
+  it('never undoes Off: turning them off clears the choice, and the next open gives the host nothing', async () => {
+    choose(null);
+    const host = { mode: 'off' };
+    device(null, host);
+    await N.subscribe('long');
+    expect(N.readChoice()).toBe('long');
+    expect(host).toMatchObject({ mode: 'long', endpoint: RENEWED });
+    const off = device(RENEWED, host);
+    await N.unsubscribe();
+    expect(off.calls.map((c) => c.method)).toEqual(['DELETE']);
+    expect(N.readChoice()).toBeNull();
+    expect(items.has('holo:notices')).toBe(false);
+    const reopened = device(RENEWED, host);
+    await N.syncPush();
+    expect(reopened.puts()).toEqual([]);
+    expect(reopened.calls.map((c) => c.url)).toEqual(['/api/agent/push']);
+  });
+
+  it('takes no choice made as another device (this browser allowed again since), and nothing without the permission', async () => {
+    choose('long', 'dev_old');
+    expect(N.readChoice()).toBeNull();
+    const other = device(RENEWED, { mode: 'off' });
+    await N.syncPush();
+    expect(other.puts()).toEqual([]);
+    choose('long');
+    const unallowed = device(RENEWED, { mode: 'off' }, 'default');
+    await N.syncPush();
+    expect(unallowed.puts()).toEqual([]);
+  });
+
+  it('keeps the host’s mode as the choice when none was kept here yet (chosen before it was)', async () => {
+    choose(null);
+    const d = device(RENEWED, { mode: 'every', endpoint: RENEWED });
+    await N.syncPush();
+    expect(d.puts()).toEqual([]);
+    expect(N.readChoice()).toBe('every');
+  });
+
+  it('picks the mode: the choice kept here, else the host’s', () => {
+    expect(N.wantedMode('long', 'off')).toBe('long');
+    expect(N.wantedMode('long', 'every')).toBe('long');
+    expect(N.wantedMode(null, 'every')).toBe('every');
+    expect(N.wantedMode(null, 'off')).toBeNull();
   });
 });

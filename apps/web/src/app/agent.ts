@@ -682,6 +682,15 @@ export function readToken(s: TokenStorage | null = storage()): string | null {
   }
 }
 
+/** The id of the device this browser was allowed as, as kept with its token (null: none kept). */
+export function readDevice(s: TokenStorage | null = storage()): string | null {
+  try {
+    return s?.getItem(DEVICE_KEY) || null;
+  } catch {
+    return null;
+  }
+}
+
 export function keepToken(token: string, device: string | null, s: TokenStorage | null = storage()): void {
   try {
     s?.setItem(TOKEN_KEY, token);

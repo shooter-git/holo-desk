@@ -41,7 +41,7 @@ import { Auth, bearer } from './auth.ts';
 import { type Body, bad, body, CONTROL, ID, int, isObj, line, num, type Params, text } from './check.ts';
 import { type JobHandler, type JobRouteKit, type OwnMethod, registerJobRoutes } from './job-routes/index.ts';
 import { type AgentJob, Jobs, type Limits, MODEL, PERMISSION_KINDS, Refusal } from './jobs.ts';
-import { type PushKey, pushKey } from './keys.ts';
+import { madePushKey, type PushKey, pushKey } from './keys.ts';
 import type { PermissionKind, RequestContext, ScanPreset } from './prompt.ts';
 import { checkSubscription, Notify } from './push.ts';
 import { AgentStore, HARNESSES, type HarnessId } from './store.ts';
@@ -172,10 +172,16 @@ export function agentRoutes(
   });
   jobs = theJobs;
   live.agent = theJobs;
-  // notices outside HO[LO], for devices that turned them on (push.ts); the key is made the first time it's needed
+  // notices outside HO[LO], for devices that turned them on (push.ts); the key is made only once a
+  // device subscribes (GET /api/agent/push?key=1), never as the server or a studio starts
   let madeKey: PushKey | null = null;
   const key = () => {
     madeKey ??= pushKey(o.dataDir);
+    return madeKey;
+  };
+  /** The key if it has been made (null: none yet). */
+  const keyIfMade = () => {
+    madeKey ??= madePushKey(o.dataDir);
     return madeKey;
   };
   const notify = new Notify({
@@ -552,17 +558,20 @@ export function agentRoutes(
 
   // ---- notices outside HO[LO] (push.ts): each device's own ----
 
-  /** This device's notices: the key its subscription is made for, its mode, and its unseen replies (its badge). */
-  const pushView = (device: string) => {
+  /**
+   * This device's notices: the key a subscription is made for, its mode, and its unseen replies (its
+   * badge). The key is made only when it's wanted (`make`: a device subscribing); until then it's null.
+   */
+  const pushView = (device: string, make = false) => {
     const row = agentStore.push(device);
-    let publicKey: string;
+    let made: PushKey | null;
     try {
-      publicKey = key().publicKey.toString('base64url');
+      made = make ? key() : keyIfMade();
     } catch {
       throw new Refusal(500, 'HO[LO] couldn’t make its key for notices in its data folder');
     }
     return {
-      key: publicKey,
+      key: made ? made.publicKey.toString('base64url') : null,
       mode: row?.mode ?? 'off',
       ...(row ? { endpoint: row.endpoint } : {}),
       unseen: agentStore.unseen(device),
@@ -570,7 +579,10 @@ export function agentRoutes(
   };
   app.get(
     '/api/agent/push',
-    forDevice(async (_req, _reply, device) => pushView(device), true),
+    forDevice(
+      async (req, _reply, device) => pushView(device, (req.query as Record<string, unknown>).key === '1'),
+      true,
+    ),
   );
   app.put(
     '/api/agent/push',

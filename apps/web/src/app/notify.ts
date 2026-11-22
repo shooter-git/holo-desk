@@ -6,13 +6,17 @@
  *
  * Here: whether this browser can have them (`notifySupport`), turning them on (the browser's
  * permission, asked on the click, then its push subscription, made for the host's key and given to
- * the host) and off, giving the host the browser's subscription again when it changed, and the Home
- * Screen badge: the replies this device asked for that no device has seen yet. An iPhone or iPad has
- * them only from HO[LO] added to its Home Screen, which keeps its own storage, so it's allowed as a
- * device of its own.
+ * the host) and off, giving the host the browser's subscription again when it changed or the host let
+ * it go, and the Home Screen badge: the replies this device asked for that no device has seen yet. An
+ * iPhone or iPad has them only from HO[LO] added to its Home Screen, which keeps its own storage, so
+ * it's allowed as a device of its own.
+ *
+ * The choice is kept here too (`holo:notices`), for this device: a browser renews its subscription
+ * now and then, and a notice sent to the old one before HO[LO] opens again makes the host let it go
+ * (410). The next open gives the host the new one with the choice kept here. Only Off clears it.
  */
 import { useEffect } from 'react';
-import { agent, call, isOn } from './agent.ts';
+import { agent, call, isOn, readDevice } from './agent.ts';
 
 export type NotifyMode = 'off' | 'long' | 'every';
 
@@ -21,8 +25,8 @@ export type NotifySupport = 'ok' | 'https' | 'home-screen' | 'unsupported' | 'bl
 
 /** This device's notices, as the host has them (`GET /api/agent/push`). */
 export interface PushView {
-  /** The host's public key (base64url), which a subscription is made for. */
-  key: string;
+  /** The host's public key (base64url), which a subscription is made for; null until one is made. */
+  key: string | null;
   mode: NotifyMode;
   endpoint?: string;
   /** Replies this device asked for that no device has seen: its badge. */
@@ -108,8 +112,43 @@ function keep(view: PushView): PushView {
   return view;
 }
 
-export async function getPush(): Promise<PushView> {
-  return keep(await call<PushView>('GET', '/api/agent/push'));
+/** This device's notices as the host has them; `withKey`, the host's key too (made then if need be: subscribing). */
+export async function getPush(withKey = false): Promise<PushView> {
+  return keep(await call<PushView>('GET', `/api/agent/push${withKey ? '?key=1' : ''}`));
+}
+
+// ---- the choice, kept on this device ----
+
+const CHOICE_KEY = 'holo:notices';
+
+/** The choice this device made (Long runs or Every reply), if it was made as the device it is now; null: Off. */
+export function readChoice(): 'long' | 'every' | null {
+  try {
+    const kept = JSON.parse(localStorage.getItem(CHOICE_KEY) ?? 'null') as { device?: unknown; mode?: unknown } | null;
+    // (made before this browser was allowed again, as another device: not this one's)
+    if (!kept || kept.device !== readDevice()) return null;
+    return kept.mode === 'long' || kept.mode === 'every' ? kept.mode : null;
+  } catch {
+    return null;
+  }
+}
+
+function keepChoice(mode: 'long' | 'every' | null): void {
+  try {
+    if (mode) localStorage.setItem(CHOICE_KEY, JSON.stringify({ device: readDevice(), mode }));
+    else localStorage.removeItem(CHOICE_KEY);
+  } catch {
+    // (storage refused: the host's copy is all there is)
+  }
+}
+
+/**
+ * How a studio opening keeps its notices going: the mode to give the host its subscription with, or
+ * null for none. The choice kept here stands (the host may have let a renewed subscription go); with
+ * none kept (chosen before it was kept here), the host's.
+ */
+export function wantedMode(chosen: 'long' | 'every' | null, host: NotifyMode): 'long' | 'every' | null {
+  return chosen ?? (host === 'off' ? null : host);
 }
 
 function keyBytes(key: string): Uint8Array<ArrayBuffer> {
@@ -161,14 +200,21 @@ export async function subscribe(mode: 'long' | 'every', key = known?.key): Promi
         ? 'Notices are blocked for HO[LO] in this browser’s settings: allow them there, then try again'
         : 'Notices weren’t allowed',
     );
-  const hostKey = key ?? (await getPush()).key;
+  const hostKey = key ?? (await getPush(true)).key;
+  if (!hostKey) throw new Error('HO[LO]’s host has no key for notices: try again');
   const reg = await worker();
   if (!reg) throw new Error('HO[LO]’s service worker isn’t running here: reload the page and try again');
-  return put(mode, await subscription(reg, hostKey));
+  const view = await put(mode, await subscription(reg, hostKey));
+  keepChoice(mode);
+  return view;
 }
 
-/** Turn notices off: the browser's subscription goes, then the host's copy (and this device's unseen replies). */
+/**
+ * Turn notices off: the choice kept here goes first (nothing gives the host a subscription again
+ * after this), then the browser's subscription, then the host's copy (and this device's unseen replies).
+ */
 export async function unsubscribe(): Promise<PushView> {
+  keepChoice(null);
   const reg = 'serviceWorker' in navigator ? await navigator.serviceWorker.getRegistration() : undefined;
   const sub = await reg?.pushManager.getSubscription().catch(() => null);
   await sub?.unsubscribe().catch(() => false);
@@ -179,17 +225,22 @@ export async function unsubscribe(): Promise<PushView> {
 
 /**
  * HO[LO] opened (or came back in front): the badge as the host counts it now (a reply seen on another
- * device since), and, with notices on, the browser's subscription given to the host again if it
- * changed or went (a browser may renew it, or let it go with the site's data).
+ * device since), and, with notices chosen on this device, the browser's subscription given to the host
+ * again if the host doesn't have it: the browser renewed it (and the host, told 410 by the old one,
+ * let it go), or let it go with the site's data. Off, chosen here, is never undone.
  */
 export async function syncPush(): Promise<void> {
-  const view = await getPush();
+  const chosen = readChoice();
+  const view = await getPush(chosen !== null);
   badge(view.unseen);
-  if (view.mode === 'off' || notifySupport(supportFacts()) !== 'ok' || Notification.permission !== 'granted') return;
+  const mode = wantedMode(chosen, view.mode);
+  if (!mode || !view.key || notifySupport(supportFacts()) !== 'ok' || Notification.permission !== 'granted') return;
   const reg = await navigator.serviceWorker.getRegistration();
   if (!reg) return;
   const sub = await subscription(reg, view.key);
-  if (sub.endpoint !== view.endpoint) await put(view.mode, sub);
+  if (view.mode !== mode || sub.endpoint !== view.endpoint) await put(mode, sub);
+  // (chosen before the choice was kept here: kept now)
+  if (!chosen) keepChoice(mode);
 }
 
 /** The open song's conversation was seen here: its replies count as unseen on no device, and the badge says so. */
@@ -234,6 +285,6 @@ export function installNotices(): void {
     on = now;
   });
   document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'visible' && known?.mode !== 'off') look();
+    if (document.visibilityState === 'visible' && (known?.mode !== 'off' || readChoice())) look();
   });
 }

@@ -130,7 +130,7 @@ Turning the agent off cancels every job, so the job-scoped routes answer 403.
 | `GET /api/agent/threads/:project` | | `{thread, job, now}`. `thread` is `{id, harness, turns:[{job, request, reply, label, state, at, permission?, brief?, briefWarnings?, view?, go?, error?}]}`, or null. `job` is the song's job that's running or waiting for a click (a `JobView`), or null: after a reload, its button comes back. `now` is the host's time (ms). |
 | `GET /api/agent/away/:project` | `?from=` (a revision) | `{away}`: what this device's studio, back on the song at revision `from`, picks up of the changes its job saved on the server while it was away (below): `{job, label, running, base, head, batches:[{batch}], song}`, the batches after `from` by id, `head` the revision they bring the song to and `song` the song then, read together (no save comes between them), `label` the job's once it has finished (its last batch's before). From a revision before the run (a save of the studio's got there, its answer lost), the whole run, `base` its first revision; otherwise `base` is `from`. `away` is null when there's nothing to pick up from `from`: no such run of the song's latest job of this device's, `from` past its first revision but not one of its own, or the song saved since by someone else. 400 for a `from` that isn't a revision. |
 | `POST /api/agent/threads/:project/reset` | | `{ok}`. The next request starts a new thread. 409 `busy` while a job runs on the song. |
-| `GET /api/agent/push` | | `{key, mode:'off'|'long'|'every', endpoint?, unseen}`: this device's notices outside HO[LO] (below). `key` is the host's VAPID public key (base64url, 65 bytes uncompressed), made the first time it's asked for; `endpoint` the subscription's, when on; `unseen` how many replies this device asked for no device has seen (its badge). Answers with the agent off. |
+| `GET /api/agent/push` | `?key=1` (subscribing) | `{key, mode:'off'|'long'|'every', endpoint?, unseen}`: this device's notices outside HO[LO] (below). `key` is the host's VAPID public key (base64url, 65 bytes uncompressed), or null while none has been made: only `?key=1` makes it, as a device subscribes. `endpoint` is the subscription's, when on; `unseen` how many replies this device asked for no device has seen (its badge). Answers with the agent off. |
 | `PUT /api/agent/push` | `{mode:'long'|'every', subscription:{endpoint, keys:{p256dh, auth}}}` | As GET. Turns notices on for this device, or changes when they come. `subscription` is the browser's `PushSubscription.toJSON()`: `endpoint` must be `https` on 443, ≤ 1000 characters, no user or password, on `fcm.googleapis.com`, `*.push.apple.com`, `*.push.services.mozilla.com` or `*.notify.windows.com`; `p256dh` a P-256 point (65 bytes, uncompressed) and `auth` 16 bytes, base64url (400 otherwise). Another device with the same endpoint (the same browser, paired again) loses it. |
 | `DELETE /api/agent/push` | | As GET (`mode:'off'`). Off: the subscription and this device's unseen replies are deleted. Answers with the agent off. |
 | `POST /api/agent/seen` | `{project}` | `{unseen}`. The song's conversation was seen on this device: its replies count as unseen on no device now. `unseen` is this device's count after it (the studio sets its badge to it). |
@@ -809,7 +809,8 @@ iPhone or iPad HO[LO] opened from the Home Screen, or the notices it has blocked
 
 - **When one goes** (`Notify`, apps/server/src/agent/push.ts, on `jobs.onJobEnd`). Only for the device
   whose request it was, and only if it has notices on. Every reply: the job ended `done` or `failed`.
-  Long runs: the same, after more than 60 s. Both: it ended `awaiting` (it needs the user's OK). Never
+  Long runs: the same, after more than 60 s of the turn's own work (what follows an OK is a job of its
+  own, begun at the click, so the wait for the OK never counts). Both: it ended `awaiting` (it needs the user's OK). Never
   for `cancelled`. Every ending but a cancel is kept as unseen (`agent_unseen`, the device's newest
   50), the badge's count.
 - **Not while HO[LO] is in front.** Each of the device's studios that last said it isn't hidden is
@@ -824,9 +825,11 @@ iPhone or iPad HO[LO] opened from the Home Screen, or the notices it has blocked
   deletes the subscription; any other failure is logged once and changes nothing. The log says each
   send.
 - **Storage.** `push.key` in the data folder (a P-256 JWK, mode 0600, kept as `runner.key` is), made
-  the first time `GET /api/agent/push` asks for it (an allowed device opening Settings › Agent). `agent_push(device, endpoint, p256dh, auth, mode, added)` and
+  only when a device turns notices on (`GET /api/agent/push?key=1`), never as the server or a studio
+  starts. `agent_push(device, endpoint, p256dh, auth, mode, added)` and
   `agent_unseen(job, device, project, at)`, both deleted with the device; Off deletes the device's rows
-  of both.
+  of both. On the device, the choice is kept as `holo:notices` (`{device, mode}`, in the browser's
+  storage); Off clears it.
 - **The service worker** (apps/web/src/sw-template.js, built as `sw.js`). `push`: shows the notice
   (`tag` the song, so a song's newest takes the place of the last; `data.url` `/?project=…&turn=…`) and
   sets the app badge to `unseen`. Every push shows one: an iPhone allows no silent pushes.
@@ -838,10 +841,16 @@ iPhone or iPad HO[LO] opened from the Home Screen, or the notices it has blocked
   device's request is at work on the open one (opening another song stops it, a scan's aside), a
   toast asks first.
 - **Seen.** The page, and the bar on a desktop, post `/api/agent/seen` as they open and as a reply ends
-  while they're open, and set the badge to the answer. When HO[LO] opens, and as it comes back in
-  front, the studio reads `GET /api/agent/push`, sets the badge, and with notices on gives the host the
-  browser's subscription again if it changed or went (made afresh, with the permission already given,
-  if it was made for another key). The bar's own dot is unchanged.
+  while they're open, and set the badge to the answer. The bar's own dot is unchanged.
+- **Keeping them going** (`syncPush`). When HO[LO] opens, and as it comes back in front, the studio
+  reads `GET /api/agent/push` and sets the badge. With a choice kept on the device, it gives the host
+  the browser's subscription again (`PUT`, with the kept mode) whenever the host doesn't have it: the
+  browser renewed it (Firefox does now and then) and a notice sent to the old one got 410, so the host
+  let it go; or the browser lost it with the site's data (subscribed afresh, the permission already
+  given), or made it for another key. Only Off, chosen on the device, clears the choice (and
+  unsubscribes the browser), so it's never undone. A choice kept as another device (this browser
+  allowed again since, with a new id) counts for nothing; one made before the choice was kept on the
+  device is taken from the host.
 - **Where it works.** Android and computers, from a browser tab. An iPhone or iPad only from HO[LO]
   added to the Home Screen (iOS 16.4 or later), which keeps its own storage, so it's allowed as a
   device of its own.
@@ -852,7 +861,9 @@ Limits, plainly:
 - The service worker exists only in production builds: a development server has no notices.
 - The host needs outbound internet, to the push services over HTTPS.
 - A subscription the browser renews while HO[LO] is closed reaches the host only when HO[LO] next opens
-  on that device (the service worker holds no device token).
+  on that device: the service worker holds no device token, so it has no `pushsubscriptionchange`
+  handler. Until then the device gets no notices (the first one sent to the old subscription ends it
+  on the host).
 
 ## Threads ("since your last reply")
 

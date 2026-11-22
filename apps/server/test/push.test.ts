@@ -1,5 +1,5 @@
 import { createDecipheriv, createECDH, createPublicKey, hkdfSync, verify } from 'node:crypto';
-import { mkdtempSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -448,12 +448,17 @@ describe('the routes, and the notices a device gets', () => {
   it('answers a device’s own notices: its key, its mode, its subscription and its unseen count', async () => {
     const w = await world();
     const d = device();
+    // no key is made until a device subscribes (asks for it): a studio starting, or Settings, makes none
     const empty = await w.push('GET');
     expect(empty.statusCode).toBe(200);
-    const view = empty.json() as { key: string; mode: string; unseen: number };
+    expect(empty.json()).toEqual({ key: null, mode: 'off', unseen: 0 });
+    expect(existsSync(join(w.dataDir, 'push.key'))).toBe(false);
+    const asked = await w.app.inject({ method: 'GET', url: '/api/agent/push?key=1', headers: auth(w.token) });
+    const view = asked.json() as { key: string; mode: string; unseen: number };
     expect(view).toEqual({ key: expect.any(String), mode: 'off', unseen: 0 });
     expect(Buffer.from(view.key, 'base64url').length).toBe(65);
-    // the same key each time (and the same one push.key holds)
+    expect(existsSync(join(w.dataDir, 'push.key'))).toBe(true);
+    // the same key each time from then on, asked for or not (and the same one push.key holds)
     expect((await w.push('GET')).json().key).toBe(view.key);
     expect(pushKey(w.dataDir).publicKey.toString('base64url')).toBe(view.key);
 
@@ -613,11 +618,55 @@ describe('the routes, and the notices a device gets', () => {
     expect(failing.calls.length).toBe(1);
     expect((await w.push('GET')).json()).toMatchObject({ mode: 'every' });
     expect(w.said.some((l) => l.includes('answered 500'))).toBe(true);
+    // the browser renewed its subscription: the old one answers 410, and the host lets it go
     const gone = pushService(410);
     w.services.notify.fetch = gone.fetch;
     await w.runTo('done');
     expect(gone.calls.length).toBe(1);
     expect((await w.push('GET')).json()).toMatchObject({ mode: 'off', unseen: 0 });
+    // HO[LO] opens again on that device: it gives the host the new one, with the choice it kept
+    // (app/notify.ts, syncPush), and the notices go on, to the new endpoint
+    const renewed = device('https://fcm.googleapis.com/fcm/send/renewed');
+    const again = await w.push('PUT', { mode: 'every', subscription: renewed.subscription });
+    expect(again.json()).toMatchObject({ mode: 'every', endpoint: renewed.subscription.endpoint });
+    const ok = pushService(201);
+    w.services.notify.fetch = ok.fetch;
+    const job = await w.runTo('done');
+    expect(ok.calls.map((c) => c.url)).toEqual([renewed.subscription.endpoint]);
+    expect(renewed.read((ok.calls[0] as Call).body)).toMatchObject({ job, body: 'Song: a reply is ready.' });
+  });
+
+  it('times Long runs from the turn’s own start: the wait for an OK never counts', async () => {
+    const w = await world();
+    const d = device();
+    await w.push('PUT', { mode: 'long', subscription: d.subscription });
+    const asked = await w.runTo('awaiting', 2_000);
+    expect(d.read((w.service.calls[0] as Call).body)).toMatchObject({
+      job: asked,
+      body: 'Song: it needs your OK to go on.',
+    });
+    // the user comes back ten minutes later and allows it
+    const waited = w.services.jobs.get(asked);
+    if (waited) {
+      waited.view.started -= 10 * 60_000;
+      waited.view.finished = (waited.view.finished ?? Date.now()) - 10 * 60_000;
+    }
+    const permitted = await w.app.inject({
+      method: 'POST',
+      url: `/api/agent/jobs/${asked}/permission`,
+      headers: auth(w.token),
+      payload: { grant: true, result: 'Installed the strings' },
+    });
+    expect(permitted.statusCode, permitted.body).toBe(200);
+    const next = (permitted.json() as { job: string }).job;
+    expect(next).not.toBe(asked);
+    // the follow-up is a job of its own, begun at the click: a short one is no long run
+    expect(Date.now() - (w.services.jobs.get(next)?.view.started ?? 0)).toBeLessThan(5_000);
+    w.run.say({ type: 'agent-done', job: next, reply: 'Done.' });
+    await waitFor(() => w.services.jobs.get(next)?.view.state === 'done');
+    await w.services.notify.idle();
+    expect(w.service.calls.length).toBe(1);
+    expect(w.unseenRows().map((r) => r.job)).toEqual([asked, next]);
   });
 
   it('counts a song seen on any device as seen on all, and answers this device’s count', async () => {

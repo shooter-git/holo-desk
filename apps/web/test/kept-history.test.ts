@@ -3,6 +3,7 @@ import { applyOps, newProject, newRegion, newTrack, type Project } from '@holo/s
 import { describe, expect, it } from 'vitest';
 import { type History, push, pushOrMergeJob, travel } from '../src/app/history.ts';
 import {
+  behind,
   KEEP_SONGS,
   type Keepable,
   Keeper,
@@ -77,7 +78,7 @@ function edited(revision = 3): { state: Keepable; songs: Project[] } {
 }
 
 describe('which history is kept', () => {
-  it('a saved song’s, with the revision it leads up to', () => {
+  it('a saved song’s, with the revision it leads up to, and the song then', () => {
     const { state } = edited(7);
     expect(toKeep(state, 'abc', 42)).toEqual({
       project: state.project?.id,
@@ -86,6 +87,32 @@ describe('which history is kept', () => {
       redo: [],
       kept: 42,
       made: 'abc',
+      song: state.project,
+    });
+  });
+
+  it('changes not saved yet, with the song they were made on when it’s known, and both come back', async () => {
+    const { state, songs } = edited(7);
+    const base = songs[2] as Project;
+    const unsaved = { ...state, saveState: 'dirty' as const, saved: base };
+    expect(toKeepUnsaved(unsaved, 'abc', 42)?.baseSong).toBe(base);
+    expect(toKeepUnsaved({ ...unsaved, saved: null }, 'abc', 42)).not.toHaveProperty('baseSong');
+    const shelf = new MemoryShelf();
+    const keeper = new Keeper(shelf, { delay: 0 });
+    keeper.changed(unsaved);
+    await keeper.flush();
+    const opened = { ...(state.project as Project), title: 'Saved since', revision: 9 };
+    const back = await new Keeper(shelf, { delay: 0 }).open(opened);
+    expect(back).toMatchObject({ kind: 'unsaved', base: 7, baseSong: base });
+    // and a history kept at an earlier revision comes back with the song it leads to
+    const shelf2 = new MemoryShelf();
+    const k2 = new Keeper(shelf2, { delay: 0 });
+    k2.changed(state);
+    await k2.flush();
+    expect(await new Keeper(shelf2, { delay: 0 }).open(opened)).toMatchObject({
+      kind: 'behind',
+      revision: 7,
+      song: state.project,
     });
   });
 
@@ -144,6 +171,25 @@ describe('the keeper', () => {
     expect(undone?.project).toEqual(songs[0]);
     const redone = travel(undone?.history as History, undone?.project as Project, 2);
     expect(redone?.project.title).toBe('Two');
+  });
+
+  it('a history at an earlier revision comes back as behind, for the agent’s changes saved since to go on top', async () => {
+    const shelf = new MemoryShelf();
+    const keeper = new Keeper(shelf, { delay: 0 });
+    const { state } = edited(5);
+    keeper.changed(state);
+    await keeper.flush();
+    const song = state.project as Project;
+    // the page was let go; the agent saved two revisions meanwhile
+    const later = { ...titled(song, 'Lifted'), revision: 7 };
+    const back = await new Keeper(shelf, { delay: 0 }).open(later);
+    expect(back).toMatchObject({ kind: 'behind', revision: 5 });
+    expect((back as History).undo.map((s) => s.label)).toEqual(['Title One', 'Title Two', 'Title Three']);
+    // not one at a later revision, another song's, or kept by other code
+    expect(behind(toKeep(state, 'abc') as Kept, { ...song, revision: 4 }, 'abc')).toBeNull();
+    expect(behind(toKeep(state, 'abc') as Kept, { ...later, id: 'prj_other' }, 'abc')).toBeNull();
+    expect(behind(toKeep(state, 'abc') as Kept, later, 'def')).toBeNull();
+    expect(behind(toKeep(state, 'abc') as Kept, later, 'abc')).toMatchObject({ revision: 5 });
   });
 
   it('keeps the same history once', async () => {

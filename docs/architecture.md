@@ -266,14 +266,24 @@ song and what its steps changed. The last 20 songs' histories are kept.
 
 So are the song's changes the host doesn't have yet: until they're saved (the studio saves a moment
 after an edit, and can't while the host is out of reach or the song was changed somewhere else), the
-song as it is, its history and the revision they were made on are kept on the device a tenth of a
-second after each change, and when the page is hidden. A browser drops what a page writes as it goes,
+song as it is, its history and the revision they were made on, with the song as it was at that
+revision, are kept on the device a tenth of a second after each change, and when the page is hidden. A browser drops what a page writes as it goes,
 so they're written while it's still there. When the song opens there again (after a reload, a closed
 tab, a phone that let the page go, or another song opened), it opens with them and saves them: on the
 revision they were made on, or, the song changed somewhere else since, asking which version to keep.
 If the host already has the song as they left it (their save got there just before the page went),
 they're let go and the history comes back. Another song opened before a save is saved in the
-background, after a save of it on its way. Unsaved changes are never let go to make room.
+background, after a save of it on its way. Unsaved changes are never let go to make room. A page that's
+hidden saves to the host too, while it still runs; a save with no answer within 30 s and the time
+to send the song at 20 KB/s (a page frozen with it on its way) is given up and made again, given
+twice as long each time after till the host answers (a slow network gets there in the end), and one
+refused because the host already has that very song is taken as saved.
+
+The agent may have saved its changes on the host while the page was away (docs/agent.md, "The studio
+that asked, away"). Then the history comes back with them as their job's step on top, and changes kept
+on the device go onto them, as if they had come while the page was there. Where they can't be put
+together, or the song they were made on isn't known for certain, the song is as the host has it and
+they're one Undo away, and a notice says so.
 
 ## The live channel
 
@@ -325,9 +335,10 @@ the studio that asked ◄── server ◄── /api/agent/jobs/:job/* ◄─�
   Tripwires stop the run at the first tool that isn't HO[LO]'s.
 - **The tools** (`packages/agent/src/tools`) call the job's routes, which check the token, that the job
   is running and, for what needs the studio, that the studio that asked still has the song open.
-  Changes go only to that studio, as batches it groups into one undo step, "Agent: …" (a scan read whose
-  studio has gone is saved on the host instead). Listening, what was just played and before and after
-  are asked of that studio too. Asking a permission (installing a pack, sending the song to its
+  Changes go only to that studio, as batches it groups into one undo step, "Agent: …". While it's away
+  (a phone switched to another app, the tab closed) they're saved on the host, and it picks them up as
+  that step when it's back. Listening, what was just played and before and after are asked of that
+  studio too, and wait for the reply's buttons while it's away. Asking a permission (installing a pack, sending the song to its
   creation, a screenshot, a photo, the microphone) ends the turn; the user's click starts the next one.
 - **The terminal** has all of it too: `holo regions`, `timeline`, `measure`, `played`, `details`,
   `import`, `packs` and `holo tool NAME` run the same tools on the song from a terminal, through the

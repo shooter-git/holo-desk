@@ -38,7 +38,7 @@ import {
   writeMidi,
 } from '@holo/session';
 import Fastify, { type FastifyInstance, type FastifyReply } from 'fastify';
-import { parsePlayed } from './agent/jobs.ts';
+import { type Jobs, parsePlayed } from './agent/jobs.ts';
 import { runnerKey } from './agent/keys.ts';
 import { agentRoutes } from './agent/routes.ts';
 import { convertToWav, sweepAudio, TO_WAV } from './audio-files.ts';
@@ -82,6 +82,8 @@ export interface Services {
   creations: Creations;
   /** The songs' FLAC and AIFF files made WAV, once, as the server starts: how many. */
   audioSwept: Promise<number>;
+  /** The in-app agent's jobs. */
+  jobs: Jobs;
 }
 
 export async function buildApp(config: Config): Promise<{ app: FastifyInstance; services: Services }> {
@@ -1059,5 +1061,5 @@ export async function buildApp(config: Config): Promise<{ app: FastifyInstance; 
     networkMidi?.close();
     store.close();
   });
-  return { app, services: { store, packs, live, creations, audioSwept } };
+  return { app, services: { store, packs, live, creations, audioSwept, jobs: agent.jobs } };
 }

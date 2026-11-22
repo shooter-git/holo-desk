@@ -5,6 +5,11 @@
  * the studio that asked, as one undo step; when its turn is done the studio saves, and the song as
  * saved is what the agent saw, for "since your last reply" next time.
  *
+ * The user may leave while it works (a phone switched to another app, the tab closed). Its changes
+ * still land: while the studio that asked is away, they're saved here as revisions by "Agent", and
+ * that studio picks them up as the job's undo step when it's back (`awayFor`). What needs the studio
+ * itself (playing, listening, its meters) is refused meanwhile, saying so (`BACKGROUND`).
+ *
  * A job is `waiting` until the runner or its tools are first heard from, then `running`. It ends
  * `done`, `awaiting` (it asked for a permission: the user's click starts the follow-up), `failed`
  * (the harness failed, the runner dropped, it went quiet for 15 minutes or ran past its ceiling) or
@@ -28,6 +33,7 @@ import type { Store } from '../db.ts';
 import {
   type AgentHooks,
   type Answer,
+  type EditorState,
   GONE,
   type Live,
   type LiveClient,
@@ -130,8 +136,10 @@ export interface AgentJob {
   preset: ScanPreset | null;
   /** What it asked the user to allow during its turn: it waits for them once the turn ends. */
   asked: Permission | null;
-  /** Batches applied here (a scan preset whose studio went away), each once: their revisions. */
+  /** Batches applied here (its studio was away), each once: their revisions. */
   batches: Map<string, number>;
+  /** Its latest run of batches saved here while its studio was away, for that studio to pick up. */
+  away: AwayRun | null;
   /** Its ceiling, and the countdown once its runner dropped. */
   clock: NodeJS.Timeout | null;
   dropped: NodeJS.Timeout | null;
@@ -188,6 +196,54 @@ interface Hearing {
   onHeard: (() => void) | null;
 }
 
+/**
+ * A job's batches saved here one after another while its studio was away: the song went from `base`
+ * to `head` through them, with no one else's save in between. The studio picks them up as the job's
+ * step when it's back (docs/agent.md, "The studio that asked, away").
+ */
+export interface AwayRun {
+  base: number;
+  head: number;
+  batches: { batch: string; label: string; revision: number }[];
+  /**
+   * Its last few revisions past the one the requester's studio last said it's at, as saved (JSON, not
+   * parsed: a big song is a few MB a copy), for the one it says next to be kept (`keepPickedUp`). Let go
+   * as the studio catches up, and as the job ends: the agent saves no more of the run then, so the one
+   * it says is the song as it is.
+   */
+  recent: { revision: number; doc: string }[];
+  /** The last revision of it the requester's studio has said it's at (kept in the song's history if it could be). */
+  kept?: number;
+}
+
+/** How many of a run's latest revisions are kept at hand, for the studio to say it's at one of them. */
+const RUN_RECENT = 4;
+
+/** What a studio back on the song picks up of a run (`Jobs.awayFor`): the batches after its revision. */
+export interface AwayChanges {
+  job: string;
+  /** The job's label once it has finished, else its last batch's. */
+  label: string;
+  running: boolean;
+  /**
+   * The revision the batches were made on: the studio's own, or (it was before the run) the run's
+   * first (a save of the studio's got here, its answer lost).
+   */
+  base: number;
+  /** The revision the song is at with them, and the song as it is then. */
+  head: number;
+  /** By id: the studio puts its own changes onto the song as it is (merge-songs.ts), not the batches. */
+  batches: { batch: string }[];
+  song: Project;
+}
+
+/** A device's studio that left a song: when, whether its page was hidden then, and what it showed. */
+interface Left {
+  at: number;
+  hidden: boolean;
+  state: EditorState;
+}
+
 /** What one part of a listen gives back. */
 export interface ListenPart {
   /** The notes this part hands out, their times in ms from the start of the whole listen: parts concatenate. */
@@ -222,12 +278,18 @@ const HOUR = 60 * MINUTE;
 const inWords = (ms: number) =>
   ms >= 2 * HOUR && ms % HOUR === 0 ? `${ms / HOUR} hours` : `${Math.round(ms / MINUTE)} minutes`;
 
-/** What a tool hears when the requester's studio is away, and doesn't come back while it waits. */
+/** What a tool hears when the requester's studio went away before it answered. */
 export const AWAY =
-  'The studio that asked is away (reloading, or its network dropped): wait a moment and try again; once it’s back, read the song again before changing it';
+  'The studio that asked went away before it answered (a reload, its network, or its page sent to the background): try again in a moment';
 /** What a change hears when the studio went away before saying whether it went in. */
 export const WENT =
-  'The studio that asked went away before saying whether this change went in: once it’s back, read the song again, and make the change again only if it isn’t there';
+  'The studio that asked went away before saying whether this change went in: read the song again, and make the change again only if it isn’t there';
+/**
+ * What a tool that needs the requester's studio itself hears while that studio is away (its page in
+ * the background or closed): changes still land, and what's to hear or see waits for the reply's view.
+ */
+export const BACKGROUND =
+  'The user’s studio isn’t in front of them now (its page is in the background or closed), so nothing can be played, heard or read in it until they’re back. Changes to the song still land: carry on, and put what there is to hear or see in your reply’s view, for when they’re back';
 
 export interface Limits {
   /**
@@ -260,6 +322,13 @@ export interface Limits {
    * network back) before it's told the studio is away.
    */
   awayMs: number;
+  /**
+   * How long a studio whose page is hidden has to apply a batch: past it, its browser has frozen the
+   * page (a phone in another app), and the batch is saved here.
+   */
+  hiddenMs: number;
+  /** How long a batch waits for a studio that's back to pick up the changes saved here meanwhile. */
+  catchUpMs: number;
 }
 
 export const LIMITS: Limits = {
@@ -276,6 +345,8 @@ export const LIMITS: Limits = {
   compareMs: 50_000,
   // (most tool calls are given up after 30 s: the wait, then what the studio does, fits in that)
   awayMs: 15_000,
+  hiddenMs: 8_000,
+  catchUpMs: 3_000,
 };
 
 export interface JobsOptions {
@@ -370,6 +441,13 @@ export class Jobs implements AgentHooks {
   private readonly endings: ((job: AgentJob) => void)[] = [];
   /** Tools waiting for a device's studio to come back with a song open: by device and song. */
   private readonly comingBack = new Map<string, Set<() => void>>();
+  /** Devices' studios that left a song and haven't come back to it: by device and song. */
+  private readonly left = new Map<string, Left>();
+  /**
+   * Studios still connected whose hidden page didn't answer (its browser froze it: a phone in another
+   * app): away until they report from a page in view.
+   */
+  private readonly frozen = new WeakSet<LiveClient>();
 
   constructor(options: JobsOptions) {
     this.o = options;
@@ -382,6 +460,9 @@ export class Jobs implements AgentHooks {
   }
 
   private ended(job: AgentJob): void {
+    // (its run saves no more: a studio back on it is at the song as it is, read as saved; an ended
+    // job, kept a while, holds no songs)
+    if (job.away) job.away.recent = [];
     for (const fn of this.endings) {
       try {
         fn(job);
@@ -637,6 +718,7 @@ export class Jobs implements AgentHooks {
         preset,
         asked: null,
         batches: new Map(),
+        away: null,
         clock: null,
         dropped: null,
         quiet: null,
@@ -710,8 +792,29 @@ export class Jobs implements AgentHooks {
 
   /** The studio saves now (it answers once it has, or in at most 10 s). */
   private async flush(device: string, project: string): Promise<void> {
+    const studio = this.studioOf(device, project);
+    if (!studio) return;
+    const hidden = isHidden(studio);
+    const answer = await this.o.live.request(
+      studio,
+      { type: 'agent-flush' },
+      hidden ? Math.min(this.limits.flushMs, this.limits.hiddenMs) : this.limits.flushMs,
+    );
+    if (hidden && answer.error === NO_ANSWER) this.unanswered(studio);
+  }
+
+  /** A device's studio with a song open, unless its browser froze it (`frozen`). */
+  private studioOf(device: string, project: string): LiveClient | null {
     const studio = this.o.live.studioFor(device, project);
-    if (studio) await this.o.live.request(studio, { type: 'agent-flush' }, this.limits.flushMs);
+    return studio && !this.frozen.has(studio) ? studio : null;
+  }
+
+  /**
+   * A studio asked while its page was hidden didn't answer: its browser froze it, and it's away, unless
+   * it has said since that it's in view again (it may answer late, as it wakes).
+   */
+  private unanswered(studio: LiveClient): void {
+    if (isHidden(studio)) this.frozen.add(studio);
   }
 
   // ---- the user's answers ----
@@ -1019,8 +1122,16 @@ export class Jobs implements AgentHooks {
   state(client: LiveClient, was: string | null): void {
     const device = client.device;
     const now = client.state?.project ?? null;
-    // a studio back with the song open (after a reload, its network back): the tools waiting for it go on
-    if (device && now) for (const back of [...(this.comingBack.get(backKey(device, now)) ?? [])]) back();
+    if (device && now) {
+      const key = backKey(device, now);
+      // the device has the song open again; a page in view again isn't frozen
+      this.left.delete(key);
+      if (!isHidden(client)) this.frozen.delete(client);
+      // a studio back with the song open (after a reload, its network back), or saying where it's got
+      // to: the tools waiting for it look again
+      for (const back of [...(this.comingBack.get(key) ?? [])]) back();
+      this.keepPickedUp(device, now, client.state?.revision);
+    }
     if (!device || !was || was === now) return;
     for (const job of this.jobs.values()) {
       // a scan preset carries on without the studio (its changes are saved here, with a restore point)
@@ -1029,7 +1140,35 @@ export class Jobs implements AgentHooks {
     }
   }
 
+  /**
+   * The requester's studio says it's at a revision of its job's run (it picked the run up, maybe as
+   * the agent saved again): that revision is kept in the song's history, once, as the song its own
+   * changes from now on are made on, which a reload of it may read (actions.ts, picking up).
+   */
+  private keepPickedUp(device: string, project: string, revision: number | undefined): void {
+    for (const job of this.jobs.values()) {
+      const run = job.away;
+      if (!run || job.view.device !== device || job.view.project !== project) continue;
+      if (revision === undefined || revision === run.kept || revision <= run.base || revision > run.head) continue;
+      const song = run.recent.find((r) => r.revision === revision);
+      if (song) this.o.store.keepRevision(project, revision, song.doc, 'Agent');
+      // (the song as it is, read as saved: not parsed)
+      else if (this.o.store.row(project)?.revision === revision) this.o.store.snapshotNow(project, 'Agent');
+      run.kept = revision;
+      // it's at that one now, not before it: only those after it may still be said
+      run.recent = run.recent.filter((r) => r.revision > revision);
+    }
+  }
+
   gone(client: LiveClient): void {
+    // a studio leaving a song: whether its page was hidden (in the background, closed) or in view (a
+    // reload, its network), and what it last showed
+    const shown = client.state;
+    if (client.role === 'editor' && client.device && shown?.project) {
+      const now = Date.now();
+      for (const [key, l] of this.left) if (now - l.at > LEFT_LIFE) this.left.delete(key);
+      this.left.set(backKey(client.device, shown.project), { at: now, hidden: isHidden(client), state: shown });
+    }
     if (client.role !== 'runner') return;
     // its sign-ins and updates under way, and its harnesses, went with it
     for (const [harness, r] of this.relays) if (r.runner === client) this.relays.delete(harness);
@@ -1149,40 +1288,32 @@ export class Jobs implements AgentHooks {
     };
   }
 
-  /** The requester's studio, while it has the job's song open. */
+  /** The requester's studio, while it has the job's song open (and its browser hasn't frozen it). */
   studio(job: AgentJob): LiveClient | null {
-    return this.o.live.studioFor(job.view.device, job.view.project);
+    return this.studioOf(job.view.device, job.view.project);
   }
 
   /**
-   * The requester's studio with the job's song open: at once, or once it's back within `awayMs` (and
-   * `budgetMs`): a reload, or its network back after dropping. Meanwhile the line under the bar says
-   * so, for the other devices that have the song open. Refused 409 `away` if it isn't back by then. A
-   * scan preset carries on without its studio, so it isn't waited for: 403 at once, as ever.
+   * The requester's studio with the job's song open: at once, or once it's back within `awayMs` of
+   * leaving (and `budgetMs`): a reload, or its network back after dropping. Meanwhile the line under
+   * the bar says so, for the other devices that have the song open. A studio whose page was hidden as
+   * it went (in the background, closed), or that's been gone longer, isn't waited for. Refused 409
+   * `away` (`BACKGROUND`) when it isn't there. A scan preset carries on without its studio, so it isn't
+   * waited for: 403 at once, as ever.
    */
   async studioBack(job: AgentJob, budgetMs = this.limits.awayMs): Promise<LiveClient> {
     const here = this.studio(job);
     if (here) return here;
     if (job.preset) throw new Refusal(403, 'The song isn’t open in the studio that asked');
-    const wait = Math.min(this.limits.awayMs, budgetMs);
+    const key = backKey(job.view.device, job.view.project);
+    const left = this.left.get(key);
+    // (gone with its page in view: a reload, or its network, may bring it back in a moment)
+    const wait = left && !left.hidden ? Math.min(left.at + this.limits.awayMs - Date.now(), budgetMs) : 0;
     if (wait > 0 && isLive(job) && !job.ending) {
-      const key = backKey(job.view.device, job.view.project);
       const before = job.view.line;
       const waiting = 'Waiting for the studio that asked to come back';
       this.progress(job, waiting);
-      await new Promise<void>((done) => {
-        const backs = this.comingBack.get(key) ?? new Set<() => void>();
-        this.comingBack.set(key, backs);
-        const timer = setTimeout(() => back(), wait);
-        timer.unref?.();
-        const back = () => {
-          clearTimeout(timer);
-          backs.delete(back);
-          if (!backs.size) this.comingBack.delete(key);
-          done();
-        };
-        backs.add(back);
-      });
+      await this.until(key, () => this.studio(job) !== null, wait);
       // (the line it had comes back, unless the agent said another meanwhile)
       if (job.view.line === waiting && isLive(job) && !job.ending) {
         if (before === undefined) delete job.view.line;
@@ -1192,7 +1323,27 @@ export class Jobs implements AgentHooks {
     }
     const back = this.studio(job);
     if (back) return back;
-    throw new Refusal(409, AWAY, 'away');
+    throw new Refusal(409, BACKGROUND, 'away');
+  }
+
+  /** Wait until a device's studio with a song says something that makes `ready` true, or `ms` pass. */
+  private async until(key: string, ready: () => boolean, ms: number): Promise<void> {
+    const end = Date.now() + ms;
+    while (!ready() && Date.now() < end) {
+      await new Promise<void>((done) => {
+        const backs = this.comingBack.get(key) ?? new Set<() => void>();
+        this.comingBack.set(key, backs);
+        const timer = setTimeout(() => back(), end - Date.now());
+        timer.unref?.();
+        const back = () => {
+          clearTimeout(timer);
+          backs.delete(back);
+          if (!backs.size) this.comingBack.delete(key);
+          done();
+        };
+        backs.add(back);
+      });
+    }
   }
 
   /** The song as the studio has it now (it saves first, so nothing it applied is missed). */
@@ -1210,41 +1361,59 @@ export class Jobs implements AgentHooks {
     return songLines(this.o.store.row(project));
   }
 
-  /** What the requester's studio shows: the playhead, the selection, the cycle, the view. */
+  /**
+   * What the requester's studio shows: the playhead, the selection, the cycle, the view. While it's
+   * away, what it showed as it went, with `away` (nothing plays; the tempo and cycle are the song's as
+   * saved).
+   */
   async studioState(job: AgentJob): Promise<Record<string, unknown>> {
-    const studio = await this.studioBack(job);
+    const studio = job.preset ? await this.studioBack(job) : await this.studioBack(job).catch(awayIsNull);
+    const { device, project } = job.view;
+    // who the song is by, its album, its creation: the library's, beside the song
+    const about = this.about(project);
+    if (!studio) {
+      const last = this.left.get(backKey(device, project))?.state ?? this.o.live.studioFor(device, project)?.state;
+      const song = this.o.store.get(project);
+      return {
+        away: true,
+        ...(last ? shown(last) : {}),
+        playing: false,
+        recording: false,
+        ...(song ? { bpm: song.tempo[0]?.bpm ?? 120, cycle: song.cycle } : {}),
+        middleC: this.middleC(),
+        about,
+      };
+    }
     const s = studio.state;
     if (!s) throw new Refusal(403, 'The song isn’t open in the studio that asked');
-    const extra = s as unknown as Record<string, unknown>;
     return {
-      playhead: s.tick,
-      position: s.position,
+      ...shown(s),
       playing: s.playing,
       recording: s.recording,
       bpm: s.bpm,
-      selection: s.selection,
       cycle: s.cycle,
       middleC: s.middleC,
-      ...(typeof extra.view === 'string' ? { view: extra.view.slice(0, 40) } : {}),
-      ...(typeof extra.scan === 'string' && SCAN_ID.test(extra.scan) ? { scan: extra.scan } : {}),
-      // who the song is by, its album, its creation: the library's, beside the song
-      about: this.about(job.view.project),
+      about,
     };
   }
 
   /**
    * A batch of the job's changes, for the requester's studio (one undo step with the rest of the
-   * job's), answered once it's applied. Never applied here, except for a scan preset whose studio
-   * went away: then it's saved as a revision of the agent's, as a scan read always was.
+   * job's), answered once it's applied. While that studio is away (or back, but not yet caught up with
+   * what was saved here meanwhile), it's saved here as a revision by "Agent", for the studio to pick
+   * up as the job's step (`saveHere`, `awayFor`). Each batch goes in once, here or there.
    */
   async ops(job: AgentJob, ops: Op[], label: string, batch: string): Promise<{ ok: true; revision?: number }> {
     const arrived = Date.now();
     job.changed = true;
-    // (a scan preset carries on without its studio: no waiting for it)
-    const studio = job.preset ? this.studio(job) : await this.studioBack(job);
+    const done = job.batches.get(batch);
+    if (done !== undefined) return { ok: true, revision: done };
+    const studio = await this.forChanges(job);
     if (studio) {
-      // (the time waited for the studio comes out of the minute it has to apply them)
-      const left = Math.max(5_000, this.limits.opsMs - (Date.now() - arrived));
+      // (the time waited for the studio comes out of the minute it has to apply them; a hidden page
+      // that doesn't answer soon was frozen by its browser)
+      const hidden = isHidden(studio);
+      const left = Math.max(5_000, (hidden ? this.limits.hiddenMs : this.limits.opsMs) - (Date.now() - arrived));
       const answer = await this.o.live.request(
         studio,
         { type: 'agent-ops', project: job.view.project, job: job.view.id, batch, ops, label },
@@ -1252,13 +1421,39 @@ export class Jobs implements AgentHooks {
         true,
       );
       if (answer.error === GONE) throw new Refusal(409, WENT, 'away');
-      if (!answer.ok)
-        throw new Refusal(answer.error === NO_ANSWER ? 504 : 400, answer.error ?? 'The studio refused the change');
-      return typeof answer.revision === 'number' ? { ok: true, revision: answer.revision } : { ok: true };
+      if (!hidden || answer.error !== NO_ANSWER) {
+        if (!answer.ok)
+          throw new Refusal(answer.error === NO_ANSWER ? 504 : 400, answer.error ?? 'The studio refused the change');
+        return typeof answer.revision === 'number' ? { ok: true, revision: answer.revision } : { ok: true };
+      }
+      // (should it wake and apply the batch after all, its id has it go in there once)
+      this.unanswered(studio);
     }
-    if (!job.preset) throw new Refusal(403, 'The song isn’t open in the studio that asked');
-    const done = job.batches.get(batch);
-    if (done !== undefined) return { ok: true, revision: done };
+    return this.saveHere(job, ops, label, batch);
+  }
+
+  /**
+   * The requester's studio to send a batch to: there, and caught up with the changes saved here while
+   * it was away (else this batch would land before them); or null, and the batch is saved here. A
+   * studio away a moment (a reload) is waited for, and one that's back gets a moment to catch up.
+   */
+  private async forChanges(job: AgentJob): Promise<LiveClient | null> {
+    const ready = (c: LiveClient | null): c is LiveClient => c !== null && caughtUp(job, c);
+    // (a scan preset carries on without its studio: no waiting for it)
+    if (job.preset) {
+      const here = this.studio(job);
+      return ready(here) ? here : null;
+    }
+    const back = await this.studioBack(job).catch(awayIsNull);
+    if (!back || ready(back)) return back;
+    const key = backKey(job.view.device, job.view.project);
+    await this.until(key, () => ready(this.studio(job)), this.limits.catchUpMs);
+    const now = this.studio(job);
+    return ready(now) ? now : null;
+  }
+
+  /** A batch saved here as a revision by "Agent", in the job's run for its studio to pick up. */
+  private saveHere(job: AgentJob, ops: Op[], label: string, batch: string): { ok: true; revision: number } {
     const song = this.o.store.get(job.view.project);
     if (!song) throw new Refusal(404, 'The song is gone');
     let next: Project;
@@ -1267,11 +1462,52 @@ export class Jobs implements AgentHooks {
     } catch (err) {
       throw new Refusal(400, err instanceof Error ? err.message : String(err));
     }
+    // the run goes on from its last revision; saved by someone else since, a new one begins, the song
+    // as it was then kept (a studio that reloads reads it, for the step's Undo), and the old one's
+    // songs go with it
+    const run = job.away?.head === song.revision ? job.away : null;
+    if (!run) this.o.store.snapshotNow(song.id, 'Agent');
     const saved = this.o.store.save(next, song.revision, 'Agent');
     if (!saved) throw new Refusal(409, 'Changed while applying; try again');
+    const away: AwayRun = run ?? { base: song.revision, head: song.revision, batches: [], recent: [] };
+    away.head = saved.revision;
+    away.batches.push({ batch, label, revision: saved.revision });
+    away.recent = [...away.recent, { revision: saved.revision, doc: JSON.stringify(saved) }].slice(-RUN_RECENT);
+    job.away = away;
     job.batches.set(batch, saved.revision);
     this.o.live.tell({ type: 'saved', project: saved.id, revision: saved.revision });
     return { ok: true, revision: saved.revision };
+  }
+
+  /**
+   * What a device's studio, back on a song at revision `from`, picks up of the changes the song's job
+   * saved here while it was away: the batches after `from` (all of them from before the run), the
+   * revision they bring the song to and the song then, and the job's label. Only for the device that
+   * asked for the job; null when there's nothing to pick up from `from` (no run, `from` past it but not
+   * one of its revisions, or the song saved since by someone else).
+   */
+  awayFor(device: string, project: string, from: number): AwayChanges | null {
+    let job: AgentJob | null = null;
+    for (const j of this.jobs.values()) if (j.view.project === project && j.view.device === device && j.away) job = j;
+    const run = job?.away;
+    // (read with the song as it is, at once: no save can come between them)
+    const song = run ? this.o.store.get(project) : null;
+    if (!job || !run || song?.revision !== run.head) return null;
+    // from before the run, all of it: the studio takes it only if its song is the run's first
+    const after = from <= run.base ? 0 : run.batches.findIndex((b) => b.revision === from) + 1;
+    if (after === 0 && from > run.base) return null;
+    const batches = run.batches.slice(after);
+    const last = batches.at(-1);
+    if (!last) return null;
+    return {
+      job: job.view.id,
+      label: job.view.label ?? last.label,
+      running: isLive(job),
+      base: after === 0 ? run.base : from,
+      head: run.head,
+      batches: batches.map(({ batch }) => ({ batch })),
+      song,
+    };
   }
 
   /** Play, stop, or move the playhead to a bar, in the requester's studio. */
@@ -1363,19 +1599,29 @@ export class Jobs implements AgentHooks {
 
   /**
    * A version for the reply's view: the studio saves, and the song as saved is kept in its history
-   * under the name; its revision.
+   * under the name; its revision. While the studio is away, the song as saved here is the song as it
+   * is (the job's changes are saved here meanwhile).
    */
   async version(job: AgentJob, name: string): Promise<{ ok: true; revision: number }> {
     if (name === BEFORE || name === AFTER || name === PREVIOUS || job.versions.has(name))
       throw new Refusal(409, `There's a version "${name}" already`);
     if (job.versions.size >= VIEW_LIMITS.versions)
       throw new Refusal(409, `At most ${VIEW_LIMITS.versions} versions a turn`);
-    if (!job.preset) {
-      const studio = await this.studioBack(job);
-      const answer = await this.o.live.request(studio, { type: 'agent-flush' }, this.limits.flushMs, true);
-      awayIfGone(answer);
-      if (!answer.ok)
-        throw new Refusal(answer.error === NO_ANSWER ? 504 : 409, answer.error ?? 'The studio couldn’t save the song');
+    const studio = job.preset ? null : await this.studioBack(job).catch(awayIsNull);
+    if (studio) {
+      const hidden = isHidden(studio);
+      const wait = hidden ? Math.min(this.limits.flushMs, this.limits.hiddenMs) : this.limits.flushMs;
+      const answer = await this.o.live.request(studio, { type: 'agent-flush' }, wait, true);
+      // (a hidden page that doesn't answer was frozen by its browser: the song as saved here it is)
+      if (hidden && answer.error === NO_ANSWER) this.unanswered(studio);
+      else {
+        awayIfGone(answer);
+        if (!answer.ok)
+          throw new Refusal(
+            answer.error === NO_ANSWER ? 504 : 409,
+            answer.error ?? 'The studio couldn’t save the song',
+          );
+      }
     }
     const revision = this.o.store.snapshotNow(job.view.project, `Agent: ${name}`);
     if (revision === null) throw new Refusal(404, 'The song is gone');
@@ -1595,6 +1841,37 @@ export class Jobs implements AgentHooks {
 /** Tools waiting for a device's studio with a song open are found by this. */
 function backKey(device: string, project: string): string {
   return `${device}\n${project}`;
+}
+
+/** How long a studio that left a song is remembered (what it showed, whether it was hidden). */
+const LEFT_LIFE = 24 * 3_600_000;
+
+/** Whether a studio's page is hidden, as it last reported (its browser may freeze it: a phone in another app). */
+function isHidden(c: LiveClient): boolean {
+  return (c.state as unknown as { hidden?: unknown } | null)?.hidden === true;
+}
+
+/** Whether a studio has the changes the job saved here while it was away: their last revision, or later. */
+function caughtUp(job: AgentJob, c: LiveClient): boolean {
+  return !job.away || (c.state?.revision ?? -1) >= job.away.head;
+}
+
+/** A refusal for the studio being away is no studio; anything else stands. */
+function awayIsNull(err: unknown): null {
+  if (err instanceof Refusal && err.reason === 'away') return null;
+  throw err;
+}
+
+/** Where a studio's playhead is, what's selected, and the view and scan in front, as the tools read them. */
+function shown(s: EditorState): Record<string, unknown> {
+  const extra = s as unknown as Record<string, unknown>;
+  return {
+    playhead: s.tick,
+    position: s.position,
+    selection: s.selection,
+    ...(typeof extra.view === 'string' ? { view: extra.view.slice(0, 40) } : {}),
+    ...(typeof extra.scan === 'string' && SCAN_ID.test(extra.scan) ? { scan: extra.scan } : {}),
+  };
 }
 
 /** A studio that went away before it answered: the tool hears it's away (409 `away`). */

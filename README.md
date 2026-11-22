@@ -203,7 +203,10 @@ microphone. Under the reply the agent shows what you'll want to do next with its
 studio's own buttons, switches, sliders and lists: play the original against its change, try the
 versions it made and keep one, set how much, or go to the bars it means. Nothing plays or moves until
 you click, unless you asked to see or hear something. Close the bar and the work goes on: the bar's button shows a turning ring while the
-agent works, then a dot until you open the bar again (a phone has the bar's button too, at the top). A
+agent works, then a dot until you open the bar again (a phone has the bar's button too, at the top).
+You can even leave: switch your phone to another app or close the tab, and its changes still land in the
+song; come back to find them as one undo step, the ring if it's still at work, or the dot and its reply
+if it's done. What needs you there (playing to you, listening) waits for its reply's buttons. A
 request runs as long as the agent keeps working, up to 2 hours; it ends if it goes quiet for 15 minutes,
 and Stop on the bar ends it at any time. The agent works on the open song and nothing else:
 

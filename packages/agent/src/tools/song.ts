@@ -57,6 +57,11 @@ export const songStatus: Tool = {
           .join(', ') || 'none'
       }`,
     ];
+    // (they've left for now: what follows is what their studio showed as they went)
+    if (state.away)
+      lines.push(
+        'Their studio is in the background or closed: your changes still land; what is to be heard or seen goes in your reply’s view, for when they’re back.',
+      );
     if (typeof state.playhead === 'number')
       lines.push(
         `Playhead: ${at(project, state.playhead)}${state.recording ? ' (recording)' : state.playing ? ' (playing)' : ' (stopped)'}`,

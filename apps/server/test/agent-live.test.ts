@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { agentApp, agentWorld, auth, type Msg, note, until, waitFor } from './agent-fakes.ts';
+import { BACKGROUND } from '../src/agent/jobs.ts';
+import { agentApp, agentWorld, auth, type Msg, note, settle, until, waitFor } from './agent-fakes.ts';
 
 let close: (() => Promise<void>) | null = null;
 afterEach(async () => {
@@ -505,8 +506,8 @@ describe('the studio that asked, away a moment', () => {
     expect(back.got('agent-ops')).toHaveLength(1);
   });
 
-  it('is away (409 `away`) if it doesn’t come back while the tool waits, and the tool may try again', async () => {
-    const { start, tool, s, token, desk, admit, studio, status } = await setup();
+  it('a change waits a moment for it (a reload), then is saved here; after that moment nothing waits', async () => {
+    const { start, tool, s, token, desk, admit, studio, status, services } = await setup();
     const phone = await admit(token);
     const phoneStudio = studio(phone.token, s.id, 'phone');
     const { job, token: jobToken } = await start({ project: s.id, text: 'Change it' });
@@ -520,17 +521,179 @@ describe('the studio that asked, away a moment', () => {
     expect(first.done).toBe(false);
     await vi.advanceTimersByTimeAsync(1);
     await until(() => first.done);
-    const refused = first.value as Awaited<ReturnType<typeof tool>>;
-    expect(refused.statusCode).toBe(409);
-    expect(refused.json()).toMatchObject({ reason: 'away', error: expect.stringContaining('try again') });
-    // tried again, it's back this time
-    const again = pending(tool(job, jobToken, 'POST', '/ops', { ops, label: 'Title', batch: 'b1' }));
-    await until(waiting);
-    await vi.advanceTimersByTimeAsync(1000);
+    const saved = first.value as Awaited<ReturnType<typeof tool>>;
+    expect(saved.statusCode).toBe(200);
+    expect(services.store.get(s.id)?.title).toBe('Later');
+    // the moment's over: the next change is saved at once, and what needs the studio says it's away
+    const next = await tool(job, jobToken, 'POST', '/ops', {
+      ops: [{ op: 'setProject', patch: { title: 'Later still' } }],
+      label: 'Title',
+      batch: 'b2',
+    });
+    expect(next.statusCode).toBe(200);
+    expect(services.store.get(s.id)?.title).toBe('Later still');
+    const play = await tool(job, jobToken, 'POST', '/transport', { action: 'play' });
+    expect(play.statusCode).toBe(409);
+    expect(play.json()).toMatchObject({ reason: 'away', error: expect.stringContaining('still land') });
+  });
+
+  it('isn’t waited for when its page was hidden as it went: changes are saved here, once each, for it to pick up', async () => {
+    const { start, tool, s, token, desk, admit, studio, app, run, status, services, save } = await setup();
+    const phone = await admit(token);
+    // (the studio saved it once already)
+    await save(services.store.get(s.id) as Parameters<typeof save>[0]);
+    const R = (services.store.get(s.id) as { revision: number }).revision;
+    const { job, token: jobToken } = await start({ project: s.id, text: 'Brighter chorus' });
+    const before = (services.store.get(s.id) as { revision: number }).revision;
+    // the phone is switched to another app: its page says it's hidden, then its connection goes
+    desk.say({
+      type: 'state',
+      state: {
+        project: s.id,
+        revision: R,
+        tick: 960,
+        position: '1.2.1',
+        selection: { track: null, regions: ['rgn_a'], notes: 0 },
+        hidden: true,
+      },
+    });
+    desk.close();
+
+    const title = (t: string) => [{ op: 'setProject', patch: { title: t } }];
+    const one = await tool(job, jobToken, 'POST', '/ops', { ops: title('One'), label: 'Chorus', batch: 'b1' });
+    expect(one.json()).toEqual({ ok: true, revision: before + 1 });
+    // the same batch again (its answer lost) isn't applied twice
+    expect(
+      (await tool(job, jobToken, 'POST', '/ops', { ops: title('One'), label: 'Chorus', batch: 'b1' })).json(),
+    ).toEqual({
+      ok: true,
+      revision: before + 1,
+    });
+    const two = await tool(job, jobToken, 'POST', '/ops', { ops: title('Two'), label: 'Chorus lift', batch: 'b2' });
+    expect(two.json()).toEqual({ ok: true, revision: before + 2 });
+    expect(services.store.get(s.id)?.title).toBe('Two');
+    expect(services.store.history(s.id)[0]).toMatchObject({ author: 'Agent' });
+    // the song they were made on is kept (a studio that reloads reads it, for its step's Undo)
+    expect(services.store.revision(s.id, before)?.title).toBe('Song');
+
+    // what the studio picks up when it's back: the batches after its revision, for its device alone
+    const away = async (from: number, as = token) =>
+      (await app.inject({ method: 'GET', url: `/api/agent/away/${s.id}?from=${from}`, headers: auth(as) })).json().away;
+    // (with the song as the host has it with them, read at the same time)
+    expect(await away(before)).toEqual({
+      job,
+      label: 'Chorus lift',
+      running: true,
+      base: before,
+      head: before + 2,
+      batches: [{ batch: 'b1' }, { batch: 'b2' }],
+      song: services.store.get(s.id),
+    });
+    expect(await away(before + 1)).toMatchObject({
+      base: before + 1,
+      batches: [{ batch: 'b2' }],
+      song: { title: 'Two', revision: before + 2 },
+    });
+    // from before the run (the studio's save got here, its answer lost), all of it from the run's first
+    expect(await away(before - 1)).toMatchObject({ base: before, batches: [{ batch: 'b1' }, { batch: 'b2' }] });
+    expect(await away(before + 2)).toBeNull();
+    expect(await away(before + 7)).toBeNull();
+    expect(await away(before, phone.token)).toBeNull();
+    expect(
+      (await app.inject({ method: 'GET', url: `/api/agent/away/${s.id}?from=x`, headers: auth(token) })).statusCode,
+    ).toBe(400);
+
+    // what needs the studio itself says at once that it's away, and that changes still land
+    const refusals = await Promise.all([
+      tool(job, jobToken, 'POST', '/transport', { action: 'play' }),
+      tool(job, jobToken, 'POST', '/audition', { events: [[0, 0x90, 60, 100]] }),
+      tool(job, jobToken, 'POST', '/listen', { maxMs: 1000, quietMs: 500 }),
+      tool(job, jobToken, 'GET', '/played?seconds=5'),
+      tool(job, jobToken, 'POST', '/compare', { from: 1, to: 3 }),
+      tool(job, jobToken, 'GET', '/commands'),
+      tool(job, jobToken, 'POST', '/measure', { what: 'meters' }),
+    ]);
+    for (const r of refusals) {
+      expect(r.statusCode, r.body).toBe(409);
+      expect(r.json()).toEqual({ reason: 'away', error: BACKGROUND });
+    }
+    // what it showed as it went, the song as saved, and a version of it, all still answer
+    expect((await tool(job, jobToken, 'GET', '/state')).json()).toMatchObject({
+      away: true,
+      playhead: 960,
+      playing: false,
+      selection: { regions: ['rgn_a'] },
+      cycle: { on: false },
+    });
+    expect((await tool(job, jobToken, 'GET', '/song')).json()).toMatchObject({ title: 'Two' });
+    expect((await tool(job, jobToken, 'POST', '/version', { name: 'Lifted' })).json()).toEqual({
+      ok: true,
+      revision: before + 2,
+    });
+    expect(services.store.history(s.id)[0]).toMatchObject({ revision: before + 2, author: 'Agent: Lifted' });
+
+    // it comes back as it was (an open page whose network returned): the next change waits for it to
+    // pick up what was saved here, then goes to it
     const back = studio(token, s.id, 'desk');
-    await until(() => again.done);
-    expect((again.value as Awaited<ReturnType<typeof tool>>).statusCode).toBe(200);
-    expect(back.got('agent-ops')).toHaveLength(1);
+    back.say({
+      type: 'state',
+      state: { project: s.id, revision: R, tick: 0, selection: { track: null, regions: [], notes: 0 } },
+    });
+    const three = pending(tool(job, jobToken, 'POST', '/ops', { ops: title('Three'), label: 'Chorus', batch: 'b3' }));
+    await settle();
+    expect(three.done).toBe(false);
+    expect(back.got('agent-ops')).toEqual([]);
+    back.say({
+      type: 'state',
+      state: { project: s.id, revision: before + 2, tick: 0, selection: { track: null, regions: [], notes: 0 } },
+    });
+    await waitFor(() => three.done);
+    expect(back.got('agent-ops').map((m) => m.batch)).toEqual(['b3']);
+    expect(services.store.get(s.id)?.title).toBe('Two');
+
+    // the turn ends: the run is still there to pick up, with the job's label
+    await tool(job, jobToken, 'POST', '/finish', { label: 'Brighter chorus', reply: 'The chorus lifts now.' });
+    run.say({ type: 'agent-done', job });
+    await waitFor(() => status(back, job)?.state === 'done');
+    expect(await away(before)).toMatchObject({ label: 'Brighter chorus', running: false, head: before + 2 });
+  });
+
+  it('a hidden page that stops answering is away: its change is saved here after a few seconds, and later ones at once', async () => {
+    const { start, tool, s, desk, services } = await setup();
+    const { job, token: jobToken } = await start({ project: s.id, text: 'Change it' });
+    const R = (services.store.get(s.id) as { revision: number }).revision;
+    // its connection is still open, but its browser froze the page
+    desk.say({
+      type: 'state',
+      state: { project: s.id, revision: R, tick: 0, selection: { track: null, regions: [], notes: 0 }, hidden: true },
+    });
+    desk.answer = (msg) => (msg.type === 'agent-ops' || msg.type === 'agent-flush' ? null : { ok: true });
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    const title = (t: string) => [{ op: 'setProject', patch: { title: t } }];
+    const one = pending(tool(job, jobToken, 'POST', '/ops', { ops: title('One'), label: 'Title', batch: 'b1' }));
+    await until(() => desk.got('agent-ops').length === 1);
+    await vi.advanceTimersByTimeAsync(7_999);
+    expect(one.done).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    await until(() => one.done);
+    expect((one.value as Awaited<ReturnType<typeof tool>>).json()).toEqual({ ok: true, revision: R + 1 });
+    expect(services.store.get(s.id)?.title).toBe('One');
+    const two = await tool(job, jobToken, 'POST', '/ops', { ops: title('Two'), label: 'Title', batch: 'b2' });
+    expect(two.json()).toEqual({ ok: true, revision: R + 2 });
+    expect(desk.got('agent-ops')).toHaveLength(1);
+    expect((await tool(job, jobToken, 'POST', '/transport', { action: 'play' })).json()).toMatchObject({
+      reason: 'away',
+    });
+
+    // in view again, and caught up: changes go to it again
+    desk.answer = () => ({ ok: true, revision: R + 2 });
+    desk.say({
+      type: 'state',
+      state: { project: s.id, revision: R + 2, tick: 0, selection: { track: null, regions: [], notes: 0 } },
+    });
+    const three = await tool(job, jobToken, 'POST', '/ops', { ops: title('Three'), label: 'Title', batch: 'b3' });
+    expect(three.json()).toEqual({ ok: true, revision: R + 2 });
+    expect(desk.got('agent-ops').map((m) => m.batch)).toEqual(['b1', 'b3']);
   });
 
   it('a change sent as it goes hears so at once: to read the song before making it again', async () => {
@@ -563,5 +726,129 @@ describe('the studio that asked, away a moment', () => {
     await until(() => read.done);
     const song = read.value as Awaited<ReturnType<typeof tool>>;
     expect([song.statusCode, song.json().id]).toEqual([200, s.id]);
+  });
+
+  it('keeps the revision a studio that’s back picks up, for a reload of it to read', async () => {
+    const { start, tool, s, token, desk, studio, services, save } = await setup();
+    await save(services.store.get(s.id) as Parameters<typeof save>[0]);
+    const { job, token: jobToken } = await start({ project: s.id, text: 'Change it' });
+    const before = (services.store.get(s.id) as { revision: number }).revision;
+    desk.say({
+      type: 'state',
+      state: {
+        project: s.id,
+        revision: before,
+        tick: 0,
+        selection: { track: null, regions: [], notes: 0 },
+        hidden: true,
+      },
+    });
+    desk.close();
+    const title = (t: string) => [{ op: 'setProject', patch: { title: t } }];
+    await tool(job, jobToken, 'POST', '/ops', { ops: title('One'), label: 'Title', batch: 'b1' });
+    await tool(job, jobToken, 'POST', '/ops', { ops: title('Two'), label: 'Title', batch: 'b2' });
+    // the run's first revision is kept; the ones after it aren't, one by one
+    expect(services.store.revision(s.id, before)).not.toBeNull();
+    expect(services.store.revision(s.id, before + 2)).toBeNull();
+    // back, it picks the run up: the revision it's at now is kept
+    const back = studio(token, s.id, 'desk');
+    back.say({
+      type: 'state',
+      state: { project: s.id, revision: before + 2, tick: 0, selection: { track: null, regions: [], notes: 0 } },
+    });
+    await settle();
+    expect(services.store.revision(s.id, before + 2)?.title).toBe('Two');
+    // one it says it's at after the agent has saved again (it fetched the run, then the next came) too
+    back.say({
+      type: 'state',
+      state: {
+        project: s.id,
+        revision: before + 2,
+        tick: 0,
+        selection: { track: null, regions: [], notes: 0 },
+        hidden: true,
+      },
+    });
+    back.close();
+    await tool(job, jobToken, 'POST', '/ops', { ops: title('Three'), label: 'Title', batch: 'b3' });
+    await tool(job, jobToken, 'POST', '/ops', { ops: title('Four'), label: 'Title', batch: 'b4' });
+    const again = studio(token, s.id, 'desk');
+    again.say({
+      type: 'state',
+      state: { project: s.id, revision: before + 3, tick: 0, selection: { track: null, regions: [], notes: 0 } },
+    });
+    await settle();
+    expect(services.store.revision(s.id, before + 3)?.title).toBe('Three');
+  });
+
+  it('holds no songs once its studio has caught up with the run, nor once the job has ended', async () => {
+    const { start, tool, run, s, token, desk, studio, services, save } = await setup();
+    await save(services.store.get(s.id) as Parameters<typeof save>[0]);
+    const { job, token: jobToken } = await start({ project: s.id, text: 'Change it' });
+    const before = (services.store.get(s.id) as { revision: number }).revision;
+    const at = (revision: number, hidden = false) => ({
+      type: 'state',
+      state: { project: s.id, revision, tick: 0, selection: { track: null, regions: [], notes: 0 }, hidden },
+    });
+    const held = () => services.jobs.get(job)?.away?.recent.length;
+    desk.say(at(before, true));
+    desk.close();
+    const title = (t: string) => [{ op: 'setProject', patch: { title: t } }];
+    await tool(job, jobToken, 'POST', '/ops', { ops: title('One'), label: 'Title', batch: 'b1' });
+    await tool(job, jobToken, 'POST', '/ops', { ops: title('Two'), label: 'Title', batch: 'b2' });
+    expect(held()).toBe(2);
+    // back, it picks the run up to its head: none of its songs are needed any more
+    const back = studio(token, s.id, 'desk');
+    back.say(at(before + 2));
+    await settle();
+    expect(services.store.revision(s.id, before + 2)?.title).toBe('Two');
+    expect(held()).toBe(0);
+    // away again, the agent saves twice more, and the job ends before the studio is back
+    back.say(at(before + 2, true));
+    back.close();
+    await tool(job, jobToken, 'POST', '/ops', { ops: title('Three'), label: 'Title', batch: 'b3' });
+    await tool(job, jobToken, 'POST', '/ops', { ops: title('Four'), label: 'Title', batch: 'b4' });
+    expect(held()).toBe(2);
+    await tool(job, jobToken, 'POST', '/finish', { label: 'Titles', reply: 'Retitled.' });
+    run.say({ type: 'agent-done', job });
+    await waitFor(() => services.jobs.get(job)?.view.state === 'done');
+    expect(held()).toBe(0);
+    // the run's head, said after the job ended, is still kept: it's the song as it is
+    expect(services.store.revision(s.id, before + 4)).toBeNull();
+    const again = studio(token, s.id, 'desk');
+    again.say(at(before + 4));
+    await settle();
+    expect(services.store.revision(s.id, before + 4)?.title).toBe('Four');
+  });
+
+  it('a page back in view as its change runs out of time isn’t taken as frozen: the next goes to it', async () => {
+    const { start, tool, s, desk, services } = await setup();
+    const { job, token: jobToken } = await start({ project: s.id, text: 'Change it' });
+    const R = (services.store.get(s.id) as { revision: number }).revision;
+    const shown = (revision: number, hidden: boolean) =>
+      desk.say({
+        type: 'state',
+        state: { project: s.id, revision, tick: 0, selection: { track: null, regions: [], notes: 0 }, hidden },
+      });
+    shown(R, true);
+    desk.answer = (msg) => (msg.type === 'agent-ops' ? null : { ok: true, revision: R });
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    const title = (t: string) => [{ op: 'setProject', patch: { title: t } }];
+    const one = pending(tool(job, jobToken, 'POST', '/ops', { ops: title('One'), label: 'Title', batch: 'b1' }));
+    await until(() => desk.got('agent-ops').length === 1);
+    await vi.advanceTimersByTimeAsync(7_000);
+    // the user is back: the page says so just before the change it was sent runs out of time
+    shown(R, false);
+    await vi.advanceTimersByTimeAsync(1_000);
+    await until(() => one.done);
+    expect((one.value as Awaited<ReturnType<typeof tool>>).json()).toEqual({ ok: true, revision: R + 1 });
+    // it's there, before it says anything more
+    desk.answer = () => ({ ok: true, revision: R + 1 });
+    expect((await tool(job, jobToken, 'POST', '/transport', { action: 'stop' })).json()).toEqual({ ok: true });
+    // it picks up what was saved here: the next change goes to it
+    shown(R + 1, false);
+    const two = await tool(job, jobToken, 'POST', '/ops', { ops: title('Two'), label: 'Title', batch: 'b2' });
+    expect(two.json()).toEqual({ ok: true, revision: R + 1 });
+    expect(desk.got('agent-ops').map((m) => m.batch)).toEqual(['b1', 'b2']);
   });
 });

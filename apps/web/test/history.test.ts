@@ -7,6 +7,7 @@ import {
   type JobResult,
   jobSteps,
   MAX_UNDO,
+  pickUp,
   push,
   pushOrMergeJob,
   redo,
@@ -429,5 +430,101 @@ describe("the agent's changes, as the studio applies them", () => {
     ]);
     expect(() => parseProject(next)).not.toThrow();
     expect(() => parseProject({ ...next, tempo: 'fast' })).toThrow();
+  });
+});
+
+describe('the agent’s changes saved on the host while the studio was away, picked up', () => {
+  const tempo = (bpm: number): Op[] => [{ op: 'setProject', patch: { tempo: [{ tick: 0, bpm }] } }];
+  const titleOps = (title: string): Op[] => [{ op: 'setProject', patch: { title } }];
+  const host = (song: Project, ops: Op[], revision = 9): Project => ({ ...applyOps(song, ops), revision });
+
+  it('as the host has them, one step whose Undo goes back to the song before them', () => {
+    const s = studio();
+    s.edit('Mine', 'Title');
+    const before = s.project;
+    const theirs = host(before, [...titleOps('Lifted'), ...tempo(132)]);
+    const r = pickUp(s.history, before, theirs, null, 'Agent: Lift', 'j1', 5000);
+    expect(r.how).toBe('exact');
+    expect(r.project).toBe(theirs);
+    expect(r.undo.map((x) => [x.label, x.job ?? null])).toEqual([
+      ['Title', null],
+      ['Agent: Lift', 'j1'],
+    ]);
+    expect(r.undo[1]?.project).toBe(before);
+    expect(r.redo).toEqual([]);
+    // the job's later batches, as they come live again, join that step
+    const later = pushOrMergeJob(r, r.project, 'Agent: Lift', 'j1', true);
+    expect(later.undo).toHaveLength(2);
+    expect(undo(later, titled(r.project, 'Later'))?.step.project).toBe(before);
+  });
+
+  it('join the job’s step on top, from changes it made while the studio was there', () => {
+    const s = studio();
+    s.edit('Before', 'Title');
+    const start = s.project;
+    s.agent('Live', 'j1', true, 'Agent: Lift');
+    const theirs = host(s.project, tempo(140));
+    const r = pickUp(s.history, s.project, theirs, null, 'Agent: Lift', 'j1');
+    expect(r.undo).toHaveLength(2);
+    expect(r.undo[1]).toMatchObject({ label: 'Agent: Lift', job: 'j1' });
+    expect(r.undo[1]?.project).toBe(start);
+  });
+
+  it('with this studio’s own changes not saved yet: those go onto the host’s song, the agent’s kept as it has them', () => {
+    const s = studio();
+    const base = s.project;
+    const theirs = host(base, [...tempo(90), { op: 'setProject', patch: { key: 'D minor' } }]);
+    // made while the agent worked on the host, and not saved before the page went
+    s.edit('Mine', 'Title');
+    const mine = s.project;
+    const r = pickUp(s.history, mine, theirs, { base, song: mine }, 'Agent: Feel', 'j1');
+    expect(r.how).toBe('merged');
+    expect([r.project.title, r.project.tempo[0]?.bpm, r.project.key, r.project.revision]).toEqual([
+      'Mine',
+      90,
+      'D minor',
+      9,
+    ]);
+    expect(r.undo.at(-1)).toMatchObject({ label: 'Agent: Feel', job: 'j1' });
+    expect(r.undo.at(-1)?.project).toBe(mine);
+    // all of them the host's already (a save of them got there, its answer lost): the host's song as it is
+    const landed = host(mine, tempo(90));
+    expect(pickUp(s.history, mine, landed, { base, song: mine }, 'Agent: Feel', 'j1')).toMatchObject({
+      how: 'exact',
+      project: landed,
+    });
+  });
+
+  it('that clash with this studio’s own leave the host’s song, and Undo brings this studio’s back', () => {
+    const s = studio();
+    const base = s.project;
+    const track = base.tracks[0]?.id as string;
+    const theirs = host(base, [{ op: 'updateTrack', track, patch: { name: 'Lead' } }]);
+    // the user deleted the track the agent renamed
+    const mine = applyOps(base, [{ op: 'removeTrack', track }]);
+    const r = pickUp(s.history, mine, theirs, { base, song: mine }, 'Agent: Names', 'j1');
+    expect(r.how).toBe('theirs');
+    expect(r.project).toBe(theirs);
+    expect(r.undo.at(-1)?.project).toBe(mine);
+    // and so it goes when what they were made on isn't known
+    expect(pickUp(s.history, mine, theirs, { base: null, song: mine }, 'Agent: Names', 'j1').how).toBe('theirs');
+  });
+});
+
+describe('batches that went in another way', () => {
+  it('are answered, not applied, when they come again, waiting or not', async () => {
+    const ran: string[] = [];
+    const q = new JobQueue<{ batch: string }>((item) => {
+      ran.push(item.batch);
+      return { ok: true };
+    });
+    const release = q.hold();
+    const waiting = q.submit({ batch: 'b1' });
+    q.remember(['b1', 'b2']);
+    release();
+    expect(await waiting).toEqual({ ok: true });
+    expect(await q.submit({ batch: 'b2' })).toEqual({ ok: true });
+    expect(ran).toEqual([]);
+    expect([q.done('b1'), q.done('b3')]).toEqual([true, false]);
   });
 });

@@ -40,6 +40,8 @@ export interface StudioState {
   scan?: string | null;
   /** Who the song is by, its album and its creation, in words (the library keeps them beside the song). */
   about?: string[];
+  /** The studio is in the background or closed: the rest is what it showed as it went. */
+  away?: boolean;
   [key: string]: unknown;
 }
 
@@ -414,7 +416,10 @@ export interface JobApi {
   describe(): Promise<{ text: string }>;
   /** GET …/state */
   state(): Promise<StudioState>;
-  /** POST …/ops: one batch of changes for the requester's studio, merged into the job's undo step. */
+  /**
+   * POST …/ops: one batch of changes for the requester's studio, merged into the job's undo step (saved
+   * on the host while that studio is away, for it to pick up as that step).
+   */
   ops(ops: Op[], label: string, batch: string): Promise<{ ok: boolean; revision?: number }>;
   /** POST …/transport; `bar` is a bar number. */
   transport(body: { action: 'play' | 'stop' | 'locate'; bar?: number }): Promise<{ ok: boolean }>;

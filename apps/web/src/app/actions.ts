@@ -70,14 +70,15 @@ import { songKeys } from '../audio/song-samples.ts';
 import { takes as keptTakes, type TakePlan, uploadTake } from '../audio/takes.ts';
 import { holdDuringDrags } from '../ui/gesture.ts';
 import { NOTE_EFFECTS, playsHits } from '../ui/pads.ts';
-import { jobLabels } from './agent.ts';
+import { AgentError, awayChanges, jobLabels } from './agent.ts';
 import { ApiError, api } from './api.ts';
 import { comparePlan, type Pass } from './compare.ts';
 import * as history from './history.ts';
-import { browserShelf, Keeper, type Restored, stepJobs } from './kept-history.ts';
+import { browserShelf, type Keepable, Keeper, type Restored, sameSong, stepJobs } from './kept-history.ts';
 import { isTouch } from './layout.ts';
 // (live.ts imports this module too: neither uses the other while loading, so the cycle is harmless)
 import { reconnectSoon, reportHistory } from './live.ts';
+import { mergeSongs } from './merge-songs.ts';
 import { type AppState, type Step, store, toast } from './store.ts';
 import { TakeSender } from './take-sender.ts';
 
@@ -159,6 +160,8 @@ interface JobBatch {
   job: string;
   batch: string;
   label: string;
+  /** Changes it saved on the host instead, picked up (pickUpAgent): this takes them in. */
+  take?: () => history.JobResult;
 }
 
 /** The agent's batches wait here while a gesture or a drag is in progress (they hold it). */
@@ -183,10 +186,15 @@ export function applyJob(ops: Op[], job: string, batch: string, label: string): 
   if (!s.project) return Promise.resolve({ ok: false, error: 'No song is open in the studio' });
   // (a job is running from its first batch until the host says otherwise)
   if (!Object.hasOwn(s.agentJobs, job)) setJobRunning(job, true);
-  const result = jobs.submit({ project: s.project.id, ops, job, batch, label: `Agent: ${label}` });
-  if (jobs.waiting(batch)) {
+  return submitJob({ project: s.project.id, ops, job, batch, label: `Agent: ${label}` });
+}
+
+/** Into the agent's queue: held by a gesture at most HOLD_LIMIT_MS, then let through. */
+function submitJob(b: JobBatch): Promise<history.JobResult> {
+  const result = jobs.submit(b);
+  if (jobs.waiting(b.batch)) {
     window.setTimeout(() => {
-      if (jobs.waiting(batch)) jobs.letThrough();
+      if (jobs.waiting(b.batch)) jobs.letThrough();
     }, HOLD_LIMIT_MS);
   }
   return result;
@@ -196,6 +204,7 @@ function runJob(b: JobBatch): history.JobResult {
   const s = store.get();
   // (another song was opened while it waited)
   if (!s.project || s.project.id !== b.project) return { ok: false, error: 'That song is not open in the studio' };
+  if (b.take) return b.take();
   if (!b.ops.length) return { ok: true };
   let next: Project;
   try {
@@ -205,22 +214,293 @@ function runJob(b: JobBatch): history.JobResult {
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : String(err) };
   }
-  let h: history.History = s;
-  // a gesture still going once the batch was let through: its step so far lands first, and it goes
-  // on from the song with the agent's changes in (its own step after theirs)
-  if (gesture) {
-    if (gesture.before !== s.project)
-      h = history.push(h, { project: gesture.before, label: gesture.label, at: Date.now() });
-    gesture.before = next;
-    gesture.last = undefined;
-  }
   const running = Object.hasOwn(s.agentJobs, b.job) ? s.agentJobs[b.job] === true : true;
-  h = history.pushOrMergeJob(h, s.project, b.label, b.job, running);
+  const h = history.pushOrMergeJob(gestureFirst(s, s.project), s.project, b.label, b.job, running);
+  gestureFrom(next);
+  arrived(b.batch, s.project, next);
   // only the history's own fields: `h` may still be the whole state (a batch merged into the job's
   // step leaves it as it was), whose song is the one from before this batch
   store.set({ project: next, undo: h.undo, redo: h.redo, saveState: 'dirty' });
   changed(next);
   return { ok: true };
+}
+
+/**
+ * A gesture still going as the agent's changes are let through: its step so far lands first (the
+ * history returned), and it goes on from the song with their changes in (`gestureFrom`), its own step
+ * after theirs.
+ */
+function gestureFirst(h: history.History, now: Project): history.History {
+  if (!gesture || gesture.before === now) return h;
+  return history.push(h, { project: gesture.before, label: gesture.label, at: Date.now() });
+}
+function gestureFrom(next: Project): void {
+  if (!gesture) return;
+  gesture.before = next;
+  gesture.last = undefined;
+}
+
+// ---- the agent's changes saved on the host while the studio was away ----
+
+/**
+ * The song as the host has it at the revision the studio carries on from (`serverRevision`): what its
+ * own changes not saved yet were made on. Kept on the device with those changes, so a reload has it
+ * too. Null when it isn't known: then the host's history is asked for that revision, and nothing else.
+ */
+let saved: { revision: number; song: Project } | null = null;
+
+/** The song is the host's at `revision`, as saved, opened or picked up. */
+function savedAs(revision: number, song: Project): void {
+  saved = { revision, song };
+}
+
+/** The song as the host has it at `revision`, when this studio knows it. */
+function savedAt(revision: number): Project | null {
+  return saved?.revision === revision ? saved.song : null;
+}
+
+/**
+ * The open song's last few batches of the agent's, with the song just before and after each: one the
+ * host saved too (it came late, to a page frozen past the time it had) is taken back out of this
+ * studio's own changes before they're put onto the host's song, which has it already. Only a few, and
+ * only the open song's: each holds two songs.
+ */
+const lately = new Map<string, { before: Project; after: Project }>();
+const LATELY_MOST = 5;
+function arrived(batch: string, before: Project, after: Project): void {
+  lately.set(batch, { before, after });
+  for (const old of lately.keys()) {
+    if (lately.size <= LATELY_MOST) break;
+    lately.delete(old);
+  }
+}
+
+/** How many of the agent's batches are kept as they came (for its tests). */
+export function lateBatchesKept(): number {
+  return lately.size;
+}
+
+/** Picking up the agent's changes saved on the host, under way, and whether to look again after it. */
+let pickingUp: Promise<PickUp> | null = null;
+let pickAgain = false;
+
+/**
+ * How a pick-up went: `picked` up; `none` to pick up (someone else saved the song, or nothing was
+ * saved by the agent); `unknown`, as the host didn't answer: it's asked again later.
+ */
+export type PickUp = 'picked' | 'none' | 'unknown';
+
+/**
+ * The one try again a song has waiting, when the host didn't answer a pick-up (its song's, let go as
+ * another opens), and how many came before it: each waits longer, up to a minute.
+ */
+let retry: { project: string; timer: number } | null = null;
+let retries = 0;
+const retryIn = () => Math.min(60_000, 5_000 * 2 ** retries++);
+function retryLater(project: string, again: () => void): void {
+  if (retry) window.clearTimeout(retry.timer);
+  const timer = window.setTimeout(() => {
+    retry = null;
+    again();
+  }, retryIn());
+  retry = { project, timer };
+}
+/** The open song is let go: its try again, its count and its batches as they came go with it. */
+function letGo(): void {
+  if (retry) window.clearTimeout(retry.timer);
+  retry = null;
+  retries = 0;
+  lately.clear();
+}
+
+/**
+ * The song was saved on the host since this studio's revision. If that was the agent, working on this
+ * device's request while the studio was away (a phone in another app, a closed tab), its changes are
+ * picked up as its job's step, as if they had come while the studio was there (history.pickUp), and the
+ * studio carries on from the host's revision: a later batch of the job's merges into that step, and
+ * Undo takes the song back to before them. A call while one is under way joins it, and it looks again
+ * after (unless the host didn't answer). What the studio does next goes by its revision then, which
+ * callers that joined share.
+ */
+export function pickUpAgent(): Promise<PickUp> {
+  if (pickingUp) {
+    pickAgain = true;
+    return pickingUp;
+  }
+  const run = async (): Promise<PickUp> => {
+    let picked = false;
+    let once: PickUp;
+    do {
+      pickAgain = false;
+      once = await pickUpOnce();
+      picked ||= once === 'picked';
+    } while (pickAgain && once !== 'unknown');
+    if (once !== 'unknown') retries = 0;
+    return picked ? 'picked' : once;
+  };
+  pickingUp = run().finally(() => {
+    pickingUp = null;
+  });
+  return pickingUp;
+}
+
+/** No answer from the host (its network, or nothing came for a while): it may have been the agent's. */
+const LATE = Symbol('late');
+
+/** What the host answers: its answer, null when it refused (no such revision kept, the agent off here), or LATE. */
+function answered<T>(asked: Promise<T>): Promise<T | null | typeof LATE> {
+  return asked.then(
+    (v) => v,
+    (err: unknown) => (err instanceof ApiError || err instanceof AgentError ? null : LATE),
+  );
+}
+
+async function pickUpOnce(): Promise<PickUp> {
+  const s = store.get();
+  const song = s.project;
+  if (!song) return 'none';
+  const from = s.serverRevision;
+  // (the song comes with them, as the host has it with them: no save can come between the two)
+  const away = await answered(awayChanges(song.id, from));
+  if (away === LATE) return 'unknown';
+  if (!away || away.song.id !== song.id || away.song.revision !== away.head) return 'none';
+  // what this studio's own changes were made on: the song as saved at `from`, known here (kept on the
+  // device with them), else as the host's history kept that very revision; never another one
+  let base = savedAt(from);
+  if (!base) {
+    const kept = await answered(api.revision(song.id, from));
+    if (kept === LATE) return 'unknown';
+    base = kept;
+  }
+  const label = `Agent: ${away.label}`;
+  const take = (): history.JobResult => {
+    const cur = store.get();
+    if (cur.project?.id !== song.id || cur.serverRevision !== from) return { ok: false, error: 'The song changed' };
+    const mine = cur.saveState === 'saved' ? null : withoutLate(cur.project, away.batches);
+    // (what can't be told apart from the agent's late batches clashes with them)
+    const own = cur.saveState === 'saved' ? null : mine ? { base, song: mine } : { base: null, song: cur.project };
+    const picked = history.pickUp(gestureFirst(cur, cur.project), cur.project, away.song, own, label, away.job);
+    gestureFrom(picked.project);
+    jobs.remember(away.batches.map((b) => b.batch));
+    savedAs(away.head, away.song);
+    store.set({
+      project: picked.project,
+      undo: picked.undo,
+      redo: picked.redo,
+      serverRevision: away.head,
+      saveState: picked.how === 'merged' ? 'dirty' : 'saved',
+    });
+    changed(picked.project);
+    if (picked.how === 'theirs')
+      toast(
+        picked.why === 'unknown'
+          ? 'The agent changed the song while this device had unsaved changes: the song has the agent’s now, and yours are one Undo away'
+          : 'Your unsaved changes and the agent’s couldn’t be put together: the song has the agent’s now, and yours are one Undo away',
+        'info',
+        12_000,
+      );
+    return { ok: true };
+  };
+  // (in turn with its batches, and after a gesture under way, or one that never ends)
+  const r = await submitJob({
+    project: song.id,
+    ops: [],
+    job: away.job,
+    batch: `away:${away.job}:${away.head}`,
+    label,
+    take,
+  });
+  if (!r.ok) return 'none';
+  setJobRunning(away.job, away.running);
+  return 'picked';
+}
+
+/**
+ * This studio's song without the agent's batches that came here late (`lately`) but that the host
+ * saved too: each taken back out, the latest first, with what was changed here since kept. Null when
+ * one can't be (it was changed since, the same parts).
+ */
+function withoutLate(song: Project, batches: readonly { batch: string }[]): Project | null {
+  let mine: Project | null = song;
+  for (const { batch } of [...batches].reverse()) {
+    const late = lately.get(batch);
+    if (!late || !mine) continue;
+    mine = mergeSongs(late.after, mine, late.before);
+  }
+  return mine;
+}
+
+/**
+ * The song was saved somewhere else (`saved` on the live channel) at `revision`. With nothing unsaved
+ * here, the agent's changes saved on the host while this studio was away come in as its job's step;
+ * still behind after that (someone else saved it: another device, a creation), the song opens as it is
+ * now. With changes of its own not saved yet, they're saved now: on top of the agent's, picked up, or
+ * asking which version to keep. A save under way hears the same from the host. When the host doesn't
+ * answer, the song's one try again (`retryLater`) asks later; notices meanwhile leave it to that.
+ */
+export async function savedElsewhere(project: string, revision: number): Promise<void> {
+  const newer = () => {
+    const now = store.get();
+    return now.project?.id === project && revision > now.serverRevision;
+  };
+  if (!newer()) return;
+  const state = store.get().saveState;
+  if (state === 'saved') {
+    if (retry?.project === project) return;
+    if ((await pickUpAgent()) === 'unknown') {
+      if (store.get().project?.id === project) retryLater(project, () => void savedElsewhere(project, revision));
+      return;
+    }
+    // (by the revision it's at now, whoever's pick-up that was)
+    if (newer() && store.get().saveState === 'saved') await openProject(project);
+  } else if (state === 'dirty' || state === 'offline' || state === 'error') await saveNow();
+}
+
+/** How long a reload waits before it asks the host again what the agent saved (it didn't answer). */
+const BEHIND_RETRIES_MS = [2_000, 5_000];
+
+/**
+ * A song opened at a later revision than the history this device kept of it (the page was gone, a
+ * phone that let it go): if what was saved since is the agent's, the history comes back with its
+ * changes as their job's step on top, whose Undo goes back to the song the history leads to (kept with
+ * it, else as the host's history kept that revision); the song is as the host has it with them (later
+ * than it opened, if the agent saved again meanwhile). Asked again a couple of times when the host
+ * doesn't answer (the history stays on the device till then). Whether it came back. (Exported for its
+ * tests: the page's database isn't there in them.)
+ */
+export async function pickUpBehind(
+  project: Project,
+  kept: history.History & { revision: number; song?: Project },
+  waits: readonly number[] = BEHIND_RETRIES_MS,
+): Promise<boolean> {
+  const away = await answered(awayChanges(project.id, kept.revision));
+  // the job's step on top already holds the song from before the job, and they join it
+  const joins = away && away !== LATE && kept.undo.at(-1)?.job === away.job;
+  const before =
+    !away || away === LATE || joins
+      ? project
+      : (kept.song ?? (await answered(api.revision(project.id, kept.revision))));
+  if (away === LATE || before === LATE) {
+    const [wait, ...more] = waits;
+    if (wait === undefined) return false;
+    await new Promise((done) => window.setTimeout(done, wait));
+    return pickUpBehind(project, kept, more);
+  }
+  if (!away || !before || away.base !== kept.revision || away.song.id !== project.id || away.head < project.revision)
+    return false;
+  const s = store.get();
+  // (edited, or another song opened, meanwhile: what's there stands)
+  if (s.project !== project || s.undo.length || s.redo.length) return false;
+  const picked = history.pickUp(kept, before, away.song, null, `Agent: ${away.label}`, away.job);
+  jobs.remember(away.batches.map((b) => b.batch));
+  if (away.head === project.revision) store.set({ undo: picked.undo, redo: picked.redo });
+  else {
+    savedAs(away.head, away.song);
+    store.set({ project: away.song, serverRevision: away.head, undo: picked.undo, redo: picked.redo });
+    changed(away.song);
+  }
+  setJobRunning(away.job, away.running);
+  return true;
 }
 
 /** Whether a job is still running (its batches merge into its step), as the host says. */
@@ -449,6 +729,7 @@ export async function saveNow(): Promise<number | null> {
       settle(null);
       return r.revision;
     }
+    savedAs(r.revision, project);
     store.set({ serverRevision: r.revision, saveState: now.project === project ? 'saved' : 'dirty' });
     // (changed meanwhile: those waiting get the save that takes the change in)
     if (now.project !== project) scheduleSave(200);
@@ -461,6 +742,33 @@ export async function saveNow(): Promise<number | null> {
       return null;
     }
     if (err instanceof ApiError && err.status === 409) {
+      // the host has this very song: an earlier save of it got there, its answer lost (a phone's page
+      // frozen as it went)
+      const current = (err.body as { current?: Project } | null)?.current;
+      if (current && sameSong(current, project)) {
+        const same = store.get().project === project;
+        savedAs(current.revision, project);
+        store.set({ serverRevision: current.revision, saveState: same ? 'saved' : 'dirty' });
+        if (same) settle(current.revision);
+        else scheduleSave(200);
+        return current.revision;
+      }
+      // the agent's changes, saved on the host while this studio was away: picked up with this
+      // studio's own (here, or by a pick-up under way already), which are saved on top of them; those
+      // waiting get that save
+      const picked = await pickUpAgent();
+      if (picked === 'picked' || store.get().serverRevision !== s.serverRevision) {
+        scheduleSave(0);
+        return null;
+      }
+      // the host didn't say in time what the agent saved: this studio's changes stay to be saved, and
+      // it's asked again in a while (never which version to keep, while the answer may be the agent's)
+      if (picked === 'unknown') {
+        store.set({ saveState: 'dirty' });
+        scheduleSave(retryIn());
+        settle(null);
+        return null;
+      }
       store.set({ saveState: 'conflict' });
       toast('This song was changed somewhere else. Choose which version to keep.', 'error', 8000);
     } else {
@@ -489,6 +797,7 @@ export async function resolveConflict(keep: 'mine' | 'theirs'): Promise<void> {
     load(theirs, { discard: true });
     return;
   }
+  savedAs(theirs.revision, theirs);
   store.set({ serverRevision: theirs.revision, saveState: 'dirty' });
   await saveNow();
 }
@@ -503,16 +812,28 @@ const keeper = new Keeper(typeof window === 'undefined' ? null : browserShelf(),
  * resolves once it's written, or couldn't be.
  */
 export function keepNow(): Promise<void> {
-  keeper.changed(store.get());
+  keeper.changed(keepable());
   return keeper.flush();
 }
 
-/** Keep the open song on the device as it changes, and as the page is hidden. */
+/** What's kept of the open song: its state, and the song as the host has it at its revision, when known. */
+function keepable(): Keepable {
+  const { project, serverRevision, saveState, undo, redo } = store.get();
+  return { project, serverRevision, saveState, undo, redo, saved: savedAt(serverRevision) };
+}
+
+/**
+ * Keep the open song on the device as it changes, and as the page is hidden; then it's saved to the
+ * host too, while the page still runs (a phone's browser soon freezes a hidden page), so what the
+ * agent changes while it's away lands on the song as it is.
+ */
 function keepOnDevice(): void {
-  store.subscribe(() => keeper.changed(store.get()));
+  store.subscribe(() => keeper.changed(keepable()));
   addEventListener('pagehide', () => void keeper.flush());
   document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'hidden') void keeper.flush();
+    if (document.visibilityState !== 'hidden') return;
+    void keeper.flush();
+    if (LEFT_TO_SAVE.has(store.get().saveState)) void saveNow();
   });
 }
 
@@ -520,15 +841,38 @@ function keepOnDevice(): void {
  * What this device kept of the song as it opens: changes the host didn't get (a reload, the tab
  * closed, the host away, another song opened before they were saved), which the song opens with and
  * saves; or its history at the revision it opened at (a reload's Undo and Redo, the agent's steps with
- * them).
+ * them), or at an earlier one with the agent's changes saved since as their job's step (pickUpBehind).
+ * The agent's batches wait meanwhile (`release` lets them in), so they land on the history as it comes
+ * back.
  */
-async function bringBack(project: Project, kept: Promise<Restored | null>): Promise<void> {
-  const back = await kept;
+async function bringBack(project: Project, kept: Promise<Restored | null>, release: () => void): Promise<void> {
+  try {
+    const back = await kept;
+    const s = store.get();
+    // (edited, or another song opened, meanwhile: what's there stands)
+    if (!back || s.project !== project || s.undo.length || s.redo.length) return;
+    if (back.kind === 'behind') {
+      if (!(await pickUpBehind(project, back))) return;
+    } else restoreKept(back);
+  } finally {
+    release();
+  }
+  // a job that ended while the page was away: its steps take the name it ended with
+  const named = stepJobs(store.get());
+  if (named.length) for (const [job, label] of await jobLabels(project.id, named)) relabelJob(job, label);
+}
+
+/**
+ * The song opens with what was kept of it at its revision: its changes the host didn't get (and the
+ * song they were made on, when kept with them), or its history. (Exported for its tests.)
+ */
+export function restoreKept(back: Exclude<Restored, { kind: 'behind' }>): void {
   const s = store.get();
-  // (edited, or another song opened, meanwhile: what's there stands)
-  if (!back || s.project !== project || s.undo.length || s.redo.length) return;
   if (back.kind === 'unsaved') {
     const song = back.song;
+    // (what they were made on, as kept with them: only that song is ever merged against)
+    if (back.baseSong) savedAs(back.base, back.baseSong);
+    else saved = null;
     store.set({
       project: song,
       serverRevision: back.base,
@@ -542,9 +886,6 @@ async function bringBack(project: Project, kept: Promise<Restored | null>): Prom
     scheduleSave(0);
     toast('Brought back changes to this song that hadn’t been saved');
   } else store.set({ undo: back.undo, redo: back.redo });
-  // a job that ended while the page was away: its steps take the name it ended with
-  const jobs = stepJobs(back);
-  if (jobs.length) for (const [job, label] of await jobLabels(project.id, jobs)) relabelJob(job, label);
 }
 
 /** The save states a song left with changes the host doesn't have can be saved from (not a conflict's). */
@@ -565,9 +906,16 @@ async function saveLeft(left: AppState): Promise<void> {
     const revision = await sending.revision;
     if (revision === null) return;
     base = revision;
-    // (what's kept is on top of that save now: all of it, or what came after it)
+    // (what's kept is on top of that save now: all of it, or what came after it, made on the song it saved)
     const all = sending.project === project;
-    keeper.changed({ project, serverRevision: base, saveState: all ? 'saved' : 'dirty', undo, redo });
+    keeper.changed({
+      project,
+      serverRevision: base,
+      saveState: all ? 'saved' : 'dirty',
+      undo,
+      redo,
+      saved: sending.project,
+    });
     if (all) return;
   }
   try {
@@ -587,6 +935,8 @@ export function load(project: Project, { discard = false }: { discard?: boolean 
   // what was kept of the song is read first (the state changing to it would let that go)
   const kept = keeper.open(project, { discard });
   if (left.project && left.project.id !== project.id && LEFT_TO_SAVE.has(left.saveState)) void saveLeft(left);
+  letGo();
+  savedAs(project.revision, project);
   store.set({
     project,
     serverRevision: project.revision,
@@ -611,7 +961,7 @@ export function load(project: Project, { discard = false }: { discard?: boolean 
   document.title = `${project.title} · HO[LO] Desk`;
   // changes, then takes recorded for this song, that never reached it (a reload, the tab closed, the
   // host away): back now, the takes placed in the song as it is with the changes
-  void bringBack(project, kept).finally(sendKeptTakes);
+  void bringBack(project, kept, jobs.hold()).finally(sendKeptTakes);
 }
 
 export async function openProject(id: string): Promise<void> {

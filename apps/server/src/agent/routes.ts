@@ -197,7 +197,8 @@ export function agentRoutes(app: FastifyInstance, o: AgentOptions): { jobs: Jobs
 
   /**
    * A route for a job's tools: its token, while it runs (403 otherwise); with `studio`, only while the
-   * requester's studio has the job's song open. The job isn't quiet while the call is under way.
+   * requester's studio has the job's song open (409 `away` while it's in the background or closed). The
+   * job isn't quiet while the call is under way.
    */
   const forJob =
     (handler: JobHandler, studio = false) =>
@@ -508,6 +509,15 @@ export function agentRoutes(app: FastifyInstance, o: AgentOptions): { jobs: Jobs
     '/api/agent/threads/:project',
     forDevice(async (req) => theJobs.threadView((req.params as Params).project ?? '')),
   );
+  // what this device's studio, back on a song, picks up of the changes its job saved here while it was away
+  app.get(
+    '/api/agent/away/:project',
+    forDevice(async (req, _reply, device) => {
+      const raw = (req.query as Record<string, unknown>).from;
+      const from = typeof raw === 'string' && /^\d{1,12}$/.test(raw) ? Number(raw) : Number.NaN;
+      return { away: theJobs.awayFor(device, (req.params as Params).project ?? '', int(from, 'from', 0, 1e12)) };
+    }),
+  );
   app.post(
     '/api/agent/threads/:project/reset',
     forDevice(async (req, reply) => {
@@ -617,9 +627,10 @@ export function agentRoutes(app: FastifyInstance, o: AgentOptions): { jobs: Jobs
       return { text: about.length ? `${about.join('\n')}\n${text}` : text };
     }),
   );
+  // (while the studio is away: what it showed as it went)
   app.get(
     `${J}/state`,
-    forJob(async (_req, _reply, job) => theJobs.studioState(job), true),
+    forJob(async (_req, _reply, job) => theJobs.studioState(job)),
   );
 
   app.post(

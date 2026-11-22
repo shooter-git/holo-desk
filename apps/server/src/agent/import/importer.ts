@@ -1,6 +1,6 @@
 /**
  * An attachment brought into the job's song, for the agent's `import` tool (its operations then put it
- * in place, through the studio, as one undo step with the rest of the job's):
+ * in place as the job's other changes go, one undo step with the rest of them):
  *
  * - a recording becomes one of the song's audio files (`data/audio/<song>/aud_<id>.wav`), kept as WAV
  *   as every renderer reads it: a WAV the engine's reader reads is copied as it is; FLAC and AIFF are

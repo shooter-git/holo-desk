@@ -1,8 +1,7 @@
 /**
  * How a reply's view (ui/AgentView.tsx) lays out a choice's options and a row's buttons in the width it
- * has: on one line as wide as their words when they fit so, else in equal columns, as many as the widest
- * fits in, or one under another; and a slider whose name is longer than its column, with its name over
- * it. What's measured is their words (as wide as each would be on one line) against the room their
+ * has: on one line as wide as their words when they fit so, else in equal columns that fill every row,
+ * or one under another; and a slider whose name is longer than its column, with its name over it. What's measured is their words (as wide as each would be on one line) against the room their
  * place has, never the device; the CSS draws them (.seg[data-cols], .v-row[data-cols],
  * .v-slider[data-stack], styles/app.css).
  */
@@ -10,23 +9,19 @@ import { type RefObject, useEffect, useLayoutEffect } from 'react';
 
 /**
  * The columns for controls of these widths (on one line each, their padding and borders included) in a
- * room, `gap` apart: 0 when they fit on one line as they are; else as many equal columns as the widest
- * fits in, spread evenly over the fewest rows (four in two rows of two, not three and one; five in three
- * and two); 1, one under another. `whole`: only as many columns as fill every row (a choice's options,
- * one control with no gaps in it: four in two rows of two, three or five one under another).
+ * room, `gap` apart: 0 when they fit on one line as they are; else the most equal columns the widest
+ * fits in that fill every row, so none ends short or with one alone (four in two rows of two; six in two
+ * of three or three of two); 1, one under another (three or five that don't fit on one line).
  */
-export function fitColumns(widths: readonly number[], room: number, gap: number, whole = false): number {
+export function fitColumns(widths: readonly number[], room: number, gap: number): number {
   const n = widths.length;
   if (!n) return 0;
   const total = widths.reduce((sum, w) => sum + w, 0) + gap * (n - 1);
   if (total <= room) return 0;
   const widest = Math.max(...widths);
-  const most = Math.max(1, Math.min(n, Math.floor((room + gap) / (widest + gap))));
-  if (whole) {
-    for (let cols = most; cols > 1; cols--) if (n % cols === 0) return cols;
-    return 1;
-  }
-  return Math.ceil(n / Math.ceil(n / most));
+  const most = Math.min(n, Math.floor((room + gap) / (widest + gap)));
+  for (let cols = most; cols > 1; cols--) if (n % cols === 0) return cols;
+  return 1;
 }
 
 /** The room inside an element: its width less its padding. */
@@ -67,7 +62,7 @@ export function fitView(view: HTMLElement): void {
   for (const [i, { slider, column }] of sliders.entries())
     slider.toggleAttribute('data-stack', (names[i] ?? 0) > column + 0.5);
   places.forEach(({ box, room, gap }, i) => {
-    const cols = fitColumns(widths[i] ?? [], room, gap, box.classList.contains('seg'));
+    const cols = fitColumns(widths[i] ?? [], room, gap);
     if (cols) {
       box.dataset.cols = String(cols);
       box.style.setProperty('--cols', String(cols));

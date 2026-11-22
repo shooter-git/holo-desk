@@ -3624,10 +3624,10 @@ button.list-item {
   overflow-wrap: break-word;
 }
 
-/* a choice that doesn't fit on one line (ui/view-fit.ts): its options in even columns (--cols) the whole
-   width of its place, a line between each, and the last row's shared out so no gap is left; in one
-   column, options one under another, their words at the start. It's still one control, the option
-   chosen lit */
+/* a choice that doesn't fit on one line (ui/view-fit.ts): its options in even columns (--cols) that fill
+   every row, the whole width of its place, a line between each; in one column, options one under
+   another. It's still one control, the option chosen lit. In columns, a choice's words and a row's are
+   centred; one under another, both start at the start, so a group's controls line up */
 .convo .agent-view .seg[data-cols] {
   display: flex;
   flex-wrap: wrap;
@@ -3643,13 +3643,13 @@ button.list-item {
   border-left: 0;
 }
 
-.convo .agent-view .seg[data-cols="1"] > .btn {
+.convo .agent-view :is(.seg, .v-row)[data-cols="1"] > .btn {
   justify-content: flex-start;
   text-align: start;
 }
 
-/* a row of buttons that doesn't fit on one line: even columns, every button as wide as the others (a last
-   one on its own is as wide as the rest) */
+/* a row of buttons that doesn't fit on one line: even columns that fill every row, every button as wide as
+   the others; in one column, one under another the whole width */
 .convo .agent-view .v-row[data-cols] {
   display: grid;
   grid-template-columns: repeat(var(--cols), minmax(0, 1fr));

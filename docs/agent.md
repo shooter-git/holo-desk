@@ -416,7 +416,8 @@ agent's other traffic uses the existing `state`, `played`, `ack`, `transport`, `
   the agent never called `finish`, even once asked for it (below, "End of the turn"). It's often markdown, so it's made plain first (`plainReply` in
   `apps/server/src/agent/plain.ts`): its markup goes, paragraphs, headings, list items and table rows
   keep a line each, and past 600 characters it's cut at the end of a sentence, with "…".
-- `agent-failed {job, error}`
+- `agent-failed {job, error, fresh?}`. `fresh: true`: the harness's model service refused the request
+  itself, and the thread's next request starts a new conversation (below, "Ending early").
 - `agent-harness {harness, kind:'login'|'update'|'install'|'refresh', state:'running'|'done'|'failed', url?, code?, ask?:'code', line?, error?}`.
   A sign-in, an update or an install says `done` or `failed` only after the runner has looked at its
   harnesses again (its `harnesses` comes first).
@@ -589,6 +590,15 @@ of the stretch `played` asked for); `length` is ms (null while still held).
    The runner is sent `agent-cancel`, except when the harness failed or the runner dropped. The agent
    hears next time that its turn didn't finish. Jobs live in memory: after a restart, turns still under
    way read `failed`, and those waiting for a click `cancelled`.
+
+   The thread's session is carried on after all of these (after a stop, "Continue" goes on where it
+   was), but one: a harness whose model service refused the request itself (HTTP 400: Gemini's
+   `INVALID_ARGUMENT`, an `invalid_request_error`; `refusedRequest` in
+   `packages/agent/src/harness/adapter.ts`). That request is the conversation so far, so carried on it
+   would be refused again, whatever was asked. A resumed turn refused before it called any tool starts
+   again at once as a new conversation, in the same job, once. One refused later (its changes stand)
+   fails; the runner's `agent-failed` says `fresh`, and the server forgets the thread's session, so the
+   next request starts a new conversation on the same thread, told that the last turn failed.
 
 ## Undo grouping (studio)
 

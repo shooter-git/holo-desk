@@ -250,8 +250,13 @@ export function startAgentRunner(o: AgentRunnerOptions): AgentRunner {
             o.send({ type: 'agent-done', job: run.job, ...(e.reply ? { reply: e.reply.slice(0, 2000) } : {}) });
             break;
           case 'failed':
-            log(`${tag} failed: ${e.error}`);
-            o.send({ type: 'agent-failed', job: run.job, error: e.error.slice(0, 500) });
+            log(`${tag} failed: ${e.error}${e.fresh ? ' (its next turn starts a new conversation)' : ''}`);
+            o.send({
+              type: 'agent-failed',
+              job: run.job,
+              error: e.error.slice(0, 500),
+              ...(e.fresh ? { fresh: true } : {}),
+            });
             break;
         }
       });

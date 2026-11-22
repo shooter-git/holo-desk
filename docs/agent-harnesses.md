@@ -834,6 +834,14 @@ with HO[LO]'s own MCP server had all its tools and called `song_status`.
   answered without them". The server starts before the model is asked (its tools are in the first
   request: with the server gone, the model didn't have them, cached schemas or not).
 - Linux only, so far: on macOS the keyring and the private home are unchecked.
+- **A refused conversation stays refused.** Seen on 2026-11-22: a resumed turn's result was
+  `ERROR`, "INVALID_ARGUMENT (code 400): Request contains an invalid argument.", with nothing more.
+  Its log showed the reply streaming (the model had written several tool calls, some with an
+  object's keys wrapped in quotes, names with a space) and the 400 coming at its end, before any call
+  ran. The next turn, carried on with another request, was refused the same way on its first reply.
+  So a refused request isn't carried on: docs/agent.md, "Ending early". (A turn stopped mid-reply
+  isn't one: Antigravity leaves the stopped step out of what it sends next, and the conversation
+  went on.)
 
 ## Tool count
 

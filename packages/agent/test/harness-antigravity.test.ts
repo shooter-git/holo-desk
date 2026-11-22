@@ -1,7 +1,7 @@
 import { existsSync, lstatSync, readFileSync, readlinkSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { remember } from '../src/harness/adapter.ts';
+import { refusedRequest, remember } from '../src/harness/adapter.ts';
 import {
   ANTIGRAVITY_MANIFESTS,
   ANTIGRAVITY_SETTINGS,
@@ -70,6 +70,8 @@ const GOOGLE_LINK =
 const SIGNED_OUT = `Fetching available models...
 Error: Please sign in to view available models. Launch the CLI without arguments to sign in.`;
 const PROBE_SAID = readFileSync(join(FIXTURES, 'antigravity-probe.stderr.txt'), 'utf8');
+/** How Antigravity says Gemini refused a request (its result's `error`). */
+const REFUSED_ERROR = 'INVALID_ARGUMENT (code 400): Request contains an invalid argument.';
 
 let s: Sandbox;
 afterEach(() => s?.cleanup());
@@ -421,6 +423,96 @@ describe('Antigravity: a sealed run', () => {
     ]);
     expect(recorded(s).argv.at(-1)).toBe('--conversation=353139ba-a600-4fd1-ae54-5b948d504c57');
     expect(antigravityArgs({ model: '', effort: '', session: 'abc' }, null).at(-1)).toBe('--conversation=abc');
+  });
+
+  describe('a conversation its model service refused (a 400)', () => {
+    const OLD = '353139ba-a600-4fd1-ae54-5b948d504c57';
+    /**
+     * Not recorded: a resumed run as Antigravity streams one whose request Gemini refused, made from
+     * the recorded resume, ending as its result says such a refusal ("status": "ERROR").
+     */
+    const refusedStream = (steps: Record<string, unknown>[] = [], error = REFUSED_ERROR) =>
+      [
+        { event: 'init', conversation_id: OLD, init: { model: 'gemini-3.8-flash-low', agent: 'holo', tools: [] } },
+        {
+          event: 'step_update',
+          step_update: { conversation_id: OLD, step_index: 2, state: 'DONE', step_type: 'user_input' },
+        },
+        ...steps.map((step_update) => ({
+          event: 'step_update',
+          step_update: { conversation_id: OLD, ...step_update },
+        })),
+        {
+          event: 'result',
+          result: { conversation_id: OLD, status: 'ERROR', response: '', error, finished_reason: 'error' },
+        },
+      ]
+        .map((e) => JSON.stringify(e))
+        .join('\n');
+    const resumeRefused = (stream: string) =>
+      `touch .holo-mcp-ready\ncase "$*" in *--conversation=*) cat <<'EOF'\n${stream}\nEOF\nexit 1;; *) ${replay('antigravity-normal')};; esac\nexit 0`;
+    const runs = () => count('starts');
+    const counted = (script: string) => `echo run >> ${q(join(s.rec, 'starts'))}\n${script}`;
+
+    it('starts it again as a new conversation, once, when the turn hadn’t called a tool yet', async () => {
+      s = sandbox();
+      const h = fake({ signedIn: true, run: counted(resumeRefused(refusedStream())) });
+      const events = await runToEnd(h, job(s, { session: OLD }));
+      expect(events).toEqual([
+        { type: 'session', session: OLD },
+        { type: 'session', session: 'c7a94997-872a-4181-a684-499816e061a0' },
+        { type: 'progress', line: 'Working' },
+        { type: 'done', reply: 'Echoed text: "spike-42", main colour: green.' },
+      ]);
+      expect(runs()).toBe(2);
+      expect(recorded(s, 0).argv.at(-1)).toBe(`--conversation=${OLD}`);
+      // the new conversation: without the old one, asked the turn's own request
+      expect(recorded(s, 1).argv.some((a) => a.startsWith('--conversation'))).toBe(false);
+      expect(recorded(s, 1).stdin).toBe(antigravityInput(`${PROMPT_MARK}\n`));
+    });
+
+    it('fails a turn that had called a tool, and its next turn starts a new conversation', async () => {
+      s = sandbox();
+      const tool = { step_index: 4, state: 'DONE', step_type: 'tool', tool_name: 'mcp_holo_track_set' };
+      const h = fake({ signedIn: true, run: counted(resumeRefused(refusedStream([tool]))) });
+      expect(await runToEnd(h, job(s, { session: OLD }))).toEqual([
+        { type: 'session', session: OLD },
+        { type: 'progress', line: 'Setting up a track' },
+        { type: 'failed', error: REFUSED_ERROR, fresh: true },
+      ]);
+      // what it changed stands: the request isn't made again in this turn
+      expect(runs()).toBe(1);
+    });
+
+    it('knows a refused request as each harness says it, and nothing else as one', () => {
+      for (const said of [
+        REFUSED_ERROR,
+        'API Error: 400 {"type":"error","error":{"type":"invalid_request_error","message":"messages.3: tool_use ids were found without tool_result blocks"}}',
+        'unexpected status 400 Bad Request: {"error":{"message":"Invalid input","type":"invalid_request_error"}}',
+        '[invalid_argument] Error',
+      ])
+        expect(refusedRequest(said), said).toBe(true);
+      for (const said of [
+        'RESOURCE_EXHAUSTED (code 429): You have exhausted your capacity on this model.',
+        'API Error: 429 {"type":"error","error":{"type":"rate_limit_error","message":"Rate limited"}}',
+        'Not logged in · Please run /login',
+        'invalid model selection (--model "x" --effort ""): model x is not recognized',
+        'It took longer than 10 minutes',
+        'HO[LO]’s tools didn’t start in Antigravity, so it answered without them',
+      ])
+        expect(refusedRequest(said), said).toBe(false);
+    });
+
+    it('leaves a conversation refused for anything else (a limit) to be carried on', async () => {
+      s = sandbox();
+      const limit = 'RESOURCE_EXHAUSTED (code 429): You have exhausted your capacity on this model.';
+      const h = fake({ signedIn: true, run: counted(resumeRefused(refusedStream([], limit))) });
+      expect(await runToEnd(h, job(s, { session: OLD }))).toEqual([
+        { type: 'session', session: OLD },
+        { type: 'failed', error: limit },
+      ]);
+      expect(runs()).toBe(1);
+    });
   });
 
   it('stops at the tripwire (a built-in tool, even one refused) and ends the process group', async () => {

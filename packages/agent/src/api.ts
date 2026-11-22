@@ -671,6 +671,9 @@ export function fakeJobApi(project: Project, options: FakeJobApiOptions = {}): F
     },
     async ops(ops, label, batch) {
       log('ops', ops, label, batch);
+      // the label as the server checks it (its /ops route)
+      if (!label.trim() || label.trim().length > 80 || /(?!\t)\p{Cc}/u.test(label))
+        throw new ApiError(400, 'label is one line of at most 80 characters');
       batches.push({ ops, label, batch });
       fake.project = { ...applyOps(fake.project, ops), revision: fake.project.revision + 1 };
       return { ok: true, revision: fake.project.revision };

@@ -1088,6 +1088,8 @@ export class Jobs implements AgentHooks {
         void this.turnDone(job);
         break;
       case 'agent-failed':
+        // its model service refused the conversation itself: carried on, it would be refused again
+        if (msg.fresh === true) this.o.threads.forgetSession(job.thread);
         this.end(job, 'failed', typeof msg.error === 'string' && msg.error ? msg.error : 'The agent stopped', false);
         break;
     }

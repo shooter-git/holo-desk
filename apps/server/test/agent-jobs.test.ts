@@ -1157,6 +1157,28 @@ describe('since your last reply', () => {
     expect(third.run.session).toBeUndefined();
     expect(third.run.prompt).not.toContain('Since your last reply');
   });
+
+  it('starts a new conversation after its model service refused the last one; carries it on after other failures', async () => {
+    const { start, s, desk, run, status, thread } = await setup();
+    const first = await start({ project: s.id, text: 'A bass line' });
+    run.say({ type: 'agent-session', job: first.job, session: 'sess-1' });
+    run.say({ type: 'agent-failed', job: first.job, error: 'Rate limited (429)' });
+    await waitFor(() => status(desk, first.job)?.state === 'failed');
+    expect(thread(s.id).session).toBe('sess-1');
+    const second = await start({ project: s.id, text: 'Continue' });
+    expect(second.run).toMatchObject({ session: 'sess-1' });
+    // refused as a request (the runner says so): carried on, it would be refused again
+    const refused = 'INVALID_ARGUMENT (code 400): Request contains an invalid argument.';
+    run.say({ type: 'agent-failed', job: second.job, error: refused, fresh: true });
+    await waitFor(() => status(desk, second.job)?.state === 'failed');
+    expect(status(desk, second.job)).toMatchObject({ error: refused });
+    expect(thread(s.id).session).toBeNull();
+    // the same thread, a new conversation, told what happened
+    const third = await start({ project: s.id, text: 'Continue' });
+    expect(third.run.thread).toBe(second.run.thread);
+    expect(third.run.session).toBeUndefined();
+    expect(third.run.prompt).toContain(`- Your last turn failed (${refused});`);
+  });
 });
 
 describe('permissions', () => {

@@ -294,6 +294,21 @@ export function cleanError(text: string, secrets: readonly string[] = []): strin
   return out.length > 400 ? `${out.slice(0, 399)}…` : out;
 }
 
+/**
+ * A model service refusing the request itself (HTTP 400): Gemini's `INVALID_ARGUMENT (code 400)` as
+ * Antigravity says it, the Anthropic and OpenAI APIs' `invalid_request_error`, a Connect
+ * `[invalid_argument]`. Not a limit (429), a sign-in (401, 403) or the network. The request is the
+ * conversation so far: carried on, much the same one is sent again and refused again (seen with
+ * Antigravity: a conversation refused once was refused again on the next turn's first request, though
+ * what was asked had changed).
+ */
+const REFUSED =
+  /\binvalid[_ ](?:argument|request)(?:_error)?\b|\b400 Bad Request\b|\b(?:API error|HTTP|status|code)\W{0,3}400\b/i;
+
+export function refusedRequest(error: string): boolean {
+  return REFUSED.test(error);
+}
+
 /** The last lines of stderr that say something, for an error. */
 function tailError(lines: readonly string[]): string {
   const said = lines.map((l) => plain(l).trim()).filter((l) => l && !/^\s*at\s/.test(l));
@@ -888,11 +903,18 @@ export function defineHarness(spec: Spec, o: AdapterOptions): Harness {
         if (early && spec.retry?.(ctx, job, said)) return resolve({ again: 'same' });
         // a session the harness no longer has fails before anything starts
         if (early && job.session) return resolve({ again: 'fresh' });
+        // its model service refused the conversation itself: carried on, it's refused again. A resumed
+        // one that hadn't called a tool yet starts again, once, as a new conversation; else the turn
+        // fails, and the next one starts a new conversation
+        const succeeded = code === 0 || (ended && exited && code === null);
+        const refused = !timedOut && refusedRequest(failure ?? (succeeded ? '' : (note ?? tailError(stderrTail))));
+        if (refused && job.session && !busy) return resolve({ again: 'fresh' });
+        const fresh = refused ? { fresh: true as const } : {};
         if (failure) {
-          report({ type: 'failed', error: cleanError(failure, secrets) });
+          report({ type: 'failed', error: cleanError(failure, secrets), ...fresh });
           return resolve({});
         }
-        if (code === 0 || (ended && exited && code === null)) {
+        if (succeeded) {
           if (!asked && !busy && spec.toolsStarted && !spec.toolsStarted(job)) {
             report({
               type: 'failed',
@@ -909,7 +931,7 @@ export function defineHarness(spec: Spec, o: AdapterOptions): Harness {
           return resolve({});
         }
         const why = note ?? (tailError(stderrTail) || `${spec.name} stopped (exit ${code ?? 'signal'})`);
-        report({ type: 'failed', error: cleanError(why, secrets) });
+        report({ type: 'failed', error: cleanError(why, secrets), ...fresh });
         resolve({});
       };
       child.on('error', (err) => finish(null, err.message));

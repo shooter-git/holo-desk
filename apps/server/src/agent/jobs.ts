@@ -205,9 +205,14 @@ export interface AwayRun {
   base: number;
   head: number;
   batches: { batch: string; label: string; revision: number }[];
-  /** Its last few revisions, as saved: the one the requester's studio says it's at is kept (`keepPickedUp`). */
-  recent: Project[];
-  /** The last revision of it the requester's studio has said it's at, kept in the song's history. */
+  /**
+   * Its last few revisions past the one the requester's studio last said it's at, as saved (JSON, not
+   * parsed: a big song is a few MB a copy), for the one it says next to be kept (`keepPickedUp`). Let go
+   * as the studio catches up, and as the job ends: the agent saves no more of the run then, so the one
+   * it says is the song as it is.
+   */
+  recent: { revision: number; doc: string }[];
+  /** The last revision of it the requester's studio has said it's at (kept in the song's history if it could be). */
   kept?: number;
 }
 
@@ -455,6 +460,9 @@ export class Jobs implements AgentHooks {
   }
 
   private ended(job: AgentJob): void {
+    // (its run saves no more: a studio back on it is at the song as it is, read as saved; an ended
+    // job, kept a while, holds no songs)
+    if (job.away) job.away.recent = [];
     for (const fn of this.endings) {
       try {
         fn(job);
@@ -1141,11 +1149,14 @@ export class Jobs implements AgentHooks {
     for (const job of this.jobs.values()) {
       const run = job.away;
       if (!run || job.view.device !== device || job.view.project !== project) continue;
-      if (revision === undefined || revision === run.kept || revision === run.base) continue;
+      if (revision === undefined || revision === run.kept || revision <= run.base || revision > run.head) continue;
       const song = run.recent.find((r) => r.revision === revision);
-      if (!song) continue;
-      this.o.store.keepRevision(song, 'Agent');
+      if (song) this.o.store.keepRevision(project, revision, song.doc, 'Agent');
+      // (the song as it is, read as saved: not parsed)
+      else if (this.o.store.row(project)?.revision === revision) this.o.store.snapshotNow(project, 'Agent');
       run.kept = revision;
+      // it's at that one now, not before it: only those after it may still be said
+      run.recent = run.recent.filter((r) => r.revision > revision);
     }
   }
 
@@ -1452,7 +1463,8 @@ export class Jobs implements AgentHooks {
       throw new Refusal(400, err instanceof Error ? err.message : String(err));
     }
     // the run goes on from its last revision; saved by someone else since, a new one begins, the song
-    // as it was then kept (a studio that reloads reads it, for the step's Undo)
+    // as it was then kept (a studio that reloads reads it, for the step's Undo), and the old one's
+    // songs go with it
     const run = job.away?.head === song.revision ? job.away : null;
     if (!run) this.o.store.snapshotNow(song.id, 'Agent');
     const saved = this.o.store.save(next, song.revision, 'Agent');
@@ -1460,7 +1472,7 @@ export class Jobs implements AgentHooks {
     const away: AwayRun = run ?? { base: song.revision, head: song.revision, batches: [], recent: [] };
     away.head = saved.revision;
     away.batches.push({ batch, label, revision: saved.revision });
-    away.recent = [...away.recent, saved].slice(-RUN_RECENT);
+    away.recent = [...away.recent, { revision: saved.revision, doc: JSON.stringify(saved) }].slice(-RUN_RECENT);
     job.away = away;
     job.batches.set(batch, saved.revision);
     this.o.live.tell({ type: 'saved', project: saved.id, revision: saved.revision });

@@ -161,14 +161,15 @@ export class Store {
   }
 
   /**
-   * A song as one of its revisions had it, kept in its history (one already kept is left as it is),
-   * though it may no longer be the latest: the revision a studio picked up while the agent saved again.
+   * A song as one of its revisions had it (`doc`, as saved), kept in its history (one already kept is
+   * left as it is), though it may no longer be the latest: the revision a studio picked up while the
+   * agent saved again.
    */
-  keepRevision(song: Project, author: string): void {
+  keepRevision(id: string, revision: number, doc: string, author: string): void {
     this.db
       .prepare('INSERT OR IGNORE INTO revisions (project, revision, saved, author, doc) VALUES (?, ?, ?, ?, ?)')
-      .run(song.id, song.revision, new Date().toISOString(), author, JSON.stringify(song));
-    this.trim(song.id);
+      .run(id, revision, new Date().toISOString(), author, doc);
+    this.trim(id);
   }
 
   private snapshot(project: Project, doc: string, author: string): void {

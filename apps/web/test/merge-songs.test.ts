@@ -124,6 +124,13 @@ describe('a song changed in two places, merged', () => {
     };
     const move = (to: string): Op[] => [{ op: 'moveRegion', from: track, to, region }];
     expect(mergeSongs(more, applyOps(more, move(two.id)), host(more, move(three.id)))).toBeNull();
+    // the user removed a track the agent joined to another in a group of parts on the score
+    const brace: Op[] = [{ op: 'setProject', patch: { score: { groups: [[track, two.id, 'brace']] } } }];
+    const noTwo = applyOps(more, [{ op: 'removeTrack', track: two.id }]);
+    expect(mergeSongs(more, noTwo, host(more, brace))).toBeNull();
+    expect([...broken({ ...noTwo, score: { groups: [[track, two.id, 'brace']] } })]).toEqual([
+      `a score group joins ${two.id}`,
+    ]);
     // what was so already in the host's song is no clash of the merge's
     // (a send left pointing at a bus that's gone: removing a bus takes its sends, so it's made by hand)
     const dangling = { ...host(base, send), buses: [] };
@@ -131,6 +138,36 @@ describe('a song changed in two places, merged', () => {
     expect(mergeSongs(base, louder, dangling)?.title).toBe('Louder');
     expect([...broken(dangling)]).toContain(`track ${track} sends to ${room.id}`);
     expect(broken(base)).toEqual(new Set());
+  });
+
+  it('lets this studio’s own changes keep what they left pointing at nothing: only what the merge does clashes', () => {
+    const { song: start, track, region } = saved();
+    const art = { id: 'art_pizz', name: 'Pizzicato', instrument: { type: 'synth', preset: 'Soft Keys' } } as const;
+    const two = newTrack('Two', { type: 'synth', preset: 'Soft Keys' });
+    const base = {
+      ...applyOps(start, [
+        { op: 'updateTrack', track, patch: { articulations: [art] } },
+        { op: 'setNotes', track, region, notes: [{ t: 0, d: 480, p: 60, v: 80, art: art.id }] },
+        { op: 'addTrack', track: two },
+      ]),
+      revision: 4,
+    };
+    // the user moved the region, pizzicato notes and all, to a track with no pizzicato (the studio lets
+    // them), and the agent changed the key
+    const mine = applyOps(base, [{ op: 'moveRegion', from: track, to: two.id, region }]);
+    expect([...broken(mine)]).toEqual([`a note of ${region} plays ${art.id}`]);
+    const merged = mergeSongs(base, mine, host(base, [{ op: 'setProject', patch: { key: 'E minor' } }]));
+    expect(merged?.key).toBe('E minor');
+    expect(merged?.tracks.find((t) => t.id === two.id)?.regions.map((r) => r.id)).toEqual([region]);
+    // but pizzicato notes of the agent's, in a region of its own on the track the user then took
+    // pizzicato from, are the merge's doing
+    const solo = newRegion(4 * BAR, BAR, 'Solo');
+    const theirs = host(base, [
+      { op: 'addRegion', track, region: solo },
+      { op: 'setNotes', track, region: solo.id, notes: [{ t: 0, d: 480, p: 67, v: 80, art: art.id }] },
+    ]);
+    const noPizz = applyOps(mine, [{ op: 'updateTrack', track, patch: { articulations: [] } }]);
+    expect(mergeSongs(base, noPizz, theirs)).toBeNull();
   });
 
   it('tells songs apart by their parts, whatever the order of their keys', () => {

@@ -718,6 +718,42 @@ describe('picking up, never on a guess, and patiently', () => {
     A.load(newProject('Next'));
     expect(A.lateBatchesKept()).toBe(0);
   });
+
+  it('a song left with a save on its way keeps what came after it with the song that save made', async () => {
+    const KH = await import('../src/app/kept-history.ts');
+    const changed = vi.spyOn(KH.Keeper.prototype, 'changed');
+    try {
+      const first = { ...newProject('Left behind'), revision: 2200 };
+      A.load(first);
+      let answer: (r: Response) => void = () => {};
+      const puts: number[] = [];
+      vi.stubGlobal('fetch', (url: string, init?: RequestInit) => {
+        if (String(url) === `/api/projects/${first.id}` && init?.method === 'PUT') {
+          puts.push((JSON.parse(String(init.body)) as { baseRevision: number }).baseRevision);
+          // the first save is on its way as another song opens; the one after it can't get there
+          if (puts.length > 1) return Promise.reject(new TypeError('Offline'));
+          return new Promise<Response>((done) => {
+            answer = done;
+          });
+        }
+        return Promise.resolve(json(404, { error: 'No such route' }));
+      });
+      A.apply([{ op: 'setProject', patch: { title: 'Sent' } }], 'Title');
+      const sent = S.store.get().project;
+      const saving = A.saveNow();
+      A.apply([{ op: 'setProject', patch: { key: 'F minor' } }], 'Key');
+      A.load(newProject('Opened next'));
+      answer(json(200, { revision: 2201, modified: '' }));
+      await saving;
+      await vi.waitFor(() => expect(puts).toEqual([2200, 2201]));
+      // kept on the device: the change after the save, on the revision it made, with the song it saved
+      const kept = changed.mock.calls.map(([k]) => k).filter((k) => k.serverRevision === 2201);
+      expect(kept.at(-1)).toMatchObject({ saveState: 'dirty', saved: sent });
+      expect([kept.at(-1)?.project?.title, kept.at(-1)?.project?.key]).toEqual(['Sent', 'F minor']);
+    } finally {
+      changed.mockRestore();
+    }
+  });
 });
 
 describe('a song saved somewhere else, as the live channel says', () => {

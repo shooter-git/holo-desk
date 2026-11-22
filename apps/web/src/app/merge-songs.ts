@@ -10,7 +10,7 @@
  * region's notes edited on both sides, a track renamed two ways, one deleted what the other edited) is
  * a clash, and nothing is merged. Anything else (a list of notes, a tempo map) is one part. Parts that
  * point at others (a send at its bus, a note at its articulation) are checked once merged: one that
- * points at nothing, or an id kept twice, that `theirs` didn't have already, is a clash too.
+ * points at nothing, or an id kept twice, that neither side had already, is a clash too.
  */
 import { type Channel, type Project, parseProject } from '@holo/session';
 
@@ -20,7 +20,7 @@ type Merged = unknown | typeof CLASH;
 /**
  * `mine`'s changes since `base` put onto `theirs` (which keeps its id, revision and when it was saved),
  * or null when they clash, or the result isn't a song the studio could open, or points at what it
- * doesn't have where `theirs` didn't (`broken`).
+ * doesn't have where neither `theirs` nor `mine` did (`broken`).
  */
 export function mergeSongs(base: Project, mine: Project, theirs: Project): Project | null {
   // (which revision each was saved as isn't a change of the song's)
@@ -33,7 +33,9 @@ export function mergeSongs(base: Project, mine: Project, theirs: Project): Proje
   } catch {
     return null;
   }
-  const already = broken(theirs);
+  // (what either side had already is no doing of the merge's: the studio itself leaves a note on an
+  // articulation its track doesn't have, moving its region to another track, say)
+  const already = new Set([...broken(theirs), ...broken(mine)]);
   for (const p of broken(song)) if (!already.has(p)) return null;
   return song;
 }
@@ -42,7 +44,8 @@ export function mergeSongs(base: Project, mine: Project, theirs: Project): Proje
  * What in a song points at what it doesn't have, or uses an id twice: a channel's output, sends or a
  * seat's sends at a bus that isn't there, an automation lane at a send's bus or a plugin the channel
  * doesn't have, a note at an articulation its track doesn't have, an audio region at a file the song
- * doesn't list; a track, region, plugin, bus, marker, file or a track's articulation id kept twice.
+ * doesn't list, a score's group of parts at a track that isn't there; a track, region, plugin, bus,
+ * marker, file or a track's articulation id kept twice.
  */
 export function broken(p: Project): Set<string> {
   const out = new Set<string>();
@@ -88,6 +91,9 @@ export function broken(p: Project): Set<string> {
     channel(`bus ${b.id}`, b.channel, new Set(), true);
   }
   channel('master', p.master, new Set(), false);
+  const tracks = new Set(p.tracks.map((t) => t.id));
+  for (const [first, last] of p.score?.groups ?? [])
+    for (const t of [first, last]) if (!tracks.has(t)) out.add(`a score group joins ${t}`);
   for (const m of p.markers) once('marker', m.id);
   for (const f of p.files ?? []) once('file', f.id);
   return out;

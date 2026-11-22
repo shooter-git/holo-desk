@@ -809,18 +809,21 @@ async function call<T>(
   return data as T;
 }
 
-/** Ask the host how the agent stands (at start, on reconnecting, from Settings). */
-export async function refreshAgent(): Promise<AgentInfo | null> {
+/**
+ * Ask the host how the agent stands (at start, on reconnecting, from Settings). `idleMs`: given up
+ * (null) once nothing of the answer has come for that long.
+ */
+export async function refreshAgent(idleMs?: number): Promise<AgentInfo | null> {
   const asked = token();
   let info: AgentInfo;
   try {
-    info = await call<AgentInfo>('GET', '/api/agent');
+    info = await call<AgentInfo>('GET', '/api/agent', undefined, idleMs);
   } catch {
     return null;
   }
   // a token came or went while it was asked (pairing answers after the host tells every studio the
   // agent is on): the answer is about the old one, so ask again
-  if (token() !== asked) return refreshAgent();
+  if (token() !== asked) return refreshAgent(idleMs);
   // a token the host no longer takes (the device was removed while away) is let go
   if (asked && !info.allowed) {
     forgetToken();
@@ -1007,9 +1010,19 @@ export interface AwayChanges {
   song: Project;
 }
 
+/** What `p` comes to, or null when it hasn't within `ms`. */
+function inTime<T>(p: Promise<T>, ms: number): Promise<T | null> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const late = new Promise<null>((done) => {
+    timer = setTimeout(() => done(null), ms);
+  });
+  return Promise.race([p, late]).finally(() => clearTimeout(timer));
+}
+
 export async function awayChanges(project: string, from: number): Promise<AwayChanges | null> {
-  // (no answer from the host at all is thrown: what it would have said may be the agent's)
-  if (!state.info && !(await refreshAgent())) throw new Error('The host didn’t answer');
+  // (no answer from the host at all is thrown: what it would have said may be the agent's; and none
+  // in time, the devices read after it included, is none: a save waits on this)
+  if (!state.info && !(await inTime(refreshAgent(IDLE_MS), 2 * IDLE_MS))) throw new Error('The host didn’t answer');
   if (!isOn(state)) return null;
   let away: AwayChanges | null | undefined;
   try {

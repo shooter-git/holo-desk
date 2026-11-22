@@ -254,8 +254,10 @@ neither does the studio going: the job runs on, its changes land, and its reply 
   begins) to the last one's (`head`). A studio that's back gets batches again only once it has picked
   the run up (it reports `head` or later as its revision); it has 3 s (`catchUpMs`) to, else the batch
   is saved on the server too. The revision of the run it says it's at is kept in the song's history,
-  once, even when the agent has saved again since (the run's last few revisions are kept at hand for
-  that). A batch sent to a studio whose connection closes before it answers is
+  once, even when the agent has saved again since (the run's last few revisions past the one the
+  studio last said are kept at hand for that, as saved, not parsed; let go as the studio catches up,
+  and as the job ends: then the one it says is the song as it is). A batch sent to a studio whose
+  connection closes before it answers is
   answered 409 `away` at once: the change may or may not have gone in, and the agent is told to read
   the song before making it again.
 - **What needs the studio itself** (routes marked **studio**: playing, auditioning, listening, what was
@@ -280,7 +282,9 @@ neither does the studio going: the job runs on, its changes land, and its reply 
   studio's own changes stay to be saved, and it's asked again later, a little longer each time (up to
   a minute), one try again a song, let go as another opens: never which version to keep while the
   answer may be the agent's. A save is given up when it takes longer than 30 s and as long again as
-  sending the song at 20 KB/s takes (a page frozen with it on its way), and made again.
+  sending the song at 20 KB/s takes (a page frozen with it on its way), and made again. (So a big
+  song on an uplink slower than about 160 kbit/s never gets there: a browser's `fetch` doesn't say
+  how much of a request has gone, so the time can't follow it as the pick-up's answer's does.)
 
 A scan preset, which carries on without its studio, isn't waited for: the routes that need the studio
 answer it 403 at once. `…/version` and an import read on the server don't need it, and answer it as
@@ -627,9 +631,11 @@ of the stretch `played` asked for); `length` is ms (null while still held).
   - where they can't be put together, the song becomes the server's, the step's Undo brings this
     studio's own back, and a notice says which: both changed the same thing differently (a region's
     notes, a track renamed two ways, one removed what the other changed), or the merged song would
-    point at what it doesn't have where the server's didn't (a send at a bus, an automation lane at
-    a plugin or a send, a note at an articulation, an audio region at a file, a channel's output) or
-    keep an id twice (`broken` in merge-songs.ts): "couldn't be put together"; or what this studio's
+    point at what it doesn't have where neither side did (a send at a bus, an automation lane at a
+    plugin or a send, a note at an articulation, an audio region at a file, a channel's output, a
+    score's group of parts at a track) or keep an id twice (`broken` in merge-songs.ts): "couldn't be
+    put together"; what either side had already is no clash (the studio lets a region's notes keep
+    an articulation the track it's moved to doesn't have); or what this studio's
     changes were made on isn't known: "The agent changed the song while this device had unsaved
     changes";
   - after a reload, the history kept at a revision of the run comes back with the step on top: joined

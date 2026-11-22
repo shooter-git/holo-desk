@@ -781,6 +781,46 @@ describe('the studio that asked, away a moment', () => {
     expect(services.store.revision(s.id, before + 3)?.title).toBe('Three');
   });
 
+  it('holds no songs once its studio has caught up with the run, nor once the job has ended', async () => {
+    const { start, tool, run, s, token, desk, studio, services, save } = await setup();
+    await save(services.store.get(s.id) as Parameters<typeof save>[0]);
+    const { job, token: jobToken } = await start({ project: s.id, text: 'Change it' });
+    const before = (services.store.get(s.id) as { revision: number }).revision;
+    const at = (revision: number, hidden = false) => ({
+      type: 'state',
+      state: { project: s.id, revision, tick: 0, selection: { track: null, regions: [], notes: 0 }, hidden },
+    });
+    const held = () => services.jobs.get(job)?.away?.recent.length;
+    desk.say(at(before, true));
+    desk.close();
+    const title = (t: string) => [{ op: 'setProject', patch: { title: t } }];
+    await tool(job, jobToken, 'POST', '/ops', { ops: title('One'), label: 'Title', batch: 'b1' });
+    await tool(job, jobToken, 'POST', '/ops', { ops: title('Two'), label: 'Title', batch: 'b2' });
+    expect(held()).toBe(2);
+    // back, it picks the run up to its head: none of its songs are needed any more
+    const back = studio(token, s.id, 'desk');
+    back.say(at(before + 2));
+    await settle();
+    expect(services.store.revision(s.id, before + 2)?.title).toBe('Two');
+    expect(held()).toBe(0);
+    // away again, the agent saves twice more, and the job ends before the studio is back
+    back.say(at(before + 2, true));
+    back.close();
+    await tool(job, jobToken, 'POST', '/ops', { ops: title('Three'), label: 'Title', batch: 'b3' });
+    await tool(job, jobToken, 'POST', '/ops', { ops: title('Four'), label: 'Title', batch: 'b4' });
+    expect(held()).toBe(2);
+    await tool(job, jobToken, 'POST', '/finish', { label: 'Titles', reply: 'Retitled.' });
+    run.say({ type: 'agent-done', job });
+    await waitFor(() => services.jobs.get(job)?.view.state === 'done');
+    expect(held()).toBe(0);
+    // the run's head, said after the job ended, is still kept: it's the song as it is
+    expect(services.store.revision(s.id, before + 4)).toBeNull();
+    const again = studio(token, s.id, 'desk');
+    again.say(at(before + 4));
+    await settle();
+    expect(services.store.revision(s.id, before + 4)?.title).toBe('Four');
+  });
+
   it('a page back in view as its change runs out of time isn’t taken as frozen: the next goes to it', async () => {
     const { start, tool, s, desk, services } = await setup();
     const { job, token: jobToken } = await start({ project: s.id, text: 'Change it' });

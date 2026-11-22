@@ -906,9 +906,16 @@ async function saveLeft(left: AppState): Promise<void> {
     const revision = await sending.revision;
     if (revision === null) return;
     base = revision;
-    // (what's kept is on top of that save now: all of it, or what came after it)
+    // (what's kept is on top of that save now: all of it, or what came after it, made on the song it saved)
     const all = sending.project === project;
-    keeper.changed({ project, serverRevision: base, saveState: all ? 'saved' : 'dirty', undo, redo });
+    keeper.changed({
+      project,
+      serverRevision: base,
+      saveState: all ? 'saved' : 'dirty',
+      undo,
+      redo,
+      saved: sending.project,
+    });
     if (all) return;
   }
   try {

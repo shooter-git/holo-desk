@@ -23,6 +23,7 @@ import { ChevronRight } from 'lucide-react';
 import { type RefObject, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { conversation, type Exchange, loadThread, useAgent } from '../app/agent.ts';
 import { type Layout, useLayout } from '../app/layout.ts';
+import { useSeenOnHost } from '../app/notify.ts';
 import { pageCovers, windowOpened } from '../app/page-layout.ts';
 import { closeBar, store, useApp } from '../app/store.ts';
 import { atEnd, useShownRoom } from './bar-swipe.ts';
@@ -198,6 +199,8 @@ export function TalkPage() {
   const newest = talk[talk.length - 1];
   const earlier = talk.slice(0, -1);
   const newestKey = newest ? keyOf(newest) : '';
+  // seen as it opens, and as a reply ends while it's open: the badge of notices counts it no more
+  useSeenOnHost(project, newest && !newest.working ? newestKey : null);
 
   // the song changed while it's open (from the Songs dialog over it): its conversation is read
   const firstSong = useRef(project);

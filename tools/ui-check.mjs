@@ -1,7 +1,7 @@
 // `pnpm ui:check`: the studio's layout, looked at in a real browser at a desktop's size, a tablet's
 // and a phone's (upright and on its side). It opens every main view, the two big dialogs and the
 // commands (the bar on a desktop, the agent's page elsewhere: with the agent off, and with it on and
-// a conversation to show), and fails when:
+// a conversation to show), and Settings › Agent with the agent on, and fails when:
 //
 //   - the page itself scrolls (something is wider or taller than the screen);
 //   - a control can't be reached: cut off by its pane with no scroll that would bring it in;
@@ -11,6 +11,7 @@
 //   - with the page open, the transport or the tabs are covered (no dialog excuses it), or the page
 //     lets the studio show through (it's solid: no blur, nothing see-through);
 //   - a request's working line, its time and Stop don't fit beside each other;
+//   - Settings › Agent's Tell me outside HO[LO] isn't whole: its three choices side by side, in the dialog;
 //   - the page throws.
 //
 // It starts a studio of its own (a server on a free port, a data folder that's removed after) with a
@@ -357,7 +358,31 @@ function wide() {
   return out;
 }
 
-const CHECKS = { transportClear, solid, workingFits, windowClear, wide };
+/**
+ * Settings › Agent's Tell me outside HO[LO]: its three choices whole and side by side, and what's said
+ * under them, inside the dialog.
+ */
+function noticesFit() {
+  const row = document.querySelector('.agent-notices');
+  if (!row) return ['Tell me outside HO[LO] isn’t in Settings › Agent'];
+  const box = (row.closest('.content') ?? document.documentElement).getBoundingClientRect();
+  const buttons = [...row.querySelectorAll('.seg .btn')];
+  const out = [];
+  if (buttons.map((b) => b.textContent.trim()).join(', ') !== 'Off, Long runs, Every reply')
+    out.push(`its choices are ${buttons.map((b) => `“${b.textContent.trim()}”`).join(', ')}`);
+  if (new Set(buttons.map((b) => Math.round(b.getBoundingClientRect().top))).size > 1)
+    out.push('its choices aren’t side by side');
+  for (const el of [...buttons, ...row.querySelectorAll('.muted')]) {
+    const r = el.getBoundingClientRect();
+    const what = el.textContent.trim().slice(0, 30);
+    if (el.scrollWidth > el.clientWidth + 1) out.push(`“${what}” is cut off`);
+    if (r.left < box.left - 1 || r.right > box.right + 1) out.push(`“${what}” runs past the dialog`);
+  }
+  if (!row.querySelector('.seg .btn.on')) out.push('none of its choices shows as chosen');
+  return out;
+}
+
+const CHECKS = { transportClear, solid, workingFits, windowClear, wide, noticesFit };
 
 // ---- the agent's host, played here: on, this device allowed, and a song's conversation ----
 
@@ -468,6 +493,15 @@ async function withAgent(ctx, doc, id, running) {
       });
     if (path === '/api/agent/harnesses/look') return json({ ok: true });
     if (path.startsWith('/api/agent/threads/')) return json(conversation(doc, id, running));
+    // this device's notices outside HO[LO]: on, for long runs (Settings › Agent says when they come)
+    if (path === '/api/agent/push')
+      return json({
+        key: `B${'A'.repeat(86)}`,
+        mode: 'long',
+        endpoint: 'https://fcm.googleapis.com/fcm/send/ui-check',
+        unseen: 2,
+      });
+    if (path === '/api/agent/seen') return json({ unseen: 0 });
     return route.fulfill({ status: 404, contentType: 'application/json', body: '{"error":"Not here"}' });
   });
 }
@@ -588,9 +622,22 @@ function agentViews(page, layout, finger, running) {
   const press = (loc) => (finger ? loc.tap() : loc.click());
   const [, open, shut, checks] = commands(page, layout, press)[0];
   const where = layout === 'desktop' ? 'Bar' : 'Page';
+  // Settings › Agent, this device allowed: its harness, what it asks first, its notices, its devices
+  const settings = [
+    'Settings › Agent',
+    async () => {
+      await press(control(page, 'Settings'));
+      await press(page.getByRole('tab', { name: 'Agent' }));
+      await page.locator('.agent-notices .seg .btn.on').waitFor();
+      await page.locator('.agent-notices').scrollIntoViewIfNeeded();
+    },
+    () => page.keyboard.press('Escape'),
+    ['noticesFit'],
+  ];
   return running
     ? [[`${where}: working turn`, open, shut, [...checks, 'workingFits']]]
     : [
+        settings,
         [`${where} with a thread`, open, shut, checks],
         // an earlier turn opened: its view drawn
         [

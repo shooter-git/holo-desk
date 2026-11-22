@@ -40,6 +40,7 @@ import {
 import Fastify, { type FastifyInstance, type FastifyReply } from 'fastify';
 import { type Jobs, parsePlayed } from './agent/jobs.ts';
 import { runnerKey } from './agent/keys.ts';
+import type { Notify } from './agent/push.ts';
 import { agentRoutes } from './agent/routes.ts';
 import { convertToWav, sweepAudio, TO_WAV } from './audio-files.ts';
 import type { Config } from './config.ts';
@@ -84,6 +85,8 @@ export interface Services {
   audioSwept: Promise<number>;
   /** The in-app agent's jobs. */
   jobs: Jobs;
+  /** The agent's notices outside HO[LO], for devices that turned them on. */
+  notify: Notify;
 }
 
 export async function buildApp(config: Config): Promise<{ app: FastifyInstance; services: Services }> {
@@ -1061,5 +1064,5 @@ export async function buildApp(config: Config): Promise<{ app: FastifyInstance; 
     networkMidi?.close();
     store.close();
   });
-  return { app, services: { store, packs, live, creations, audioSwept, jobs: agent.jobs } };
+  return { app, services: { store, packs, live, creations, audioSwept, jobs: agent.jobs, notify: agent.notify } };
 }

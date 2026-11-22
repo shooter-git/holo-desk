@@ -871,8 +871,11 @@ export class AgentError extends Error {
   }
 }
 
-/** `idleMs`: given up only once nothing of the answer has come for that long (`patiently`). */
-async function call<T>(
+/**
+ * One of the agent's routes, with this device's token (notify.ts uses it too). `idleMs`: given up
+ * only once nothing of the answer has come for that long (`patiently`).
+ */
+export async function call<T>(
   method: 'GET' | 'POST' | 'PUT' | 'DELETE',
   path: string,
   body?: unknown,

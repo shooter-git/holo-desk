@@ -4296,6 +4296,15 @@ html[data-layout="tablet"] .talk-room[data-covered] .talk-page {
   min-width: 220px;
 }
 
+/* Tell me outside HO[LO]: the choice as wide as its words, what it needs or does under it */
+.agent-notices > .seg {
+  align-self: flex-start;
+}
+
+.agent-notices > .muted {
+  line-height: 1.45;
+}
+
 /* Runs with, when there's something left to choose before it runs (Claude Code's model or effort) */
 .agent-grid .agent-attention {
   color: var(--warn);

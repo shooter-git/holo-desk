@@ -396,6 +396,11 @@ async function onMessage(msg: Record<string, unknown>): Promise<void> {
       ack(r.ok, r.ok ? {} : { error: r.error });
       return;
     }
+    case 'agent-front':
+      // a notice is due for this device (agent/push.ts on the host): none goes while HO[LO] is in front
+      // here. A page its browser froze can't answer, so a notice isn't held back by one
+      ack(true, { front: document.visibilityState === 'visible' });
+      return;
     case 'agent-status':
     case 'agent-listen':
     case 'agent-settings':

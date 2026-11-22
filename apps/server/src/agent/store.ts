@@ -2,7 +2,9 @@
  * What the agent keeps on disk, in HO[LO]'s own database (db.ts): whether it's on and with which
  * harness, the devices allowed to use it (only a hash of each one's token), devices asking to join,
  * and each song's conversation with it (its thread: what the agent last saw of the song, what the
- * user did since, and the requests and replies the bar shows).
+ * user did since, and the requests and replies the bar shows). A device that turned on notices
+ * outside HO[LO] has its push subscription here too, and the replies it asked for that no device has
+ * seen yet (its Home Screen badge).
  */
 
 import type { DatabaseSync } from 'node:sqlite';
@@ -101,7 +103,24 @@ export interface TurnRow {
   extra: string | null;
 }
 
+/** When a device is told of a reply outside HO[LO] (Settings › Agent, "Tell me outside HO[LO]"). */
+export type PushMode = 'long' | 'every';
+
+/** A device's push subscription (its browser's push service, and the keys its notices are encrypted to). */
+export interface PushRow {
+  device: string;
+  /** The push service's URL for this device (an allowed host: push.ts, `allowedEndpoint`). */
+  endpoint: string;
+  /** The browser's P-256 public key (65 bytes) and its auth secret (16 bytes), as base64url. */
+  p256dh: string;
+  auth: string;
+  mode: PushMode;
+  added: number;
+}
+
 const KEEP_TURNS = 50;
+/** A device's unseen replies kept for its badge: the newest this many. */
+const KEEP_UNSEEN = 50;
 
 export class AgentStore {
   private readonly db: DatabaseSync;
@@ -155,6 +174,22 @@ export class AgentStore {
         at INTEGER NOT NULL
       );
       CREATE INDEX IF NOT EXISTS agent_turns_thread ON agent_turns (thread, at);
+      CREATE TABLE IF NOT EXISTS agent_push (
+        device TEXT PRIMARY KEY,
+        endpoint TEXT NOT NULL,
+        p256dh TEXT NOT NULL,
+        auth TEXT NOT NULL,
+        mode TEXT NOT NULL CHECK (mode IN ('long', 'every')),
+        added INTEGER NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS agent_unseen (
+        job TEXT PRIMARY KEY,
+        device TEXT NOT NULL,
+        project TEXT NOT NULL,
+        at INTEGER NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS agent_unseen_device ON agent_unseen (device, at);
+      CREATE INDEX IF NOT EXISTS agent_unseen_project ON agent_unseen (project);
       INSERT OR IGNORE INTO agent_settings (id) VALUES (1);
     `);
     // added after the first version: turns keep what they asked, their brief, why they stopped
@@ -217,8 +252,64 @@ export class AgentStore {
     this.db.prepare('UPDATE agent_devices SET seen = ? WHERE id = ?').run(at, id);
   }
 
+  /** A device removed: its notices' subscription and unseen replies go with it. */
   removeDevice(id: string): boolean {
+    this.removePush(id);
     return Number(this.db.prepare('DELETE FROM agent_devices WHERE id = ?').run(id).changes) > 0;
+  }
+
+  // ---- notices outside HO[LO] (push.ts), per device ----
+
+  push(device: string): PushRow | null {
+    const row = this.db
+      .prepare('SELECT device, endpoint, p256dh, auth, mode, added FROM agent_push WHERE device = ?')
+      .get(device);
+    return (row as unknown as PushRow | undefined) ?? null;
+  }
+
+  /**
+   * A device's subscription, new or changed. A browser has one subscription for HO[LO], so another
+   * device with the same one (the same browser, paired again after its site data was cleared) lets it go.
+   */
+  setPush(row: PushRow): void {
+    this.db.prepare('DELETE FROM agent_push WHERE endpoint = ? AND device != ?').run(row.endpoint, row.device);
+    this.db
+      .prepare(
+        `INSERT INTO agent_push (device, endpoint, p256dh, auth, mode, added) VALUES (?, ?, ?, ?, ?, ?)
+         ON CONFLICT(device) DO UPDATE SET endpoint = excluded.endpoint, p256dh = excluded.p256dh,
+         auth = excluded.auth, mode = excluded.mode`,
+      )
+      .run(row.device, row.endpoint, row.p256dh, row.auth, row.mode, row.added);
+  }
+
+  /** Notices off for a device (Off, its subscription ended, or the device removed): its unseen replies go too. */
+  removePush(device: string): void {
+    this.db.prepare('DELETE FROM agent_push WHERE device = ?').run(device);
+    this.db.prepare('DELETE FROM agent_unseen WHERE device = ?').run(device);
+  }
+
+  /** A reply the device asked for ended unseen (its newest KEEP_UNSEEN are kept). */
+  addUnseen(job: string, device: string, project: string, at: number): void {
+    this.db
+      .prepare('INSERT OR REPLACE INTO agent_unseen (job, device, project, at) VALUES (?, ?, ?, ?)')
+      .run(job, device, project, at);
+    this.db
+      .prepare(
+        `DELETE FROM agent_unseen WHERE device = ? AND job NOT IN
+         (SELECT job FROM agent_unseen WHERE device = ? ORDER BY at DESC, rowid DESC LIMIT ?)`,
+      )
+      .run(device, device, KEEP_UNSEEN);
+  }
+
+  /** How many replies a device asked for are unseen: its Home Screen badge. */
+  unseen(device: string): number {
+    const row = this.db.prepare('SELECT COUNT(*) AS n FROM agent_unseen WHERE device = ?').get(device) as { n: number };
+    return Number(row.n);
+  }
+
+  /** A song's replies were seen (on any device): none of them counts as unseen on any device now. */
+  seenSong(project: string): void {
+    this.db.prepare('DELETE FROM agent_unseen WHERE project = ?').run(project);
   }
 
   // ---- devices asking to join ----

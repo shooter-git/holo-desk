@@ -109,6 +109,36 @@ keeps it to the open song:
   notes: nothing else on disk is read or written, and a file the studio says it converted must be one of
   that song's.
 
+## Notices outside HO[LO]
+
+A device allowed to use the agent can turn on **Tell me outside HO[LO]** in Settings › Agent (Off by
+default, per device). Then, when a request that device asked ends, or stops to ask for its OK, while
+HO[LO] isn't in front on it, the host sends it a notice through its browser's push service (Web Push).
+See `apps/server/src/agent/push.ts`.
+
+- **What is sent.** About 200 bytes: "HO[LO] Desk", the song's name and what happened ("a reply is
+  ready", "it needs your OK to go on", "the request stopped"), the song's and the turn's ids, and how
+  many replies are unseen. Never the request, the reply or anything from the song. It's encrypted end
+  to end for that device (RFC 8291, aes128gcm, a new key pair and salt each time): only the browser
+  holding the subscription's private key and auth secret can read it.
+- **What the push service sees.** The host's IP address, when each notice is sent and its size, which
+  browser installation it's for (the subscription's endpoint), a topic header that's a hash of the
+  song's id, HO[LO]'s VAPID public key and the JWT's `sub`, which is the project's URL
+  (`https://github.com/shooter-git/holo-desk`), never an email address. Never what a notice says.
+- **Keys.** The VAPID key pair (RFC 8292, P-256) is made the first time an allowed device opens
+  Settings › Agent (it reads the public key there, to subscribe with), as `push.key` in the data folder (a JWK, mode 0600, closed to its owner again whenever it's read, like
+  `runner.key`). Each device's subscription (its endpoint, public key and auth secret) and the
+  replies it hasn't seen are kept in HO[LO]'s database, per device, and deleted when the device turns
+  notices off or is removed. A notice goes only to the device whose request it was.
+- **Endpoints.** A device's subscription is taken only if its endpoint is `https` on port 443, at most
+  1000 characters, without a user or password, on `fcm.googleapis.com`, `*.push.apple.com`,
+  `*.push.services.mozilla.com` or `*.notify.windows.com`, and its keys are a P-256 point and 16
+  bytes. It's checked again before each send, and redirects aren't followed, so a device can't make
+  the host send requests anywhere else. A push service's 404 or 410 deletes the subscription; any
+  other failure is logged once and changes nothing.
+- **Network.** Notices need the host to reach the internet: those push services, over HTTPS. With
+  notices off on every device, none is sent and no push service is ever contacted.
+
 ## Especially valuable reports
 
 - anything that reads or writes files outside the data folder or a creation's declared sessions folder
@@ -126,4 +156,6 @@ keeps it to the open song:
 - a device token or a job token that works beyond its scope: after the device is removed or the job
   has ended, or for another job or song;
 - a way to guess the pairing code, or to get past its tries and its lockout;
+- a notice that reaches a device other than the one that asked, says more than it should, or a way to
+  make the host send a push to a host outside the allowlist;
 - a runner without the key being handed the agent's jobs or the pairing code.

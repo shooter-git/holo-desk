@@ -3,9 +3,10 @@ import '@fontsource-variable/jetbrains-mono';
 import './styles/app.css';
 import { lazy, StrictMode, Suspense } from 'react';
 import { createRoot } from 'react-dom/client';
-import { findCompanion, startup } from './app/actions.ts';
+import { findCompanion, openTurn, startup } from './app/actions.ts';
 import { installKeys } from './app/keys.ts';
 import { connectLive, device } from './app/live.ts';
+import { installNotices } from './app/notify.ts';
 import { readPairLink } from './app/pair-link.ts';
 import { connectRemote } from './app/remote.ts';
 import { installRightClick } from './app/right-click.ts';
@@ -43,6 +44,17 @@ if (isRemote) {
   connectLive();
   findCompanion();
   void startup();
+  // the agent's notices outside HO[LO] (app/notify.ts): a tap on one while the studio is open comes
+  // from the service worker, for the page to open at that reply
+  installNotices();
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.addEventListener('message', (e: MessageEvent) => {
+      const m = e.data as { type?: unknown; project?: unknown; job?: unknown } | null;
+      if (m?.type === 'open-turn' && typeof m.project === 'string')
+        openTurn(m.project, typeof m.job === 'string' ? m.job : null);
+    });
+    navigator.serviceWorker.startMessages();
+  }
 }
 
 // the installed app works offline; a development server never registers it

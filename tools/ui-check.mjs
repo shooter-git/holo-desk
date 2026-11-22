@@ -11,6 +11,13 @@
 //   - with the page open, the transport or the tabs are covered (no dialog excuses it), or the page
 //     lets the studio show through (it's solid: no blur, nothing see-through);
 //   - a request's working line, its time and Stop don't fit beside each other;
+//   - a reply's view (or its dock) isn't laid out whole: a control runs past the view's edge (where
+//     nothing scrolls it in), two controls are over each other, or a control's words don't fit in it
+//     (crammed, cut off or ellipsized), a slider's or a list's words included. Besides the song's
+//     conversation, two replies are looked at on their own: one comparing takes (choices of four and
+//     three long-ish labels, each with a row of three buttons) and one with everything at once (a
+//     choice of six, five long buttons, a table of six columns, long-named sliders, toggles, a list, a
+//     chart, notes, a waveform, a group in a group);
 //   - Settings › Agent's Tell me outside HO[LO] isn't whole: its three choices side by side, in the dialog;
 //   - with a reply that has a dock read and the page closed, a phone shows no tray, or one that isn't a
 //     row of its own (or × leaves it there); a tablet or a desktop shows one;
@@ -414,12 +421,267 @@ function noTray() {
   return document.querySelector('.tray') ? ['a tray shows'] : [];
 }
 
-const CHECKS = { transportClear, solid, workingFits, windowClear, wide, noticesFit, tray, noTray };
+/**
+ * A reply's view (and a dock) laid out whole: every control inside the view, or in a box of it that
+ * scrolls (a table), no two over each other, and each control's words whole inside it: none spilling
+ * past its edge, none cut off or ellipsized (a slider's name and a list's rows too).
+ */
+function viewFits() {
+  const out = [];
+  const said = new Set();
+  const say = (line) => {
+    if (!said.has(line)) out.push(line);
+    said.add(line);
+  };
+  const words = (el) =>
+    (el.getAttribute('aria-label') || el.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 36);
+  const shown = (el) => {
+    const r = el.getBoundingClientRect();
+    return r.width > 0 && r.height > 0 && el.checkVisibility({ visibilityProperty: true });
+  };
+  // a box between the control and the view that scrolls sideways (a table does; a choice must not)
+  const scrolled = (el, view) => {
+    for (let e = el.parentElement; e && e !== view; e = e.parentElement) {
+      const s = getComputedStyle(e);
+      if (/auto|scroll/.test(s.overflowX) && e.scrollWidth > e.clientWidth + 1) return e;
+    }
+    return null;
+  };
+  for (const view of document.querySelectorAll('.convo .agent-view, .convo .dock-view')) {
+    if (!shown(view)) continue;
+    // (its box, padding included: a list's rows reach into it on purpose, their words in line with the rest)
+    const { left, right } = view.getBoundingClientRect();
+    const controls = [...view.querySelectorAll('button, input, select, textarea')].filter(shown);
+    for (const el of controls) {
+      const r = el.getBoundingClientRect();
+      const box = scrolled(el, view);
+      if (box && !box.matches('.v-table')) say(`a box scrolls sideways to show “${words(el)}”: ${box.className}`);
+      else if (!box && (r.left < left - 1 || r.right > right + 1))
+        say(
+          `“${words(el)}” runs past the reply's view (${Math.round(r.left - left)} to ${Math.round(r.right - right)} px)`,
+        );
+      // its words (and icon): all of what it holds, inside its own box
+      const range = document.createRange();
+      range.selectNodeContents(el);
+      const w = range.getBoundingClientRect();
+      if (w.width > 0 && (w.left < r.left - 1 || w.right > r.right + 1 || w.top < r.top - 1 || w.bottom > r.bottom + 1))
+        say(
+          `the words of “${words(el)}” run past it (${Math.round(w.width)} px of words in ${Math.round(r.width)} px)`,
+        );
+    }
+    // words a box hides: ellipsized, or clipped by it
+    for (const el of view.querySelectorAll('span, div')) {
+      const st = getComputedStyle(el);
+      if (st.overflowX === 'visible' || !shown(el) || el.matches('.v-table, .seg')) continue;
+      if (el.scrollWidth > el.clientWidth + 1)
+        say(`“${words(el)}” is cut off (${el.scrollWidth} px in ${el.clientWidth})`);
+    }
+    for (let i = 0; i < controls.length; i++)
+      for (let j = i + 1; j < controls.length; j++) {
+        const [a, b] = [controls[i], controls[j]];
+        if (a.contains(b) || b.contains(a)) continue;
+        const p = a.getBoundingClientRect();
+        const q = b.getBoundingClientRect();
+        const x = Math.min(p.right, q.right) - Math.max(p.left, q.left);
+        const y = Math.min(p.bottom, q.bottom) - Math.max(p.top, q.top);
+        if (x > 1 && y > 1) say(`“${words(a)}” and “${words(b)}” are over each other`);
+      }
+  }
+  return out;
+}
+
+const CHECKS = { transportClear, solid, workingFits, windowClear, wide, noticesFit, tray, noTray, viewFits };
 
 // ---- the agent's host, played here: on, this device allowed, and a song's conversation ----
 
-/** A conversation of three turns (a list, a brief, a choice with sliders); `running`, a fourth that has worked 65 s. */
-function conversation(doc, id, running) {
+/**
+ * Two replies looked at on their own, as the newest turn (the bar shows only that one): takes compared
+ * in two places, each with a row of buttons; and everything at once, as many and as long as a view can
+ * have them.
+ */
+const NEWEST = {
+  compare: {
+    what: 'a reply comparing takes',
+    turn(doc, now) {
+      const lead = doc.tracks[2].id;
+      const take = (label, version, from, to) => ({ label, do: { play: { from, to, version } } });
+      const solo = (label, version) => ({ button: label, do: { play: { from: 1, to: 5, version, solo: [lead] } } });
+      return {
+        job: 'agj_00000000000e',
+        request: 'The lead sounds thin: try a few other voices for it',
+        reply:
+          'I made three other voices for the lead, each kept as a version. Play each against the old one, then keep the one you like.',
+        label: 'Lead voices',
+        state: 'done',
+        at: now - 100_000,
+        view: {
+          blocks: [
+            {
+              group: [
+                {
+                  choice: [
+                    take('The old lead', 'before', 1, 5),
+                    take('Glassy Pad Lead', 'Glassy', 1, 5),
+                    take('Warm Saw Lead', 'Warm saw', 1, 5),
+                    take('Soft Organ Lead', 'Soft organ', 1, 5),
+                  ],
+                },
+                {
+                  row: [
+                    solo('Solo Glassy Pad Lead', 'Glassy'),
+                    solo('Solo Warm Saw Lead', 'Warm saw'),
+                    solo('Solo Soft Organ Lead', 'Soft organ'),
+                  ],
+                },
+              ],
+              title: 'Compare in the intro (bars 1–4)',
+            },
+            {
+              group: [
+                {
+                  choice: [
+                    take('Glassy Pad Lead', 'Glassy', 5, 9),
+                    take('Warm Saw Lead', 'Warm saw', 5, 9),
+                    take('Soft Organ Lead', 'Soft organ', 5, 9),
+                  ],
+                },
+                {
+                  row: [
+                    { button: 'Keep Glassy Pad Lead', do: { keep: 'Glassy' } },
+                    { button: 'Keep Warm Saw Lead', do: { keep: 'Warm saw' } },
+                    { button: 'Keep Soft Organ Lead', do: { keep: 'Soft organ' } },
+                  ],
+                },
+              ],
+              title: 'Compare in the verse (bars 5–8) and choose',
+            },
+          ],
+          versions: { before: 3, after: 4, Glassy: 4, 'Warm saw': 5, 'Soft organ': 6 },
+        },
+      };
+    },
+  },
+  crowded: {
+    what: 'a reply with everything at once',
+    turn(doc, now) {
+      const [keys, , lead, bass, drums] = doc.tracks.map((t) => t.id);
+      const delay = doc.tracks[0].channel.inserts.find((p) => p.type === 'delay').id;
+      const hall = doc.buses[0].id;
+      const play = (version) => ({ play: { from: 9, to: 13, version, solo: [keys, drums] } });
+      const takes = [
+        ['Take one, close and dry', 'Take one'],
+        ['Take two, with the room around it', 'Take two'],
+        ['Take three, an octave up', 'Take three'],
+        ['Take four, at half time', 'Take four'],
+        ['Take five, doubled and wide', 'Take five'],
+        ['Take six, the long one with the fills', 'Take six'],
+      ];
+      return {
+        job: 'agj_00000000000f',
+        request: 'Show me every take of the chorus and every setting I might want, all at once',
+        reply: 'Here is all of it at once: six takes, what to keep, how they measure, and the settings to try.',
+        label: 'Everything at once',
+        state: 'done',
+        at: now - 100_000,
+        view: {
+          blocks: [
+            { text: 'Six takes of the chorus, bars 9–12, each with the drums', quiet: true },
+            { choice: takes.map(([label, version]) => ({ label, do: play(version) })) },
+            {
+              row: [
+                { button: 'Keep take one as it was played', do: { keep: 'Take one' } },
+                { button: 'Keep take two with the room sound', do: { keep: 'Take two' } },
+                { button: 'Keep take three an octave higher', do: { keep: 'Take three' } },
+                { button: 'Ask for a seventh take in half time', do: { ask: 'Write a seventh take, in half time' } },
+                { button: 'Open the chorus where it starts', do: { go: { bar: 9, track: keys } } },
+              ],
+            },
+            {
+              table: {
+                head: ['Take', 'Bars', 'Notes', 'Loudest', 'Timing', ''],
+                rows: takes
+                  .slice(0, 5)
+                  .map(([label, version], i) => [
+                    label,
+                    '9–12',
+                    40 + i * 6,
+                    `−${(6 + i * 0.7).toFixed(1)} dB`,
+                    i % 2 ? 'a little behind the beat' : 'tight',
+                    { button: 'Play', do: play(version) },
+                  ]),
+              },
+            },
+            {
+              slider: { track: keys, param: `fx:${delay}:highcut` },
+              label: 'The high cut of the keys’ delay, over the whole long chorus',
+            },
+            { slider: { track: bass, param: 'volume' }, label: 'Bass level' },
+            {
+              row: [
+                { slider: { track: keys, param: `send:${hall}` }, label: 'How much of the keys goes to the hall' },
+                { slider: { track: lead, param: 'pan' }, label: 'Where the lead sits' },
+              ],
+            },
+            {
+              row: [
+                { toggle: { track: drums, param: 'mute' }, label: 'Mute the drums while you listen' },
+                { toggle: { track: bass, param: 'solo' }, label: 'Solo the bass' },
+                { toggle: { track: keys, param: `on:${delay}` }, label: 'The keys’ delay on' },
+              ],
+            },
+            {
+              list: [
+                {
+                  text: 'The chorus from its first bar, with every take one after another',
+                  detail: 'bars 9–12, the loudest part of the song, where the takes differ the most',
+                  do: { go: { bar: 9 } },
+                },
+                {
+                  text: 'Take six on its own',
+                  detail: 'the long one, with the fills at its end',
+                  do: play('Take six'),
+                },
+                { text: 'What the takes have in common', detail: 'the same four chords, at the same tempo' },
+              ],
+            },
+            {
+              chart: takes.map(([label], i) => ({ y: -6 - ((i * 7) % 5) * 0.8, label })),
+              kind: 'bars',
+              unit: 'dB',
+              ref: -6,
+            },
+            {
+              group: [
+                { notes: { track: keys, from: 9, to: 13 } },
+                { wave: { track: keys, from: 9, to: 13 } },
+                {
+                  group: [
+                    { text: 'A group inside a group, with its own buttons', quiet: true },
+                    { button: 'Go to the start of the chorus', do: { go: { bar: 9 } } },
+                    { button: 'Go to the end of the song', do: { go: { bar: 17 } } },
+                  ],
+                  title: 'And inside it another group, its title long enough for two lines',
+                },
+              ],
+              title: 'The keys in the chorus, as notes and as a waveform',
+            },
+          ],
+          versions: Object.fromEntries([
+            ['before', 3],
+            ['after', 4],
+            ...takes.map(([, version], i) => [version, 4 + i]),
+          ]),
+        },
+      };
+    },
+  },
+};
+
+/**
+ * A conversation of three turns (a list, a brief, a choice with sliders); `running`, a fourth that has
+ * worked 65 s; `newest`, a fourth from NEWEST.
+ */
+function conversation(doc, id, running, newest) {
   const now = Date.now();
   const [keys, , , bass, drums] = doc.tracks.map((t) => t.id);
   const turns = [
@@ -505,6 +767,7 @@ function conversation(doc, id, running) {
     : null;
   if (job)
     turns.push({ job: job.id, request: job.request, reply: null, label: null, state: 'running', at: job.started });
+  if (newest) turns.push(NEWEST[newest].turn(doc, now));
   return { thread: { id: 'agt_uicheck', harness: 'claude', turns }, job, now };
 }
 
@@ -513,7 +776,7 @@ function conversation(doc, id, running) {
  * and the agent's routes are answered here (the live channel's hello with a token the host doesn't
  * know is only that: no device).
  */
-async function withAgent(ctx, doc, id, running) {
+async function withAgent(ctx, doc, id, running, newest) {
   await ctx.addInitScript(() => {
     localStorage.setItem('holo:agent-token', 'ui-check-token');
     localStorage.setItem('holo:agent-device', 'dev_uicheck0000');
@@ -536,7 +799,7 @@ async function withAgent(ctx, doc, id, running) {
         requests: [],
       });
     if (path === '/api/agent/harnesses/look') return json({ ok: true });
-    if (path.startsWith('/api/agent/threads/')) return json(conversation(doc, id, running));
+    if (path.startsWith('/api/agent/threads/')) return json(conversation(doc, id, running, newest));
     // this device's notices outside HO[LO]: on, for long runs (Settings › Agent says when they come)
     if (path === '/api/agent/push')
       return json({
@@ -689,7 +952,7 @@ function agentViews(page, layout, finger, running) {
   };
   const tray = layout.startsWith('phone')
     ? [
-        ['Tray', read, null, ['tray', 'transportClear']],
+        ['Tray', read, null, ['tray', 'transportClear', 'viewFits']],
         ['Tray, put away', () => press(page.locator('.tray button[aria-label="Put this away"]')), null, ['noTray']],
       ]
     : [['No tray', read, null, ['noTray']]];
@@ -697,7 +960,7 @@ function agentViews(page, layout, finger, running) {
     ? [[`${where}: working turn`, open, shut, [...checks, 'workingFits']]]
     : [
         settings,
-        [`${where} with a thread`, open, shut, checks],
+        [`${where} with a thread`, open, shut, [...checks, 'viewFits']],
         // an earlier turn opened: its view drawn
         [
           `${where} with a thread, a turn opened`,
@@ -706,10 +969,28 @@ function agentViews(page, layout, finger, running) {
             if (layout !== 'desktop') await press(page.locator('.talk-row').last());
           },
           shut,
-          checks,
+          [...checks, 'viewFits'],
         ],
         ...tray,
       ];
+}
+
+/** The page (or the bar) with a reply of NEWEST's as its newest turn: its view laid out whole. */
+function replyViews(page, layout, finger, newest) {
+  const press = (loc) => (finger ? loc.tap() : loc.click());
+  const [, open, shut, checks] = commands(page, layout, press)[0];
+  const where = layout === 'desktop' ? 'Bar' : 'Page';
+  return [
+    [
+      `${where}: ${NEWEST[newest].what}`,
+      async () => {
+        await open();
+        await page.locator('.talk.newest .agent-view, .bar .talk .agent-view').first().waitFor();
+      },
+      shut,
+      [...checks, 'viewFits'],
+    ],
+  ];
 }
 
 /** What to look at on a screen: each opens something, and says how to close it again (and what's checked besides). */
@@ -771,7 +1052,7 @@ try {
   // a screen's studio, opened and started, in a browser of its own; what's wrong on each view is said
   const look = async (name, screen, list, agent) => {
     const ctx = await browser.newContext(screen);
-    if (agent) await withAgent(ctx, doc, id, agent.running);
+    if (agent) await withAgent(ctx, doc, id, agent.running, agent.newest);
     const page = await ctx.newPage();
     // (a view that can't be opened is a finding, not something to wait half a minute for)
     page.setDefaultTimeout(8000);
@@ -812,6 +1093,12 @@ try {
     looked += await look(name, screen, (page, layout, finger) => agentViews(page, layout, finger, true), {
       running: true,
     });
+    // and a reply of each kind of NEWEST, on its own
+    for (const newest of Object.keys(NEWEST))
+      looked += await look(name, screen, (page, layout, finger) => replyViews(page, layout, finger, newest), {
+        running: false,
+        newest,
+      });
     console.log(`${name} (${screen.viewport.width}×${screen.viewport.height}): ${looked} views looked at`);
   }
 } catch (e) {

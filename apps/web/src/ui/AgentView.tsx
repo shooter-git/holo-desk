@@ -4,8 +4,10 @@
  * canvases, in its own colours) and nothing of a colour of its own. Words are shown as words, never
  * as markup. What a click does is app/agent-view.ts's: each is something the user could do themselves.
  *
- * The view is checked again here before it's drawn; one that doesn't pass shows nothing. Its dock (a
- * few of its controls again) is drawn compact, in one row, for a phone's tray: DockView.
+ * The view is checked again here before it's drawn; one that doesn't pass shows nothing. Its choices
+ * and rows of buttons are laid out in the width they have (ui/view-fit.ts): on one line when they fit,
+ * else in even columns. Its dock (a few of its controls again) is drawn compact, in one row, for a
+ * phone's tray: DockView.
  */
 import {
   type Action,
@@ -50,6 +52,7 @@ import { editableNotes } from './AudioNotes.tsx';
 import { dbToFader, faderToDb } from './controls.tsx';
 import { prepare, useFrame, useSize } from './frame.ts';
 import { centredRange, drawMiniNotes, type MiniNote, rangeOf } from './mini-notes.ts';
+import { useFitView } from './view-fit.ts';
 import { drawClipWave } from './wave.ts';
 
 // a go to a recording's notes, and its notes drawn small, number them as the Notes view does
@@ -321,7 +324,7 @@ function Toggle({ ctx, b, label }: { ctx: Ctx; b: Binding; label?: string }) {
         if (!setBinding(b, on ? 0 : 1)) ctx.say('That setting is gone from the song');
       }}
     >
-      {label ?? info.name}
+      <span>{label ?? info.name}</span>
     </button>
   );
 }
@@ -573,8 +576,11 @@ function ListView({ ctx, items, at }: { ctx: Ctx; items: ListItem[]; at: string 
             {/* a row that plays shows it as a button does; one that does something else, a chevron:
                 without a pointer to hover with, nothing else says a row can be pressed */}
             {plays && (live ? <Square size={11} aria-hidden="true" /> : <Play size={11} aria-hidden="true" />)}
-            <span className="title">{it.text}</span>
-            {detail && <span className="hint">{detail}</span>}
+            {/* its words and its detail side by side, the detail under them when they don't fit so */}
+            <span className="v-words">
+              <span className="title">{it.text}</span>
+              {detail && <span className="hint">{detail}</span>}
+            </span>
             {it.do && !plays && <ChevronRight size={13} className="go" aria-hidden="true" />}
           </>
         );
@@ -604,7 +610,8 @@ function BlockView({ ctx, block: b, at }: { ctx: Ctx; block: Block; at: string }
   if ('text' in b) return <div className={`v-text${b.quiet ? ' quiet' : ''}`}>{b.text}</div>;
   if ('row' in b)
     return (
-      <div className="v-row">
+      // (a row of only buttons and toggles goes into even columns when it doesn't fit on one line)
+      <div className={`v-row${b.row.every((c) => 'button' in c || 'toggle' in c) ? ' buttons' : ''}`}>
         {b.row.map((c, i) => (
           <BlockView key={i} ctx={ctx} block={c} at={`${at}.${i}`} />
         ))}
@@ -662,10 +669,12 @@ function BlockView({ ctx, block: b, at }: { ctx: Ctx; block: Block; at: string }
 export function AgentView({ view, job, busy }: { view: View; job: string; busy: boolean }) {
   const [why, setWhy] = useState('');
   const checked = useMemo(() => checkView(view.blocks, true), [view]);
+  const root = useRef<HTMLDivElement>(null);
+  useFitView(root, checked.ok);
   if (!checked.ok) return null;
   const ctx: Ctx = { view, job, busy, say: setWhy };
   return (
-    <div className="agent-view">
+    <div className="agent-view" ref={root}>
       {checked.blocks.map((b, i) => (
         <BlockView key={i} ctx={ctx} block={b} at={String(i)} />
       ))}

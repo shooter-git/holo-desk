@@ -252,6 +252,7 @@ const VIEW_GRAMMAR = [
   '{"ask": "…"} a next request, sent when clicked.',
   `A setting is {"track": a track, bus or "master", "param": ${PARAMS_TEXT}}.`,
   `A version is "before" (the song before this request), "after" (as you leave it), "previous" (the song before your previous request: to compare an earlier change, play "previous" against "before") or a name you gave the version tool. Plain text only, no markdown. At most ${LIMITS.top} blocks at the top, ${LIMITS.pieces} in all, ${LIMITS.depth} deep.`,
+  `A dock is button, choice and toggle blocks only, with any action: at most ${LIMITS.dock} controls (each option of a choice is one), labels of at most ${LIMITS.dockLabel} characters.`,
 ].join(' ');
 
 export const version: Tool = {
@@ -287,7 +288,7 @@ export const version: Tool = {
 export const finish: Tool = {
   name: 'finish',
   kind: 'ask',
-  summary: `End your turn, always, even when you were only asked a question: only finish reaches the user, and text you write outside it isn't shown. "label" names the undo step for everything you changed (at most 80 characters, e.g. "Counter-melody on oboe, bars 9–16"), and "reply" is what the user reads under the bar, shown exactly as written: plain text (no markdown, lists or code), one or two short sentences, at most about 200 characters, in musical terms; what changed and where (or the answer, what you're waiting for, or why you couldn't). "view" (optional) is what shows under the reply, made of the blocks and actions below: a question's details go there too. "go" (optional, only when they asked to see something) is a go the studio moves to as the reply arrives. Call it exactly once, last. ${VIEW_GRAMMAR}`,
+  summary: `End your turn, always, even when you were only asked a question: only finish reaches the user, and text you write outside it isn't shown. "label" names the undo step for everything you changed (at most 80 characters, e.g. "Counter-melody on oboe, bars 9–16"), and "reply" is what the user reads under the bar, shown exactly as written: plain text (no markdown, lists or code), one or two short sentences, at most about 200 characters, in musical terms; what changed and where (or the answer, what you're waiting for, or why you couldn't). "view" (optional) is what shows under the reply, made of the blocks and actions below: a question's details go there too. "go" (optional, only when they asked to see something) is a go the studio moves to as the reply arrives. "dock" (optional, only with a view) repeats a few of the view's controls in one row the studio keeps at hand once the reply has been read. Call it exactly once, last. ${VIEW_GRAMMAR}`,
   args: [
     {
       name: 'label',
@@ -318,13 +319,20 @@ export const finish: Tool = {
       describe:
         'Where the studio goes as the reply arrives, only when they asked to see something, e.g. {"track": "Vocal", "notes": {"from": "12", "to": "13"}}',
     },
+    {
+      name: 'dock',
+      type: 'array',
+      items: 'object',
+      maxLength: LIMITS.dock,
+      describe: `A few of the view's controls again, in one row (buttons, choices and toggles; at most ${LIMITS.dock} controls, labels of ${LIMITS.dockLabel} characters at most), e.g. [{"choice": [{"label": "Take 1", "do": {"play": {"from": 5, "to": 13, "version": "Take 1"}}}, {"label": "Take 2", "do": {"play": {"from": 5, "to": 13, "version": "Take 2"}}}, {"label": "Take 3", "do": {"play": {"from": 5, "to": 13, "version": "Take 3"}}}]}, {"button": "Keep Take 2", "do": {"keep": "Take 2"}}]`,
+    },
   ],
   async run(ctx, args) {
     const label = need(args, 'label');
     const reply = need(args, 'reply');
     try {
-      const { view, go } = await resolvePresentation(ctx, args.view, args.go);
-      await ctx.api.finish(label, reply, view, go);
+      const { view, go, dock } = await resolvePresentation(ctx, args.view, args.go, args.dock);
+      await ctx.api.finish(label, reply, view, go, dock);
     } catch (err) {
       // refused: the model must know nothing reached them, and how to get it through
       if (err instanceof ToolError || (err instanceof ApiError && err.status === 400))
@@ -335,9 +343,9 @@ export const finish: Tool = {
   },
 };
 
-/** What a refused finish answers: nothing reached them yet, why, and the view's grammar to write it again. */
+/** What a refused finish answers: nothing reached them yet, why, and the view's grammar (a dock's too) to write it again. */
 export function finishRefused(why: string): string {
-  return `finish was refused, so nothing has reached them yet: ${why}. Call finish again with the view written as below, or without a view (and then don't mention one in the reply). ${VIEW_GRAMMAR}`;
+  return `finish was refused, so nothing has reached them yet: ${why}. Call finish again with the view written as below, or without a view (and then don't mention one in the reply, and give no dock). ${VIEW_GRAMMAR}`;
 }
 
 export const conversationTools: Tool[] = [attachmentGet, look, askPermission, handOff, version, finish];

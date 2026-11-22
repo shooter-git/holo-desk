@@ -1076,8 +1076,13 @@ export async function lookAtHarnesses(): Promise<void> {
   await call('POST', '/api/agent/harnesses/look');
 }
 
-/** The open song's conversation, for the bar. */
-export async function loadThread(project: string): Promise<void> {
+/**
+ * The open song's conversation, for the bar (or the page) as it opens. With `barOpen` false (a phone's
+ * tray, as a song opens, the bar closed) only its turns are kept: the song's job that's working or
+ * waiting isn't told of from here, so it's neither taken as seen nor as a reply waiting, and the bar's
+ * button's ring and dot, and the requests followed, stay as they are (they're caught up on their own).
+ */
+export async function loadThread(project: string, barOpen = true): Promise<void> {
   if (!isOn(state)) return;
   try {
     const r = await call<{ thread: { turns: Turn[] } | null; job?: JobView | null; now?: number }>(
@@ -1087,7 +1092,7 @@ export async function loadThread(project: string): Promise<void> {
     heardClock(r.now);
     agent.dispatch({ type: 'thread', project, turns: r.thread?.turns ?? [] });
     // the song's job that's working, or waiting for a click (after a reload, its button comes back)
-    if (r.job) agent.dispatch({ type: 'status', job: r.job, barOpen: true });
+    if (r.job && barOpen) agent.dispatch({ type: 'status', job: r.job, barOpen: true });
   } catch {
     // the bar shows what it has
   }

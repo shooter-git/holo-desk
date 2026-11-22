@@ -8,7 +8,7 @@ import { toolWords } from '../src/harness/adapter.ts';
 import { notationLength } from '../src/index.ts';
 import { describeTool, LABEL_MAX, stepLabel, type Tool } from '../src/tools/common.ts';
 import { TOOLS, toolNamed } from '../src/tools/index.ts';
-import { checkGo, checkView } from '../src/view.ts';
+import { checkDock, checkGo, checkView } from '../src/view.ts';
 import { allOps, BAR, call, lastOps, memoryOf, refused, setup } from './helpers.ts';
 
 /** Everything the model reads of a tool: its description and its fields' help. */
@@ -100,12 +100,16 @@ describe('the tool list', () => {
       expect(knobs.has(key as string), `synth_set: ${key}`).toBe(true);
   });
 
-  it('shows finish’s examples as a view and a go the studio would take', () => {
+  it('shows finish’s examples as a view, a go and a dock the studio would take', () => {
     const finish = toolNamed('finish') as Tool;
     const example = (name: string) =>
       JSON.parse(/e\.g\. (.*)$/.exec(finish.args.find((a) => a.name === name)?.describe ?? '')?.[1] ?? 'null');
     expect(checkView(example('view')).ok).toBe(true);
     expect(checkGo(example('go')).ok).toBe(true);
+    const dock = checkDock(example('dock'));
+    expect(dock.ok).toBe(true);
+    // (a dock as full as it may be: three takes and Keep)
+    expect(dock.ok && dock.blocks).toHaveLength(2);
   });
 
   it('says each tool in words under the bar while it runs, never "Working"', () => {

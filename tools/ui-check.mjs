@@ -12,6 +12,8 @@
 //     lets the studio show through (it's solid: no blur, nothing see-through);
 //   - a request's working line, its time and Stop don't fit beside each other;
 //   - Settings › Agent's Tell me outside HO[LO] isn't whole: its three choices side by side, in the dialog;
+//   - with a reply that has a dock read and the page closed, a phone shows no tray, or one that isn't a
+//     row of its own (or × leaves it there); a tablet or a desktop shows one;
 //   - the page throws.
 //
 // It starts a studio of its own (a server on a free port, a data folder that's removed after) with a
@@ -382,7 +384,37 @@ function noticesFit() {
   return out;
 }
 
-const CHECKS = { transportClear, solid, workingFits, windowClear, wide, noticesFit };
+/**
+ * A reply with a dock read, the page closed: on a phone its row waits in the studio, one row of its own
+ * on the screen (the view ends above it; held upright, the transport starts below it), with × and ^.
+ */
+function tray() {
+  const el = document.querySelector('.tray');
+  if (!el) return ['no tray once a reply with a dock was read and the page closed'];
+  const out = [];
+  const r = el.getBoundingClientRect();
+  if (r.left < -1 || r.top < -1 || r.right > innerWidth + 1 || r.bottom > innerHeight + 1)
+    out.push('the tray is partly off the screen');
+  if (r.height > 52) out.push(`the tray is ${Math.round(r.height)} px tall: more than a row`);
+  const view = document.querySelector('.phone-view')?.getBoundingClientRect();
+  if (view && view.bottom > r.top + 1) out.push('the view reaches under the tray');
+  const transport = document.querySelector('.phone-dock .phone-transport')?.getBoundingClientRect();
+  if (transport && transport.top < r.bottom - 1) out.push('the tray reaches over the transport');
+  const controls = [...el.querySelectorAll('.dock-view .btn')];
+  if (controls.length < 2) out.push(`the tray shows ${controls.length} of the dock's controls`);
+  const tops = controls.map((b) => b.getBoundingClientRect().top);
+  if (tops.length && Math.max(...tops) - Math.min(...tops) > 1) out.push('the dock’s controls aren’t in one row');
+  for (const name of ['Put this away', 'Open the conversation'])
+    if (!el.querySelector(`button[aria-label="${name}"]`)) out.push(`the tray has no “${name}”`);
+  return out;
+}
+
+/** No tray: put away, or not a phone (a tablet's sheet, or a desktop's bar, stays open beside the studio). */
+function noTray() {
+  return document.querySelector('.tray') ? ['a tray shows'] : [];
+}
+
+const CHECKS = { transportClear, solid, workingFits, windowClear, wide, noticesFit, tray, noTray };
 
 // ---- the agent's host, played here: on, this device allowed, and a song's conversation ----
 
@@ -443,8 +475,20 @@ function conversation(doc, id, running) {
           },
           { slider: { track: bass, param: 'volume' }, label: 'Bass level' },
           { slider: { track: keys, param: 'volume' }, label: 'Keys level' },
+          { button: 'Keep Take 3', do: { keep: 'after' } },
         ],
         versions: { before: 2, after: 3 },
+        // its takes and Keep again, for a phone's tray once it has been read
+        dock: [
+          {
+            choice: [
+              { label: 'Take 1', do: { play: { from: 5, to: 13, solo: [bass, drums] } } },
+              { label: 'Take 2', do: { play: { from: 5, to: 13 } } },
+              { label: 'Take 3', do: { play: { from: 5, to: 13 } } },
+            ],
+          },
+          { button: 'Keep Take 3', do: { keep: 'after' } },
+        ],
       },
     },
   ];
@@ -617,7 +661,10 @@ function commands(page, layout, press) {
   return [[name, open, shut, checks]];
 }
 
-/** With the agent on: the page (or the bar) with the song's conversation, or a request working. */
+/**
+ * With the agent on: the page (or the bar) with the song's conversation, or a request working; and the
+ * newest reply's dock, once it has been read: on a phone the tray, put away with ×, and nowhere else.
+ */
 function agentViews(page, layout, finger, running) {
   const press = (loc) => (finger ? loc.tap() : loc.click());
   const [, open, shut, checks] = commands(page, layout, press)[0];
@@ -634,6 +681,18 @@ function agentViews(page, layout, finger, running) {
     () => page.keyboard.press('Escape'),
     ['noticesFit'],
   ];
+  // the reply read on the page (or the bar), then closed
+  const read = async () => {
+    await open();
+    await page.waitForTimeout(300);
+    await shut();
+  };
+  const tray = layout.startsWith('phone')
+    ? [
+        ['Tray', read, null, ['tray', 'transportClear']],
+        ['Tray, put away', () => press(page.locator('.tray button[aria-label="Put this away"]')), null, ['noTray']],
+      ]
+    : [['No tray', read, null, ['noTray']]];
   return running
     ? [[`${where}: working turn`, open, shut, [...checks, 'workingFits']]]
     : [
@@ -649,6 +708,7 @@ function agentViews(page, layout, finger, running) {
           shut,
           checks,
         ],
+        ...tray,
       ];
 }
 

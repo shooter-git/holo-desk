@@ -207,6 +207,10 @@ with the song's whole conversation: on a phone held upright it fills the room be
 and the transport, which stay in reach; on its side and on a tablet it's a sheet down the right edge,
 beside the studio. Earlier requests fold to a line you tap to open, the one at work says how long it has
 worked, and holding the page's header lets you see the studio through it. Done or a swipe puts it away.
+When a reply leaves you something to decide while you listen (three takes to try, one to keep), the
+agent may give it a short row of those controls: on a phone, once you've read the reply, that row waits
+above the transport (at the foot of the screen on its side) until you swipe it away, press ×, or ask the
+next thing; ^ opens the page again.
 Close the bar (or the page) and the work goes on: the bar's button shows a turning ring while the
 agent works, then a dot until you open the bar again (a phone has the bar's button too, at the top).
 You can even leave: switch your phone to another app or close the tab, and its changes still land in the

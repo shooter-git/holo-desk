@@ -20,6 +20,7 @@ import { PianoRoll, PianoRollBar } from './PianoRoll.tsx';
 import { PlayPad } from './PlayPad.tsx';
 import { useScrollCue } from './scroll-cue.ts';
 import { spareTrackRoom, TracksArea } from './Tracks.tsx';
+import { Tray } from './Tray.tsx';
 import { UndoRedo } from './UndoRedo.tsx';
 import { DOUBLE_TAP_MS } from './view.ts';
 
@@ -532,6 +533,8 @@ function PhoneLayout({ layout, inert }: { layout: Layout; inert: boolean }) {
           </div>
           <Banners />
           <PhoneView />
+          {/* a read reply's controls, at the foot of the column (a row of its own: it covers nothing) */}
+          <Tray layout={layout} />
         </div>
       </div>
     );
@@ -544,6 +547,8 @@ function PhoneLayout({ layout, inert }: { layout: Layout; inert: boolean }) {
         <PhoneView />
       </FramePause>
       <div className="phone-dock">
+        {/* a read reply's controls, above the transport (a row of its own: it covers nothing) */}
+        <Tray layout={layout} />
         <div className="phone-transport">
           <TransportButtons minimal />
           <Lcd compact />

@@ -612,14 +612,16 @@ of the stretch `played` asked for); `length` is ms (null while still held).
    harness's own result says it (`refusedRequest` in `packages/agent/src/harness/adapter.ts`:
    Antigravity's `INVALID_ARGUMENT (code 400): …`; Claude Code's `API Error: 400 …`, and its `Prompt is
    too long` and `Request too large`, which it says once it couldn't compact the conversation to fit;
-   Codex's showing the API's own JSON with an `invalid_request_error`, as it shows a 400; never a tool's
+   Codex's showing the API's own JSON with an `invalid_request_error`, or `unexpected status 400 Bad
+   Request: …`; never a tool's
    answer, the model's words or stderr, so never Cursor's, whose stream doesn't say why a run failed:
    docs/agent-harnesses.md, "A refused conversation", has each wording and where it was seen). That
    request is the conversation so far, so carried on it would be refused again, whatever was asked. The
    same 400s about the account (billing, credits, a quota, a disabled organization), a location, a model
    it can't use or a sign-in are ordinary failures: another conversation would fare no better. So is
-   Codex's "ran out of room in the model's context window": Codex compacts that conversation before the
-   next turn's first request.
+   Codex's "ran out of room in the model's context window", the first time: Codex compacts that
+   conversation before the next turn's first request. A resumed turn that fails so again in the
+   conversation the last one failed so in counts as refused (`refusedIfRepeated`).
    A resumed turn refused before it called any tool starts again at once as a new conversation, in the
    same job, once. One refused later (its changes stand) fails; the runner's `agent-failed` says
    `fresh`, and the server forgets the thread's session and the song it last saw. The next request

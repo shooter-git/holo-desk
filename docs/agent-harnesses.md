@@ -890,8 +890,9 @@ So the pattern is `API Error: 400 `, `Prompt is too long` or `Request too large`
   in `codex-api/src/api_bridge.rs`): `{"error":{"message":"No tool output found for function call
   call_….","type":"invalid_request_error","param":"input","code":null}}`, and an invalid argument the same
   with its `param` and `code`. Over the WebSocket a ChatGPT sign-in uses, it's the error event as it came:
-  `{"type":"error","status":400,"error":{"type":"invalid_request_error",…}}` (by the source:
-  `responses_websocket.rs`). An older Codex put `unexpected status 400 Bad Request: ` first, still matched;
+  `{"type":"error","status":400,"error":{"type":"invalid_request_error",…}}` (recorded too, with the stand-in
+  answering on a WebSocket: `supports_websockets` on the provider; `responses_websocket.rs` hands the event on
+  as the body). An older Codex put `unexpected status 400 Bad Request: ` first, still matched;
 - any other status: the message alone, with its address and ids: `unexpected status 401 Unauthorized:
   Incorrect API key provided: …, url: …, request id: …`, ``The model `…` does not exist or you do not have
   access to it.`` (404, and 403), `Quota exceeded. Check your plan and billing details.`, `exceeded retry limit,
@@ -900,14 +901,21 @@ So the pattern is `API Error: 400 `, `Prompt is too long` or `Request too large`
   `invalid_request_error`: ordinary;
 - the context window: `Codex ran out of room in the model's context window. Start a new thread or clear
   earlier history before retrying.`, from a `response.failed` with `context_length_exceeded`, and in 0.171.0
-  from a 400 with that code as well. Not one: Codex records the context as full in the thread, and at the
-  next turn, resumed or not, compacts the conversation before its first request, dropping the oldest items
-  if even that overflows (`core/src/session/turn.rs`, `core/src/compact.rs`), so the thread recovers.
-  0.167.1 shows that 400 raw (`"code":"context_length_exceeded"`) and marks nothing: that counts.
+  from a 400 with that code as well. Not one the first time: Codex records the context as full in the
+  thread, and at the next turn, resumed or not, compacts the conversation before its first request,
+  dropping the oldest items if even that overflows (`core/src/session/turn.rs`, `core/src/compact.rs`), so
+  the thread should recover. That the full context is recorded when a turn overflows isn't confirmed by a
+  run, so a resumed run that fails so again in the conversation the last run failed so in counts
+  (`refusedIfRepeated` in the adapter spec: the runner notes that conversation in the workspace,
+  `.holo-failed-once`, and any other outcome clears it). 0.167.1 shows that 400 raw
+  (`"code":"context_length_exceeded"`) and marks nothing: that counts at once.
 
-So the pattern is a JSON body, with `unexpected status 400 Bad Request: ` or nothing first, that says
-`"type":"invalid_request_error"`. The earlier guess needed that prefix, which 0.167.1 and 0.171.0 never write
-for a 400.
+So the pattern is a JSON body that says `"type":"invalid_request_error"`, or `unexpected status 400 Bad
+Request: ` and anything after it. Neither version writes the second for a 400, but every other status is
+written so, with the body's message (and an older Codex wrote a 400 so, with the body): if a later one
+writes a 400 that way too, its refusals still count. `ORDINARY` keeps the account's, the plan's and the
+model's, and a refused sign-in (`, auth error: …`, which Codex adds). The earlier guess needed that prefix
+and the JSON both, which 0.167.1 and 0.171.0 never write for a 400.
 
 **Cursor** (2026.11.11-043ef28, and 2026.11.22-e9042b2, read in their bundles). A failed run writes no
 `result` (the ones it writes all say `is_error: false`): print mode prints the error as `String(error)` on
@@ -1060,6 +1068,7 @@ All are in `packages/agent/test/fixtures/`.
 | `codex-model-chatgpt.jsonl` | stand-in API: a 400 `{"detail":…}`, a model a ChatGPT plan doesn't have |
 | `codex-model-missing.jsonl` | stand-in API: a 404 for the model |
 | `codex-rate-limited.jsonl` | stand-in API: a 429, until its retries ran out |
+| `codex-refused-websocket.jsonl` | stand-in API over a WebSocket: a 400 error event, "No tool output found …" |
 
 The Claude shell fixtures were recorded with an earlier prompt (`ls ~` and `/etc/hostname`, no write). The
 Claude fixtures predate `--settings`, so their `init` still has `memory_paths`. `cursor-shell-denied.jsonl` and
@@ -1069,4 +1078,5 @@ them there; the tests run them as the agent to reach the tool). The `claude-refu
 like (Claude Code 2.1.322) and `codex-refused-*`, `codex-quota` and the like (Codex 0.167.1) were recorded
 against a stand-in for the model API ("A refused conversation"), with a one-tool stand-in for HO[LO]'s server
 (`song_status`); their paths are made neutral. A Codex run refused after one of HO[LO]'s calls is the recorded
-refusal with the recorded normal run's call put first.
+refusal with the recorded normal run's call put first, and one refused as `unexpected status 400 Bad Request: …`
+is a recorded run with its error written in that form.

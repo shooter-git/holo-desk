@@ -173,6 +173,12 @@ export const FINISHED_FILE = '.holo-finished';
 export const READY_FILE = '.holo-mcp-ready';
 
 /**
+ * Written by the runner when a run fails with an error that's a refusal only the second time running
+ * (`Spec.refusedIfRepeated`): the conversation it failed in. Gone after any other outcome.
+ */
+export const FAILED_ONCE_FILE = '.holo-failed-once';
+
+/**
  * Antigravity's files: the workspace's MCP config (HO[LO]'s server, each of its tools loaded up front,
  * so the model has them without the built-in tools that read their schemas; told to mark when it's
  * started, which Antigravity doesn't say), the custom agent, and the private home (kept for resume: the

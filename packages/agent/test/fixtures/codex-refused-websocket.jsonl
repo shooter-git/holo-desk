@@ -1,0 +1,4 @@
+{"type":"thread.started","thread_id":"01a204fe-a2f0-7bc3-a2e8-81047de84418"}
+{"type":"turn.started"}
+{"type":"error","message":"{\"type\":\"error\",\"status\":400,\"error\":{\"type\":\"invalid_request_error\",\"code\":null,\"message\":\"No tool output found for function call call_MockMockMockMock.\",\"param\":\"input\"}}"}
+{"type":"turn.failed","error":{"message":"{\"type\":\"error\",\"status\":400,\"error\":{\"type\":\"invalid_request_error\",\"code\":null,\"message\":\"No tool output found for function call call_MockMockMockMock.\",\"param\":\"input\"}}"}}

@@ -406,6 +406,9 @@ export function codexSpec(): Spec {
     reader: codexReader,
     // AGENTS.md reaches the model as one message when a conversation starts, as Cursor's does
     rulesAtStartOnly: true,
+    // it records the context as full and compacts the conversation before the next turn's first
+    // request; if a resumed run fails so again in that conversation, it didn't, and every turn would
+    refusedIfRepeated: /^Codex ran out of room in the model's context window\b/,
   };
 }
 

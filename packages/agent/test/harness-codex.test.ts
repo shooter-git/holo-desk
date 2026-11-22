@@ -13,6 +13,7 @@ import {
   parseCodexModels,
 } from '../src/harness/codex.ts';
 import { GIT_ENV } from '../src/harness/env.ts';
+import { FAILED_ONCE_FILE } from '../src/harness/workspace.ts';
 import {
   alive,
   collect,
@@ -440,11 +441,13 @@ const FAILED = {
     '{"detail":"The \'gpt-holo-nope\' model is not supported when using Codex with a ChatGPT account."}',
   'codex-model-missing': 'The model `gpt-holo-nope` does not exist or you do not have access to it.',
   'codex-rate-limited': 'exceeded retry limit, last status: 429 Too Many Requests, request id: req_mock',
+  'codex-refused-websocket':
+    '{"type":"error","status":400,"error":{"type":"invalid_request_error","code":null,"message":"No tool output found for function call call_MockMockMockMock.","param":"input"}}',
 } as const;
 
 describe('Codex: a conversation its model service refused', () => {
   const OLD = '01a1cbcd-f893-71a1-aa67-6013e3fe50b3';
-  const runs = () => [0, 1, 2].filter((n) => existsSync(join(s.rec, `argv${n}`))).length;
+  const runs = () => [0, 1, 2, 3, 4].filter((n) => existsSync(join(s.rec, `argv${n}`))).length;
   const threadOf = (name: string) => fixtureEvents(name).find((e) => e.type === 'thread.started')?.thread_id;
   /** A resumed run that prints `stream` and fails as Codex does (exit 1); a new one goes well. */
   const resumed = (stream: string) =>
@@ -465,6 +468,20 @@ describe('Codex: a conversation its model service refused', () => {
     const call = lines('codex-normal').filter((l) => l.includes('"mcp_tool_call"') && l.includes('"echo"'));
     return [started, turn, ...call, ...rest].join('\n');
   };
+  /**
+   * Not recorded: a recorded stream with its error in another form: `unexpected status 400 Bad Request: `
+   * and the body's message, as Codex shows every other status (and might show a 400).
+   */
+  const withError = (stream: string, message: string) =>
+    stream
+      .split('\n')
+      .map((l) => {
+        const e = JSON.parse(l) as Record<string, unknown>;
+        if (e.type === 'error') e.message = message;
+        if (e.type === 'turn.failed') e.error = { message };
+        return JSON.stringify(e);
+      })
+      .join('\n');
 
   it('reads each recorded failure as the error its turn.failed says, with no tripwire', () => {
     for (const [name, error] of Object.entries(FAILED)) {
@@ -494,6 +511,61 @@ describe('Codex: a conversation its model service refused', () => {
     expect(events.some((e) => e.type === 'failed')).toBe(false);
   });
 
+  it('knows a 400 over its WebSocket, as recorded: the error event as it came', async () => {
+    s = sandbox();
+    const events = await runToEnd(resumed(lines('codex-refused-websocket').join('\n')), job(s, { session: OLD }));
+    expect(runs()).toBe(2);
+    expect(recorded(s, 1).argv[1]).not.toBe('resume');
+    expect(events.at(-1)).toEqual({ type: 'done', reply: 'spike-42 — yellow.' });
+    s.cleanup();
+    s = sandbox();
+    expect((await runToEnd(resumed(afterACall('codex-refused-websocket')), job(s, { session: OLD }))).at(-1)).toEqual({
+      type: 'failed',
+      error: FAILED['codex-refused-websocket'],
+      fresh: true,
+    });
+  });
+
+  it('knows a 400 with the status first and the body’s message, and keeps the account’s and the model’s', async () => {
+    const tail = ', url: https://chatgpt.com/backend-api/codex/responses, request id: req_0123456789';
+    for (const message of [
+      'No tool output found for function call call_abc.',
+      "Invalid 'input[3].name': string does not match pattern. Expected a string that matches the pattern '^[a-zA-Z0-9_-]+$'.",
+    ]) {
+      s = sandbox();
+      const said = `unexpected status 400 Bad Request: ${message}${tail}`;
+      const events = await runToEnd(
+        resumed(withError(afterACall('codex-refused-tool-output'), said)),
+        job(s, { session: OLD }),
+      );
+      expect(events.at(-1), message).toEqual({ type: 'failed', error: said, fresh: true });
+      s.cleanup();
+    }
+    for (const message of [
+      'You exceeded your current quota, please check your plan and billing details.',
+      'Your organization must have a payment method on file. Add one in Billing settings.',
+      'The model `gpt-6` does not exist or you do not have access to it.',
+      "The 'gpt-6' model is not supported when using Codex with a ChatGPT account.",
+    ]) {
+      s = sandbox();
+      const said = `unexpected status 400 Bad Request: ${message}${tail}`;
+      const events = await runToEnd(
+        resumed(withError(lines('codex-refused-tool-output').join('\n'), said)),
+        job(s, { session: OLD }),
+      );
+      expect(events.at(-1), message).toEqual({ type: 'failed', error: said });
+      expect(runs(), message).toBe(1);
+      s.cleanup();
+    }
+    // a refused sign-in, as Codex adds it
+    expect(
+      refusedRequest(
+        'codex',
+        `unexpected status 400 Bad Request: Bad request${tail}, auth error: missing_authorization_header, auth error code: token_expired`,
+      ),
+    ).toBe(false);
+  });
+
   it('fails a turn that had called a tool, saying the next starts a new thread (a broken history, too long)', async () => {
     for (const name of ['codex-refused-invalid', 'codex-refused-too-long'] as const) {
       s = sandbox();
@@ -507,7 +579,7 @@ describe('Codex: a conversation its model service refused', () => {
     }
   });
 
-  it('keeps the thread for an ordinary failure, and for its context window: Codex compacts it next turn', async () => {
+  it('keeps the thread for an ordinary failure, and for its context window once: Codex compacts it next turn', async () => {
     for (const name of [
       'codex-context-window',
       'codex-quota',
@@ -524,6 +596,67 @@ describe('Codex: a conversation its model service refused', () => {
     }
   });
 
+  describe('its context window, again', () => {
+    const SID = String(threadOf('codex-context-window'));
+    const overflow = () => lines('codex-context-window').join('\n');
+    const failedOnce = (j: ReturnType<typeof job>) => {
+      const file = join(j.workspace, FAILED_ONCE_FILE);
+      return existsSync(file) ? readFileSync(file, 'utf8') : null;
+    };
+
+    it('keeps the thread the first time, and starts a new one when it fails so again, resumed, before a tool', async () => {
+      s = sandbox();
+      const first = job(s, { session: SID });
+      expect(await runToEnd(resumed(overflow()), first)).toEqual([
+        { type: 'session', session: SID },
+        { type: 'failed', error: FAILED['codex-context-window'] },
+      ]);
+      expect(failedOnce(first)).toBe(SID);
+      const events = await runToEnd(resumed(overflow()), job(s, { session: SID }));
+      // the second turn: its resumed run, then a new thread at once
+      expect(runs()).toBe(3);
+      expect(recorded(s, 1).argv.slice(0, 2)).toEqual(['exec', 'resume']);
+      expect(recorded(s, 2).argv[1]).not.toBe('resume');
+      expect(recorded(s, 2).stdin).toBe(`${PROMPT_MARK}\n`);
+      expect(events.at(-1)).toEqual({ type: 'done', reply: 'spike-42 — yellow.' });
+      expect(failedOnce(first)).toBeNull();
+    });
+
+    it('fails the second, after a tool, saying the next starts a new thread', async () => {
+      s = sandbox();
+      await runToEnd(resumed(afterACall('codex-context-window')), job(s, { session: SID }));
+      expect((await runToEnd(resumed(afterACall('codex-context-window')), job(s, { session: SID }))).at(-1)).toEqual({
+        type: 'failed',
+        error: FAILED['codex-context-window'],
+        fresh: true,
+      });
+      expect(runs()).toBe(2);
+    });
+
+    it('counts only twice in a row, in the same thread', async () => {
+      s = sandbox();
+      // a turn that went well between them
+      await runToEnd(resumed(overflow()), job(s, { session: SID }));
+      await runToEnd(fake({ signedIn: true }), job(s, { session: SID }));
+      expect(failedOnce(job(s))).toBeNull();
+      expect((await runToEnd(resumed(overflow()), job(s, { session: SID }))).at(-1)).toEqual({
+        type: 'failed',
+        error: FAILED['codex-context-window'],
+      });
+      // another failure between them
+      await runToEnd(resumed(lines('codex-quota').join('\n')), job(s, { session: SID }));
+      expect((await runToEnd(resumed(overflow()), job(s, { session: SID }))).at(-1)).toEqual({
+        type: 'failed',
+        error: FAILED['codex-context-window'],
+      });
+      // the first in another thread: the one noted is the thread it failed in
+      expect((await runToEnd(resumed(overflow()), job(s, { session: OLD }))).at(-1)).toEqual({
+        type: 'failed',
+        error: FAILED['codex-context-window'],
+      });
+    });
+  });
+
   it('knows a refusal by the API’s own body, as Codex shows it, and nothing else as one', () => {
     for (const said of [
       FAILED['codex-refused-tool-output'],
@@ -531,8 +664,10 @@ describe('Codex: a conversation its model service refused', () => {
       FAILED['codex-refused-too-long'],
       // by its source (0.171.0): a 400 over its WebSocket shows the error event as it came
       '{"type":"error","status":400,"error":{"type":"invalid_request_error","message":"No tool output found for function call call_abc."}}',
-      // an older Codex, which put the status first
+      FAILED['codex-refused-websocket'],
+      // the status first: an older Codex, with the body; or the body's message, as it shows other statuses
       'unexpected status 400 Bad Request: {"error":{"message":"No tool output found for function call call_abc.","type":"invalid_request_error","param":"input","code":null}}',
+      'unexpected status 400 Bad Request: No tool output found for function call call_abc., url: https://chatgpt.com/backend-api/codex/responses',
     ])
       expect(refusedRequest('codex', said), said).toBe(true);
     for (const said of [

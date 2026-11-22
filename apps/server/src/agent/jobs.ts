@@ -205,9 +205,14 @@ export interface AwayRun {
   base: number;
   head: number;
   batches: { batch: string; label: string; revision: number }[];
+  /** Its last few revisions, as saved: the one the requester's studio says it's at is kept (`keepPickedUp`). */
+  recent: Project[];
   /** The last revision of it the requester's studio has said it's at, kept in the song's history. */
   kept?: number;
 }
+
+/** How many of a run's latest revisions are kept at hand, for the studio to say it's at one of them. */
+const RUN_RECENT = 4;
 
 /** What a studio back on the song picks up of a run (`Jobs.awayFor`): the batches after its revision. */
 export interface AwayChanges {
@@ -1128,18 +1133,19 @@ export class Jobs implements AgentHooks {
   }
 
   /**
-   * The requester's studio says it's at the last revision of its job's run (it picked the run up):
-   * that revision is kept in the song's history, once, as the song its own changes from now on are
-   * made on, which a reload of it may read (actions.ts, picking up).
+   * The requester's studio says it's at a revision of its job's run (it picked the run up, maybe as
+   * the agent saved again): that revision is kept in the song's history, once, as the song its own
+   * changes from now on are made on, which a reload of it may read (actions.ts, picking up).
    */
   private keepPickedUp(device: string, project: string, revision: number | undefined): void {
     for (const job of this.jobs.values()) {
       const run = job.away;
       if (!run || job.view.device !== device || job.view.project !== project) continue;
-      if (revision !== run.head || run.kept === run.head || run.head === run.base) continue;
-      if (this.o.store.row(project)?.revision !== run.head) continue;
-      this.o.store.snapshotNow(project, 'Agent');
-      run.kept = run.head;
+      if (revision === undefined || revision === run.kept || revision === run.base) continue;
+      const song = run.recent.find((r) => r.revision === revision);
+      if (!song) continue;
+      this.o.store.keepRevision(song, 'Agent');
+      run.kept = revision;
     }
   }
 
@@ -1451,9 +1457,10 @@ export class Jobs implements AgentHooks {
     if (!run) this.o.store.snapshotNow(song.id, 'Agent');
     const saved = this.o.store.save(next, song.revision, 'Agent');
     if (!saved) throw new Refusal(409, 'Changed while applying; try again');
-    const away = run ?? { base: song.revision, head: song.revision, batches: [] };
+    const away: AwayRun = run ?? { base: song.revision, head: song.revision, batches: [], recent: [] };
     away.head = saved.revision;
     away.batches.push({ batch, label, revision: saved.revision });
+    away.recent = [...away.recent, saved].slice(-RUN_RECENT);
     job.away = away;
     job.batches.set(batch, saved.revision);
     this.o.live.tell({ type: 'saved', project: saved.id, revision: saved.revision });

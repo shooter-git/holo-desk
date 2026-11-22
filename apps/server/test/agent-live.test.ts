@@ -758,6 +758,27 @@ describe('the studio that asked, away a moment', () => {
     });
     await settle();
     expect(services.store.revision(s.id, before + 2)?.title).toBe('Two');
+    // one it says it's at after the agent has saved again (it fetched the run, then the next came) too
+    back.say({
+      type: 'state',
+      state: {
+        project: s.id,
+        revision: before + 2,
+        tick: 0,
+        selection: { track: null, regions: [], notes: 0 },
+        hidden: true,
+      },
+    });
+    back.close();
+    await tool(job, jobToken, 'POST', '/ops', { ops: title('Three'), label: 'Title', batch: 'b3' });
+    await tool(job, jobToken, 'POST', '/ops', { ops: title('Four'), label: 'Title', batch: 'b4' });
+    const again = studio(token, s.id, 'desk');
+    again.say({
+      type: 'state',
+      state: { project: s.id, revision: before + 3, tick: 0, selection: { track: null, regions: [], notes: 0 } },
+    });
+    await settle();
+    expect(services.store.revision(s.id, before + 3)?.title).toBe('Three');
   });
 
   it('a page back in view as its change runs out of time isn’t taken as frozen: the next goes to it', async () => {

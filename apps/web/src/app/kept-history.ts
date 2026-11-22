@@ -46,6 +46,11 @@ export interface Kept {
   kept: number;
   /** The code that made its songs: the session and engine's fingerprint. */
   made: string;
+  /**
+   * The song at `revision`, as it was then (the agent's changes saved since are picked up on top of
+   * it, its Undo going back to it, without asking the host for it). Missing from what older code kept.
+   */
+  song?: Project;
 }
 
 /** A song's changes the host doesn't have yet, as they're kept. */
@@ -63,6 +68,11 @@ export interface Unsaved {
   kept: number;
   /** The code that made the songs: the session and engine's fingerprint. */
   made: string;
+  /**
+   * The song as the host had it at `base`, which they were made on, when the studio knew it: changes
+   * the agent saved on the host meanwhile are merged with them against it, never against a guess.
+   */
+  baseSong?: Project;
 }
 
 /** Where songs are kept: the browser's database (or, in a test, maps). */
@@ -85,6 +95,8 @@ export interface Keepable {
   saveState: SaveState;
   undo: Step[];
   redo: Step[];
+  /** The song as the host has it at `serverRevision`, when the studio knows it. */
+  saved?: Project | null;
 }
 
 /** The save states in which the song has changes the host doesn't have. */
@@ -97,7 +109,15 @@ const UNSAVED_STATES: ReadonlySet<SaveState> = new Set(['dirty', 'saving', 'offl
 export function toKeep(s: Keepable, made: string, now = Date.now()): Kept | null {
   if (!s.project || s.saveState !== 'saved') return null;
   if (!s.undo.length && !s.redo.length) return null;
-  return { project: s.project.id, revision: s.serverRevision, undo: s.undo, redo: s.redo, kept: now, made };
+  return {
+    project: s.project.id,
+    revision: s.serverRevision,
+    undo: s.undo,
+    redo: s.redo,
+    kept: now,
+    made,
+    song: s.project,
+  };
 }
 
 /** The changes to keep, or null: the song is saved as it is. */
@@ -111,6 +131,7 @@ export function toKeepUnsaved(s: Keepable, made: string, now = Date.now()): Unsa
     redo: s.redo,
     kept: now,
     made,
+    ...(s.saved ? { baseSong: s.saved } : {}),
   };
 }
 
@@ -159,10 +180,16 @@ export function stepJobs(h: History): string[] {
 export type Restored =
   /** Its history, at the revision it opened at. */
   | ({ kind: 'history' } & History)
-  /** Its changes the host didn't get: the song with them, the revision they were made on, and its history. */
-  | ({ kind: 'unsaved'; song: Project; base: number } & History)
-  /** Its history at an earlier revision (saved since somewhere else: the agent, while the page was gone?). */
-  | ({ kind: 'behind'; revision: number } & History);
+  /**
+   * Its changes the host didn't get: the song with them, the revision they were made on (and the song
+   * then, when it was kept), and its history.
+   */
+  | ({ kind: 'unsaved'; song: Project; base: number; baseSong?: Project } & History)
+  /**
+   * Its history at an earlier revision (saved since somewhere else: the agent, while the page was
+   * gone?), and the song at that revision, when it was kept.
+   */
+  | ({ kind: 'behind'; revision: number; song?: Project } & History);
 
 /** One write of what's kept of a song. */
 type Keep =
@@ -180,6 +207,7 @@ function sameKeep(a: Keep, b: Keep | undefined): boolean {
     return (
       a.unsaved.base === b.unsaved.base &&
       a.unsaved.song === b.unsaved.song &&
+      a.unsaved.baseSong === b.unsaved.baseSong &&
       a.unsaved.undo === b.unsaved.undo &&
       a.unsaved.redo === b.unsaved.redo
     );
@@ -319,7 +347,14 @@ export class Keeper {
       if (!h) {
         // (kept again only if it comes back: it's the studio's to say)
         const old = behind(kept, project, this.made);
-        return old ? { kind: 'behind', revision: old.revision, undo: old.undo, redo: old.redo } : null;
+        if (!old) return null;
+        return {
+          kind: 'behind',
+          revision: old.revision,
+          undo: old.undo,
+          redo: old.redo,
+          ...(old.song ? { song: old.song } : {}),
+        };
       }
       this.last.set(id, {
         kind: 'history',
@@ -358,8 +393,15 @@ export class Keeper {
       await shelf.dropUnsaved(id);
       return h.undo.length || h.redo.length ? { kind: 'history', ...h } : null;
     }
+    // (the song they were made on, as kept with them; kept by other code, read as this code reads it)
+    let baseSong: Project | undefined;
+    try {
+      baseSong = u.baseSong && (sameCode ? u.baseSong : parseProject(u.baseSong));
+    } catch {
+      baseSong = undefined;
+    }
     this.last.set(id, { kind: 'unsaved', unsaved: { ...u, song, ...h } });
-    return { kind: 'unsaved', song, base: u.base, ...h };
+    return { kind: 'unsaved', song, base: u.base, ...(baseSong ? { baseSong } : {}), ...h };
   }
 }
 

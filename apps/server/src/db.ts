@@ -160,6 +160,17 @@ export class Store {
     return row.revision;
   }
 
+  /**
+   * A song as one of its revisions had it, kept in its history (one already kept is left as it is),
+   * though it may no longer be the latest: the revision a studio picked up while the agent saved again.
+   */
+  keepRevision(song: Project, author: string): void {
+    this.db
+      .prepare('INSERT OR IGNORE INTO revisions (project, revision, saved, author, doc) VALUES (?, ?, ?, ?, ?)')
+      .run(song.id, song.revision, new Date().toISOString(), author, JSON.stringify(song));
+    this.trim(song.id);
+  }
+
   private snapshot(project: Project, doc: string, author: string): void {
     const last = this.db
       .prepare('SELECT saved, author FROM revisions WHERE project = ? ORDER BY revision DESC LIMIT 1')

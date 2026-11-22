@@ -45,10 +45,15 @@ export interface PickedUp extends History {
   project: Project;
   /**
    * `exact`: the song is the host's as they left it (nothing of this studio's own was left to keep);
-   * `merged`: this studio's own changes were put onto it; `theirs`: they clashed with the agent's (both
-   * changed the same thing), so the song is the host's, and the step's Undo brings this studio's back.
+   * `merged`: this studio's own changes were put onto it; `theirs`: they couldn't be, so the song is
+   * the host's, and the step's Undo brings this studio's back.
    */
   how: 'exact' | 'merged' | 'theirs';
+  /**
+   * Why not, with `theirs`: `clash`, they and the agent's changed the same thing or the song would
+   * point at what it doesn't have; `unknown`, what they were made on isn't known here (never guessed).
+   */
+  why?: 'clash' | 'unknown';
 }
 
 /** This studio's own changes the host doesn't have: its song (`song`), and the song they were made on (`base`). */
@@ -83,7 +88,13 @@ export function pickUp(
   };
   if (!mine) return { project: theirs, ...joined(), how: 'exact' };
   const merged = mine.base && mergeSongs(mine.base, mine.song, theirs);
-  if (!merged) return { project: theirs, ...push(h, { project: now, label, job, at }), how: 'theirs' };
+  if (!merged)
+    return {
+      project: theirs,
+      ...push(h, { project: now, label, job, at }),
+      how: 'theirs',
+      why: mine.base ? 'clash' : 'unknown',
+    };
   // (all of this studio's own were the host's already: a save of them got there, its answer lost)
   if (same(merged, theirs)) return { project: theirs, ...joined(), how: 'exact' };
   return { project: merged, ...joined(), how: 'merged' };

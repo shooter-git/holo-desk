@@ -10,6 +10,7 @@
 import type { Go, View } from '@holo/agent/view';
 import { type Project, parseProject } from '@holo/session';
 import { useSyncExternalStore } from 'react';
+import { IDLE_MS, patiently } from './api.ts';
 import type { Ready } from './attach.ts';
 import { type Command, selectionSpan } from './commands.ts';
 import { type AppState, store as studio } from './store.ts';
@@ -763,17 +764,38 @@ export class AgentError extends Error {
   }
 }
 
-async function call<T>(method: 'GET' | 'POST' | 'PUT' | 'DELETE', path: string, body?: unknown): Promise<T> {
+/** `idleMs`: given up only once nothing of the answer has come for that long (`patiently`). */
+async function call<T>(
+  method: 'GET' | 'POST' | 'PUT' | 'DELETE',
+  path: string,
+  body?: unknown,
+  idleMs?: number,
+): Promise<T> {
   const t = token();
-  const res = await fetch(path, {
+  const init: RequestInit = {
     method,
     headers: {
       ...(body !== undefined ? { 'content-type': 'application/json' } : {}),
       ...(t ? { authorization: `Bearer ${t}` } : {}),
     },
     ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
-  });
-  const data = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+  };
+  let res: Response;
+  let data: Record<string, unknown>;
+  if (idleMs) {
+    const got = await patiently(path, init, idleMs);
+    res = got.res;
+    data = (() => {
+      try {
+        return JSON.parse(got.text) as Record<string, unknown>;
+      } catch {
+        return {};
+      }
+    })();
+  } else {
+    res = await fetch(path, init);
+    data = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+  }
   if (!res.ok) {
     const reason = typeof data.reason === 'string' ? data.reason : undefined;
     // turned off elsewhere, or this device let go: the studio catches up
@@ -991,9 +1013,12 @@ export async function awayChanges(project: string, from: number): Promise<AwayCh
   if (!isOn(state)) return null;
   let away: AwayChanges | null | undefined;
   try {
+    // (a whole song: given up only once nothing of it has come for a while)
     ({ away } = await call<{ away?: AwayChanges | null }>(
       'GET',
       `/api/agent/away/${encodeURIComponent(project)}?from=${from}`,
+      undefined,
+      IDLE_MS,
     ));
   } catch (err) {
     if (err instanceof AgentError) return null;

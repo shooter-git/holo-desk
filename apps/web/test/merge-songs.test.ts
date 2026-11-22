@@ -1,6 +1,6 @@
-import { applyOps, newProject, newRegion, newTrack, type Op, type Project } from '@holo/session';
+import { applyOps, newBus, newProject, newRegion, newTrack, type Op, type Project } from '@holo/session';
 import { describe, expect, it } from 'vitest';
-import { mergeSongs, same } from '../src/app/merge-songs.ts';
+import { broken, mergeSongs, same } from '../src/app/merge-songs.ts';
 
 const BAR = 3840;
 
@@ -95,6 +95,42 @@ describe('a song changed in two places, merged', () => {
     expect(mergeSongs(base, applyOps(base, notes(62)), host(base, notes(65)))).toBeNull();
     // removed on one side, changed on the other
     expect(mergeSongs(base, applyOps(base, [{ op: 'removeTrack', track }]), host(base, rename('Kept')))).toBeNull();
+  });
+
+  it('clashes where the merged song would point at what it doesn’t have, or keep an id twice', () => {
+    const { song: start, track, region } = saved();
+    const room = newBus('Room');
+    const base = { ...applyOps(start, [{ op: 'addBus', bus: room }]), revision: 4 };
+    // the user removed the bus the agent sends the track to
+    const send: Op[] = [
+      { op: 'updateChannel', target: track, patch: { sends: [{ bus: room.id, level: -12, pre: false }] } },
+    ];
+    expect(mergeSongs(base, applyOps(base, [{ op: 'removeBus', bus: room.id }]), host(base, send))).toBeNull();
+    // the user removed an articulation the agent wrote notes for
+    const art = { id: 'art_pizz', name: 'Pizzicato', instrument: { type: 'synth', preset: 'Soft Keys' } } as const;
+    const withArt = { ...applyOps(base, [{ op: 'updateTrack', track, patch: { articulations: [art] } }]), revision: 4 };
+    const pizz: Op[] = [{ op: 'setNotes', track, region, notes: [{ t: 0, d: 480, p: 60, v: 80, art: art.id }] }];
+    const noArt = applyOps(withArt, [{ op: 'updateTrack', track, patch: { articulations: [] } }]);
+    expect(mergeSongs(withArt, noArt, host(withArt, pizz))).toBeNull();
+    // both moved the same region, to different tracks: its id would be kept twice
+    const two = newTrack('Two', { type: 'synth', preset: 'Soft Keys' });
+    const three = newTrack('Three', { type: 'synth', preset: 'Soft Keys' });
+    const more = {
+      ...applyOps(base, [
+        { op: 'addTrack', track: two },
+        { op: 'addTrack', track: three },
+      ]),
+      revision: 4,
+    };
+    const move = (to: string): Op[] => [{ op: 'moveRegion', from: track, to, region }];
+    expect(mergeSongs(more, applyOps(more, move(two.id)), host(more, move(three.id)))).toBeNull();
+    // what was so already in the host's song is no clash of the merge's
+    // (a send left pointing at a bus that's gone: removing a bus takes its sends, so it's made by hand)
+    const dangling = { ...host(base, send), buses: [] };
+    const louder = applyOps(base, [{ op: 'setProject', patch: { title: 'Louder' } }]);
+    expect(mergeSongs(base, louder, dangling)?.title).toBe('Louder');
+    expect([...broken(dangling)]).toContain(`track ${track} sends to ${room.id}`);
+    expect(broken(base)).toEqual(new Set());
   });
 
   it('tells songs apart by their parts, whatever the order of their keys', () => {

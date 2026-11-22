@@ -266,21 +266,23 @@ song and what its steps changed. The last 20 songs' histories are kept.
 
 So are the song's changes the host doesn't have yet: until they're saved (the studio saves a moment
 after an edit, and can't while the host is out of reach or the song was changed somewhere else), the
-song as it is, its history and the revision they were made on are kept on the device a tenth of a
-second after each change, and when the page is hidden. A browser drops what a page writes as it goes,
+song as it is, its history and the revision they were made on, with the song as it was at that
+revision, are kept on the device a tenth of a second after each change, and when the page is hidden. A browser drops what a page writes as it goes,
 so they're written while it's still there. When the song opens there again (after a reload, a closed
 tab, a phone that let the page go, or another song opened), it opens with them and saves them: on the
 revision they were made on, or, the song changed somewhere else since, asking which version to keep.
 If the host already has the song as they left it (their save got there just before the page went),
 they're let go and the history comes back. Another song opened before a save is saved in the
 background, after a save of it on its way. Unsaved changes are never let go to make room. A page that's
-hidden saves to the host too, while it still runs; a save with no answer within 30 s (a page frozen
-with it on its way) is given up and made again, and one refused because the host already has that very
-song is taken as saved.
+hidden saves to the host too, while it still runs; a save with no answer within 30 s and the time
+to send the song at 20 KB/s (a page frozen with it on its way) is given up and made again, and one
+refused because the host already has that very song is taken as saved.
 
 The agent may have saved its changes on the host while the page was away (docs/agent.md, "The studio
 that asked, away"). Then the history comes back with them as their job's step on top, and changes kept
-on the device go onto them, as if they had come while the page was there.
+on the device go onto them, as if they had come while the page was there. Where they can't be put
+together, or the song they were made on isn't known for certain, the song is as the host has it and
+they're one Undo away, and a notice says so.
 
 ## The live channel
 

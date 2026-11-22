@@ -256,9 +256,9 @@ describe('the agent’s changes saved on the host while the studio was away', ()
     // the agent saves its next batch just after the host has said what there is to pick up
     h.onAway = () => h.agent({ batch: 'r2', ops: [{ op: 'setProject', patch: { tempo: [{ tick: 0, bpm: 99 }] } }] });
     await A.saveNow();
-    await settled(() => S.store.get().saveState !== 'saving' && S.store.get().serverRevision === h.latest().revision);
+    // (picked up a second time, it's 'dirty' at the host's revision a moment, till it saves on top)
+    await settled(() => S.store.get().saveState === 'saved' && S.store.get().serverRevision === h.latest().revision);
     const s = S.store.get();
-    expect(s.saveState).toBe('saved');
     expect([s.project?.title, s.project?.key, s.project?.tempo[0]?.bpm]).toEqual(['Mine', 'B minor', 99]);
     expect(h.latest()).toMatchObject({ title: 'Mine', key: 'B minor' });
     expect(s.undo.map((x) => x.label)).toEqual(['Title', 'Agent: Race']);
@@ -512,6 +512,211 @@ describe('the agent’s changes saved on the host, picked up when things go wron
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe('picking up, never on a guess, and patiently', () => {
+  const JOB = 'agj_00000000d0d1';
+  const json = (status: number, body: unknown) =>
+    new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
+  /** A wait that ends early, as a request does, when it's given up. */
+  const waitOrGiveUp = (ms: number, signal?: AbortSignal | null) =>
+    new Promise<void>((done, fail) => {
+      const t = setTimeout(done, ms);
+      signal?.addEventListener('abort', () => {
+        clearTimeout(t);
+        fail(new DOMException('Gave up', 'AbortError'));
+      });
+    });
+
+  /**
+   * The host: the agent on; its job's run from `base` (`at.get(base)`) to `head` (`at.get(head)`, the
+   * song as it is); the song's history keeping only the revisions in `kept`; saves refused on any
+   * revision but the latest. `stall`: away answers that never come (till given up); `trickle`: the away
+   * answer comes in pieces, one every so many ms; `slowSave`: each save answered that many ms late.
+   */
+  function host(
+    at: Map<number, Project>,
+    base: number,
+    head: number,
+    o: { kept?: number[]; stall?: boolean; trickle?: number; slowSave?: number } = {},
+  ) {
+    const song = at.get(head) as Project;
+    let latest: Project = song;
+    const asked: number[] = [];
+    const saves: number[] = [];
+    vi.stubGlobal('fetch', async (url: string, init?: RequestInit) => {
+      const path = String(url);
+      if (path === '/api/agent') return json(200, { enabled: true, allowed: true, pairing: false, runner: {} });
+      if (path === '/api/agent/devices') return json(200, { devices: [{ id: 'dev_me', current: true }], requests: [] });
+      if (path.startsWith('/api/agent/away/')) {
+        const from = Number(new URL(path, 'http://h').searchParams.get('from'));
+        asked.push(from);
+        if (o.stall) await waitOrGiveUp(3_600_000, init?.signal);
+        const batches = [];
+        for (let r = Math.max(from, base) + 1; r <= head; r++) batches.push({ batch: `d${r}` });
+        const away =
+          latest.revision !== head || !batches.length
+            ? null
+            : { job: JOB, label: 'Lift', running: true, base: Math.max(from, base), head, batches, song: latest };
+        const text = JSON.stringify({ away });
+        if (!o.trickle) return json(200, JSON.parse(text));
+        // (a big answer on a slow network: a piece now and then)
+        const pieces = 6;
+        const size = Math.ceil(text.length / pieces);
+        let i = 0;
+        const every = o.trickle;
+        const body = new ReadableStream<Uint8Array>({
+          async pull(c) {
+            if (i >= pieces) return c.close();
+            if (i > 0) await waitOrGiveUp(every, init?.signal).catch(() => c.error(new Error('gone')));
+            c.enqueue(new TextEncoder().encode(text.slice(i * size, (i + 1) * size)));
+            i++;
+          },
+        });
+        return new Response(body, { status: 200, headers: { 'content-type': 'application/json' } });
+      }
+      const kept = /\/history\/(\d+)$/.exec(path);
+      if (kept) {
+        const r = Number(kept[1]);
+        return (o.kept ?? [base]).includes(r) && at.has(r) ? json(200, at.get(r)) : json(404, { error: 'Not kept' });
+      }
+      if (path === `/api/projects/${song.id}` && init?.method === 'PUT') {
+        if (o.slowSave) await waitOrGiveUp(o.slowSave, init.signal);
+        const body = JSON.parse(String(init.body)) as { doc: Project; baseRevision: number };
+        saves.push(body.baseRevision);
+        if (body.baseRevision !== latest.revision) return json(409, { error: 'Changed elsewhere', current: latest });
+        latest = { ...body.doc, revision: latest.revision + 1 };
+        return json(200, { revision: latest.revision, modified: '' });
+      }
+      if (path === `/api/projects/${song.id}`) return json(200, latest);
+      return json(404, { error: 'No such route' });
+    });
+    return { asked, saves, latest: () => latest };
+  }
+
+  /** The song at `from`, changed by `change` at each later revision up to `to`. */
+  function revisions(first: Project, from: number, to: number, change: (r: number) => Op[]): Map<number, Project> {
+    const at = new Map<number, Project>([[from, { ...first, revision: from }]]);
+    for (let r = from + 1; r <= to; r++) at.set(r, { ...applyOps(at.get(r - 1) as Project, change(r)), revision: r });
+    return at;
+  }
+
+  it('a reload’s changes whose song the host didn’t keep: another device’s save is never undone', async () => {
+    // the page had this change of the user's unsaved at 1600 (a revision the host doesn't keep), and was let go
+    const first = { ...newProject('Reloaded'), revision: 1600 };
+    const mine = applyOps(first, [{ op: 'setProject', patch: { tempo: [{ tick: 0, bpm: 77 }] } }]);
+    // another device saved 1601 ("Desktop"); the agent's run began on it
+    const at = revisions(first, 1600, 1602, (r) =>
+      r === 1601
+        ? [{ op: 'setProject', patch: { title: 'Desktop' } }]
+        : [{ op: 'setProject', patch: { key: 'A minor' } }],
+    );
+    A.load(newProject('Something else'));
+    host(at, 1601, 1602, { kept: [1601] });
+    S.store.set({
+      project: mine,
+      serverRevision: 1600,
+      saveState: 'dirty',
+      undo: [],
+      redo: [],
+      agentJobs: {},
+      toasts: [],
+    });
+    await A.saveNow();
+    await vi.waitFor(() => expect(S.store.get().serverRevision).toBe(1602));
+    const s = S.store.get();
+    // the other device's title stays; the user's change is one Undo away, and the notice says why
+    expect([s.project?.title, s.project?.key, s.project?.tempo[0]?.bpm]).toEqual(['Desktop', 'A minor', 120]);
+    expect(s.toasts.at(-1)?.text).toMatch(/changed the song while this device had unsaved changes/);
+    expect(s.undo.at(-1)?.project).toBe(mine);
+  });
+
+  it('a reload’s changes kept with the song they were made on: merged, and nobody else’s save undone', async () => {
+    const first = { ...newProject('Kept base'), revision: 1700 };
+    const mine = applyOps(first, [{ op: 'setProject', patch: { tempo: [{ tick: 0, bpm: 77 }] } }]);
+    const at = revisions(first, 1700, 1702, (r) =>
+      r === 1701
+        ? [{ op: 'setProject', patch: { title: 'Desktop' } }]
+        : [{ op: 'setProject', patch: { key: 'A minor' } }],
+    );
+    A.load(first);
+    host(at, 1701, 1702, { kept: [1701] });
+    // what the reload brings back: the changes, the revision they were made on, the song then
+    A.restoreKept({ kind: 'unsaved', song: mine, base: 1700, baseSong: first, undo: [], redo: [] });
+    await vi.waitFor(() => expect(S.store.get().serverRevision).toBe(1703));
+    const s = S.store.get();
+    expect([s.saveState, s.project?.title, s.project?.key, s.project?.tempo[0]?.bpm]).toEqual([
+      'saved',
+      'Desktop',
+      'A minor',
+      77,
+    ]);
+  });
+
+  it('notices of a save that the host is slow to explain start one retry between them, not one each', async () => {
+    vi.useFakeTimers();
+    try {
+      const first = { ...newProject('Many notices'), revision: 1800 };
+      const at = revisions(first, 1800, 1801, () => [{ op: 'setProject', patch: { key: 'E minor' } }]);
+      A.load(first);
+      const h = host(at, 1800, 1801, { stall: true });
+      // the agent saves a batch every 10 s, and the host says so each time
+      for (let i = 0; i < 12; i++) {
+        void A.savedElsewhere(first.id, 1801);
+        await vi.advanceTimersByTimeAsync(10_000);
+      }
+      // asked at first, then once a retry, the retries further and further apart
+      expect(h.asked.length).toBeLessThanOrEqual(4);
+      // and none at all once the song is closed
+      A.load(newProject('Another'));
+      const before = h.asked.length;
+      await vi.advanceTimersByTimeAsync(300_000);
+      expect(h.asked.length).toBe(before);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('an answer that keeps coming, however slowly, is waited for', async () => {
+    vi.useFakeTimers();
+    try {
+      const first = { ...newProject('Big song'), revision: 1900 };
+      const at = revisions(first, 1900, 1901, () => [{ op: 'setProject', patch: { key: 'D major' } }]);
+      A.load(first);
+      // a piece every 5 s, for half a minute
+      host(at, 1900, 1901, { trickle: 5_000 });
+      void A.savedElsewhere(first.id, 1901);
+      await vi.advanceTimersByTimeAsync(40_000);
+      expect([S.store.get().serverRevision, S.store.get().project?.key]).toEqual([1901, 'D major']);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('a big song’s save is given as long as its size needs', async () => {
+    vi.useFakeTimers();
+    try {
+      const first = { ...newProject('Long notes'), revision: 2000 };
+      A.load(first);
+      const h = host(new Map([[2000, first]]), 2000, 2000, { slowSave: 40_000 });
+      // two megabytes of song, sent over a slow network: 40 s
+      A.apply([{ op: 'setProject', patch: { notes: 'n'.repeat(2_000_000) } }], 'Notes');
+      await vi.advanceTimersByTimeAsync(45_000);
+      expect([S.store.get().saveState, h.saves]).toEqual(['saved', [2000]]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps only the open song’s last few late batches, and none once another song opens', async () => {
+    const first = { ...newProject('Late ones'), revision: 2100 };
+    A.load(first);
+    for (let i = 0; i < 12; i++)
+      await A.applyJob([{ op: 'setProject', patch: { title: `T${i}` } }], JOB, `late-${i}`, 'Lift');
+    expect(A.lateBatchesKept()).toBeLessThanOrEqual(5);
+    A.load(newProject('Next'));
+    expect(A.lateBatchesKept()).toBe(0);
   });
 });
 

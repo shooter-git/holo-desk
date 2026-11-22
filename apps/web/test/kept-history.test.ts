@@ -78,7 +78,7 @@ function edited(revision = 3): { state: Keepable; songs: Project[] } {
 }
 
 describe('which history is kept', () => {
-  it('a saved song’s, with the revision it leads up to', () => {
+  it('a saved song’s, with the revision it leads up to, and the song then', () => {
     const { state } = edited(7);
     expect(toKeep(state, 'abc', 42)).toEqual({
       project: state.project?.id,
@@ -87,6 +87,32 @@ describe('which history is kept', () => {
       redo: [],
       kept: 42,
       made: 'abc',
+      song: state.project,
+    });
+  });
+
+  it('changes not saved yet, with the song they were made on when it’s known, and both come back', async () => {
+    const { state, songs } = edited(7);
+    const base = songs[2] as Project;
+    const unsaved = { ...state, saveState: 'dirty' as const, saved: base };
+    expect(toKeepUnsaved(unsaved, 'abc', 42)?.baseSong).toBe(base);
+    expect(toKeepUnsaved({ ...unsaved, saved: null }, 'abc', 42)).not.toHaveProperty('baseSong');
+    const shelf = new MemoryShelf();
+    const keeper = new Keeper(shelf, { delay: 0 });
+    keeper.changed(unsaved);
+    await keeper.flush();
+    const opened = { ...(state.project as Project), title: 'Saved since', revision: 9 };
+    const back = await new Keeper(shelf, { delay: 0 }).open(opened);
+    expect(back).toMatchObject({ kind: 'unsaved', base: 7, baseSong: base });
+    // and a history kept at an earlier revision comes back with the song it leads to
+    const shelf2 = new MemoryShelf();
+    const k2 = new Keeper(shelf2, { delay: 0 });
+    k2.changed(state);
+    await k2.flush();
+    expect(await new Keeper(shelf2, { delay: 0 }).open(opened)).toMatchObject({
+      kind: 'behind',
+      revision: 7,
+      song: state.project,
     });
   });
 

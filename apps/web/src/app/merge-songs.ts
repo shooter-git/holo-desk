@@ -8,27 +8,89 @@
  * plugins, buses, markers, files), an automation lane's setting or a send's bus, by that. A part only
  * one side changed takes that side's; one both changed alike is kept; one both changed differently (a
  * region's notes edited on both sides, a track renamed two ways, one deleted what the other edited) is
- * a clash, and nothing is merged. Anything else (a list of notes, a tempo map) is one part.
+ * a clash, and nothing is merged. Anything else (a list of notes, a tempo map) is one part. Parts that
+ * point at others (a send at its bus, a note at its articulation) are checked once merged: one that
+ * points at nothing, or an id kept twice, that `theirs` didn't have already, is a clash too.
  */
-import { type Project, parseProject } from '@holo/session';
+import { type Channel, type Project, parseProject } from '@holo/session';
 
 const CLASH = Symbol('clash');
 type Merged = unknown | typeof CLASH;
 
 /**
  * `mine`'s changes since `base` put onto `theirs` (which keeps its id, revision and when it was saved),
- * or null when they clash, or the result isn't a song the studio could open.
+ * or null when they clash, or the result isn't a song the studio could open, or points at what it
+ * doesn't have where `theirs` didn't (`broken`).
  */
 export function mergeSongs(base: Project, mine: Project, theirs: Project): Project | null {
   // (which revision each was saved as isn't a change of the song's)
   const stamp = { revision: theirs.revision, modified: theirs.modified };
   const merged = merge({ ...base, ...stamp }, { ...mine, ...stamp }, theirs);
   if (merged === CLASH) return null;
+  let song: Project;
   try {
-    return parseProject(merged);
+    song = parseProject(merged);
   } catch {
     return null;
   }
+  const already = broken(theirs);
+  for (const p of broken(song)) if (!already.has(p)) return null;
+  return song;
+}
+
+/**
+ * What in a song points at what it doesn't have, or uses an id twice: a channel's output, sends or a
+ * seat's sends at a bus that isn't there, an automation lane at a send's bus or a plugin the channel
+ * doesn't have, a note at an articulation its track doesn't have, an audio region at a file the song
+ * doesn't list; a track, region, plugin, bus, marker, file or a track's articulation id kept twice.
+ */
+export function broken(p: Project): Set<string> {
+  const out = new Set<string>();
+  const seen = new Set<string>();
+  const once = (kind: string, id: string) => {
+    if (seen.has(`${kind} ${id}`)) out.add(`${kind} ${id} twice`);
+    seen.add(`${kind} ${id}`);
+  };
+  const buses = new Set(p.buses.map((b) => b.id));
+  const files = new Set((p.files ?? []).map((f) => f.id));
+  const channel = (where: string, c: Channel, plugins: Set<string>, output: boolean) => {
+    if (output && c.output !== 'master' && !buses.has(c.output)) out.add(`${where} outputs to ${c.output}`);
+    for (const s of [...c.sends, ...(c.stage?.near.sends ?? []), ...(c.stage?.far.sends ?? [])])
+      if (!buses.has(s.bus)) out.add(`${where} sends to ${s.bus}`);
+    for (const plugin of c.inserts) {
+      once('plugin', plugin.id);
+      plugins.add(plugin.id);
+    }
+    for (const lane of c.automation ?? []) {
+      const [kind, id] = lane.param.split(':');
+      if (kind === 'send' && id !== undefined && !buses.has(id)) out.add(`${where} automates a send to ${id}`);
+      if (kind === 'fx' && id !== undefined && !plugins.has(id)) out.add(`${where} automates plugin ${id}`);
+    }
+  };
+  for (const t of p.tracks) {
+    once('track', t.id);
+    const plugins = new Set<string>();
+    for (const plugin of t.midiFx) {
+      once('plugin', plugin.id);
+      plugins.add(plugin.id);
+    }
+    channel(`track ${t.id}`, t.channel, plugins, true);
+    for (const a of t.articulations) once(`articulation of ${t.id}`, a.id);
+    const arts = new Set(t.articulations.map((a) => a.id));
+    for (const r of t.regions) {
+      once('region', r.id);
+      for (const n of r.notes) if (n.art !== undefined && !arts.has(n.art)) out.add(`a note of ${r.id} plays ${n.art}`);
+      if (r.audio && !files.has(r.audio.file)) out.add(`region ${r.id} plays ${r.audio.file}`);
+    }
+  }
+  for (const b of p.buses) {
+    once('bus', b.id);
+    channel(`bus ${b.id}`, b.channel, new Set(), true);
+  }
+  channel('master', p.master, new Set(), false);
+  for (const m of p.markers) once('marker', m.id);
+  for (const f of p.files ?? []) once('file', f.id);
+  return out;
 }
 
 /** Whether two parts of a song are the same: the same value, or the same parts throughout. */

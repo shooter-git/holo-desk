@@ -252,9 +252,10 @@ neither does the studio going: the job runs on, its changes land, and its reply 
   open `saved`. The batches saved one after another, with no one else's save between, are the job's
   **run**: from the revision the first was made on (`base`, kept in the song's history as the run
   begins) to the last one's (`head`). A studio that's back gets batches again only once it has picked
-  the run up (it reports `head` or later as its revision, which is then kept in the song's history
-  too, once: a reload of it may read it); it has 3 s (`catchUpMs`) to, else the batch is saved on the
-  server too. A batch sent to a studio whose connection closes before it answers is
+  the run up (it reports `head` or later as its revision); it has 3 s (`catchUpMs`) to, else the batch
+  is saved on the server too. The revision of the run it says it's at is kept in the song's history,
+  once, even when the agent has saved again since (the run's last few revisions are kept at hand for
+  that). A batch sent to a studio whose connection closes before it answers is
   answered 409 `away` at once: the change may or may not have gone in, and the agent is told to read
   the song before making it again.
 - **What needs the studio itself** (routes marked **studio**: playing, auditioning, listening, what was
@@ -271,13 +272,15 @@ neither does the studio going: the job runs on, its changes land, and its reply 
   revision, which answers the song as the batches left it, and takes it in as the job's step, in turn
   with the job's batches and after a gesture under way (one that never ends holds it 15 s at most, as
   it does a batch): below, "Undo grouping". A pick-up asked for while one is under way joins it, and
-  it looks again after; what the studio does next (open the song as it now is, save its own changes
-  on top) goes by the revision it's at then. A save refused while a pick-up moved the studio on is
-  made again on top; a save refused because the server has this very song (an earlier save got there,
-  its answer lost) is taken as saved. When the server doesn't answer a pick-up within 15 s (a slow
-  network, a big song), the studio's own changes stay to be saved, and it's asked again later, a
-  little longer each time (up to a minute): never which version to keep while the answer may be the
-  agent's. A save is given up after 30 s (a page frozen with it on its way) and made again.
+  it looks again after (unless the server didn't answer); what the studio does next (open the song as
+  it now is, save its own changes on top) goes by the revision it's at then. A save refused while a
+  pick-up moved the studio on is made again on top; a save refused because the server has this very
+  song (an earlier save got there, its answer lost) is taken as saved. A pick-up's answer, a whole
+  song, is waited for as long as it keeps coming, and given up after 15 s with nothing of it; then the
+  studio's own changes stay to be saved, and it's asked again later, a little longer each time (up to
+  a minute), one try again a song, let go as another opens: never which version to keep while the
+  answer may be the agent's. A save is given up when it takes longer than 30 s and as long again as
+  sending the song at 20 KB/s takes (a page frozen with it on its way), and made again.
 
 A scan preset, which carries on without its studio, isn't waited for: the routes that need the studio
 answer it 403 at once. `…/version` and an import read on the server don't need it, and answer it as
@@ -612,21 +615,30 @@ of the stretch `played` asked for); `length` is ms (null while still held).
     apps/web/src/app/merge-songs.ts), and saved on top: nobody's changes are lost. The agent's are
     kept just as the server has them, ids and all (bars it copied, then changed, included), as the
     merge is of songs, not of the agent's operations made again. It compares this studio's song with
-    the song its changes were made on (as last saved or opened here, else read from the song's
-    history) part by part: objects by key, lists of things with an id (tracks, regions, plugins,
-    buses, markers, files) or an automation lane's setting or a send's bus by that, anything else
-    (a region's notes, a tempo map) whole. A batch of the job's that came here too, late (to a page
-    frozen past its time), is taken back out of this studio's changes first, so it isn't made twice;
-  - where both changed the same thing differently (a region's notes, a track renamed two ways, one
-    removed what the other changed), the song becomes the server's, the step's Undo brings this
-    studio's own back, and a notice says so;
+    the song its changes were made on, part by part: objects by key, lists of things with an id
+    (tracks, regions, plugins, buses, markers, files) or an automation lane's setting or a send's bus
+    by that, anything else (a region's notes, a tempo map) whole. That song is the one at the revision
+    the studio carries on from, as last saved, opened or picked up here, and kept on the device with
+    changes not saved yet (`baseSong` in kept-history.ts), so a reload has it too; else the song's
+    history is asked for that very revision. It's never guessed: no other revision stands in for it.
+    A batch of the job's that came here too, late (to a page frozen past its time), is taken back out
+    of this studio's changes first, so it isn't made twice (the open song's last five are kept as they
+    came, let go as another song opens);
+  - where they can't be put together, the song becomes the server's, the step's Undo brings this
+    studio's own back, and a notice says which: both changed the same thing differently (a region's
+    notes, a track renamed two ways, one removed what the other changed), or the merged song would
+    point at what it doesn't have where the server's didn't (a send at a bus, an automation lane at
+    a plugin or a send, a note at an articulation, an audio region at a file, a channel's output) or
+    keep an id twice (`broken` in merge-songs.ts): "couldn't be put together"; or what this studio's
+    changes were made on isn't known: "The agent changed the song while this device had unsaved
+    changes";
   - after a reload, the history kept at a revision of the run comes back with the step on top: joined
     to the job's step on top when it has one (it keeps the song from before the job), else a step whose
-    Undo reads the revision the history leads to from the song's history; the song is as the server
-    has it with the run, if the agent saved again as the page opened. Kept at another revision, or at
-    one the song's history doesn't have with no job's step on top, it starts afresh as before. The
-    server not answering in time, it's asked twice more, a few seconds apart; the history stays on
-    the device till then.
+    Undo goes back to the song the history leads to (kept with it, else as the song's history kept that
+    revision); the song is as the server has it with the run, if the agent saved again as the page
+    opened. Kept at another revision, or at one not known with no job's step on top, it starts afresh
+    as before. The server not answering, it's asked twice more, a few seconds apart; the history stays
+    on the device till then.
 
   The studio then carries on from the server's revision; the job's later batches come live again and
   merge into the step. A batch already applied (the last 500 remembered, those picked up included)

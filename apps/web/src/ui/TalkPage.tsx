@@ -23,6 +23,7 @@ import { ChevronRight } from 'lucide-react';
 import { type RefObject, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { conversation, type Exchange, loadThread, useAgent } from '../app/agent.ts';
 import { type Layout, useLayout } from '../app/layout.ts';
+import { useSeenOnHost } from '../app/notify.ts';
 import { pageCovers, windowOpened } from '../app/page-layout.ts';
 import { closeBar, store, useApp } from '../app/store.ts';
 import { markSeen } from '../app/tray.ts';
@@ -199,6 +200,8 @@ export function TalkPage() {
   const newest = talk[talk.length - 1];
   const earlier = talk.slice(0, -1);
   const newestKey = newest ? keyOf(newest) : '';
+  // seen as it opens, and as a reply ends while it's open: the badge of notices counts it no more
+  useSeenOnHost(project, newest && !newest.working ? newestKey : null);
 
   // the newest reply, shown here with a dock: once the page closes a phone keeps that row at hand
   const docked = newest && !newest.working && newest.view?.dock?.length ? newest.job : null;

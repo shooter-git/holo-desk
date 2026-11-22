@@ -17,6 +17,7 @@
  */
 import { useEffect, useRef } from 'react';
 import { useLayout } from '../app/layout.ts';
+import { useSeenOnHost } from '../app/notify.ts';
 import { usesPage } from '../app/page-layout.ts';
 import { closeBar, openBar, useApp } from '../app/store.ts';
 import { useShownRoom, useSwipeUpToClose } from './bar-swipe.ts';
@@ -75,6 +76,8 @@ function BarPanel() {
   useShownRoom(scrim);
   useSwipeUpToClose(card);
   const { ex, project, talking, busy } = f;
+  // seen as it opens, and as a reply ends while it's open: the badge of notices counts it no more
+  useSeenOnHost(project, ex && !ex.working ? (ex.job ?? null) : null);
 
   return (
     // a press outside closes the bar and goes no further, as a menu's does

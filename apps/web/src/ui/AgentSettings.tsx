@@ -1,8 +1,9 @@
 /**
  * Settings › Agent: Off or On, and, once this device is allowed, Claude Code, Codex, Cursor and
  * Antigravity as the host has them (each installed or not, with its version, sign-in and update, and the one the agent
- * runs with), its model and effort, what it asks first and never does, and the devices allowed to use
- * it. Off is the default, and then this section is all there is of it.
+ * runs with), its model and effort, what it asks first and never does, whether this device is told of
+ * a reply outside HO[LO], and the devices allowed to use it. Off is the default, and then this section
+ * is all there is of it.
  *
  * Turning it on from a device that isn't allowed yet: the first device pairs with a code from the host
  * (`pnpm holo pair` prints one any time, with a link that opens this filled in; a keyed runner prints
@@ -32,6 +33,16 @@ import {
   useAgent,
 } from '../app/agent.ts';
 import { device } from '../app/live.ts';
+import {
+  getPush,
+  type NotifyMode,
+  notifySupport,
+  type PushView,
+  subscribe,
+  supportFacts,
+  supportHint,
+  unsubscribe,
+} from '../app/notify.ts';
 import { takePairCode } from '../app/pair-link.ts';
 import {
   caution,
@@ -345,6 +356,8 @@ function Allowed() {
         </span>
         <span className="agent-key">Never</span>
         <span>HO[LO] Desk’s code, holo-packs, or any other file on this computer</span>
+        <span className="agent-key">Tell me outside HO[LO]</span>
+        <Notices />
         <span className="agent-key">Devices</span>
         <Devices />
       </div>
@@ -701,6 +714,71 @@ function HarnessRows({ harness: h, model, effort }: { harness: HarnessInfo; mode
         {runsWithText(h, model, effort)}
       </span>
     </>
+  );
+}
+
+const NOTICE_MODES: [NotifyMode, string][] = [
+  ['off', 'Off'],
+  ['long', 'Long runs'],
+  ['every', 'Every reply'],
+];
+
+/**
+ * This device's notices outside HO[LO] (app/notify.ts): Off, Long runs or Every reply, off until it's
+ * chosen here, on each device. The browser asks its permission as one is chosen. Under it, what this
+ * browser needs first (HTTPS, the Home Screen on an iPhone), or when they come.
+ */
+function Notices() {
+  const [view, setView] = useState<PushView | null>(null);
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+  const support = notifySupport(supportFacts());
+  useEffect(() => {
+    void getPush().then(setView, (err: unknown) => setError(message(err)));
+  }, []);
+  const mode = view?.mode ?? 'off';
+  const choose = (next: NotifyMode) => {
+    if (busy || next === mode) return;
+    setError('');
+    setBusy(true);
+    // (on the click itself: the browser asks its permission first)
+    const work = next === 'off' ? unsubscribe() : subscribe(next, view?.key);
+    work
+      .then(setView, (err: unknown) => {
+        // (turned down for good: the line under the choice says so, and how to allow them)
+        if (notifySupport(supportFacts()) !== 'blocked') setError(message(err));
+      })
+      .finally(() => setBusy(false));
+  };
+  const hint =
+    supportHint(support) ??
+    (mode === 'off'
+      ? null
+      : 'On this device, while HO[LO] isn’t in front: when a reply is ready (Long runs: one that took over a minute) or the agent needs your OK.');
+  return (
+    <div className="vstack agent-notices">
+      <div className="seg">
+        {NOTICE_MODES.map(([m, label]) => (
+          <button
+            key={m}
+            type="button"
+            className={`btn${mode === m ? ' on' : ''}`}
+            aria-pressed={mode === m}
+            // (Off always works: a browser that blocked them since still turns them off on the host)
+            disabled={busy || !view || (m !== 'off' && support !== 'ok')}
+            onClick={() => choose(m)}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+      {hint && <span className="muted">{hint}</span>}
+      {error && (
+        <span className="agent-error" role="alert">
+          {error}
+        </span>
+      )}
+    </div>
   );
 }
 

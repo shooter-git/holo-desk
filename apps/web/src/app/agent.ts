@@ -682,6 +682,15 @@ export function readToken(s: TokenStorage | null = storage()): string | null {
   }
 }
 
+/** The id of the device this browser was allowed as, as kept with its token (null: none kept). */
+export function readDevice(s: TokenStorage | null = storage()): string | null {
+  try {
+    return s?.getItem(DEVICE_KEY) || null;
+  } catch {
+    return null;
+  }
+}
+
 export function keepToken(token: string, device: string | null, s: TokenStorage | null = storage()): void {
   try {
     s?.setItem(TOKEN_KEY, token);
@@ -871,8 +880,11 @@ export class AgentError extends Error {
   }
 }
 
-/** `idleMs`: given up only once nothing of the answer has come for that long (`patiently`). */
-async function call<T>(
+/**
+ * One of the agent's routes, with this device's token (notify.ts uses it too). `idleMs`: given up
+ * only once nothing of the answer has come for that long (`patiently`).
+ */
+export async function call<T>(
   method: 'GET' | 'POST' | 'PUT' | 'DELETE',
   path: string,
   body?: unknown,

@@ -7,7 +7,8 @@
  * Only `GET /api/agent`, pairing, and asking to join are open; everything else needs an allowed
  * device's token (401 without one), or for the tools, the running job's token (403 when it isn't).
  * Every body is checked: its types, its lengths, and ids of the shapes HO[LO] makes. With the agent
- * off, only turning it on, Settings (to turn it on again) and removing devices answer.
+ * off, only turning it on, Settings (to turn it on again), removing devices, and reading or turning
+ * off a device's notices answer.
  *
  * Attachments a device sends are kept a week, each the device's own for the song it was sent for;
  * a job reads only those its request (or an earlier one on its thread) named.
@@ -40,7 +41,9 @@ import { Auth, bearer } from './auth.ts';
 import { type Body, bad, body, CONTROL, ID, int, isObj, line, num, type Params, text } from './check.ts';
 import { type JobHandler, type JobRouteKit, type OwnMethod, registerJobRoutes } from './job-routes/index.ts';
 import { type AgentJob, Jobs, type Limits, MODEL, PERMISSION_KINDS, Refusal } from './jobs.ts';
+import { madePushKey, type PushKey, pushKey } from './keys.ts';
 import type { PermissionKind, RequestContext, ScanPreset } from './prompt.ts';
+import { checkSubscription, Notify } from './push.ts';
 import { AgentStore, HARNESSES, type HarnessId } from './store.ts';
 import { Threads } from './threads.ts';
 
@@ -130,7 +133,10 @@ function refuse(reply: FastifyReply, err: Refusal) {
   return reply.code(err.status).send({ error: err.message, ...(err.reason ? { reason: err.reason } : {}) });
 }
 
-export function agentRoutes(app: FastifyInstance, o: AgentOptions): { jobs: Jobs; auth: Auth; close: () => void } {
+export function agentRoutes(
+  app: FastifyInstance,
+  o: AgentOptions,
+): { jobs: Jobs; auth: Auth; notify: Notify; close: () => void } {
   const { store, live } = o;
   const agentStore = new AgentStore(store.database);
   const threads = new Threads(agentStore);
@@ -166,6 +172,26 @@ export function agentRoutes(app: FastifyInstance, o: AgentOptions): { jobs: Jobs
   });
   jobs = theJobs;
   live.agent = theJobs;
+  // notices outside HO[LO], for devices that turned them on (push.ts); the key is made only once a
+  // device subscribes (GET /api/agent/push?key=1), never as the server or a studio starts
+  let madeKey: PushKey | null = null;
+  const key = () => {
+    madeKey ??= pushKey(o.dataDir);
+    return madeKey;
+  };
+  /** The key if it has been made (null: none yet). */
+  const keyIfMade = () => {
+    madeKey ??= madePushKey(o.dataDir);
+    return madeKey;
+  };
+  const notify = new Notify({
+    agentStore,
+    live,
+    key,
+    title: (project) => store.row(project)?.title ?? null,
+    deviceName: (device) => agentStore.device(device)?.name ?? null,
+  });
+  notify.attach(theJobs);
 
   type DeviceHandler = (req: FastifyRequest, reply: FastifyReply, device: string) => Promise<unknown>;
   /** A route for allowed devices (401 without a device's token; with the agent off, 409 unless `whenOff`). */
@@ -530,6 +556,63 @@ export function agentRoutes(app: FastifyInstance, o: AgentOptions): { jobs: Jobs
     }),
   );
 
+  // ---- notices outside HO[LO] (push.ts): each device's own ----
+
+  /**
+   * This device's notices: the key a subscription is made for, its mode, and its unseen replies (its
+   * badge). The key is made only when it's wanted (`make`: a device subscribing); until then it's null.
+   */
+  const pushView = (device: string, make = false) => {
+    const row = agentStore.push(device);
+    let made: PushKey | null;
+    try {
+      made = make ? key() : keyIfMade();
+    } catch {
+      throw new Refusal(500, 'HO[LO] couldn’t make its key for notices in its data folder');
+    }
+    return {
+      key: made ? made.publicKey.toString('base64url') : null,
+      mode: row?.mode ?? 'off',
+      ...(row ? { endpoint: row.endpoint } : {}),
+      unseen: agentStore.unseen(device),
+    };
+  };
+  app.get(
+    '/api/agent/push',
+    forDevice(
+      async (req, _reply, device) => pushView(device, (req.query as Record<string, unknown>).key === '1'),
+      true,
+    ),
+  );
+  app.put(
+    '/api/agent/push',
+    forDevice(async (req, _reply, device) => {
+      const b = body(req);
+      if (b.mode !== 'long' && b.mode !== 'every') throw bad('mode is long or every (Off is DELETE)');
+      const sub = checkSubscription(b.subscription);
+      if (typeof sub === 'string') throw bad(sub);
+      agentStore.setPush({ device, ...sub, mode: b.mode, added: Date.now() });
+      return pushView(device);
+    }),
+  );
+  app.delete(
+    '/api/agent/push',
+    forDevice(async (_req, _reply, device) => {
+      agentStore.removePush(device);
+      return pushView(device);
+    }, true),
+  );
+  // a song's conversation was seen on this device: its replies are unseen on no device now
+  app.post(
+    '/api/agent/seen',
+    forDevice(async (req, _reply, device) => {
+      const project = body(req).project;
+      if (typeof project !== 'string' || !ID.test(project)) throw bad('project is a song’s id');
+      agentStore.seenSong(project);
+      return { unseen: agentStore.unseen(device) };
+    }),
+  );
+
   // ---- attachments: what a device sends with a request ----
 
   // any type comes in as bytes, straight to disk as they arrive, cut off at the type's limit (the type
@@ -881,6 +964,7 @@ export function agentRoutes(app: FastifyInstance, o: AgentOptions): { jobs: Jobs
   return {
     jobs: theJobs,
     auth,
+    notify,
     close: () => {
       theJobs.close();
       attachments.stop();

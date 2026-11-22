@@ -1860,7 +1860,7 @@ function backKey(device: string, project: string): string {
 const LEFT_LIFE = 24 * 3_600_000;
 
 /** Whether a studio's page is hidden, as it last reported (its browser may freeze it: a phone in another app). */
-function isHidden(c: LiveClient): boolean {
+export function isHidden(c: LiveClient): boolean {
   return (c.state as unknown as { hidden?: unknown } | null)?.hidden === true;
 }
 

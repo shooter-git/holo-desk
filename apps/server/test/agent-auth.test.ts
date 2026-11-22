@@ -263,6 +263,10 @@ describe('allowed devices', () => {
       ['POST', '/api/agent/threads/prj_000000/reset'],
       ['POST', '/api/agent/attachments'],
       ['PUT', '/api/agent/attachments/att_000000/meta'],
+      ['GET', '/api/agent/push'],
+      ['PUT', '/api/agent/push'],
+      ['DELETE', '/api/agent/push'],
+      ['POST', '/api/agent/seen'],
     ];
     const jobRoutes: [string, string][] = [
       ['GET', `${J}/song`],

@@ -70,7 +70,7 @@ import { songKeys } from '../audio/song-samples.ts';
 import { takes as keptTakes, type TakePlan, uploadTake } from '../audio/takes.ts';
 import { holdDuringDrags } from '../ui/gesture.ts';
 import { NOTE_EFFECTS, playsHits } from '../ui/pads.ts';
-import { AgentError, awayChanges, jobLabels } from './agent.ts';
+import { AgentError, agent, awayChanges, isLive, jobLabels } from './agent.ts';
 import { ApiError, api } from './api.ts';
 import { comparePlan, type Pass } from './compare.ts';
 import * as history from './history.ts';
@@ -79,7 +79,7 @@ import { isTouch } from './layout.ts';
 // (live.ts imports this module too: neither uses the other while loading, so the cycle is harmless)
 import { reconnectSoon, reportHistory } from './live.ts';
 import { mergeSongs } from './merge-songs.ts';
-import { type AppState, type Step, store, toast } from './store.ts';
+import { type AppState, openBar, type Step, store, toast } from './store.ts';
 import { TakeSender } from './take-sender.ts';
 
 // ---- editing ----
@@ -1049,6 +1049,7 @@ export async function startup(): Promise<void> {
   } catch {
     id = null;
   }
+  const turn = takeLinkedTurn();
   // the last song and the list are asked for together: a song that's gone costs no second round trip
   const last = id ? api.project(id).catch(() => null) : Promise.resolve(null);
   const list = api.projects();
@@ -1057,6 +1058,7 @@ export async function startup(): Promise<void> {
   if (project) {
     load(project);
     goToLinkedBar();
+    if (turn?.project === project.id) openAtTurn(project.id, turn.job);
     return;
   }
   try {
@@ -1076,6 +1078,89 @@ function goToLinkedBar(): void {
   const tick = barToTick(p.meter, at);
   locate(tick);
   linkedTick = tick;
+}
+
+/** A turn's job, as the host names them. */
+const JOB_ID = /^agj_[0-9a-f]{12}$/;
+
+/**
+ * A link may name a turn of its song's conversation (?project=…&turn=…, a notice's: notify.ts), for
+ * the page to open at. It's taken out of the address as it's read, so a reload doesn't open it again.
+ */
+function takeLinkedTurn(): { project: string; job: string } | null {
+  try {
+    const url = new URL(location.href);
+    const job = url.searchParams.get('turn');
+    if (job === null) return null;
+    url.searchParams.delete('turn');
+    window.history.replaceState(window.history.state, '', url);
+    const project = url.searchParams.get('project');
+    return project && JOB_ID.test(job) ? { project, job } : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Opening the page at a turn, while it waits for the studio to start. */
+let waitingToOpen: (() => void) | null = null;
+
+/**
+ * The page (the bar, on a desktop) open at a turn of the song, once the studio has started (on a
+ * phone, past Start the studio), and only while the song is still the open one.
+ */
+function openAtTurn(project: string, turn: string | null): void {
+  waitingToOpen?.();
+  waitingToOpen = null;
+  const open = () => {
+    if (store.get().project?.id === project) openBar(turn ?? undefined);
+  };
+  if (store.get().audioReady) {
+    open();
+    return;
+  }
+  const off = store.subscribe(() => {
+    if (!store.get().audioReady) return;
+    off();
+    waitingToOpen = null;
+    open();
+  });
+  waitingToOpen = off;
+}
+
+/** A scan's request carries on when its studio opens another song (the host's rule): any other stops. */
+const CARRIES_ON = new Set(['Read this scan', 'Check this scan', 'Fix what was flagged']);
+
+/**
+ * A notice was tapped (the service worker posts `open-turn` to a studio already open): HO[LO] on that
+ * song, with the page open at that reply. Going to another song stops this device's request at work on
+ * the open one, so that asks first.
+ */
+export function openTurn(project: string, turn: string | null): void {
+  if (!/^[\w-]{1,64}$/.test(project)) return;
+  const at = turn !== null && JOB_ID.test(turn) ? turn : null;
+  const s = store.get();
+  if (s.project?.id === project) {
+    openAtTurn(project, at);
+    return;
+  }
+  const go = () => void openProject(project).then(() => openAtTurn(project, at));
+  const a = agent.get();
+  const working = Object.values(a.jobs).some(
+    (j) => j.device === a.me && j.project === s.project?.id && isLive(j.state) && !CARRIES_ON.has(j.request),
+  );
+  if (!working) {
+    go();
+    return;
+  }
+  toast(
+    `The agent is still at work on “${s.project?.title ?? 'this song'}”: going to the other song stops it.`,
+    'info',
+    15000,
+    {
+      label: 'Go anyway',
+      run: go,
+    },
+  );
 }
 
 /** Where a link asked the views to start (read once by the tracks area). */

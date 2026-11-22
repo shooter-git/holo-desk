@@ -102,8 +102,8 @@ Code, has no model or effort chosen, or one it no longer offers), all with 409. 
 reason.
 
 **With the agent off**, only these answer (under `/api/agent`): `GET /api/agent`, `POST /pairing`,
-`POST /pair`, `GET /devices/requests/:id`, `GET|PUT /settings`, `GET /devices` and
-`DELETE /devices/:id`. Every other route answers 409 `off`, `POST /devices/requests` included.
+`POST /pair`, `GET /devices/requests/:id`, `GET|PUT /settings`, `GET /devices`,
+`DELETE /devices/:id` and `GET|DELETE /push`. Every other route answers 409 `off`, `POST /devices/requests` included.
 Turning the agent off cancels every job, so the job-scoped routes answer 403.
 
 | Method and path | Body / query | Answer |
@@ -131,6 +131,10 @@ Turning the agent off cancels every job, so the job-scoped routes answer 403.
 | `GET /api/agent/threads/:project` | | `{thread, job, now}`. `thread` is `{id, harness, turns:[{job, request, reply, label, state, at, permission?, brief?, briefWarnings?, view?, go?, error?}]}`, or null. `job` is the song's job that's running or waiting for a click (a `JobView`), or null: after a reload, its button comes back. `now` is the host's time (ms). |
 | `GET /api/agent/away/:project` | `?from=` (a revision) | `{away}`: what this device's studio, back on the song at revision `from`, picks up of the changes its job saved on the server while it was away (below): `{job, label, running, base, head, batches:[{batch}], song}`, the batches after `from` by id, `head` the revision they bring the song to and `song` the song then, read together (no save comes between them), `label` the job's once it has finished (its last batch's before). From a revision before the run (a save of the studio's got there, its answer lost), the whole run, `base` its first revision; otherwise `base` is `from`. `away` is null when there's nothing to pick up from `from`: no such run of the song's latest job of this device's, `from` past its first revision but not one of its own, or the song saved since by someone else. 400 for a `from` that isn't a revision. |
 | `POST /api/agent/threads/:project/reset` | | `{ok}`. The next request starts a new thread. 409 `busy` while a job runs on the song. |
+| `GET /api/agent/push` | `?key=1` (subscribing) | `{key, mode:'off'|'long'|'every', endpoint?, unseen}`: this device's notices outside HO[LO] (below). `key` is the host's VAPID public key (base64url, 65 bytes uncompressed), or null while none has been made: only `?key=1` makes it, as a device subscribes. `endpoint` is the subscription's, when on; `unseen` how many replies this device asked for no device has seen (its badge). Answers with the agent off. |
+| `PUT /api/agent/push` | `{mode:'long'|'every', subscription:{endpoint, keys:{p256dh, auth}}}` | As GET. Turns notices on for this device, or changes when they come. `subscription` is the browser's `PushSubscription.toJSON()`: `endpoint` must be `https` on 443, ≤ 1000 characters, no user or password, on `fcm.googleapis.com`, `*.push.apple.com`, `*.push.services.mozilla.com` or `*.notify.windows.com`; `p256dh` a P-256 point (65 bytes, uncompressed) and `auth` 16 bytes, base64url (400 otherwise). Another device with the same endpoint (the same browser, paired again) loses it. |
+| `DELETE /api/agent/push` | | As GET (`mode:'off'`). Off: the subscription and this device's unseen replies are deleted. Answers with the agent off. |
+| `POST /api/agent/seen` | `{project}` | `{unseen}`. The song's conversation was seen on this device: its replies count as unseen on no device now. `unseen` is this device's count after it (the studio sets its badge to it). |
 | `POST /api/agent/attachments` | `?project=&name=&type=` and the file as the body (a recording ≤ 200 MB, anything else ≤ 25 MB, text ≤ 100 KB; 413) | `{id, name, type, size}`. Allowed types: `image/png`, `image/jpeg`, `image/webp`, `audio/wav`, `audio/x-wav`, `audio/flac`, `audio/aiff`, `audio/mpeg`, `audio/ogg`, `audio/mp4`, `audio/midi`, `application/vnd.recordare.musicxml+xml`, `application/vnd.recordare.musicxml` (`.mxl`), `text/plain`. The body goes to disk as it arrives, and is cut off at the type's limit (one whose `content-length` says it's over isn't read at all). Its first bytes must be what the type says (415): a recording's first 64 KB are checked; text must be UTF-8, MusicXML UTF-8 or UTF-16, and an `.mxl` a zip with a score in it. 404 for no such song. Kept 7 days, the device's own, for that song. |
 | `PUT /api/agent/attachments/:id/meta` | JSON object (≤ 64 KB) | `{ok}`. The browser stores what it measured here. Only the device's own (403). |
 | `GET /api/agent/attachments/:id/data` | | The file's bytes, as its type, `no-store`: for the studio to decode a recording the agent imports (below). Only the device that sent it, or the device whose running job may read it (an earlier request on the job's thread, from another device); 403 otherwise, 404 once it's gone. |
@@ -479,6 +483,10 @@ taken only from the runner it was handed to, while it runs.
   fetched the attachment (`GET /api/agent/attachments/:id/data`), decoded it and uploaded it as a WAV
   (`POST /api/projects/:id/files`), or `{ok:false, error}` (another song open, a recording the browser
   can't read). Up to 10 minutes.
+- `agent-front {id}`: ack `{ok:true, front}`, `front` being whether the page is in view
+  (`document.visibilityState === 'visible'`). Asked of each of a device's studios that last said it
+  isn't hidden, when a notice is due for that device (below, "Notices outside HO[LO]"); one that
+  doesn't answer in 1.5 s (a page its browser froze) doesn't hold the notice back.
 - `transport {id, action, at?}`, the existing message.
 
 **Server → studio**, told:
@@ -826,6 +834,73 @@ the page, and × or a swipe across it (either way, unless the row would scroll t
   the page being opened, and nothing is asked when no tray could show.
 - **Cost.** Hidden, it's nothing: no listeners, timers or observers until it shows, and that one read
   as a song opens.
+
+## Notices outside HO[LO]
+
+Settings › Agent has **Tell me outside HO[LO]**: Off, Long runs or Every reply, for this device only,
+Off until it's chosen. Choosing one asks the browser's permission on that click, subscribes its push
+manager to the host's key, and hands the host the subscription (`PUT /api/agent/push`); Off
+unsubscribes, then `DELETE /api/agent/push`. Under the choice, what the browser needs first
+(`notifySupport` in apps/web/src/app/notify.ts): a secure page (`pnpm tailnet on`, `pnpm lan on`), on an
+iPhone or iPad HO[LO] opened from the Home Screen, or the notices it has blocked.
+
+- **When one goes** (`Notify`, apps/server/src/agent/push.ts, on `jobs.onJobEnd`). Only for the device
+  whose request it was, and only if it has notices on. Every reply: the job ended `done` or `failed`.
+  Long runs: the same, after more than 60 s of the turn's own work (what follows an OK is a job of its
+  own, begun at the click, so the wait for the OK never counts). Both: it ended `awaiting` (it needs the user's OK). Never
+  for `cancelled`. Every ending but a cancel is kept as unseen (`agent_unseen`, the device's newest
+  50), the badge's count.
+- **Not while HO[LO] is in front.** Each of the device's studios that last said it isn't hidden is
+  asked `agent-front`; if one answers `front: true` within 1.5 s, nothing is sent. A frozen page (an
+  iPhone in another app) may still read as not hidden, but can't answer, so the notice goes.
+- **What goes.** `{title:'HO[LO] Desk', body:'<song>: a reply is ready.' | '…: it needs your OK to go on.' | '…: the request stopped.', project, job, unseen}`,
+  about 200 bytes, the song's name on one line of at most 60 characters. Encrypted for the device
+  (RFC 8291, aes128gcm, one record of 4096) and signed (RFC 8292: an ES256 JWT for the push service's
+  origin, 12 hours, `sub` the project's URL), with `TTL: 43200`, `Urgency: normal` and
+  `Topic` (the first 22 characters of base64url(sha256(song id)): a push service keeps only a song's
+  latest for a device that's off). `send` gives up after 10 s and follows no redirect. 404 or 410
+  deletes the subscription; any other failure is logged once and changes nothing. The log says each
+  send.
+- **Storage.** `push.key` in the data folder (a P-256 JWK, mode 0600, kept as `runner.key` is), made
+  only when a device turns notices on (`GET /api/agent/push?key=1`), never as the server or a studio
+  starts. `agent_push(device, endpoint, p256dh, auth, mode, added)` and
+  `agent_unseen(job, device, project, at)`, both deleted with the device; Off deletes the device's rows
+  of both. On the device, the choice is kept as `holo:notices` (`{device, mode}`, in the browser's
+  storage); Off clears it.
+- **The service worker** (apps/web/src/sw-template.js, built as `sw.js`). `push`: shows the notice
+  (`tag` the song, so a song's newest takes the place of the last; `data.url` `/?project=…&turn=…`) and
+  sets the app badge to `unseen`. Every push shows one: an iPhone allows no silent pushes.
+  `notificationclick`: a studio window already open (not `/remote`) comes in front and is posted
+  `{type:'open-turn', project, job}`; with none, `/?project=…&turn=…` opens.
+- **Opening at the reply.** main.tsx passes `open-turn` to `openTurn` (actions.ts); `startup()` reads
+  `?turn=` (and takes it out of the address). The page opens at that turn once the studio has started
+  (`audioReady`: on a phone, past Start the studio). If the notice is another song's and this
+  device's request is at work on the open one (opening another song stops it, a scan's aside), a
+  toast asks first.
+- **Seen.** The page, and the bar on a desktop, post `/api/agent/seen` as they open and as a reply ends
+  while they're open, and set the badge to the answer. The bar's own dot is unchanged.
+- **Keeping them going** (`syncPush`). When HO[LO] opens, and as it comes back in front, the studio
+  reads `GET /api/agent/push` and sets the badge. With a choice kept on the device, it gives the host
+  the browser's subscription again (`PUT`, with the kept mode) whenever the host doesn't have it: the
+  browser renewed it (Firefox does now and then) and a notice sent to the old one got 410, so the host
+  let it go; or the browser lost it with the site's data (subscribed afresh, the permission already
+  given), or made it for another key. Only Off, chosen on the device, clears the choice (and
+  unsubscribes the browser), so it's never undone. A choice kept as another device (this browser
+  allowed again since, with a new id) counts for nothing; one made before the choice was kept on the
+  device is taken from the host.
+- **Where it works.** Android and computers, from a browser tab. An iPhone or iPad only from HO[LO]
+  added to the Home Screen (iOS 16.4 or later), which keeps its own storage, so it's allowed as a
+  device of its own.
+
+Limits, plainly:
+- An iPhone has no silent pushes, so a reply seen on another device updates its badge only when HO[LO]
+  next opens there, or with its next notice.
+- The service worker exists only in production builds: a development server has no notices.
+- The host needs outbound internet, to the push services over HTTPS.
+- A subscription the browser renews while HO[LO] is closed reaches the host only when HO[LO] next opens
+  on that device: the service worker holds no device token, so it has no `pushsubscriptionchange`
+  handler. Until then the device gets no notices (the first one sent to the old subscription ends it
+  on the host).
 
 ## Threads ("since your last reply")
 

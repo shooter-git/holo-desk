@@ -215,7 +215,14 @@ Close the bar (or the page) and the work goes on: the bar's button shows a turni
 agent works, then a dot until you open the bar again (a phone has the bar's button too, at the top).
 You can even leave: switch your phone to another app or close the tab, and its changes still land in the
 song; come back to find them as one undo step, the ring if it's still at work, or the dot and its reply
-if it's done. What needs you there (playing to you, listening) waits for its reply's buttons. A
+if it's done. What needs you there (playing to you, listening) waits for its reply's buttons. To hear
+of a reply while you're away, turn on **Tell me outside HO[LO]** in Settings › Agent on that device:
+**Long runs** (replies that took more than a minute) or **Every reply**, and either way when the agent
+needs your OK. The notice comes only to the device that asked, only while HO[LO] isn't in front there,
+and a tap opens the song at that reply; HO[LO]'s Home Screen icon counts the replies not seen yet. It
+needs HO[LO] opened over HTTPS (`pnpm tailnet on` or `pnpm lan on`) and the host to reach the internet.
+Android phones and computers can have it in a browser tab; an iPhone or iPad only from HO[LO] added to
+its Home Screen, which is a device of its own, so allow it as one first. A
 request runs as long as the agent keeps working, up to 2 hours; it ends if it goes quiet for 15 minutes,
 and Stop on the bar ends it at any time. The agent works on the open song and nothing else:
 
@@ -390,8 +397,10 @@ secret, an email address or a home-folder path.
 
 ## Privacy and security
 
-HO[LO] has no accounts and sends nothing anywhere. The agent is off unless you turn it on, and off, no
-harness is run and nothing is looked up for it. On, it runs your own Claude Code, Codex, Cursor or Antigravity, which sends what
+HO[LO] has no accounts and sends nothing anywhere, unless you turn on **Tell me outside HO[LO]** on a
+device: then a short notice of each reply goes to that device through its browser's push service
+(Apple's, Google's, Mozilla's or Microsoft's), encrypted so only the device can read it. The agent is
+off unless you turn it on, and off, no harness is run and nothing is looked up for it. On, it runs your own Claude Code, Codex, Cursor or Antigravity, which sends what
 it reads (the song, a scanned page, a file you attached) to Anthropic, OpenAI, Cursor or Google as any session
 of yours does, as you, and only the devices you've allowed can ask it anything. HO[LO] binds to
 `127.0.0.1`, and only devices on your own tailnet can reach it when you turn that on. HO[LO] Engine

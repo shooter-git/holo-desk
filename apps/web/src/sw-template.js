@@ -6,6 +6,9 @@
 //   offline it comes from the cache. Hashed files are always served from the cache.
 // - Projects (/api) are never cached here: the studio keeps its own copy while it works offline.
 //   Samples (/packs) have their own cache, filled by the studio as instruments load.
+// - The agent's notices outside HO[LO] (a device turns them on in Settings › Agent: app/notify.ts)
+//   arrive here as pushes from the host, and are shown, with the badge set to the unseen replies. A
+//   tap brings HO[LO] up on that song with the page open at the reply.
 const BUILD = /* BUILD */ null;
 const SHELL = `holo-shell-${BUILD.version}`;
 // big files only some devices use (the score's engraver): kept the first time they're fetched
@@ -85,4 +88,81 @@ self.addEventListener('fetch', (event) => {
       })(),
     );
   }
+});
+
+// ---- the agent's notices (apps/server/src/agent/push.ts sends them) ----
+
+/** A song's id, and a turn's job, as HO[LO] makes them. */
+const SONG = /^[\w-]{1,64}$/;
+const TURN = /^agj_[0-9a-f]{12}$/;
+
+/** What a push says, checked: from HO[LO] Desk, the song and what happened, the turn, the unseen count. */
+function readNotice(event) {
+  let data = {};
+  try {
+    data = event.data ? event.data.json() : {};
+  } catch {
+    // (not one of HO[LO]'s: shown plainly all the same)
+  }
+  const text = (v, max, or) => (typeof v === 'string' && v ? v.slice(0, max) : or);
+  const project = typeof data.project === 'string' && SONG.test(data.project) ? data.project : null;
+  const job = typeof data.job === 'string' && TURN.test(data.job) ? data.job : null;
+  const query = new URLSearchParams();
+  if (project) query.set('project', project);
+  if (project && job) query.set('turn', job);
+  const search = query.toString();
+  return {
+    title: text(data.title, 60, 'HO[LO] Desk'),
+    body: text(data.body, 200, 'The agent has something for you.'),
+    project,
+    job,
+    url: at(search ? `./?${search}` : './'),
+    unseen: Number.isInteger(data.unseen) && data.unseen >= 0 ? data.unseen : null,
+  };
+}
+
+/** The badge on HO[LO]'s Home Screen icon, where the browser has one. */
+function setBadge(n) {
+  const nav = self.navigator;
+  if (n === null || !nav.setAppBadge) return Promise.resolve();
+  return (n > 0 ? nav.setAppBadge(n) : nav.clearAppBadge()).catch(() => undefined);
+}
+
+// every push shows a notice (an iPhone allows no silent ones); a song's newest takes the place of its last
+self.addEventListener('push', (event) => {
+  const n = readNotice(event);
+  event.waitUntil(
+    Promise.all([
+      self.registration.showNotification(n.title, {
+        body: n.body,
+        tag: n.project ?? 'holo',
+        renotify: true,
+        icon: at('icons/icon-192.png'),
+        data: { url: n.url, project: n.project, job: n.job },
+      }),
+      setBadge(n.unseen),
+    ]),
+  );
+});
+
+// a tap: the studio already open comes in front and opens the page at that reply; else HO[LO] opens there
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close();
+  const { url, project, job } = event.notification.data ?? {};
+  event.waitUntil(
+    (async () => {
+      const windows = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+      const studio = windows.find((c) => {
+        const u = new URL(c.url);
+        // (HO[LO] Remote, a phone driving the studio, isn't one)
+        return u.origin === self.location.origin && !/^\/remote\/?$/.test(u.pathname);
+      });
+      if (studio) {
+        await studio.focus().catch(() => undefined);
+        if (project) studio.postMessage({ type: 'open-turn', project, job: job ?? null });
+        return;
+      }
+      await self.clients.openWindow(typeof url === 'string' ? url : at('./'));
+    })(),
+  );
 });

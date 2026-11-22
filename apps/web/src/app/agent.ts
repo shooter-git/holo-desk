@@ -142,6 +142,7 @@ export interface Turn {
   brief?: string;
   briefWarnings?: { line: number; kind: BriefWarning }[];
   view?: View;
+  go?: Go;
   error?: string;
 }
 
@@ -182,6 +183,11 @@ export interface AgentState {
   listening: string | null;
   /** One of this device's jobs ended while the bar was closed: a dot on the bar's button until it opens. */
   unseen: boolean;
+  /**
+   * How far the host's clock is ahead of this device's (ms), from the `now` its answers carry: a job's
+   * times are the host's, so the time a request has been working is counted on the host's clock.
+   */
+  skew: number;
 }
 
 export const EMPTY: AgentState = {
@@ -196,6 +202,7 @@ export const EMPTY: AgentState = {
   refused: null,
   listening: null,
   unseen: false,
+  skew: 0,
 };
 
 const LIVE: ReadonlySet<string> = new Set(['waiting', 'running']);
@@ -223,13 +230,19 @@ export type AgentEvent =
   | { type: 'refused'; project: string; request: string; error: string; at: number }
   | { type: 'reset'; project: string }
   | { type: 'seen' }
-  | { type: 'removed' };
+  | { type: 'removed' }
+  | { type: 'clock'; skew: number };
+
+/** A change in the host's clock smaller than this is a message's time on the way, not the clock: it's let be. */
+const SKEW_STEADY_MS = 1000;
 
 export function reduce(a: AgentState, e: AgentEvent): AgentState {
   switch (e.type) {
     case 'info':
       // the agent turned off (or this device was let go): nothing of it is kept to show
-      return e.info.enabled && e.info.allowed ? { ...a, info: e.info } : { ...EMPTY, info: e.info, me: a.me };
+      return e.info.enabled && e.info.allowed
+        ? { ...a, info: e.info }
+        : { ...EMPTY, info: e.info, me: a.me, skew: a.skew };
     case 'me':
       return { ...a, me: e.id };
     case 'settings': {
@@ -294,8 +307,27 @@ export function reduce(a: AgentState, e: AgentEvent): AgentState {
     case 'seen':
       return a.unseen ? { ...a, unseen: false } : a;
     case 'removed':
-      return { ...EMPTY, info: a.info ? { ...a.info, allowed: false } : null };
+      return { ...EMPTY, info: a.info ? { ...a.info, allowed: false } : null, skew: a.skew };
+    case 'clock':
+      return Math.abs(e.skew - a.skew) < SKEW_STEADY_MS ? a : { ...a, skew: e.skew };
   }
+}
+
+/**
+ * How long a request has been working (ms): from when it started, on the host's clock, to `now` on
+ * this device's, the clocks' difference (`skew`) taken in. Never less than none.
+ */
+export function elapsedMs(started: number, now: number, skew: number): number {
+  return Math.max(0, now + skew - started);
+}
+
+/** A time a request has been working, as the page says it: "0:07", "1:05", "1:02:09" past an hour. */
+export function elapsedClock(ms: number): string {
+  const s = Math.floor(Math.max(0, ms) / 1000);
+  const two = (n: number) => String(n).padStart(2, '0');
+  const h = Math.floor(s / 3600);
+  const m = Math.floor(s / 60) % 60;
+  return h ? `${h}:${two(m)}:${two(s % 60)}` : `${m}:${two(s % 60)}`;
 }
 
 /**
@@ -318,10 +350,16 @@ export function statusEffects(
   };
 }
 
-/** The last exchange on a song, as the bar shows it under its field. */
+/** An exchange on a song: the bar shows the last under its field, the page all of them. */
 export interface Exchange {
   /** Its job (none while the request is on its way, or when it was turned down). */
   job: string | null;
+  /** When it was asked, on the host's clock: what the song's conversation is in the order of. */
+  at: number;
+  /** When its work began, on the host's clock: what the time it has been working is counted from. */
+  started: number;
+  /** Its step's name, once it has one (an earlier turn's row says it). */
+  label: string | null;
   request: string;
   /** Working: the ring, the line it's on, and Stop. */
   working: boolean;
@@ -346,27 +384,55 @@ function endedWhy(state: string, error?: string | null): string | null {
   return null;
 }
 
+type Seen = { at: number; make: () => Exchange };
+
 /**
- * The song's latest exchange: the newest of a request on its way, one turned down, the jobs the host
- * told of, and the conversation's last turn. Null when the song has none.
+ * What's known of a song's exchanges, each with its time: a request on its way, one turned down, the
+ * jobs the host told of, then the conversation's `turns` the jobs don't already stand for.
  */
-export function exchange(a: AgentState, project: string | null): Exchange | null {
-  if (!project || !isOn(a)) return null;
-  type Seen = { at: number; make: () => Exchange };
+function told(a: AgentState, project: string, turns: readonly Turn[]): Seen[] {
   const seen: Seen[] = [];
-  const base = { permission: null, brief: null, flagged: new Map(), mine: false, listening: false, view: null };
+  const base = {
+    permission: null,
+    brief: null,
+    flagged: new Map(),
+    mine: false,
+    listening: false,
+    view: null,
+    label: null,
+  };
   if (a.sending?.project === project) {
     const s = a.sending;
     seen.push({
       at: s.at,
-      make: () => ({ ...base, job: null, request: s.request, working: true, line: null, reply: null, mine: true }),
+      make: () => ({
+        ...base,
+        job: null,
+        at: s.at,
+        started: s.at,
+        request: s.request,
+        working: true,
+        line: null,
+        reply: null,
+        mine: true,
+      }),
     });
   }
   if (a.refused?.project === project) {
     const r = a.refused;
     seen.push({
       at: r.at,
-      make: () => ({ ...base, job: null, request: r.request, working: false, line: null, reply: r.error, mine: true }),
+      make: () => ({
+        ...base,
+        job: null,
+        at: r.at,
+        started: r.at,
+        request: r.request,
+        working: false,
+        line: null,
+        reply: r.error,
+        mine: true,
+      }),
     });
   }
   for (const j of Object.values(a.jobs)) {
@@ -375,6 +441,9 @@ export function exchange(a: AgentState, project: string | null): Exchange | null
       at: j.started,
       make: () => ({
         job: j.id,
+        at: j.started,
+        started: j.started,
+        label: j.label ?? null,
         request: j.request,
         working: isLive(j.state),
         line: j.line ?? null,
@@ -388,29 +457,57 @@ export function exchange(a: AgentState, project: string | null): Exchange | null
       }),
     });
   }
-  const last = a.thread?.project === project ? a.thread.turns[a.thread.turns.length - 1] : undefined;
-  if (last && !a.jobs[last.job]) {
+  for (const t of turns) {
+    if (a.jobs[t.job]) continue;
     seen.push({
-      at: last.at,
+      at: t.at,
       make: () => ({
         ...base,
-        job: last.job,
-        request: last.request,
-        working: isLive(last.state),
+        job: t.job,
+        at: t.at,
+        started: t.at,
+        label: t.label,
+        request: t.request,
+        working: isLive(t.state),
         line: null,
-        reply: isLive(last.state) ? null : (last.reply ?? endedWhy(last.state, last.error)),
-        permission: last.state === 'awaiting' ? (last.permission ?? null) : null,
-        brief: last.brief ?? null,
-        flagged: new Map((last.briefWarnings ?? []).map((w) => [w.line, w.kind])),
+        reply: isLive(t.state) ? null : (t.reply ?? endedWhy(t.state, t.error)),
+        permission: t.state === 'awaiting' ? (t.permission ?? null) : null,
+        brief: t.brief ?? null,
+        flagged: new Map((t.briefWarnings ?? []).map((w) => [w.line, w.kind])),
         // (the host answers a permission only from the device that asked)
         mine: true,
-        view: isLive(last.state) ? null : (last.view ?? null),
+        view: isLive(t.state) ? null : (t.view ?? null),
       }),
     });
   }
+  return seen;
+}
+
+/**
+ * The song's latest exchange: the newest of a request on its way, one turned down, the jobs the host
+ * told of, and the conversation's last turn. Null when the song has none.
+ */
+export function exchange(a: AgentState, project: string | null): Exchange | null {
+  if (!project || !isOn(a)) return null;
+  const last = a.thread?.project === project ? a.thread.turns[a.thread.turns.length - 1] : undefined;
+  const seen = told(a, project, last ? [last] : []);
   if (!seen.length) return null;
   seen.sort((x, y) => y.at - x.at);
   return (seen[0] as Seen).make();
+}
+
+/**
+ * The song's whole conversation, oldest first, as the page shows it: every turn the host keeps, with
+ * the jobs it told of standing for theirs (a job's news is the newer), a request on its way and one
+ * turned down. Of two at the same time the one `exchange` shows comes last, so the last is always it.
+ */
+export function conversation(a: AgentState, project: string | null): Exchange[] {
+  if (!project || !isOn(a)) return [];
+  const turns = a.thread?.project === project ? a.thread.turns : [];
+  return told(a, project, turns)
+    .map((seen, i) => ({ seen, i }))
+    .sort((x, y) => x.seen.at - y.seen.at || y.i - x.i)
+    .map(({ seen }) => seen.make());
 }
 
 /** What the bar's button shows: a turning ring while a job of this device's works on the open song, a dot after. */
@@ -751,6 +848,16 @@ export function useAgent<T>(selector: (a: AgentState) => T): T {
   return useSyncExternalStore(agent.subscribe, () => selector(agent.get()));
 }
 
+/** The time now on the host's clock, as near as this device knows it (what a request is stamped with). */
+export function serverNow(): number {
+  return Date.now() + state.skew;
+}
+
+/** An answer from the host said its time (`now`): how far its clock is from this device's is kept. */
+function heardClock(now: unknown): void {
+  if (typeof now === 'number' && Number.isFinite(now)) agent.dispatch({ type: 'clock', skew: now - Date.now() });
+}
+
 // ---- the host ----
 
 /** A refusal from the host: its words, its status, and a reason the studio can act on. */
@@ -961,10 +1068,11 @@ export async function lookAtHarnesses(): Promise<void> {
 export async function loadThread(project: string): Promise<void> {
   if (!isOn(state)) return;
   try {
-    const r = await call<{ thread: { turns: Turn[] } | null; job?: JobView | null }>(
+    const r = await call<{ thread: { turns: Turn[] } | null; job?: JobView | null; now?: number }>(
       'GET',
       `/api/agent/threads/${encodeURIComponent(project)}`,
     );
+    heardClock(r.now);
     agent.dispatch({ type: 'thread', project, turns: r.thread?.turns ?? [] });
     // the song's job that's working, or waiting for a click (after a reload, its button comes back)
     if (r.job) agent.dispatch({ type: 'status', job: r.job, barOpen: true });
@@ -1096,7 +1204,8 @@ export async function ask(
 ): Promise<void> {
   const request = text.trim();
   if (!request || !isOn(state)) return;
-  const at = Date.now();
+  // (on the host's clock, as the job's own times are: the page orders the conversation by them)
+  const at = serverNow();
   agent.dispatch({ type: 'sending', project, request, at });
   try {
     const attachments: string[] = [];
@@ -1119,7 +1228,7 @@ export async function ask(
 /** A scan's task for the agent (read it in, check it, fix what was flagged), from its fixed words. */
 export async function askScan(task: ScanTask, scan: string, project: string, context: RequestContext): Promise<void> {
   if (!isOn(state)) return;
-  const at = Date.now();
+  const at = serverNow();
   const request = task === 'read' ? 'Read this scan' : task === 'check' ? 'Check this scan' : 'Fix what was flagged';
   agent.dispatch({ type: 'sending', project, request, at });
   try {
@@ -1179,6 +1288,7 @@ export function agentMessage(msg: Record<string, unknown>): { handled: boolean; 
     case 'agent-status': {
       const job = msg.job as JobView | undefined;
       if (!job || typeof job.id !== 'string' || !isOn(state)) return { handled: true };
+      heardClock(msg.now);
       const was = state.jobs[job.id];
       agent.dispatch({ type: 'status', job, barOpen: studio.get().bar });
       const fx = statusEffects(state, job, was);
@@ -1246,12 +1356,13 @@ export async function catchUp(): Promise<JobEffect[]> {
   const followed = Object.values(state.jobs).filter((j) => isLive(j.state) || j.state === 'awaiting');
   const effects: JobEffect[] = [];
   for (const project of new Set(followed.map((j) => j.project))) {
-    let r: { thread: { turns: Turn[] } | null; job?: JobView | null };
+    let r: { thread: { turns: Turn[] } | null; job?: JobView | null; now?: number };
     try {
       r = await call('GET', `/api/agent/threads/${encodeURIComponent(project)}`);
     } catch {
       continue;
     }
+    heardClock(r.now);
     for (const j of followed.filter((x) => x.project === project)) {
       const turn = r.thread?.turns.find((t) => t.job === j.id);
       const now = r.job?.id === j.id ? r.job : asEnded(j, turn);

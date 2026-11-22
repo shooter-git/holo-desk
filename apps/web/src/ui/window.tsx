@@ -5,6 +5,7 @@
 import type { ParamDef } from '@holo/session';
 import { ChevronDown } from 'lucide-react';
 import { type ReactNode, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { windowLeft } from '../app/page-layout.ts';
 import { Knob, startDrag } from './controls.tsx';
 import { openMenuAt } from './menu.tsx';
 
@@ -29,7 +30,8 @@ export function useViewport(): { w: number; h: number } {
 /**
  * A plugin's or a stage's window: it floats where it was put (its header drags it), and on a
  * phone it is a sheet up from the bottom, with a scrim behind it that closes it. Keyed by what
- * it shows, so a new one opens centered and takes the keyboard; closing gives the keyboard back.
+ * it shows, so a new one opens centered (beside the agent's sheet, where there's room) and takes
+ * the keyboard; closing gives the keyboard back. It opens over the agent's page (ui/TalkPage.tsx).
  */
 export function Floating({
   width,
@@ -50,8 +52,9 @@ export function Floating({
 }) {
   const vp = useViewport();
   const win = useRef<HTMLDivElement>(null);
+  // (with the agent's sheet open on a tablet, in the room beside it when there's enough)
   const [pos, setPos] = useState(() => ({
-    x: Math.max(8, window.innerWidth / 2 - width / 2),
+    x: windowLeft(width, window.innerWidth, document.querySelector('.talk-page')?.getBoundingClientRect().left ?? null),
     y: Math.max(60, window.innerHeight / 2 - 220),
   }));
   // it opens whole, and stays so as it grows (a kit's pads page opened, its deeper settings shown): a

@@ -202,7 +202,12 @@ to install a pack, send the song to its creation, share the screen, take a photo
 microphone. Under the reply the agent shows what you'll want to do next with its work, composed in the
 studio's own buttons, switches, sliders and lists: play the original against its change, try the
 versions it made and keep one, set how much, or go to the bars it means. Nothing plays or moves until
-you click, unless you asked to see or hear something. Close the bar and the work goes on: the bar's button shows a turning ring while the
+you click, unless you asked to see or hear something. On a phone or a tablet the bar opens as a page
+with the song's whole conversation: on a phone held upright it fills the room between the control bar
+and the transport, which stay in reach; on its side and on a tablet it's a sheet down the right edge,
+beside the studio. Earlier requests fold to a line you tap to open, the one at work says how long it has
+worked, and holding the page's header lets you see the studio through it. Done or a swipe puts it away.
+Close the bar (or the page) and the work goes on: the bar's button shows a turning ring while the
 agent works, then a dot until you open the bar again (a phone has the bar's button too, at the top).
 You can even leave: switch your phone to another app or close the tab, and its changes still land in the
 song; come back to find them as one undo step, the ring if it's still at work, or the dot and its reply

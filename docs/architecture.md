@@ -68,7 +68,11 @@ wraps `EngineCore` from `@holo/engine`):
   take ends where Stop was pressed, as ever. The engines that play live turn this on
   (`transportFades`); a bounce and a headless render never stop part way, and a loop's jump there
   is the music's own, so they play as they always have.
-- **Meters and the playhead** come back through shared memory, read by the screen every frame.
+- **Meters and the playhead** come back through shared memory, read by the screen every frame. The
+  screen draws in one frame loop (`apps/web/src/ui/frame.ts`) that rests when nothing moves, and skips
+  what's out of sight: on a phone held upright, the views under the agent's page are hidden and their
+  frames skipped (`FramePause`) until it closes or is held to see through, while the transport's display
+  keeps going. Each draws what it has to on its first frame back.
 - **With shared memory, the song itself is played ahead** by worker threads on the other cores, and
   the audio thread plays the master and whatever comes in live (see Scaling, below).
 - Nothing allocates on the audio thread except a voice object per note. All buffers are preallocated,
@@ -315,7 +319,7 @@ passes.
 ## The agent
 
 The agent is off by default and turned on in Settings › Agent. A request typed in the studio's bar
-goes this way:
+(on a phone or a tablet, its page) goes this way:
 
 ```
 the bar ──► server ──► runner ──► harness ──► HO[LO]'s MCP server

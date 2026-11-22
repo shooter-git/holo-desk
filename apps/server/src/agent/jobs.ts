@@ -1016,10 +1016,13 @@ export class Jobs implements AgentHooks {
     job.quiet.unref?.();
   }
 
-  /** The studios that hear how a job goes: the requester's, and allowed devices with its song open. */
+  /**
+   * The studios that hear how a job goes: the requester's, and allowed devices with its song open. It
+   * says the host's time too, so a studio counts how long a job has worked on the host's clock.
+   */
   private tell(job: AgentJob): void {
     this.o.live.toDevices(
-      { type: 'agent-status', job: job.view },
+      { type: 'agent-status', job: job.view, now: Date.now() },
       (c) => c.device === job.view.device || c.state?.project === job.view.project,
     );
   }

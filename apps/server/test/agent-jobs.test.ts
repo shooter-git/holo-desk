@@ -1124,6 +1124,7 @@ describe('since your last reply', () => {
         ],
       },
       job: null,
+      now: expect.any(Number),
     });
 
     // the user undoes the agent's step, makes one of their own, and the song is slower

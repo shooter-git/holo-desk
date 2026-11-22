@@ -28,6 +28,8 @@ import {
   updateChannel,
 } from './actions.ts';
 import { spaceIsTransport } from './fields.ts';
+import { layoutNow } from './layout.ts';
+import { pageCovers, usesPage } from './page-layout.ts';
 import { closeBar, openBar, store } from './store.ts';
 
 export interface KeyCommand {
@@ -190,11 +192,29 @@ function selectedTrackId(): string | null {
   return store.get().selectedTrack;
 }
 
-/** The bar from the keyboard: open (not over the start screen) or closed. */
+/**
+ * The bar from the keyboard: open (not over the start screen) or closed. The page (a phone's or a
+ * tablet's) is under a dialog, so it doesn't open while one is up; a desktop's bar opens over it.
+ */
 function toggleBar(): void {
   const s = store.get();
   if (s.bar) closeBar();
-  else if (s.audioReady) openBar();
+  else if (s.audioReady && !(usesPage(layoutNow()) && (s.dialog || covered()))) openBar();
+}
+
+/**
+ * Whether the bar keeps the studio's keys: the bar always (it's over everything); the page while it
+ * covers the studio (a phone held upright) or has the keyboard, unless something is over it (a dialog,
+ * a window over the whole studio, or one of the studio's windows opened after it): that takes the keys
+ * first, Escape closing it before the page. A sheet beside the studio leaves them to it otherwise.
+ */
+function barHasKeys(target: EventTarget | null): boolean {
+  const layout = layoutNow();
+  if (!usesPage(layout)) return true;
+  const s = store.get();
+  const under = (s.plugin || s.synth || s.stage) && document.querySelector('.talk-room[data-below]');
+  if (s.dialog || covered() || under) return false;
+  return pageCovers(layout) || !!(target as Element | null)?.closest?.('.talk-page');
 }
 
 function onKeyDown(e: KeyboardEvent): void {
@@ -207,7 +227,7 @@ function onKeyDown(e: KeyboardEvent): void {
     return;
   }
   // the bar keeps the keys while it's open: the studio's shortcuts (Space, Delete, the letters) wait
-  if (store.get().bar) {
+  if (store.get().bar && barHasKeys(e.target)) {
     if (e.key === 'Escape') closeBar();
     return;
   }

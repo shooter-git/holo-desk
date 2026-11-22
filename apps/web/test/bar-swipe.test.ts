@@ -1,14 +1,18 @@
 import { describe, expect, it } from 'vitest';
 import {
+  along,
   atEnd,
   CLOSE_PX,
   closes,
   drawn,
+  drawnToward,
   FLICK_PX,
   FLICK_SPEED,
   HOLD_MS,
   judge,
+  judgeToward,
   MOVE_PX,
+  speedToward,
   speedUp,
 } from '../src/ui/bar-swipe.ts';
 
@@ -88,5 +92,62 @@ describe('a reply that scrolls', () => {
     expect(atEnd({ scrollTop: 600, clientHeight: 300, scrollHeight: 1000 })).toBe(false);
     // past it, as a scroll bounces
     expect(atEnd({ scrollTop: 720, clientHeight: 300, scrollHeight: 1000 })).toBe(true);
+  });
+});
+
+describe('the page’s swipes, toward its own side', () => {
+  it('measures a move toward each side', () => {
+    expect(along(3, -10, 'up')).toBe(10);
+    expect(along(3, 10, 'down')).toBe(10);
+    expect(along(12, 4, 'right')).toBe(12);
+    expect(along(-12, 4, 'left')).toBe(12);
+    expect(along(-12, 4, 'right')).toBe(-12);
+  });
+
+  it('down, held upright: a finger going down takes it, one going up or across is the browser’s', () => {
+    expect(judgeToward(0, 3, 20, 'down')).toBeNull();
+    expect(judgeToward(2, 10, 50, 'down')).toBe('swipe');
+    expect(judgeToward(0, -10, 50, 'down')).toBe('pass');
+    expect(judgeToward(10, 4, 50, 'down')).toBe('pass');
+    expect(judgeToward(0, 20, HOLD_MS + 1, 'down')).toBe('pass');
+  });
+
+  it('right, a sheet: a finger going right takes it, a scroll up or down doesn’t', () => {
+    expect(judgeToward(10, 3, 50, 'right')).toBe('swipe');
+    expect(judgeToward(-10, 3, 50, 'right')).toBe('pass');
+    expect(judgeToward(4, 10, 50, 'right')).toBe('pass');
+    expect(judgeToward(0, -MOVE_PX, 40, 'right')).toBe('pass');
+    // the bar's own rule is the same as before
+    for (const [dx, dy, ms] of [
+      [2, -10, 50],
+      [0, 10, 50],
+      [10, -4, 50],
+      [0, -20, HOLD_MS + 1],
+    ] as const)
+      expect(judgeToward(dx, dy, ms)).toBe(judge(dx, dy, ms));
+  });
+
+  it('draws the page toward its side with the finger, never the other way', () => {
+    expect(drawnToward(30, 'down')).toBe(30);
+    expect(drawnToward(-30, 'down')).toBe(0);
+    expect(drawnToward(30, 'right')).toBe(30);
+    expect(drawnToward(-30, 'right')).toBe(0);
+    expect(drawnToward(-30, 'left')).toBe(-30);
+    expect(drawnToward(-30)).toBe(drawn(-30));
+  });
+
+  it('measures a flick toward its side as it lets go', () => {
+    const right = [
+      { x: 100, y: 200, at: 0 },
+      { x: 110, y: 201, at: 16 },
+      { x: 130, y: 199, at: 32 },
+      { x: 160, y: 200, at: 48 },
+    ];
+    expect(speedToward(right, 50, 'right')).toBeCloseTo(60 / 48);
+    expect(speedToward(right, 50, 'left')).toBeCloseTo(-60 / 48);
+    expect(speedToward(right, 400, 'right')).toBe(0);
+    const down = right.map((m) => ({ x: m.y, y: m.x, at: m.at }));
+    expect(speedToward(down, 50, 'down')).toBeCloseTo(60 / 48);
+    expect(closes(40, speedToward(right, 50, 'right'))).toBe(true);
   });
 });

@@ -1,15 +1,17 @@
 /**
- * The bar hangs from the top of the screen, so on a touch screen a swipe up puts it away, as a swipe
- * down on a phone's top bar brings it. The card goes up with the finger; let go far enough up, or
- * flicked, it goes on up and the bar closes, and otherwise it drops back into place.
+ * The bar (a desktop's: on a phone or a tablet it's the page, ui/TalkPage.tsx) hangs from the top of the
+ * screen, so on a touch screen a swipe up puts it away, as a swipe down on a phone's top bar brings it.
+ * The card goes up with the finger; let go far enough up, or flicked, it goes on up and the bar closes,
+ * and otherwise it drops back into place. The page's swipes (ui/page-swipe.ts) are judged by the same
+ * rules, toward the side that puts it away.
  *
  * A swipe that would scroll is the scroll's: one that starts on a reply (or the list) that can still
  * go on is left to it, and only once that's at its end does a swipe up take the card. A finger held
  * still before it moves is the caret's, a selection's or a menu's, a sideways drag or a swipe down is
  * the browser's, and a slider is its own. A tap is a tap.
  *
- * On a phone the bar also keeps to what shows of the page (above the keyboard, when it's up), and
- * held upright it stops short of the foot of it, so there's always some studio under it to tap.
+ * The bar, and the page, keep to what shows of the screen (above the keyboard, when it's up):
+ * useShownRoom.
  */
 import { type RefObject, useEffect, useLayoutEffect } from 'react';
 import { closeBar } from '../app/store.ts';
@@ -31,31 +33,70 @@ export function atEnd(s: { scrollTop: number; clientHeight: number; scrollHeight
   return s.scrollHeight - s.clientHeight - s.scrollTop <= 1;
 }
 
-/**
- * What a finger that has gone (dx, dy) since it went down, `ms` ago, is doing: nothing yet (null, a
- * tap so far), drawing the card up ('swipe'), or something that's the browser's ('pass': a scroll, a
- * sideways drag, a swipe down, or a press held first).
- */
-export function judge(dx: number, dy: number, ms: number): 'swipe' | 'pass' | null {
-  if (Math.hypot(dx, dy) < MOVE_PX) return null;
-  return ms <= HOLD_MS && -dy > Math.abs(dx) ? 'swipe' : 'pass';
+/** The side a card is swiped toward to put it away: the bar up, the page down (held upright) or right (a sheet). */
+export type Toward = 'up' | 'down' | 'right' | 'left';
+
+const vertical = (toward: Toward) => toward === 'up' || toward === 'down';
+
+/** How far a move of (dx, dy) goes toward a side (less than none: away from it). */
+export function along(dx: number, dy: number, toward: Toward): number {
+  if (toward === 'up') return -dy;
+  if (toward === 'down') return dy;
+  return toward === 'right' ? dx : -dx;
 }
 
-/** Where the card is, drawn by a finger now `dy` below where it went down: up with it, never down. */
-export const drawn = (dy: number): number => Math.min(0, dy);
+/**
+ * What a finger that has gone (dx, dy) since it went down, `ms` ago, is doing: nothing yet (null, a
+ * tap so far), drawing the card toward its side ('swipe'), or something that's the browser's ('pass':
+ * a scroll, a drag across, a swipe the other way, or a press held first).
+ */
+export function judgeToward(dx: number, dy: number, ms: number, toward: Toward = 'up'): 'swipe' | 'pass' | null {
+  if (Math.hypot(dx, dy) < MOVE_PX) return null;
+  const across = vertical(toward) ? Math.abs(dx) : Math.abs(dy);
+  return ms <= HOLD_MS && along(dx, dy, toward) > across ? 'swipe' : 'pass';
+}
+
+/** The bar's: a finger drawing the card up. */
+export const judge = (dx: number, dy: number, ms: number): 'swipe' | 'pass' | null => judgeToward(dx, dy, ms, 'up');
 
 /**
- * How fast a finger was going up as it let go (px a ms), from where it was in the last `window` ms:
- * none if it rested before it let go.
+ * Where the card is, drawn by a finger now `d` px from where it went down along the swipe's axis (dy
+ * for up and down, dx across): toward its side with it, never the other way.
  */
-export function speedUp(moves: { y: number; at: number }[], now: number, window = 100): number {
+export function drawnToward(d: number, toward: Toward = 'up'): number {
+  return toward === 'up' || toward === 'left' ? Math.min(0, d) : Math.max(0, d);
+}
+
+/** The bar's: the card goes up with the finger, never down. */
+export const drawn = (dy: number): number => drawnToward(dy, 'up');
+
+/**
+ * How fast a finger was going toward a side as it let go (px a ms), from where it was in the last
+ * `window` ms: none if it rested before it let go.
+ */
+export function speedToward(
+  moves: { x?: number; y?: number; at: number }[],
+  now: number,
+  toward: Toward = 'up',
+  window = 100,
+): number {
   const last = moves[moves.length - 1];
   if (!last || now - last.at > window) return 0;
   const first = moves.find((m) => last.at - m.at <= window) ?? last;
-  return last.at > first.at ? (first.y - last.y) / (last.at - first.at) : 0;
+  if (last.at <= first.at) return 0;
+  const d = (m: { x?: number; y?: number }) => (vertical(toward) ? (m.y ?? 0) : (m.x ?? 0));
+  const moved = vertical(toward) ? along(0, d(last) - d(first), toward) : along(d(last) - d(first), 0, toward);
+  return moved / (last.at - first.at);
 }
 
-/** Whether a finger let go `up` px above where it went down, going up at `speed`, closes the bar. */
+/** The bar's: how fast a finger was going up as it let go. */
+export const speedUp = (moves: { y: number; at: number }[], now: number, window = 100): number =>
+  speedToward(moves, now, 'up', window);
+
+/**
+ * Whether a finger let go `up` px toward the side that puts the card away (above where it went down,
+ * for the bar), going that way at `speed`, closes it.
+ */
 export const closes = (up: number, speed: number): boolean =>
   up >= CLOSE_PX || (up >= FLICK_PX && speed >= FLICK_SPEED);
 
@@ -192,9 +233,10 @@ export function useSwipeUpToClose(ref: RefObject<HTMLElement | null>): void {
 }
 
 /**
- * What of the page shows, as --shown-top and --shown-height on the scrim: on a phone, whose keyboard
- * may cover the page rather than make it shorter, the bar keeps within it. data-covered says the foot
- * of the screen is hidden (by the keyboard), and with it the room kept for the home bar.
+ * What of the page shows, as --shown-top and --shown-height on the scrim (or the page's room): on a
+ * phone, whose keyboard may cover the page rather than make it shorter, the bar or the page keeps
+ * within it. data-covered says the foot of the screen is hidden (by the keyboard), and with it the room
+ * kept for the home bar.
  */
 export function useShownRoom(ref: RefObject<HTMLElement | null>): void {
   useLayoutEffect(() => {

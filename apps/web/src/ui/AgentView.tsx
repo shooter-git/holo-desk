@@ -1,5 +1,5 @@
 /**
- * What a reply shows under its sentence in the bar: the blocks the agent composed (the format is
+ * What a reply shows under its sentence in the bar or the page: the blocks the agent composed (the format is
  * @holo/agent/view), drawn with the studio's own pieces (its buttons, switches, rows, sliders and
  * canvases, in its own colours) and nothing of a colour of its own. Words are shown as words, never
  * as markup. What a click does is app/agent-view.ts's: each is something the user could do themselves.
@@ -41,7 +41,8 @@ import {
   versionSong,
   versionWords,
 } from '../app/agent-view.ts';
-import { closeBar, useApp } from '../app/store.ts';
+import { closeForStudio } from '../app/page-layout.ts';
+import { useApp } from '../app/store.ts';
 import { recordingNotes } from '../audio/notes.ts';
 import { editableNotes } from './AudioNotes.tsx';
 import { dbToFader, faderToDb } from './controls.tsx';
@@ -65,13 +66,16 @@ interface Ctx {
   say: (why: string) => void;
 }
 
-/** What a click does, run, and what the bar does after: it closes for a go or a command, so the studio shows. */
+/**
+ * What a click does, run, and what the bar does after: it closes for a go or a command, so the studio
+ * shows (the page too where it covers the studio; a sheet stays beside it).
+ */
 async function run(ctx: Ctx, action: Action, key: string): Promise<void> {
   let why: string | null = null;
   if ('play' in action) why = await playBars(ctx.view, action.play, key);
   else if ('go' in action) {
     why = goTo(action.go);
-    if (!why) closeBar();
+    if (!why) closeForStudio();
   } else if ('set' in action) {
     if (!setBinding(action.set, action.value)) why = 'That setting is gone from the song';
   } else if ('keep' in action) {

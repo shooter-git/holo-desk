@@ -1,8 +1,19 @@
 /**
- * Drawing helpers: one animation loop for everything that moves (meters, the playhead), and a
- * hook that keeps a canvas sharp at the screen's pixel density as its box resizes.
+ * Drawing helpers: one animation loop for everything that moves (meters, the playhead), paused where
+ * a part is out of sight (FramePause), and a hook that keeps a canvas sharp at the screen's pixel
+ * density as its box resizes.
  */
-import { type RefObject, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import {
+  createContext,
+  createElement,
+  type ReactNode,
+  type RefObject,
+  useContext,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from 'react';
 
 /** A frame's work. One that returns true asks for the screen's pace to be kept (it still has something moving). */
 type Frame = (now: number) => unknown;
@@ -88,14 +99,49 @@ export function useMedia(query: string): boolean {
 }
 
 /**
+ * A part of the studio that's out of sight (the panes under the agent's page on a phone held upright):
+ * its frames are skipped while it is, and it's drawn again on its first frame back. A part inside a
+ * paused one is paused with it.
+ */
+interface PauseScope {
+  paused: boolean;
+  parent: PauseScope | null;
+}
+
+const PauseContext = createContext<PauseScope | null>(null);
+
+function isPaused(scope: PauseScope | null): boolean {
+  for (let s = scope; s; s = s.parent) if (s.paused) return true;
+  return false;
+}
+
+/**
+ * What's inside isn't drawn while `paused`: every useFrame under it skips its frames. Each draws what
+ * it has to as its first frame back comes (it reads the song and the playhead as they are then), and
+ * that frame comes at once.
+ */
+export function FramePause({ paused, children }: { paused: boolean; children?: ReactNode }) {
+  const parent = useContext(PauseContext);
+  const scope = useRef<PauseScope>({ paused, parent });
+  scope.current.paused = paused;
+  scope.current.parent = parent;
+  useEffect(() => {
+    if (!paused) wake();
+  }, [paused]);
+  return createElement(PauseContext.Provider, { value: scope.current }, children);
+}
+
+/**
  * Call `fn` every animation frame while the component is mounted (ten times a second while the
- * loop rests). Returning true from it keeps the screen's pace, as wake() does.
+ * loop rests), unless it's under a FramePause that's paused. Returning true from it keeps the
+ * screen's pace, as wake() does.
  */
 export function useFrame(fn: Frame): void {
   const ref = useRef(fn);
   ref.current = fn;
+  const pause = useContext(PauseContext);
   useEffect(() => {
-    const f: Frame = (now) => ref.current(now);
+    const f: Frame = (now) => (isPaused(pause) ? undefined : ref.current(now));
     frames.add(f);
     // (something new is on the screen: it's drawn at once)
     wake();
@@ -106,7 +152,8 @@ export function useFrame(fn: Frame): void {
     return () => {
       frames.delete(f);
     };
-  }, []);
+    // (the scope is the same object for as long as the component is mounted where it is)
+  }, [pause]);
 }
 
 export interface Size {

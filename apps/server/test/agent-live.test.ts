@@ -852,3 +852,24 @@ describe('the studio that asked, away a moment', () => {
     expect(desk.got('agent-ops').map((m) => m.batch)).toEqual(['b1', 'b2']);
   });
 });
+
+describe('the host’s time', () => {
+  it('comes with each status and with the song’s conversation, for the studio to count a job’s time by', async () => {
+    const { app, start, s, token, desk } = await setup();
+    const before = Date.now();
+    const { job } = await start({ project: s.id, text: 'Lift the chorus' });
+    await waitFor(() => desk.got('agent-status').length > 0);
+    for (const m of desk.got('agent-status')) {
+      expect(m.now).toBeGreaterThanOrEqual(before);
+      expect(m.now).toBeLessThanOrEqual(Date.now());
+      expect(m.now).toBeGreaterThanOrEqual((m.job as Msg).started as number);
+    }
+    const r = (await app.inject({ method: 'GET', url: `/api/agent/threads/${s.id}`, headers: auth(token) })).json() as {
+      now: number;
+      job: Msg | null;
+    };
+    expect(r.job?.id).toBe(job);
+    expect(r.now).toBeGreaterThanOrEqual(r.job?.started as number);
+    expect(r.now).toBeLessThanOrEqual(Date.now());
+  });
+});

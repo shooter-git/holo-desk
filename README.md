@@ -206,8 +206,9 @@ you click, unless you asked to see or hear something. Close the bar and the work
 agent works, then a dot until you open the bar again (a phone has the bar's button too, at the top).
 You can even leave: switch your phone to another app or close the tab, and its changes still land in the
 song; come back to find them as one undo step, the ring if it's still at work, or the dot and its reply
-if it's done. What needs you there (playing to you, listening) waits for its reply's buttons. The
-agent works on the open song and nothing else:
+if it's done. What needs you there (playing to you, listening) waits for its reply's buttons. A
+request runs as long as the agent keeps working, up to 2 hours; it ends if it goes quiet for 15 minutes,
+and Stop on the bar ends it at any time. The agent works on the open song and nothing else:
 
 - its notes, score, tracks, instruments, effects, mix, automation, tempo, key, meter, markers and cycle;
 - playing to you, listening as you play, and reading what you just played (its tempo, meter, key and

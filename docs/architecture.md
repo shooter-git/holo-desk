@@ -339,9 +339,10 @@ the studio that asked ◄── server ◄── /api/agent/jobs/:job/* ◄─�
   `import`, `packs` and `holo tool NAME` run the same tools on the song from a terminal, through the
   command line's own routes instead of a job's (docs/agent.md, "What doesn't change, and the terminal").
 - **A job ends** with the agent's `finish` (a label for the undo step and a reply of a sentence or
-  two), or when it's stopped: Stop, the studio opening another song or undoing the job's change while it
-  runs, the device removed, the agent turned off, the runner gone for 15 s, or after 10 minutes (45 for
-  reading a scan). Its token stops working then.
+  two), or when it's stopped: Stop (at any time), the studio opening another song or undoing the job's
+  change while it runs, the device removed, the agent turned off, the runner gone for 15 s, 15 minutes
+  without a word from it (a tool call under way counts until it answers), or 2 hours however busy it is
+  (3 for reading a scan). Its token stops working then.
 - **Threads** (`apps/server/src/agent/threads.ts`). Each song has one conversation: the harness's own
   session, carried on from request to request, the song as the agent last saw it, and what the user did
   since (undo, redo, their own steps). The next prompt has a "since your last reply" part, so the agent

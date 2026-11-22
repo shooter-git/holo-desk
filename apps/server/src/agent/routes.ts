@@ -197,7 +197,8 @@ export function agentRoutes(app: FastifyInstance, o: AgentOptions): { jobs: Jobs
 
   /**
    * A route for a job's tools: its token, while it runs (403 otherwise); with `studio`, only while the
-   * requester's studio has the job's song open (409 `away` while it's in the background or closed).
+   * requester's studio has the job's song open (409 `away` while it's in the background or closed). The
+   * job isn't quiet while the call is under way.
    */
   const forJob =
     (handler: JobHandler, studio = false) =>
@@ -206,6 +207,7 @@ export function agentRoutes(app: FastifyInstance, o: AgentOptions): { jobs: Jobs
       if (!token) return reply.code(401).send({ error: 'This needs the job’s token' });
       const job = theJobs.forTool((req.params as Params).job ?? '', token);
       if (!job) return reply.code(403).send({ error: 'This job has ended, or the token isn’t its' });
+      const answered = theJobs.toolCall(job);
       try {
         // (a studio away a moment, reloading or its network dropped, is waited for: 409 `away` if it isn't back)
         if (studio) await theJobs.studioBack(job);
@@ -213,6 +215,8 @@ export function agentRoutes(app: FastifyInstance, o: AgentOptions): { jobs: Jobs
       } catch (err) {
         if (err instanceof Refusal) return refuse(reply, err);
         throw err;
+      } finally {
+        answered();
       }
     };
 

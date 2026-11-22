@@ -1,7 +1,15 @@
 import { describeChanges, type Project } from '@holo/session';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { briefWarnings, chooseText, LOOK_EVERY_MS, parseHarnessEvent, parseHarnesses } from '../src/agent/jobs.ts';
-import { agentApp, agentWorld, auth, CLAUDE, type Msg, settle, waitFor } from './agent-fakes.ts';
+import {
+  type AgentJob,
+  briefWarnings,
+  chooseText,
+  type Jobs,
+  LOOK_EVERY_MS,
+  parseHarnessEvent,
+  parseHarnesses,
+} from '../src/agent/jobs.ts';
+import { agentApp, agentWorld, auth, CLAUDE, type Msg, settle, until, waitFor } from './agent-fakes.ts';
 
 let close: (() => Promise<void>) | null = null;
 afterEach(async () => {
@@ -37,7 +45,20 @@ describe('a request', () => {
     });
     expect(job).toMatch(/^agj_[0-9a-f]{12}$/);
     expect(Object.keys(sent).sort()).toEqual(
-      ['base', 'effort', 'harness', 'job', 'middleC', 'model', 'prompt', 'thread', 'token', 'type', 'workspace'].sort(),
+      [
+        'base',
+        'effort',
+        'harness',
+        'job',
+        'limitMs',
+        'middleC',
+        'model',
+        'prompt',
+        'thread',
+        'token',
+        'type',
+        'workspace',
+      ].sort(),
     );
     expect(sent).toMatchObject({
       type: 'agent-run',
@@ -50,6 +71,8 @@ describe('a request', () => {
       token: expect.stringMatching(/^[A-Za-z0-9_-]{43}$/),
       workspace: sent.thread,
       base: 'http://127.0.0.1:47899',
+      // its ceiling, 2 hours: the runner stops the harness a little past it
+      limitMs: 2 * 60 * 60_000,
     });
     const { prompt, ...rest } = sent;
     expect(JSON.stringify(rest)).not.toContain('ZEBRA');
@@ -403,7 +426,10 @@ describe('ending early', () => {
 });
 
 describe('the clock', () => {
-  it('fails a job 15 s after its runner drops, and stops one that runs past 10 minutes', async () => {
+  const MINUTE = 60_000;
+  const HOUR = 60 * MINUTE;
+
+  it('fails a job 15 s after its runner drops, and when its harness fails', async () => {
     const { start, tool, s, song, studio, token, desk, run, runner, status } = await setup();
     const first = await start({ project: s.id, text: 'A bass line' });
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
@@ -423,14 +449,100 @@ describe('the clock', () => {
     const second = await start({ project: other.id, text: 'Drums' }, token, fresh);
     fresh.say({ type: 'agent-failed', job: second.job, error: 'Claude Code exited (1)' });
     expect(status(desk, second.job)).toMatchObject({ state: 'failed', error: 'Claude Code exited (1)' });
-    // (its clock is set when it starts: with the timers faked from here)
+    expect((await start({ project: other.id, text: 'Drums again' }, token, fresh)).job).toMatch(/^agj_/);
+  });
+
+  it('ends a job that goes quiet for 15 minutes: a tool call, a line or its runner starts the quiet again', async () => {
+    const { start, tool, s, desk, run, status } = await setup();
+    // (its quiet starts when it does: with the timers faked from here)
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
-    const third = await start({ project: other.id, text: 'Drums again' }, token, fresh);
-    vi.advanceTimersByTime(10 * 60_000 - 1);
-    expect(status(desk, third.job)).toMatchObject({ state: 'waiting' });
+    // never heard from at all: it didn't start (the runner may be busy with other songs' jobs)
+    const first = await start({ project: s.id, text: 'A bass line' });
+    vi.advanceTimersByTime(15 * MINUTE - 1);
+    expect(status(desk, first.job)).toMatchObject({ state: 'waiting' });
     vi.advanceTimersByTime(1);
-    expect(status(desk, third.job)).toMatchObject({ state: 'failed', error: 'It took longer than 10 minutes' });
-    expect(fresh.got('agent-cancel')).toEqual([{ type: 'agent-cancel', job: third.job }]);
+    expect(status(desk, first.job)).toMatchObject({ state: 'failed', error: 'It didn’t start in 15 minutes' });
+    expect(run.got('agent-cancel')).toEqual([{ type: 'agent-cancel', job: first.job }]);
+
+    const second = await start({ project: s.id, text: 'Re-orchestrate the song' });
+    run.say({ type: 'agent-session', job: second.job, session: 'sess-1' });
+    vi.advanceTimersByTime(14 * MINUTE);
+    expect((await tool(second.job, second.token, 'GET', '/describe')).statusCode).toBe(200);
+    vi.advanceTimersByTime(14 * MINUTE);
+    run.say({ type: 'agent-progress', job: second.job, line: 'Writing notes' });
+    vi.advanceTimersByTime(14 * MINUTE);
+    const line = await tool(second.job, second.token, 'POST', '/progress', { line: 'Shaping the sound' });
+    expect(line.statusCode).toBe(200);
+    vi.advanceTimersByTime(15 * MINUTE - 1);
+    // 57 minutes in: far past the old 10, and never quiet for 15
+    expect(status(desk, second.job)).toMatchObject({ state: 'running' });
+    vi.advanceTimersByTime(1);
+    expect(status(desk, second.job)).toMatchObject({ state: 'failed', error: 'It went quiet for 15 minutes' });
+    expect(run.got('agent-cancel').at(-1)).toEqual({ type: 'agent-cancel', job: second.job });
+  });
+
+  it('isn’t quiet while a tool call is under way: the quiet starts again when it answers', async () => {
+    const { start, tool, s, desk, run, status, services } = await setup();
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const { job, token } = await start({ project: s.id, text: 'Bounce it and measure the mix' });
+    run.say({ type: 'agent-session', job, session: 'sess-1' });
+    // a call that takes longer than the quiet, held open 40 minutes (each route's own answers within a minute or so)
+    const jobs = services.live.agent as unknown as Jobs;
+    const done = jobs.toolCall(jobs.get(job) as AgentJob);
+    vi.advanceTimersByTime(40 * MINUTE);
+    expect(status(desk, job)).toMatchObject({ state: 'running' });
+    done();
+    vi.advanceTimersByTime(14 * MINUTE + 50_000);
+    expect(status(desk, job)).toMatchObject({ state: 'running' });
+    // the studio takes 50 s over a change sent 14:50 after that
+    let answer: () => void = () => undefined;
+    desk.answer = (msg) =>
+      msg.type === 'agent-ops'
+        ? new Promise((ok) => {
+            answer = () => ok({ ok: true, revision: 0 });
+          })
+        : { ok: true, revision: 0 };
+    let answered = false;
+    const ops = [{ op: 'setProject', patch: { title: 'Slow' } }];
+    void tool(job, token, 'POST', '/ops', { ops, label: 'Title', batch: 'b1' }).then(() => {
+      answered = true;
+    });
+    await until(() => desk.got('agent-ops').length === 1);
+    await vi.advanceTimersByTimeAsync(50_000);
+    expect(answered).toBe(false);
+    answer();
+    await until(() => answered);
+    // 15 minutes from the answer, not from the call (which would have been 50 s ago)
+    await vi.advanceTimersByTimeAsync(15 * MINUTE - 1);
+    expect(status(desk, job)).toMatchObject({ state: 'running' });
+    await vi.advanceTimersByTimeAsync(1);
+    expect(status(desk, job)).toMatchObject({ state: 'failed', error: 'It went quiet for 15 minutes' });
+  });
+
+  it('stops a job at its ceiling however busy it is: 2 hours, 3 for a scan preset', async () => {
+    const { start, s, app, desk, run, status } = await setup();
+    const scan = (await app.inject({ method: 'POST', url: '/api/scans', payload: { project: s.id } })).json() as {
+      id: string;
+    };
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    for (const [body, hours] of [
+      [{ text: 'Re-orchestrate the whole song' }, 2],
+      [{ text: '', preset: { kind: 'scan', task: 'read', scan: scan.id } }, 3],
+    ] as const) {
+      const { job, run: sent } = await start({ project: s.id, ...body });
+      // the runner is told it, and stops the harness a little past it
+      expect(sent.limitMs).toBe(hours * HOUR);
+      // a line every 10 minutes
+      for (let at = 10; at < hours * 60; at += 10) {
+        vi.advanceTimersByTime(10 * MINUTE);
+        run.say({ type: 'agent-progress', job, line: `Still at it, ${at} minutes in` });
+      }
+      vi.advanceTimersByTime(10 * MINUTE - 1);
+      expect(status(desk, job)).toMatchObject({ state: 'running' });
+      vi.advanceTimersByTime(1);
+      expect(status(desk, job)).toMatchObject({ state: 'failed', error: `It took longer than ${hours} hours` });
+      expect(run.got('agent-cancel').at(-1)).toEqual({ type: 'agent-cancel', job });
+    }
   });
 });
 

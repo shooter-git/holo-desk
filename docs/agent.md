@@ -282,9 +282,10 @@ neither does the studio going: the job runs on, its changes land, and its reply 
   studio's own changes stay to be saved, and it's asked again later, a little longer each time (up to
   a minute), one try again a song, let go as another opens: never which version to keep while the
   answer may be the agent's. A save is given up when it takes longer than 30 s and as long again as
-  sending the song at 20 KB/s takes (a page frozen with it on its way), and made again. (So a big
-  song on an uplink slower than about 160 kbit/s never gets there: a browser's `fetch` doesn't say
-  how much of a request has gone, so the time can't follow it as the pick-up's answer's does.)
+  sending the song at 20 KB/s takes (a page frozen with it on its way), and made again; each try
+  after one that ran out is given twice as long as the last, till the host answers, so a network
+  slower than that pace gets there in the end. (A browser's `fetch` doesn't say how much of a
+  request has gone, so a save's time can't follow it as the pick-up's answer's does.)
 
 A scan preset, which carries on without its studio, isn't waited for: the routes that need the studio
 answer it 403 at once. `…/version` and an import read on the server don't need it, and answer it as

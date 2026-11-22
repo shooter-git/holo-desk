@@ -709,6 +709,40 @@ describe('picking up, never on a guess, and patiently', () => {
     }
   });
 
+  it('a save slower than its time is given twice as long each try after, so it gets there in the end', async () => {
+    vi.useFakeTimers();
+    try {
+      const first = { ...newProject('Slow uplink'), revision: 2300 };
+      A.load(first);
+      // the network takes 100 s to send the song, more than the 30 s it's given at first
+      const h = host(new Map([[2300, first]]), 2300, 2300, { slowSave: 100_000 });
+      const hosted = globalThis.fetch;
+      const tries: number[] = [];
+      vi.stubGlobal('fetch', (url: string, init?: RequestInit) => {
+        if (init?.method === 'PUT') tries.push(Date.now());
+        return hosted(url, init);
+      });
+      const start = Date.now();
+      A.apply([{ op: 'setProject', patch: { title: 'At last' } }], 'Title');
+      await vi.advanceTimersByTimeAsync(300_000);
+      // given up after 30 s, then 60 s; the third, given 120 s, gets there
+      expect(tries).toHaveLength(3);
+      expect([S.store.get().saveState, h.saves, h.latest().title]).toEqual(['saved', [2300], 'At last']);
+      expect((tries[2] as number) - start).toBeGreaterThan(90_000);
+      // and once it has, the next is given the usual 30 s again (on this network, it runs out and is
+      // made again, 5 s later)
+      A.apply([{ op: 'setProject', patch: { title: 'Again' } }], 'Title');
+      await vi.advanceTimersByTimeAsync(40_000);
+      expect(tries).toHaveLength(5);
+      expect((tries[4] as number) - (tries[3] as number)).toBeLessThan(40_000);
+      // (and it too gets there, given longer each try: nothing's left on its way for the next test)
+      await vi.advanceTimersByTimeAsync(300_000);
+      expect([S.store.get().saveState, h.latest().title]).toEqual(['saved', 'Again']);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('keeps only the open song’s last few late batches, and none once another song opens', async () => {
     const first = { ...newProject('Late ones'), revision: 2100 };
     A.load(first);

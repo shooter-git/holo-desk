@@ -67,6 +67,15 @@ export const SAVE_MS = 30_000;
 const SAVE_BYTES_PER_S = 20_000;
 export const saveWithin = (bytes: number) => SAVE_MS + (bytes / SAVE_BYTES_PER_S) * 1000;
 
+/**
+ * For each song, how many of its saves in a row ran out of time: each one after is given twice as
+ * long as the last (a network slower than that pace still gets there in the end, while a page frozen
+ * with a save on its way still lets it go the first time). An answer from the host starts it again.
+ */
+const saveTimeouts = new Map<string, number>();
+/** (the longest a timer can wait) */
+const LONGEST_MS = 2 ** 31 - 1;
+
 /** How long a request that's given up only when nothing comes waits for the next of what it's sent. */
 export const IDLE_MS = 15_000;
 
@@ -144,17 +153,39 @@ export const api = {
   /**
    * Save a song on the revision it was made on. Given up after `saveWithin` its size (a page frozen
    * with it on its way, as a phone's is in the background), so it can be made again: one that got
-   * there anyway is then found to be the song as it is (actions.ts).
+   * there anyway is then found to be the song as it is (actions.ts). Each try after one that ran out
+   * of time is given twice as long (`saveTimeouts`).
    */
   save: (doc: Project, baseRevision: number) => {
     const body = JSON.stringify({ doc, baseRevision });
     const stop = new AbortController();
-    const timer = setTimeout(() => stop.abort(), saveWithin(body.length));
+    const late = saveTimeouts.get(doc.id) ?? 0;
+    let ranOut = false;
+    const timer = setTimeout(
+      () => {
+        ranOut = true;
+        stop.abort();
+      },
+      Math.min(LONGEST_MS, saveWithin(body.length) * 2 ** Math.min(late, 30)),
+    );
     return call<{ revision: number; modified: string }>(`/api/projects/${doc.id}`, {
       method: 'PUT',
       body,
       signal: stop.signal,
-    }).finally(() => clearTimeout(timer));
+    })
+      .then(
+        (r) => {
+          saveTimeouts.delete(doc.id);
+          return r;
+        },
+        (err: unknown) => {
+          // (an answer, a refusal too, means the song got there: the next is given the usual time)
+          if (ranOut) saveTimeouts.set(doc.id, late + 1);
+          else if (err instanceof ApiError) saveTimeouts.delete(doc.id);
+          throw err;
+        },
+      )
+      .finally(() => clearTimeout(timer));
   },
   remove: (id: string) => call<{ ok: boolean }>(`/api/projects/${id}`, { method: 'DELETE' }),
   /** Set a song's artist or album (null clears one; one left out stays). */

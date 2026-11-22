@@ -201,7 +201,9 @@ export class SampleLibrary {
     const manifest = await instrumentManifest(pack, name);
     const want = asked === null ? manifest.zones.map((_, i) => i) : [...zonesForKeys(manifest.zones, asked)];
     const only = want.filter((i) => !part?.zones.has(i));
-    if (!only.length) return;
+    // nothing new to fetch: done, unless it has no samples at all (a synth's patch, all its sources
+    // drawn) and the audio thread hasn't had it yet: it goes over as it is, its patch in its params
+    if (!only.length && (manifest.zones.length > 0 || engine.hasSampler(key))) return;
     const had = part?.zones.size ?? 0;
     const progress = (done: number, total: number) => {
       this.states.set(key, { state: 'loading', done: had + done, total: had + total });

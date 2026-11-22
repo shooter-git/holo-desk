@@ -4,7 +4,8 @@
  * canvases, in its own colours) and nothing of a colour of its own. Words are shown as words, never
  * as markup. What a click does is app/agent-view.ts's: each is something the user could do themselves.
  *
- * The view is checked again here before it's drawn; one that doesn't pass shows nothing.
+ * The view is checked again here before it's drawn; one that doesn't pass shows nothing. Its dock (a
+ * few of its controls again) is drawn compact, in one row, for a phone's tray: DockView.
  */
 import {
   type Action,
@@ -13,6 +14,7 @@ import {
   bindingInfo,
   bindingText,
   type Cell,
+  checkDock,
   checkView,
   type ListItem,
   type Point,
@@ -108,23 +110,38 @@ function actionReady(ctx: Ctx, action: Action): boolean {
   return true;
 }
 
+/**
+ * A control's words: what its action says (a command's title, a request's words), or its own label; in
+ * a dock (`compact`) always its own short label, the action's words going in its title.
+ */
+function controlWords(
+  words: { title?: string; label?: string },
+  label: string,
+  compact: boolean,
+): { title?: string; shown: string } {
+  if (!compact) return { title: words.title, shown: words.label ?? label };
+  return { title: words.title ?? (words.label !== label ? words.label : undefined), shown: label };
+}
+
 function ActionButton({
   ctx,
   label,
   action,
   at,
   on,
+  compact = false,
 }: {
   ctx: Ctx;
   label: string;
   action: Action;
   at: string;
   on?: boolean;
+  compact?: boolean;
 }) {
   const song = useApp((s) => s.project);
   const playing = usePlaying();
   const key = `${ctx.job}:${at}`;
-  const words = actionWords(action, song);
+  const words = controlWords(actionWords(action, song), label, compact);
   const isPlay = 'play' in action;
   const live = isPlay && playing === key;
   return (
@@ -137,13 +154,23 @@ function ActionButton({
       onClick={() => void run(ctx, action, key)}
     >
       {isPlay && (live ? <Square size={11} aria-hidden="true" /> : <Play size={11} aria-hidden="true" />)}
-      <span>{words.label ?? label}</span>
+      <span>{words.shown}</span>
     </button>
   );
 }
 
 /** A two-or-more-way switch: the option last clicked stays lit (an A/B, the original against the new). */
-function Choice({ ctx, options, at }: { ctx: Ctx; options: { label: string; do: Action }[]; at: string }) {
+function Choice({
+  ctx,
+  options,
+  at,
+  compact = false,
+}: {
+  ctx: Ctx;
+  options: { label: string; do: Action }[];
+  at: string;
+  compact?: boolean;
+}) {
   const [lit, setLit] = useState<number | null>(null);
   const playing = usePlaying();
   const song = useApp((s) => s.project);
@@ -151,7 +178,7 @@ function Choice({ ctx, options, at }: { ctx: Ctx; options: { label: string; do: 
     <div className="seg">
       {options.map((o, i) => {
         const key = `${ctx.job}:${at}.${i}`;
-        const words = actionWords(o.do, song);
+        const words = controlWords(actionWords(o.do, song), o.label, compact);
         const on = 'play' in o.do ? playing === key : lit === i;
         return (
           <button
@@ -168,7 +195,7 @@ function Choice({ ctx, options, at }: { ctx: Ctx; options: { label: string; do: 
           >
             {'play' in o.do &&
               (playing === key ? <Square size={11} aria-hidden="true" /> : <Play size={11} aria-hidden="true" />)}
-            <span>{words.label ?? o.label}</span>
+            <span>{words.shown}</span>
           </button>
         );
       })}
@@ -646,6 +673,35 @@ export function AgentView({ view, job, busy }: { view: View; job: string; busy: 
         <div className="v-why" role="status">
           {why}
         </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * A reply's dock, compact, for the tray: its buttons, choices and toggles in one row, each with its own
+ * short label, run as the view's are (a version plays, one is kept, a setting set, a command run, a go
+ * taken, as the page's rules have it). Nothing when there's none, or it doesn't pass the check.
+ */
+export function DockView({ view, job, busy }: { view: View; job: string; busy: boolean }) {
+  const [why, setWhy] = useState('');
+  const checked = useMemo(() => (view.dock ? checkDock(view.dock, true) : null), [view]);
+  if (!checked?.ok) return null;
+  const ctx: Ctx = { view, job, busy, say: setWhy };
+  return (
+    <div className="dock-view">
+      {checked.blocks.map((b, i) => {
+        // (its own keys: a take playing from the tray isn't the page's button playing)
+        const at = `dock.${i}`;
+        if ('button' in b) return <ActionButton key={i} ctx={ctx} label={b.button} action={b.do} at={at} compact />;
+        if ('choice' in b) return <Choice key={i} ctx={ctx} options={b.choice} at={at} compact />;
+        if ('toggle' in b) return <Toggle key={i} ctx={ctx} b={b.toggle} label={b.label} />;
+        return null;
+      })}
+      {why && (
+        <span className="v-why" role="status">
+          {why}
+        </span>
       )}
     </div>
   );

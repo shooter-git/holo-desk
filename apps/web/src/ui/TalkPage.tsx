@@ -25,6 +25,7 @@ import { conversation, type Exchange, loadThread, useAgent } from '../app/agent.
 import { type Layout, useLayout } from '../app/layout.ts';
 import { pageCovers, windowOpened } from '../app/page-layout.ts';
 import { closeBar, store, useApp } from '../app/store.ts';
+import { markSeen } from '../app/tray.ts';
 import { atEnd, useShownRoom } from './bar-swipe.ts';
 import { CommandField, CommandList, useCommandField } from './command-field.tsx';
 import { useHoldToSeeThrough, useSwipeToClose } from './page-swipe.ts';
@@ -198,6 +199,12 @@ export function TalkPage() {
   const newest = talk[talk.length - 1];
   const earlier = talk.slice(0, -1);
   const newestKey = newest ? keyOf(newest) : '';
+
+  // the newest reply, shown here with a dock: once the page closes a phone keeps that row at hand
+  const docked = newest && !newest.working && newest.view?.dock?.length ? newest.job : null;
+  useEffect(() => {
+    if (docked) markSeen(docked);
+  }, [docked]);
 
   // the song changed while it's open (from the Songs dialog over it): its conversation is read
   const firstSong = useRef(project);

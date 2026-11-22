@@ -7,6 +7,7 @@ import {
   bindingInfo,
   bindingOps,
   bindingText,
+  checkDock,
   checkGo,
   checkView,
   LIMITS,
@@ -21,6 +22,94 @@ const error = (input: unknown, strict = false): string => {
   if (r.ok) throw new Error('it passed');
   return r.error;
 };
+
+const dockError = (input: unknown, strict = false): string => {
+  const r = checkDock(input, strict);
+  if (r.ok) throw new Error('it passed');
+  return r.error;
+};
+
+describe('a reply’s dock, checked', () => {
+  const takes = {
+    choice: [
+      { label: 'Take 1', do: { play: { from: 5, to: 13, version: 'Take 1' } } },
+      { label: 'Take 2', do: { play: { from: 5, to: 13, version: 'Take 2' } } },
+      { label: 'Take 3', do: { play: { from: 5, to: 13, version: 'Take 3' } } },
+    ],
+  };
+
+  it('takes buttons, choices and toggles, with any action', () => {
+    const dock = [
+      takes,
+      { button: 'Keep Take 2', do: { keep: 'Take 2' } },
+      { toggle: { track: 'Vocal', param: 'mute' }, label: 'Vocal' },
+    ];
+    expect(checkDock(dock)).toEqual({ ok: true, blocks: dock });
+    for (const action of [
+      { go: { bar: 5 } },
+      { set: { track: 'Bass', param: 'volume' }, value: -6 },
+      { command: 'metronome' },
+      { ask: 'Make it busier' },
+    ])
+      expect(checkDock([{ button: 'Go', do: action }]).ok, JSON.stringify(action)).toBe(true);
+  });
+
+  it('refuses any other kind, saying where', () => {
+    expect(dockError([takes, { slider: { track: 'Bass', param: 'volume' } }])).toMatch(
+      /^dock\[1\]: a dock holds button, choice, toggle blocks only, not slider/,
+    );
+    expect(dockError([{ row: [{ button: 'A', do: { keep: 'before' } }] }])).toMatch(/^dock\[0\]: .*not row/);
+    expect(dockError([{ text: 'Takes' }])).toMatch(/not text/);
+  });
+
+  it(`has at most ${LIMITS.dock} controls, each option of a choice one`, () => {
+    expect(checkDock([takes, { button: 'A', do: { keep: 'before' } }, { button: 'B', do: { keep: 'after' } }]).ok).toBe(
+      true,
+    );
+    expect(
+      dockError([takes, { button: 'A', do: { keep: 'before' } }, { toggle: { track: 'Bass', param: 'mute' } }, takes]),
+    ).toMatch(/^dock: 8 controls; at most 5/);
+    expect(
+      dockError([
+        takes,
+        { button: 'A', do: { keep: 'before' } },
+        { button: 'B', do: { keep: 'after' } },
+        { toggle: { track: 'Bass', param: 'mute' } },
+      ]),
+    ).toMatch(/^dock: 6 controls; at most 5/);
+  });
+
+  it(`has labels of at most ${LIMITS.dockLabel} characters`, () => {
+    const long = 'Keep the second take!';
+    expect(long.length).toBe(LIMITS.dockLabel + 1);
+    expect(dockError([takes, { button: long, do: { keep: 'Take 2' } }])).toMatch(
+      /^dock\[1\]: its label is 21 characters; a dock's are at most 20/,
+    );
+    expect(
+      dockError([
+        { choice: [takes.choice[0], { label: long, do: { keep: 'before' } }] },
+        { button: 'A', do: { keep: 'after' } },
+      ]),
+    ).toMatch(/^dock\[0\]\.choice\[1\]: its label is 21/);
+    expect(dockError([{ toggle: { track: 'Bass', param: 'mute' }, label: long }])).toMatch(/^dock\[0\]: its label/);
+  });
+
+  it('says a view’s problems where they are in the dock', () => {
+    expect(dockError([takes, { button: 'Go' }])).toBe('dock[1]: a button needs "do"');
+    expect(dockError([takes, { button: 'Play', do: { play: { from: 9, to: 9 } } }])).toMatch(
+      /^dock\[1\]\.do\.play: "to" comes after "from"/,
+    );
+    expect(dockError([])).toMatch(/^dock: a list of blocks/);
+    expect(dockError({ button: 'A' })).toMatch(/^dock: a list of blocks/);
+  });
+
+  it('wants resolved references when strict', () => {
+    const named = [{ toggle: { track: 'Vocal', param: 'pitch.on' }, label: 'Tuned' }];
+    expect(checkDock(named).ok).toBe(true);
+    expect(dockError(named, true)).toMatch(/^dock\[0\]\.toggle: "pitch\.on" isn't a resolved setting/);
+    expect(checkDock([{ toggle: { track: 'trk_1', param: 'on:fx_1' }, label: 'Tuned' }], true).ok).toBe(true);
+  });
+});
 
 describe('a reply’s view, checked', () => {
   it('takes blocks of every kind, composed', () => {

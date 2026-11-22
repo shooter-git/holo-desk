@@ -100,7 +100,9 @@ export const speedUp = (moves: { y: number; at: number }[], now: number, window 
 export const closes = (up: number, speed: number): boolean =>
   up >= CLOSE_PX || (up >= FLICK_PX && speed >= FLICK_SPEED);
 
-const reducedMotion = () => typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
+/** Less motion is asked for: a card swiped away is gone, or back, at once. */
+export const reducedMotion = () =>
+  typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
 
 /** How near words that are selected a finger is taken to be going for the selection's handles. */
 const HANDLE_PX = 30;

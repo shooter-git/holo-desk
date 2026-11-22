@@ -61,9 +61,10 @@ The in-app agent lives in `packages/agent` (`@holo/agent`): the runner's side (`
 - **Asking ends the turn.** What only the user can allow (a pack, sending to a creation, a screenshot,
   a photo, a recording) is asked with one button; the user's click starts the next turn.
 - **They press play.** The agent shows its work under its reply, in a view it composes (below): buttons
-  that play or compare versions, switches, sliders, lists of places to go. It doesn't start playback or
-  move the user's view, selection or playhead itself, unless the request was to see or hear something
-  now (`go` on `finish`, the transport).
+  that play or compare versions, switches, sliders, lists of places to go; when they'll have something to
+  decide while they listen, a dock of the few controls they'll reach for then (most replies need none).
+  It doesn't start playback or move the user's view, selection or playhead itself, unless the request
+  was to see or hear something now (`go` on `finish`, the transport).
 - **One request, one undo step.** It's labeled "Agent: …". Its changes reach only the requesting
   device's studio: live while it's there, and while it's away (a phone in another app, the tab closed)
   saved on the server, for it to pick up as that step when it's back.
@@ -318,7 +319,7 @@ they answer any job. The command line's own requests to a studio are as they wer
 | `POST …/progress` | `{line}` (≤ 200) | `{ok}`. The line under the bar. |
 | `POST …/permission` | `{kind, detail, pack?}` (detail ≤ 300) | `{ok}`. `kind` is `install-pack` (with `pack`), `send-creation`, `bounce`, `render`, `screen`, `photo` or `microphone`; `render` only for a song that came from a creation (400). The job waits for the user once the turn ends. |
 | `POST …/handoff` | `{brief}` (≤ 4000) | `{ok}`. Lines that mention a secret, hold a link or run a command are flagged (`briefWarnings`). |
-| `POST …/finish` | `{label, reply, view?, go?}` (one line ≤ 80; ≤ 600; a view and a go, resolved: below) | `{ok}`. The agent is asked for one or two short sentences, about 200 characters at most; 600 is the server's limit. The view and the go are checked again (`checkView`, `checkGo` in strict form, 400 with where the problem is), and every version the view names must be one the job kept (`before`, one from `…/version`, or `after`, kept when the turn ends): its revision goes with it. |
+| `POST …/finish` | `{label, reply, view?, go?, dock?}` (one line ≤ 80; ≤ 600; a view, a go and a dock, resolved: below) | `{ok}`. The agent is asked for one or two short sentences, about 200 characters at most; 600 is the server's limit. The view, the go and the dock are checked again (`checkView`, `checkGo`, `checkDock` in strict form, 400 with where the problem is; a dock without a view is refused), and every version the view or the dock names must be one the job kept (`before`, one from `…/version`, or `after`, kept when the turn ends): its revision goes with it. |
 | `PUT …/details` | `{artist?, album?}` (each a name, or null to clear) | `{ok, artist, album}`, as `PUT /api/projects/:id/details` answers for the job's song: the library keeps them beside the song (no new revision, outside undo). 400 for a creation's song. |
 
 **Listening.** A harness can cut a tool call at 60 s, so a listen comes in parts: the `listen` tool asks
@@ -504,7 +505,7 @@ was played (null when the song wasn't playing); `time` is ms from the listen's s
 of the stretch `played` asked for); `length` is ms (null while still held).
 
 **`JobView`** is:
-`{id, project, device, state:'waiting'|'running'|'awaiting'|'done'|'failed'|'cancelled', request, line?, reply?, label?, permission?:{kind, detail, pack?}, brief?, briefWarnings?:[{line, kind:'command'|'url'|'secret'}], view?:{blocks, versions}, go?, error?, started, finished?}`.
+`{id, project, device, state:'waiting'|'running'|'awaiting'|'done'|'failed'|'cancelled', request, line?, reply?, label?, permission?:{kind, detail, pack?}, brief?, briefWarnings?:[{line, kind:'command'|'url'|'secret'}], view?:{blocks, versions, dock?}, go?, error?, started, finished?}`.
 - `waiting` lasts until the runner or the job's tools are first heard from.
 - `briefWarnings` are the brief's lines (from 0) the studio flags, each once: `secret` for a line that
   mentions one (ssh, `.ssh`, `id_rsa`/`id_ed25519`, private keys, `.pem`, `.env`, credentials, tokens,
@@ -719,9 +720,19 @@ compare an earlier change, and is refused on a conversation's first request. A v
 `before` and `after` is refused when the job's tools changed nothing: they'd be the same song. Each is a revision in the song's history (`GET /api/projects/:id/history/:rev`, 200 kept),
 so a view still plays after a reload, and a version that has aged out says so.
 
+**The dock.** `finish` may also give a `dock`: a few of the view's controls again, in one row a phone
+keeps at hand once the reply has been read (the tray, below), for a reply that leaves something to decide
+while the person listens or looks at the studio (three takes and Keep). It's kept in the view
+(`View.dock`) and checked as its blocks are (`checkDock`: problems said at `dock[1]…`), then: `button`,
+`choice` and `toggle` blocks only, with any action; at most 5 controls (each button and toggle, and each
+option of a choice, is one); labels of at most 20 characters. A dock needs a view (the tool and the
+server refuse one without), and its versions are kept and resolved with the view's. It's never drawn on
+the page or in the bar, where the view holds the same controls. What goes in it is the agent's call, as
+the view is; most replies have none.
+
 **Limits:** 24 blocks at the top, 80 pieces in all (list items and table rows count), three deep, 10,000
-characters as JSON; 24 list items or table rows, 6 columns, 6 options, 256 points, 8 versions a turn.
-Words are plain text, drawn as text.
+characters as JSON; 24 list items or table rows, 6 columns, 6 options, 256 points, 8 versions a turn;
+a dock's 5 controls and 20-character labels. Words are plain text, drawn as text.
 
 **In the studio** (`apps/web/src/ui/AgentView.tsx`, `apps/web/src/app/agent-view.ts`) the view sits
 between the reply and a brief, drawn with the studio's own buttons, switches, rows and canvases. It's
@@ -790,11 +801,37 @@ slash button and the swipe down all bring it; a second press of the slash button
 - What's typed, and the files going with it, stay as the window crosses between the desktop's and
   the tablet's layouts (the bar becoming the sheet, or back).
 
+### The tray (phones)
+
+On a phone, once the page has shown a reply that has a dock, that row waits in the studio after the page
+closes (`apps/web/src/ui/Tray.tsx`, `trayFor` in `apps/web/src/app/tray.ts`): above the transport held
+upright, at the foot of the content column on its side. It's a row of the layout, so it covers nothing;
+the view above it gives up its height. Its controls do what the view's do (a version plays, one is kept,
+a setting set, a command run, a go taken, with the page's rules), each with its own short label; ^ opens
+the page, and × or a swipe across it (either way, unless the row would scroll that way) puts it away.
+
+- **When.** Only the song's newest exchange, once it has ended (not waiting for a click), with a dock
+  that passes the check, that the page has shown on this device and that wasn't put away; only while
+  the page is closed. The next request takes it: while a request works, or a reply hasn't been read, the
+  bar's button's ring and dot are the only signs. A tablet and a desktop have none: their sheet or bar
+  can stay open beside the studio.
+- **Kept.** `holo:agent-tray` in the browser's storage, `{seen, gone}`: the jobs whose reply with a dock
+  the page showed, and those whose tray was put away, as job ids (`agj_` and 12 hex digits; anything
+  else is dropped as it's read), the latest 20 of each.
+- **After a reload.** As a song opens on a phone (a reload, or another song), its conversation is
+  read once, quietly, when a reply read here with a dock wasn't put away (`trayWantsThread`;
+  `loadThread(project, false)`): only its turns are kept. The song's job that's working or waiting for
+  a click isn't told of from there, so it's neither taken as seen nor as a reply waiting: the bar's
+  button's ring and dot, and the requests followed, stay as they are. So the tray comes back without
+  the page being opened, and nothing is asked when no tray could show.
+- **Cost.** Hidden, it's nothing: no listeners, timers or observers until it shows, and that one read
+  as a song opens.
+
 ## Threads ("since your last reply")
 
 `agent_threads(id, project, harness, session, seen_doc, seen_revision, events_json, created, updated, current)`
 holds one current thread (`agt_…`) per song. `agent_turns(job, thread, request, reply, label, state, at, extra)`
-holds its turns, the last 50; `extra` keeps the permission, the brief and its flagged lines, the view and
+holds its turns, the last 50; `extra` keeps the permission, the brief and its flagged lines, the view (its dock too) and
 its go, the error, and the attachments. Changing the harness, or `reset`, starts a new thread; the old one is kept but no
 longer current.
 

@@ -35,8 +35,8 @@ function peek(card: HTMLElement, on: boolean): void {
   if (store.get().barPeek !== on) store.set({ barPeek: on });
 }
 
-/** Whether a box can still scroll the way a finger going toward `toward` moves what's in it. */
-function canScroll(el: Element, toward: Toward): boolean {
+/** Whether a box can still scroll the way a finger going toward `toward` moves what's in it (the tray's row too). */
+export function canScroll(el: Element, toward: Toward): boolean {
   const s = getComputedStyle(el);
   if (vertical(toward)) {
     if (!/auto|scroll/.test(s.overflowY) || el.scrollHeight <= el.clientHeight + 1) return false;

@@ -198,6 +198,9 @@ pieces. How you use them is yours to design, for this person and this moment:
   "previous" (the song before your previous request) to compare an earlier change.
 - Bind every control to tracks and settings you've read in this song, and play bars that hold the
   change.
+- Some replies leave the person something to decide while they listen or look at the studio. For
+  those, a `dock` repeats the few controls of the view they'll reach for then, in one row the studio
+  keeps at hand once the reply has been read (at most five). Most replies need none.
 - Keep it the studio's: labels of a word or three, no decoration, no emoji, no instructions on how to
   use the controls. Small enough to take in at a glance.
 

@@ -23,6 +23,7 @@
 //   - Settings › Agent's Tell me outside HO[LO] isn't whole: its three choices side by side, in the dialog;
 //   - with a reply that has a dock read and the page closed, a phone shows no tray, or one that isn't a
 //     row of its own (or × leaves it there); a tablet or a desktop shows one;
+//   - Scan's list of a song's earlier scans, a delete asked, isn't whole, or Keep doesn't bring the scan back;
 //   - a scan's review (Scan, over the whole studio) isn't whole, or its header's Commands button can't
 //     be pressed; the commands opened from it don't come up over the review, under its header; Escape
 //     closes the review instead of them; or, with the agent on, they don't offer to read the scan;
@@ -1153,15 +1154,30 @@ function replyViews(page, layout, finger, newest) {
  * agent on, the commands must offer to read the scan.
  */
 function scanViews(page, layout, press, agent) {
-  const open = async () => {
+  const toScan = async () => {
     await page.keyboard.press('n');
     await page.waitForTimeout(300);
     if (layout === 'phone-portrait') {
       await press(control(page, 'More'));
       await press(page.getByRole('menuitem', { name: 'Scan…' }));
     } else await press(control(page, 'Scan sheet music'));
-    await press(page.locator('.scan-earlier button').first());
+  };
+  const open = async () => {
+    await toScan();
+    await press(page.locator('.scan-earlier .scan-open').first());
     await page.locator('.scan-row').first().waitFor();
+  };
+  // an earlier scan's delete, asked first: the question laid out whole, and Keep bringing the scan back
+  const ask = async () => {
+    await toScan();
+    await press(page.locator('.scan-earlier button[title="Delete this scan"]').first());
+    await page.locator('.scan-earlier-row.asking').waitFor();
+  };
+  const keep = async () => {
+    await press(page.locator('.scan-earlier-row.asking').getByRole('button', { name: 'Keep' }));
+    if (!(await page.locator('.scan-earlier .scan-open').count())) throw new Error('Keep didn’t bring the scan back');
+    await press(page.locator('.scan-window button[title="Close"]'));
+    await page.keyboard.press('n');
   };
   const commandsOpen = async () => {
     await press(page.locator('.scan-window .cb-bar'));
@@ -1177,6 +1193,7 @@ function scanViews(page, layout, press, agent) {
     await page.keyboard.press('n');
   };
   return [
+    ['Scan, an earlier scan’s delete asked', ask, keep],
     ['Scan review', open, null],
     ['Scan review, its commands', commandsOpen, shut, agent ? ['scanOver', 'scanOffered'] : ['scanOver']],
   ];

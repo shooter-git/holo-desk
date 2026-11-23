@@ -1,4 +1,8 @@
+import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
+
+/** The engines' image CI publishes, for a server that runs them itself. */
+export const OMR_IMAGE = 'ghcr.io/shooter-git/holo-desk:omr-stable';
 
 /** Settings come from the environment (.env when run by hand, the compose file in Docker). */
 export interface Config {
@@ -11,8 +15,18 @@ export interface Config {
   repoDir: string;
   /** HO[LO] as a network MIDI session (RTP-MIDI: an iPhone's USB MIDI, a Mac's network MIDI). */
   networkMidi: { port: number; host: string } | null;
-  /** The recognition engines' container (pnpm omr on), when it's running: a second reader of scans. */
+  /**
+   * The recognition engines, which read scanned sheet music into songs: where they answer (in Docker,
+   * their own container), or null.
+   */
   omrUrl?: string | null;
+  /**
+   * Run without Docker and given no address: the engines' image, which the server runs itself in a
+   * container of its own (with no network) the first time a scan wants it. Null: it doesn't.
+   */
+  omrImage?: string | null;
+  /** Off because the server runs in a container that wasn't given their address (not turned off). */
+  omrUnset?: boolean;
   /**
    * Sites besides HO[LO]'s usual kinds (this computer, the local network, a tailnet) whose pages may
    * use the live channel and the agent: host names, host:port, or origins (HOLO_ALLOWED_HOSTS).
@@ -20,7 +34,7 @@ export interface Config {
   allowedHosts?: string[];
 }
 
-export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
+export function loadConfig(env: NodeJS.ProcessEnv = process.env, inContainer = existsSync('/.dockerenv')): Config {
   const root = resolve(import.meta.dirname, '../../..');
   return {
     port: Number(env.HOLO_PORT ?? 47800),
@@ -35,11 +49,24 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       .split(',')
       .map((h) => h.trim())
       .filter(Boolean),
+    ...omr(env, inContainer),
     // off unless asked for: it listens on UDP (in Docker, where it's published decides who reaches it)
-    omrUrl: env.HOLO_OMR_URL?.replace(/\/$/, '') || null,
     networkMidi:
       env.HOLO_NETWORK_MIDI === 'on'
         ? { port: Number(env.HOLO_NETWORK_MIDI_PORT ?? 5004), host: env.HOLO_NETWORK_MIDI_HOST ?? '0.0.0.0' }
         : null,
   };
+}
+
+/**
+ * The recognition engines, on unless turned off: HOLO_OMR_URL is where they answer (Docker's compose
+ * file sets their container's), and set empty they're off (pnpm omr off). Not set at all, a server run
+ * without Docker runs them itself, from HOLO_OMR_IMAGE (in a container of its own, when the computer
+ * has Docker); one in a container it wasn't given them for goes without.
+ */
+function omr(env: NodeJS.ProcessEnv, inContainer: boolean): Pick<Config, 'omrUrl' | 'omrImage' | 'omrUnset'> {
+  const url = env.HOLO_OMR_URL;
+  if (url !== undefined) return { omrUrl: url.trim().replace(/\/$/, '') || null, omrImage: null };
+  if (inContainer) return { omrUrl: null, omrImage: null, omrUnset: true };
+  return { omrUrl: null, omrImage: env.HOLO_OMR_IMAGE?.trim() || OMR_IMAGE };
 }

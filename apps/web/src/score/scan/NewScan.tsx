@@ -7,7 +7,15 @@ import type { FoundSystem, Point, Scan } from '@holo/score';
 import { Camera, FileUp, X } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useSize } from '../../ui/frame.ts';
-import { listScans, type PickedPage, type PreparedPage, preparePage, readPages, saveScan } from './client.ts';
+import {
+  listScans,
+  omrStatus,
+  type PickedPage,
+  type PreparedPage,
+  preparePage,
+  readPages,
+  saveScan,
+} from './client.ts';
 
 export interface NewScanProps {
   project: { id: string; title: string } | null;
@@ -32,6 +40,11 @@ export function NewScan({ project, track, notify, onClose, onSaved, onOpen }: Ne
   useEffect(() => {
     if (project) void listScans(project.id).then(setEarlier, () => setEarlier([]));
   }, [project]);
+  // the recognition engines, asked for now so they're ready by the review (asking starts them where the
+  // server runs them itself: the first time, that fetches them)
+  useEffect(() => {
+    void omrStatus().catch(() => undefined);
+  }, []);
   // pictures made for showing go when the window does
   useEffect(
     () => () => {

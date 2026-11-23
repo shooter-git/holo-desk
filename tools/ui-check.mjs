@@ -23,6 +23,9 @@
 //   - Settings › Agent's Tell me outside HO[LO] isn't whole: its three choices side by side, in the dialog;
 //   - with a reply that has a dock read and the page closed, a phone shows no tray, or one that isn't a
 //     row of its own (or × leaves it there); a tablet or a desktop shows one;
+//   - a scan's review (Scan, over the whole studio) isn't whole, or its header's Commands button can't
+//     be pressed; the commands opened from it don't come up over the review, under its header; Escape
+//     closes the review instead of them; or, with the agent on, they don't offer to read the scan;
 //   - the page throws.
 //
 // It starts a studio of its own (a server on a free port, a data folder that's removed after) with a
@@ -41,6 +44,7 @@ import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { crc32, deflateSync } from 'node:zlib';
 import {
   newBus,
   newPlugin,
@@ -137,7 +141,15 @@ const data = mkdtempSync(join(tmpdir(), 'holo-ui-check-'));
 const base = `http://127.0.0.1:${port}`;
 const server = spawn(process.execPath, ['--disable-warning=ExperimentalWarning', 'apps/server/src/main.ts'], {
   cwd: root,
-  env: { ...process.env, HOLO_PORT: String(port), HOLO_HOST: '127.0.0.1', HOLO_DATA_DIR: data, HOLO_WEB_DIR: built },
+  // (the recognition engines off: nothing is fetched, and a scan's review says they're off)
+  env: {
+    ...process.env,
+    HOLO_PORT: String(port),
+    HOLO_HOST: '127.0.0.1',
+    HOLO_DATA_DIR: data,
+    HOLO_WEB_DIR: built,
+    HOLO_OMR_URL: '',
+  },
   stdio: ['ignore', 'pipe', 'pipe'],
 });
 let serverLog = '';
@@ -161,6 +173,61 @@ async function up() {
     await new Promise((r) => setTimeout(r, 200));
   }
   throw new Error(`The studio didn’t start:\n${serverLog}`);
+}
+
+// ---- a scan of a page, its two systems not read yet ----
+
+/** A grey picture `w` × `h` as a PNG (no library: a stored row of each, deflated). */
+function png(w, h) {
+  const chunk = (type, body) => {
+    const head = Buffer.alloc(8);
+    head.writeUInt32BE(body.length);
+    head.write(type, 4, 'ascii');
+    const crc = Buffer.alloc(4);
+    crc.writeUInt32BE(crc32(Buffer.concat([head.subarray(4), body])));
+    return Buffer.concat([head, body, crc]);
+  };
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(w);
+  ihdr.writeUInt32BE(h, 4);
+  ihdr.set([8, 0, 0, 0, 0], 8);
+  const rows = Buffer.alloc((w + 1) * h, 0xe8);
+  for (let y = 0; y < h; y++) rows[y * (w + 1)] = 0;
+  return Buffer.concat([
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    chunk('IHDR', ihdr),
+    chunk('IDAT', deflateSync(rows)),
+    chunk('IEND', Buffer.alloc(0)),
+  ]);
+}
+
+async function makeScan(project) {
+  const call = async (method, path, body, type = 'application/json') => {
+    const res = await fetch(`${base}${path}`, {
+      method,
+      headers: { 'content-type': type },
+      body: type === 'application/json' ? JSON.stringify(body) : body,
+    });
+    if (!res.ok) throw new Error(`The scan couldn’t be made (${path}): ${res.status} ${await res.text()}`);
+    return res.json();
+  };
+  const scan = await call('POST', '/api/scans', { project, title: 'Hymn, page 1' });
+  await call('PUT', `/api/scans/${scan.id}/pages/0`, png(1200, 800), 'image/png');
+  for (const k of [0, 1]) await call('PUT', `/api/scans/${scan.id}/strips/0/${k}`, png(1200, 160), 'image/png');
+  const system = (k) => ({
+    k,
+    top: k * 400,
+    bottom: k * 400 + 400,
+    left: 40,
+    right: 1160,
+    staves: 2,
+    bars: [40, 600, 1160],
+    state: 'new',
+  });
+  await call('PUT', `/api/scans/${scan.id}`, {
+    ...scan,
+    pages: [{ n: 0, w: 1200, h: 800, type: 'png', systems: [system(0), system(1)] }],
+  });
 }
 
 // ---- what's wrong on the page as it stands (runs in the page) ----
@@ -233,6 +300,8 @@ function problems() {
       // a plugin's or an instrument's window is over the agent's page on purpose too)
       if (top.closest('label')?.contains(el) || (top.closest(over) && !el.closest(over))) continue;
       if (top.closest('.plugin-window, .sheet-scrim') && el.closest('.talk-page')) continue;
+      // (and the commands are over a scan's review on purpose, opened from its header)
+      if (top.closest('.bar-scrim, .talk-room') && el.closest('.scan-window')) continue;
       say(`covered by ${name(top)}`);
     }
   }
@@ -524,7 +593,45 @@ async function fitsOnce() {
   return out;
 }
 
+/**
+ * The commands opened from a scan's review: over it (what's in the middle of where they are is theirs),
+ * under its header (whose Commands button, beside Close, stays in reach), and the review still there.
+ */
+function scanOver() {
+  const head = document.querySelector('.scan-window .scan-bar');
+  const el = document.querySelector('.talk-page') ?? document.querySelector('.bar');
+  if (!head) return ['the review closed'];
+  if (!el) return ['the commands didn’t open'];
+  const out = [];
+  const r = el.getBoundingClientRect();
+  const mid = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+  if (!mid || !el.contains(mid)) out.push(`they're under the review (${mid?.className ?? 'nothing'} is over them)`);
+  if (el.classList.contains('talk-page') && r.top < head.getBoundingClientRect().bottom - 1)
+    out.push('the page covers the review’s header');
+  // (the page keeps it in reach to put the page away; a desktop's bar is a menu: a press outside closes it)
+  const button = el.classList.contains('talk-page') ? head.querySelector('.cb-bar') : null;
+  if (button) {
+    const b = button.getBoundingClientRect();
+    const at = document.elementFromPoint(b.left + b.width / 2, b.top + b.height / 2);
+    if (!at || !button.contains(at))
+      out.push(`the header’s Commands button is covered by ${at?.className ?? 'nothing'}`);
+  }
+  return out;
+}
+
+/** With the agent on, the commands opened over a scan's review offer to read it. */
+function scanOffered() {
+  const rows = [...document.querySelectorAll('.talk-page [role=option], .bar [role=option]')].map((e) =>
+    e.textContent.trim(),
+  );
+  return rows.some((t) => t.startsWith('Read this scan'))
+    ? []
+    : [`they don't offer to read the scan (${rows.slice(0, 4).join(' / ') || 'nothing listed'})`];
+}
+
 const CHECKS = {
+  scanOver,
+  scanOffered,
   transportClear,
   solid,
   workingFits,
@@ -1017,6 +1124,7 @@ function agentViews(page, layout, finger, running) {
           [...checks, 'viewFits'],
         ],
         ...tray,
+        ...scanViews(page, layout, press, true),
       ];
 }
 
@@ -1039,6 +1147,41 @@ function replyViews(page, layout, finger, newest) {
 }
 
 /** What to look at on a screen: each opens something, and says how to close it again (and what's checked besides). */
+/**
+ * A scan's review, opened from the Score (on a phone held upright, behind its ⋯), then the commands
+ * from its header's button, closed with Escape (the review stays), and the review closed. With the
+ * agent on, the commands must offer to read the scan.
+ */
+function scanViews(page, layout, press, agent) {
+  const open = async () => {
+    await page.keyboard.press('n');
+    await page.waitForTimeout(300);
+    if (layout === 'phone-portrait') {
+      await press(control(page, 'More'));
+      await press(page.getByRole('menuitem', { name: 'Scan…' }));
+    } else await press(control(page, 'Scan sheet music'));
+    await press(page.locator('.scan-earlier button').first());
+    await page.locator('.scan-row').first().waitFor();
+  };
+  const commandsOpen = async () => {
+    await press(page.locator('.scan-window .cb-bar'));
+    await page.locator('.talk-page, .bar').first().waitFor();
+  };
+  const shut = async () => {
+    await page.keyboard.press('Escape');
+    await page.waitForTimeout(250);
+    if (!(await page.locator('.scan-window .scan-bar').count()))
+      throw new Error('Escape closed the review, not the commands');
+    if (await page.locator('.talk-page, .bar').count()) throw new Error('Escape left the commands open');
+    await press(page.locator('.scan-window button[title="Close"]'));
+    await page.keyboard.press('n');
+  };
+  return [
+    ['Scan review', open, null],
+    ['Scan review, its commands', commandsOpen, shut, agent ? ['scanOver', 'scanOffered'] : ['scanOver']],
+  ];
+}
+
 function views(page, layout, finger) {
   const phone = layout.startsWith('phone');
   const press = (loc) => (finger ? loc.tap() : loc.click());
@@ -1063,6 +1206,7 @@ function views(page, layout, finger) {
       tab('Tracks'),
       ...dialogs,
       ...commands(page, layout, press),
+      ...scanViews(page, layout, press, false),
     ];
   }
   const key = (label, k) => [label, () => page.keyboard.press(k), () => page.keyboard.press(k)];
@@ -1075,6 +1219,7 @@ function views(page, layout, finger) {
     key('Automation', 'a'),
     ...dialogs,
     ...commands(page, layout, press),
+    ...scanViews(page, layout, press, false),
   ];
 }
 
@@ -1089,6 +1234,7 @@ try {
   });
   if (!made.ok) throw new Error(`The song couldn’t be made: ${made.status} ${await made.text()}`);
   const { id } = await made.json();
+  await makeScan(id);
 
   browser = await chromium.launch({
     args: ['--autoplay-policy=no-user-gesture-required'],

@@ -42,15 +42,30 @@ export function sameBarNotes(a: [number, number][], b: [number, number][]): bool
 }
 
 /**
- * A reading's bars laid over a page's systems: in order, as many to each system as its bar lines
- * say (at least one), the first system's first. One list a system, in the page's order.
+ * A reading's bars laid over a page's systems, one list a system, in the page's order. An engine marks
+ * where each of its systems starts (MusicXML's new-system): when it found as many as the page has, its
+ * own systems are the page's, so a page whose bar lines weren't found (handwriting, mostly) still gets
+ * every bar in its place. Otherwise in order, as many to each system as its bar lines say (at least
+ * one), the first system's first; an engine that read more bars than that has them shared out among
+ * the systems in the same proportions, rather than the rest left out.
  */
 export function pageBars(page: ScanPage, doc: ScoreDoc): Bar[][] {
+  const own: Bar[][] = [];
+  for (const bar of doc.bars) {
+    if (!own.length || bar.break) own.push([]);
+    own[own.length - 1]?.push(bar);
+  }
+  if (own.length === page.systems.length) return own;
+  const counts = page.systems.map((s) => Math.max(1, s.bars.length - 1));
+  const total = counts.reduce((a, b) => a + b, 0);
+  const share = Math.max(1, doc.bars.length / total);
   let next = 0;
-  return page.systems.map((s) => {
-    const count = Math.max(1, s.bars.length - 1);
-    const bars = doc.bars.slice(next, next + count);
-    next += count;
+  let through = 0;
+  return counts.map((count) => {
+    through += count;
+    const end = Math.round(through * share);
+    const bars = doc.bars.slice(next, end);
+    next = end;
     return bars;
   });
 }

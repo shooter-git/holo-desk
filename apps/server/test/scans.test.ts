@@ -123,6 +123,18 @@ describe('scans', () => {
     expect((await app.inject({ method: 'GET', url: `/api/scans/${scan.id}` })).json()).toEqual(scan);
   });
 
+  it('says why the recognition engines can’t read when they’re turned off', async () => {
+    expect((await app.inject({ method: 'GET', url: '/api/omr' })).json()).toEqual({
+      available: false,
+      engines: [],
+      why: 'off',
+    });
+    const scan = (await app.inject({ method: 'POST', url: '/api/scans', payload: { project } })).json() as Scan;
+    const run = await app.inject({ method: 'POST', url: `/api/scans/${scan.id}/engines` });
+    expect(run.statusCode).toBe(409);
+    expect(run.json()).toEqual({ error: 'The recognition engines are turned off (pnpm omr on)', reason: 'off' });
+  });
+
   it('goes when its song does', async () => {
     const scan = (await app.inject({ method: 'POST', url: '/api/scans', payload: { project } })).json() as Scan;
     expect(existsSync(join(work, 'data', 'scans', scan.id))).toBe(true);

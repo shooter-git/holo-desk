@@ -228,7 +228,19 @@ export const listScans = (project: string) =>
 export const setSystem = (id: string, page: number, k: number, body: Record<string, unknown>) =>
   call(`/api/scans/${id}/systems/${page}/${k}`, json('PATCH', body));
 export const deleteScan = (id: string) => call(`/api/scans/${id}`, { method: 'DELETE' });
-export const omrStatus = () => call<{ available: boolean; engines: string[] }>('/api/omr');
+/**
+ * Whether the recognition engines are here to read a scan in, and which; when they aren't, why: being
+ * got ready (the first start fetches them), turned off, no Docker where HO[LO] runs, or not answering.
+ * Asking starts them where the server runs them itself.
+ */
+export interface OmrStatus {
+  available: boolean;
+  engines: string[];
+  why?: 'starting' | 'off' | 'no-docker' | 'unreachable';
+  detail?: string;
+}
+
+export const omrStatus = () => call<OmrStatus>('/api/omr');
 export const compareEngines = (id: string) =>
   call<{ summary: string[]; flagged: number }>(`/api/scans/${id}/engines`, { method: 'POST' });
 

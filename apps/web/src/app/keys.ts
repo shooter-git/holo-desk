@@ -194,27 +194,28 @@ function selectedTrackId(): string | null {
 
 /**
  * The bar from the keyboard: open (not over the start screen) or closed. The page (a phone's or a
- * tablet's) is under a dialog, so it doesn't open while one is up; a desktop's bar opens over it.
+ * tablet's) is under a dialog and Print, so it doesn't open while one is up; a desktop's bar opens over
+ * them. The page opens over Scan, whose header carries the Commands button.
  */
 function toggleBar(): void {
   const s = store.get();
   if (s.bar) closeBar();
-  else if (s.audioReady && !(usesPage(layoutNow()) && (s.dialog || covered()))) openBar();
+  else if (s.audioReady && !(usesPage(layoutNow()) && (s.dialog || s.printView))) openBar();
 }
 
 /**
  * Whether the bar keeps the studio's keys: the bar always (it's over everything); the page while it
- * covers the studio (a phone held upright) or has the keyboard, unless something is over it (a dialog,
- * a window over the whole studio, or one of the studio's windows opened after it): that takes the keys
- * first, Escape closing it before the page. A sheet beside the studio leaves them to it otherwise.
+ * covers the studio (a phone held upright), is over Scan, or has the keyboard, unless something is over
+ * it (a dialog, Print, or one of the studio's windows opened after it): that takes the keys first,
+ * Escape closing it before the page. A sheet beside the studio leaves them to it otherwise.
  */
 function barHasKeys(target: EventTarget | null): boolean {
   const layout = layoutNow();
   if (!usesPage(layout)) return true;
   const s = store.get();
   const under = (s.plugin || s.synth || s.stage) && document.querySelector('.talk-room[data-below]');
-  if (s.dialog || covered() || under) return false;
-  return pageCovers(layout) || !!(target as Element | null)?.closest?.('.talk-page');
+  if (s.dialog || s.printView || under) return false;
+  return pageCovers(layout) || s.scanView !== null || !!(target as Element | null)?.closest?.('.talk-page');
 }
 
 function onKeyDown(e: KeyboardEvent): void {

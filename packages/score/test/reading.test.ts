@@ -190,6 +190,49 @@ describe('reading a scan with the recognition engines', () => {
     expect(readScanWithEngines(song, scan, readings).pages[0]?.engine).toBe('audiveris');
   });
 
+  it('lays the bars on the systems the engine marked, where the page’s bar lines weren’t found', () => {
+    const song = songWith(track('Flute', ''));
+    // handwriting: two systems, no bar lines found in either
+    const scan = scanOf(song, [[system(0, 1), system(1, 1)]]);
+    // the engine read four bars, its second system starting at the third
+    const read = page([track('Flute', FOUR_BARS)]).replace(
+      /(<measure number="3"[^>]*>)/,
+      '$1<print new-system="yes"/>',
+    );
+    const reading = readScanWithEngines(song, scan, [{ page: 0, engine: 'audiveris', musicxml: read }]);
+    expect(reading.systems.map((s) => s.bars)).toEqual([
+      [1, 2],
+      [3, 4],
+    ]);
+  });
+
+  it('keeps the engine’s systems when one of its bars ran over its time', () => {
+    const song = songWith(track('Flute', ''));
+    const scan = scanOf(song, [[system(0, 1), system(1, 1)]]);
+    // four measures of 4/4, the second with five beats in it, the second system starting at the third
+    const measure = (n: number, beats: number, print = '') =>
+      `<measure number="${n}">${n === 1 ? '<attributes><divisions>1</divisions><time><beats>4</beats><beat-type>4</beat-type></time><clef><sign>G</sign><line>2</line></clef></attributes>' : ''}${print}${'<note><pitch><step>C</step><octave>5</octave></pitch><duration>1</duration><type>quarter</type></note>'.repeat(beats)}</measure>`;
+    const read = `<?xml version="1.0"?><score-partwise version="4.0"><part-list><score-part id="P1"><part-name>Flute</part-name></score-part></part-list><part id="P1">${measure(1, 4)}${measure(2, 5)}${measure(3, 4, '<print new-system="yes"/>')}${measure(4, 4)}</part></score-partwise>`;
+    const reading = readScanWithEngines(song, scan, [{ page: 0, engine: 'audiveris', musicxml: read }]);
+    // (the extra beat makes a fifth bar here, at the end of the second system)
+    expect(reading.systems.map((s) => s.bars)).toEqual([
+      [1, 2],
+      [3, 5],
+    ]);
+  });
+
+  it('shares out the bars an engine read beyond what the bar lines say, rather than leaving them out', () => {
+    const song = songWith(track('Flute', ''));
+    const scan = scanOf(song, [[system(0, 1), system(1, 1)]]);
+    const reading = readScanWithEngines(song, scan, [
+      { page: 0, engine: 'audiveris', musicxml: page([track('Flute', FOUR_BARS)]) },
+    ]);
+    expect(reading.systems.map((s) => s.bars)).toEqual([
+      [1, 2],
+      [3, 4],
+    ]);
+  });
+
   it('adds a track for a part the song lacks, and writes each part into its own', () => {
     const song = songWith(track('Flute', ''));
     const scan = scanOf(song, [[system(0, 2, { staves: 2 }), system(1, 2, { staves: 2 })]]);
@@ -280,7 +323,8 @@ describe('reading a scan with the recognition engines', () => {
     const reading = readScanWithEngines(song, scan, readings);
     expect(reading.warnings[0]).toMatch(/^page 1: oemer's reading couldn't be read/);
     expect(reading.warnings[1]).toBe('page 1: no engine has read it');
-    expect(reading.systems.map((s) => [s.page, s.bars])).toEqual([[1, [1, 2]]]);
+    // (the page's one system, all four bars the engine read on it)
+    expect(reading.systems.map((s) => [s.page, s.bars])).toEqual([[1, [1, 4]]]);
   });
 
   it('keeps a system new, flagged with why, when its bars are refused', () => {

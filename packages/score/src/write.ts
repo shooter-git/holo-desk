@@ -520,13 +520,24 @@ function planLine(
         const octave = state.oct
           ? Math.sign(Number(state.oct.mark.v)) * (Math.abs(Number(state.oct.mark.v)) === 15 ? 2 : 1)
           : 0;
+        const clef = clefAt(staff.clefs, at);
+        const pitchOfHead = (h: Head) =>
+          part.drums ? drumAt(track, h.written) : pitchOf(h.written) - tr[0] - 12 * clefShift(clef) + 12 * octave;
+        // the note or chord just before, tied to this one in the bar, is held on when all of it is tied
+        // and all of it goes on here (a note of a chord held under others moving is left struck again:
+        // the score would show it as a second voice)
+        const before = chords.at(-1) as (Note & { _start: number })[] | undefined;
+        const pitches = tok.heads.map(pitchOfHead);
+        const holdInBar =
+          !tok.grace &&
+          !!before &&
+          before.length === pitches.length &&
+          before.every((n) => ties.get(n.p) === n && n._start + n.d === at) &&
+          pitches.every((p) => before.some((n) => n.p === p));
         for (const h of tok.heads) {
-          const clef = clefAt(staff.clefs, at);
-          const writtenPitch = pitchOf(h.written);
-          const p = part.drums ? drumAt(track, h.written) : writtenPitch - tr[0] - 12 * clefShift(clef) + 12 * octave;
-          // a note tied from before (earlier in this bar, or from the bar before) grows instead of
-          // starting again
-          const here = ties.get(p);
+          const p = pitchOfHead(h);
+          // a note tied from before grows instead of starting again
+          const here = holdInBar ? ties.get(p) : undefined;
           const held = here ?? state.ties.get(p);
           if (held && held._start + held.d === at && !tok.grace) {
             held.d += len;
@@ -552,7 +563,8 @@ function planLine(
           if (st) hints.st = st;
           n.n = hints;
           if (tok.grace) n.t = n._start = Math.max(span.start, at - 90);
-          if (h.tie) ties.set(p, n);
+          // (a grace note is struck before its main note, never held into it)
+          if (h.tie && !tok.grace) ties.set(p, n);
           notes.push(n);
           chord.push(n);
         }

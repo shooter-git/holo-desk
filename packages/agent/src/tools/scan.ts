@@ -25,7 +25,7 @@ function guidesText(clefs: Clef[] | undefined, pitches: boolean, staves: number)
   return [
     'Guides: every staff line is drawn over in blue, following the page, and the middle of every space is dotted in green. A notehead with blue through its middle is on that line; one with the green dots through its middle is in that space, however much of the lines either side it touches. Dashed orange marks where ledger lines would go above and below if spaced as the staff is, their spaces dotted green too: the ledger lines of a printed page fall on them, but handwritten ones seldom do, so off the staff count the ledger lines drawn on the page.',
     clefs && pitches
-      ? `The margins name each line and space as pitches for the clefs given (${clefs.join(', ')}, top to bottom): read a notehead's pitch from the name at its height (off the staff, from the ledger lines counted). If a clef changes in the system, the names are for the clefs given, not the new one.`
+      ? `The margins name each line and space as pitches for the clefs given (${clefs.join(', ')}, top to bottom): read a notehead's pitch from the name at its height (off the staff, from the ledger lines counted), the key signature's sharps and flats and any accidental still applying. If a clef changes in the system, the names are for the clefs given, not the new one.`
       : clefs
         ? `The margins name each line and space by place, not pitch: ${staves} staves were found here, not the ${clefs.length} clefs given, so pitch names could be wrong. L1–L5 are the lines from the bottom, S1–S4 the spaces, +1 the first ledger line above, -1 the first below; work out the pitches from the clefs you see.`
         : 'The margins name each line and space by place: L1–L5 the lines from the bottom, S1–S4 the spaces, +1 the first ledger line above, -1 the first below. Give "clefs" (each staff\'s, top to bottom, e.g. "treble,bass") to have them named as pitches.',
@@ -39,16 +39,21 @@ const png = (img: Rgb): Image => ({ mime: 'image/png', data: writePngRgb(img).to
  * again twice as large, in pieces. None when the strip can't be read as a picture.
  */
 function zoomed(strip: Image, clefs: Clef[] | undefined, part?: number): { images: Image[]; text: string } {
-  if (strip.mime !== 'image/png') return { images: [], text: '' };
+  const none = (why: string) => {
+    if (part !== undefined) throw new ToolError(`This system can't be shown in parts: ${why}`);
+    return { images: [], text: '' };
+  };
+  if (strip.mime !== 'image/png') return none('its strip is not a PNG');
   let gray: Gray;
   let z: ReturnType<typeof zoomSystem>;
   try {
     gray = readPngGray(Buffer.from(strip.data, 'base64'));
     z = zoomSystem(gray, { clefs });
   } catch {
-    return { images: [], text: '' };
+    return none('its strip cannot be read as a picture');
   }
   const n = z.parts.length;
+  if (!n) return none('no staff was found on its strip');
   if (part !== undefined) {
     const p = z.parts[part - 1];
     if (!p) throw new ToolError(`This system has ${n} part${n === 1 ? '' : 's'}: "part" is 1 to ${n}`);
@@ -103,7 +108,7 @@ export const scanShow: Tool = {
       name: 'clefs',
       type: 'string',
       describe:
-        'With "system": each staff\'s clef, top to bottom, e.g. "treble,bass" (treble, bass, alto, tenor, treble8, percussion), so the guides name pitches',
+        'With "system": each staff\'s clef, top to bottom, e.g. "treble,bass", so the guides name pitches. treble, bass; alto and tenor are C clefs (on the middle line, on the fourth), so an alto or tenor voice on a treble staff is treble; treble8 is a treble clef with an 8 under it; percussion',
       maxLength: 120,
     },
     {

@@ -1003,7 +1003,7 @@ apart), in pieces, with the same guides, its margins named for that part's own s
 instructions ask for that look before such a note is written.
 The reading instructions (`apps/server/src/agent/prompt.ts`) ask for every notehead read from where it
 sits, bar by bar; for every head on a stem (a chord, an octave), on ledger lines too, a stem that runs on
-past a head ending at another however slight the mark there. They say that a handwritten head may be a
+past a head, away from its flag or beam, ending at another however slight the mark there. They say that a handwritten head may be a
 small stroke, a slash, a dash or a cross through its ledger line, its pitch where its middle is (not its
 heavier end); that a ledger line on its own is not a note; and that off the staff the ledger lines drawn
 on the page name a note, not its distance, since a hand seldom spaces them as evenly as the staff: with

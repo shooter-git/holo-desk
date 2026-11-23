@@ -691,6 +691,14 @@ describe('the score', () => {
     expect(await refused(api, 'scan_show', { scan: scan.id, system: '0.0', part: parts + 1 })).toContain(
       `1 to ${parts}`,
     );
+    // a strip with no staff on it is shown as it is; a part of it is refused, saying why
+    const blank = {
+      mime: 'image/png',
+      data: writePngRgb({ w, h, data: new Uint8Array(w * h * 3).fill(240) }).toString('base64'),
+    };
+    const bare = setup({ scans: { [scan.id]: scan }, strips: { [`${scan.id}/0/0`]: blank } });
+    expect((await call(bare, 'scan_show', { scan: scan.id, system: '0.0' })).images).toEqual([blank]);
+    expect(await refused(bare, 'scan_show', { scan: scan.id, system: '0.0', part: 1 })).toContain('no staff was found');
   });
 });
 

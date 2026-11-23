@@ -145,7 +145,12 @@ export function staffCurve(ink: Uint8Array, w: number, h: number, staff: FoundSt
   return out;
 }
 
-/** Rows of the strip for each group of staves: all of them, or fewer when a part would be too tall. */
+/**
+ * Rows of the strip for each group of staves: all of them, or fewer when a part would be too tall.
+ * Each staff's rows go five spaces beyond its outer lines, or on to halfway to the staff beside it if
+ * that's further, and the first and last staves' on to the strip's edges: a dozen spaces at most, so
+ * nothing far above or below a staff, nor between two far apart, is lost.
+ */
 function groups(
   strip: Gray,
   staves: FoundStaff[],
@@ -154,13 +159,23 @@ function groups(
   tallest: number,
 ): [number, number, number[]][] {
   if (!staves.length || strip.h * scale <= tallest) return [[0, strip.h, staves.map((_, i) => i)]];
+  const reach = space * 12;
+  const top = (i: number) => {
+    const line = (staves[i] as FoundStaff).lines[0] as number;
+    const prev = staves[i - 1];
+    const edge = prev ? Math.min(((prev.lines[4] as number) + line) / 2, line - space * 5) : 0;
+    return Math.max(0, Math.round(Math.max(edge, line - reach)));
+  };
+  const bottom = (i: number) => {
+    const line = (staves[i] as FoundStaff).lines[4] as number;
+    const next = staves[i + 1];
+    const edge = next ? Math.max((line + (next.lines[0] as number)) / 2, line + space * 5) : strip.h;
+    return Math.min(strip.h, Math.round(Math.min(edge, line + reach)));
+  };
   const out: [number, number, number[]][] = [];
   let first = 0;
   while (first < staves.length) {
     let last = first;
-    const top = (i: number) => Math.max(0, Math.round((staves[i] as FoundStaff).lines[0] as number) - space * 5);
-    const bottom = (i: number) =>
-      Math.min(strip.h, Math.round((staves[i] as FoundStaff).lines[4] as number) + space * 5);
     while (last + 1 < staves.length && (bottom(last + 1) - top(first)) * scale <= tallest) last++;
     out.push([top(first), bottom(last), Array.from({ length: last - first + 1 }, (_, k) => first + k)]);
     first = last + 1;
@@ -268,7 +283,9 @@ const LETTERS = 'CDEFGAB';
 /** The bottom line's pitch for a clef, as a diatonic step (C0 = 0). */
 const BOTTOM: Record<Exclude<Clef, 'percussion'>, number> = {
   treble: 4 * 7 + 2, // E4
-  treble8: 3 * 7 + 2, // E3
+  // as written: the score text's pitches are the page's, a staff with an 8 under its clef sounding an
+  // octave lower
+  treble8: 4 * 7 + 2, // E4
   bass: 2 * 7 + 4, // G2
   alto: 3 * 7 + 3, // F3
   tenor: 3 * 7 + 1, // D3
@@ -276,7 +293,7 @@ const BOTTOM: Record<Exclude<Clef, 'percussion'>, number> = {
 const stepName = (step: number) => `${LETTERS[((step % 7) + 7) % 7]}${Math.floor(step / 7)}`;
 
 /** The name of the place `k` half-spaces above a staff's bottom line (0 its bottom line). */
-function placeName(k: number, clef: Clef | null | undefined): string {
+export function placeName(k: number, clef: Clef | null | undefined): string {
   if (clef && clef !== 'percussion') return stepName(BOTTOM[clef] + k);
   if (k >= 0 && k <= 8) return k % 2 === 0 ? `L${k / 2 + 1}` : `S${(k + 1) / 2}`;
   if (k > 8) return k % 2 === 0 ? `+${(k - 8) / 2}` : '';
@@ -296,11 +313,14 @@ export function zoomSystem(strip: Gray, options: ZoomOptions = {}): ZoomedSystem
   const guides = options.guides ?? true;
   const ink = binarize(strip);
   const { staves, space } = theSystem(strip, ink);
+  // no staff found: nothing to size the parts by, nor to draw guides on
+  if (!staves.length) return { parts: [], staves, space, scale: 1, pitches: false };
   const curves = guides ? staves.map((staff) => staffCurve(ink, strip.w, strip.h, staff, space)) : [];
   // pitch names only when there's a clef for each staff found: one staff missed would name the rest
   // for the wrong clefs
   const clefs = options.clefs?.length === staves.length ? options.clefs : undefined;
-  const scale = Math.max(1, Math.min(5, want / Math.max(4, space)));
+  // (up to twelve times: a closer look at music printed small is twice as large as the first look too)
+  const scale = Math.max(1, Math.min(12, want / Math.max(4, space)));
   const margin = guides ? MARGIN : 0;
   const parts: ZoomPart[] = [];
   for (const [y0, y1, inGroup] of groups(strip, staves, space, scale, maxSide * 0.75)) {
@@ -324,7 +344,8 @@ export function zoomSystem(strip: Gray, options: ZoomOptions = {}): ZoomedSystem
           const bottom = staff.lines[4] as number;
           const half = (bottom - top) / 8;
           // a place k half-spaces above the bottom line, at column x of the part
-          const at = (k: number) => (x: number) => (bottom - k * half + (curve[source(x)] as number) - y0) * scale;
+          const at = (k: number) => (x: number) =>
+            (bottom - k * half + (curve[source(x)] as number) - y0 + 0.5) * scale - 0.5;
           // ledger lines and names up to halfway to the staff above or below (a grand staff's two
           // share the gap), and no nearer the middle than half a space
           const prev = staves[index - 1];

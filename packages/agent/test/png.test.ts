@@ -1,4 +1,4 @@
-import { deflateSync } from 'node:zlib';
+import { deflateSync, inflateSync } from 'node:zlib';
 import { describe, expect, it } from 'vitest';
 import { readPngGray, writePngRgb } from '../src/tools/png.ts';
 
@@ -89,5 +89,23 @@ describe('PNGs for the agent', () => {
 
   it('refuses what isn’t a PNG it can read', () => {
     expect(() => readPngGray(Buffer.from('not a png'))).toThrow('Not a PNG');
+    // a row filter past the five there are, and a picture cut short, are refused, not read as blank rows
+    const good = png(4, 3, 1, () => [128]);
+    const at = good.indexOf('IDAT') + 4;
+    const length = good.readUInt32BE(at - 8);
+    const raw = Buffer.from(inflateSync(good.subarray(at, at + length)));
+    raw[0] = 7;
+    const badFilter = Buffer.concat([
+      good.subarray(0, at - 8),
+      chunk('IDAT', deflateSync(raw)),
+      chunk('IEND', Buffer.alloc(0)),
+    ]);
+    expect(() => readPngGray(badFilter)).toThrow('unknown filter');
+    const short = Buffer.concat([
+      good.subarray(0, at - 8),
+      chunk('IDAT', deflateSync(raw.subarray(0, 6))),
+      chunk('IEND', Buffer.alloc(0)),
+    ]);
+    expect(() => readPngGray(short)).toThrow('cut short');
   });
 });

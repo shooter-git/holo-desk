@@ -47,13 +47,17 @@ export function readPngGray(png: Buffer): Gray {
     else if (kind === 'IEND') break;
     at += 12 + length;
   }
+  // (a strip is a few thousand pixels a side: anything far bigger isn't one)
+  if (!w || !h || w * h > 50_000_000) throw new Error(`A ${w}×${h} PNG isn’t a strip read here`);
   const channels = ({ 0: 1, 2: 3, 4: 2, 6: 4 } as Record<number, number>)[type] as number;
   const raw = inflateSync(Buffer.concat(idat));
   const stride = w * channels;
+  if (raw.length < (stride + 1) * h) throw new Error('The PNG’s picture is cut short');
   const rows = new Uint8Array(stride * h);
   const prev = new Uint8Array(stride);
   for (let y = 0; y < h; y++) {
     const filter = raw[y * (stride + 1)] as number;
+    if (filter > 4) throw new Error(`The PNG’s row ${y} has an unknown filter (${filter})`);
     const line = raw.subarray(y * (stride + 1) + 1, (y + 1) * (stride + 1));
     const out = rows.subarray(y * stride, (y + 1) * stride);
     const up = y ? rows.subarray((y - 1) * stride, y * stride) : prev;

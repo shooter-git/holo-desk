@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { type Gray, type Rgb, zoomSystem } from '../src/index.ts';
+import { type Gray, placeName, type Rgb, zoomSystem } from '../src/index.ts';
 
 /** A strip of paper with staves drawn on it: each staff's top line, how far its lines fall across it. */
 function strip(w: number, h: number, tops: number[], gap = 12, fall = 0): Gray {
@@ -113,5 +113,47 @@ describe('a system zoomed for the agent', () => {
     // every staff is in some part
     expect(new Set(z.parts.flatMap((p) => p.staves))).toEqual(new Set([0, 1, 2, 3, 4, 5, 6, 7]));
     for (const p of z.parts) expect(Math.max(p.img.w, p.img.h)).toBeLessThanOrEqual(1560);
+  });
+
+  it('keeps all of a tall system in its parts: far above its first staff, below its last, between two far apart', () => {
+    // eight staves, the first with notes up to eight spaces over it, two of them 14 spaces apart
+    const tops = [120, 220, 320, 420, 520, 620, 788, 888];
+    const z = zoomSystem(strip(1400, 1050, tops), {});
+    expect(z.staves).toHaveLength(8);
+    expect(new Set(z.parts.map((p) => p.y0)).size).toBeGreaterThan(1);
+    const covered = new Uint8Array(1050);
+    for (const p of z.parts) covered.fill(1, p.y0, p.y1);
+    // every row from eight spaces over the first staff to six under the last is in some part
+    expect(covered.subarray(120 - 8 * 12, 888 + 48 + 6 * 12).every((v) => v === 1)).toBe(true);
+  });
+
+  it('shows a closer look twice as large, music printed small too', () => {
+    for (const gap of [6, 8, 12]) {
+      const s = strip(1200, 30 + 4 * gap + 30, [30], gap);
+      const first = zoomSystem(s, {});
+      const closer = zoomSystem(s, { space: 68 });
+      expect(first.staves).toHaveLength(1);
+      expect(closer.scale / first.scale, `staff space ${gap}`).toBeCloseTo(2, 1);
+    }
+  });
+
+  it('gives no parts for a strip with no staff on it', () => {
+    const blank: Gray = { w: 2400, h: 700, data: new Uint8Array(2400 * 700).fill(240) };
+    expect(zoomSystem(blank, {}).parts).toEqual([]);
+  });
+
+  it('names a staff’s lines and spaces as written, by clef', () => {
+    expect(placeName(0, 'treble')).toBe('E4');
+    expect(placeName(8, 'treble')).toBe('F5');
+    expect(placeName(10, 'treble')).toBe('A5');
+    // a treble clef with an 8 under it is written as a treble staff (the score text's pitches are written)
+    expect(placeName(0, 'treble8')).toBe('E4');
+    expect(placeName(0, 'bass')).toBe('G2');
+    expect(placeName(-2, 'bass')).toBe('E2');
+    expect(placeName(4, 'alto')).toBe('C4');
+    expect(placeName(6, 'tenor')).toBe('C4');
+    expect(placeName(3, undefined)).toBe('S2');
+    expect(placeName(12, undefined)).toBe('+2');
+    expect(placeName(11, undefined)).toBe('');
   });
 });

@@ -9,7 +9,7 @@
 - **Write and edit.** Tracks and regions on a timeline. A Piano Roll with the keyboard down the left: drag notes to new pitches and times, stretch them, set velocities, and draw any controller (mod wheel, expression, sustain, pitch bend, aftertouch, any CC). Quantize, transpose, split, repeat, undo everything.
 - **Play it live.** USB MIDI keyboards and drum pads through Web MIDI, delivered to the audio engine through shared memory: a key you press sounds in the next 128-frame block. You can also play the computer keyboard (Musical Typing) or the touch keyboard and drum pads on a phone. Record with count-in, cycle and metronome (right-click the metronome, or open Settings › Metronome, for its sound and volume). For the shortest time from key to ear, run [HO[LO] Engine](#play-it-in-a-few-milliseconds-holo-engine) on the computer you play on.
 - **Scores.** Any track as notation (press <kbd>N</kbd>): the score and the Piano Roll are the same notes, so an edit in either shows in both. Write by typing letters and note values, playing a MIDI keyboard, or clicking on a staff; add dynamics, articulations, slurs, lyrics, chord symbols, repeats and endings, D.C. and D.S. jumps, guitar tab and drum parts. Markings sound as they read, and playback follows the repeats. MusicXML goes in and out (MuseScore, Sibelius, Finale, Dorico), and the full score or each part prints, or saves as a PDF.
-- **Scan sheet music.** Photograph a page with your phone or open an image or a PDF: HO[LO] straightens it, finds the systems and shows each line of the page above the bars it became, for a quick review. Optional open-source recognition engines (Audiveris and homr, `pnpm omr on`) read it into the song as one undo step, and read it again to flag the bars where they differ from what's written. The agent, if you turn it on, can read it too.
+- **Scan sheet music.** Photograph a page with your phone or open an image or a PDF: HO[LO] straightens it, finds the systems and shows each line of the page above the bars it became, for a quick review. Open-source recognition engines (Audiveris and homr, on by default) read it into the song as one undo step, and read it again to flag the bars where they differ from what's written. The agent, if you turn it on, can read it too.
 - **Record and edit audio.** Audio tracks record a microphone or an instrument through an audio interface (lined up with what you heard, using this device's measured round trip), or take WAV, FLAC, MP3, Ogg and AIFF files dropped on the tracks. Trim from either edge, drag fades, set gain, normalize, and time-stretch without changing pitch (Alt-drag a region's end, as in Logic) in the tracks area or the Audio Editor.
 - **Mix and automate.** Channel strips with instruments, MIDI effects, audio effects, sends, buses, pan, faders and meters. Put a channel on a **Stage**: a near seat and a far seat, each with its own rooms and depth, and a Distance that moves it between them. Automation lanes (press <kbd>A</kbd>) draw how volume, pan, mute, sends, distance and any plugin parameter move through the song, in straight lines or smooth curves, sample-accurately.
 - **Bounce.** <kbd>Ctrl B</kbd> renders the song (or the cycle) to a 24-bit WAV with the same engine, faster than real time, and keeps a copy with the song. The stock plugins are Channel EQ, Parametric EQ (eight free bands), Studio EQ (cuts to 48 dB an octave, shelves, four bells and Proportional Q), Compressor, Character Compressor (Clean, FET, VCA and Opto circuits, with an output stage and a limiter), Noise Gate, Transient Softener, Limiter (with a soft knee), Space Designer (convolution with generated rooms, halls and cathedrals, or any impulse response), Shimmer, Space Reverb, Room Reverb (early reflections from a room's walls, then a tail with its own decay for the lows and highs), Smooth Hall, Tape Delay, Dual Delay (each side its own note, groove, feedback and crossfeed), Chorus, Wow & Flutter, Rotary Speaker, Phaser, Tremolo (or auto-pan), String Resonance (a grand's strings ringing in sympathy, with an extended grand's bass strings), Stereo Width, Tape Warmth, Saturation, Lo-fi, Drum Replacer (each hit on a drum track played again on any kit, and turned into notes), Pitch Correction (a voice pulled to the nearest note of a key and scale, hard and robotic or natural), Arpeggiator, Harmonizer, Scale Quantizer, Velocity Processor and Session Drummer (a drummer that plays along in ten styles, with fills). Plugins that look ahead (the limiter, Shimmer, the Drum Replacer, Pitch Correction) are delay-compensated: everything else waits for them, so it all arrives together. A song can carry its **finish** (mastering to a loudness under a true-peak ceiling, with glue) and be marked a **loop**, so a game's music renders as it plays forever, its end ringing into its start.
@@ -33,13 +33,16 @@ pnpm packs install          # the sample libraries (a few GB), or install them f
 pnpm build && pnpm start    # or `pnpm dev` while working on HO[LO] itself
 ```
 
-Open <http://localhost:47800> and press **Start the studio**.
+Open <http://localhost:47800> and press **Start the studio**. Scanned sheet music is read by recognition
+engines that run in Docker: with Docker on this computer, the server fetches them (a few GB) and starts
+them the first time a scan needs them (`pnpm omr off` if you'd rather not).
 
 **In Docker** (the server, the built studio and your data in `./data`), from the image CI publishes:
 
 ```bash
 cp .env.example .env
-pnpm run update             # pull ghcr.io/shooter-git/holo-desk:stable and start it (or: pnpm run update main)
+pnpm run update             # pull ghcr.io/shooter-git/holo-desk:stable and start it (or: pnpm run update main),
+                            # with the recognition engines that read scans beside it (pnpm omr off: without)
 pnpm run autoupdate on      # then it keeps itself up to date (Linux: a systemd timer, as you)
 pnpm run runner-service on  # and the runner, for creations' renders and the agent (Linux: a service, as you)
 # on a server nobody stays logged into, once: the timer and the runner keep running after you log out,
@@ -231,7 +234,8 @@ and Stop on the bar ends it at any time. The agent works on the open song and no
   pickup);
 - finding sounds, and installing a HO[LO] Pack once you've clicked;
 - playing the bars it changed as they were, then as they are;
-- with the Scan window open, **Read this scan**, **Check it** and **Fix flagged**.
+- with the Scan window open, **Read this scan**, **Check it** and **Fix flagged** (from the Commands
+  button in its header, on a phone or a tablet too).
 
 Everything it changes for one request is one undo step, "Agent: …", and before your next request it's
 told what you undid or changed since. It can't change HO[LO]'s code, its packs, a creation's code or
@@ -402,7 +406,8 @@ device: then a short notice of each reply goes to that device through its browse
 (Apple's, Google's, Mozilla's or Microsoft's), encrypted so only the device can read it. The agent is
 off unless you turn it on, and off, no harness is run and nothing is looked up for it. On, it runs your own Claude Code, Codex, Cursor or Antigravity, which sends what
 it reads (the song, a scanned page, a file you attached) to Anthropic, OpenAI, Cursor or Google as any session
-of yours does, as you, and only the devices you've allowed can ask it anything. HO[LO] binds to
+of yours does, as you, and only the devices you've allowed can ask it anything. The recognition engines that read
+scans run on this computer, in a container with no way out to the internet. HO[LO] binds to
 `127.0.0.1`, and only devices on your own tailnet can reach it when you turn that on. HO[LO] Engine
 listens on `127.0.0.1:47830` only, and lets in a studio served from this computer, the local network or
 a tailnet (`--origin` names any other). Your songs and packs stay in `./data`. Read

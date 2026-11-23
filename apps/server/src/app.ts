@@ -245,9 +245,11 @@ export async function buildApp(config: Config): Promise<{ app: FastifyInstance; 
     changed: (scan) => live.tell({ type: 'scan', id: scan.id, project: scan.project }),
   });
 
-  // the recognition engines, a second reader of scanned pages (when their container is running)
-  omrRoutes(app, {
+  // the recognition engines, which read scanned pages into songs: their container in Docker, or one the
+  // server runs itself (stopped with it)
+  const engines = omrRoutes(app, {
     url: config.omrUrl ?? null,
+    image: config.omrImage ?? null,
     dataDir: config.dataDir,
     scan: scans.get,
     save: scans.save,
@@ -1063,6 +1065,8 @@ export async function buildApp(config: Config): Promise<{ app: FastifyInstance; 
     agent.close();
     networkMidi?.close();
     store.close();
+    // (a container the server started, removed: quick, and nothing in it is kept)
+    await engines.close?.().catch(() => undefined);
   });
   return { app, services: { store, packs, live, creations, audioSwept, jobs: agent.jobs, notify: agent.notify } };
 }

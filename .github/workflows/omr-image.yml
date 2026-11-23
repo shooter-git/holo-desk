@@ -1,0 +1,171 @@
+name: Recognition engines image
+
+# The sheet-music recognition engines (deploy/omr: Audiveris and homr, AGPL-3.0, built from their
+# published sources at pinned versions) as an image beside the studio's, in the same package
+# (ghcr.io/<owner>/holo-desk): `omr-main` for main, `omr-stable` and `omr-<version>` on each release.
+# Hosts pull it with the studio (tools/update.mjs); a studio run without Docker runs it itself.
+#
+# It's built once for each version of deploy/omr, as `omr-src-<its tree>`, on each architecture's own
+# runner (amd64, arm64), then joined into one tag; the channels are tags of that build, so a release
+# that doesn't change the engines only retags. Each build carries a signed record of the commit and
+# workflow that built it (gh attestation verify oci://ghcr.io/<owner>/holo-desk:omr-main --owner <owner>).
+on:
+  push:
+    branches: [main]
+    paths:
+      - deploy/omr/**
+      - .github/workflows/omr-image.yml
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: omr-image-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  IMAGE: ghcr.io/${{ github.repository }}
+
+jobs:
+  source:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: read
+    outputs:
+      tree: ${{ steps.tree.outputs.tree }}
+      built: ${{ steps.look.outputs.built }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - id: tree
+        name: Which version of deploy/omr this is
+        run: echo "tree=$(git rev-parse HEAD:deploy/omr | cut -c1-12)" >> "$GITHUB_OUTPUT"
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: look
+        name: Whether it's built already
+        env:
+          TREE: ${{ steps.tree.outputs.tree }}
+        run: |
+          if docker buildx imagetools inspect "$IMAGE:omr-src-$TREE" > /dev/null 2>&1; then
+            echo "built=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "built=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  build:
+    needs: source
+    if: needs.source.outputs.built != 'true'
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            platform: linux/amd64
+            arch: amd64
+          - runner: ubuntu-24.04-arm
+            platform: linux/arm64
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: build
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: deploy/omr
+          platforms: ${{ matrix.platform }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+          outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
+          cache-from: type=gha,scope=omr-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=omr-${{ matrix.arch }}
+      - name: Keep the digest for the tag
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          mkdir -p digests
+          touch "digests/${DIGEST#sha256:}"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: omr-digest-${{ matrix.arch }}
+          path: digests/*
+          retention-days: 1
+
+  publish:
+    needs: [source, build]
+    # (after a build, or with none needed)
+    if: always() && needs.source.result == 'success' && (needs.build.result == 'success' || needs.build.result == 'skipped')
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    env:
+      TREE: ${{ needs.source.outputs.tree }}
+    steps:
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - if: needs.build.result == 'success'
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: omr-digest-*
+          merge-multiple: true
+          path: digests
+      - if: needs.build.result == 'success'
+        name: One tag for both architectures
+        working-directory: digests
+        run: docker buildx imagetools create -t "$IMAGE:omr-src-$TREE" $(printf "$IMAGE@sha256:%s " *)
+      - id: channels
+        name: The channels this run moves
+        env:
+          EVENT: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+          PRERELEASE: ${{ github.event.release.prerelease }}
+          VERSION: ${{ github.event.release.tag_name }}
+        run: |
+          tags=""
+          if [ "$EVENT" = "release" ] && [ "$PRERELEASE" != "true" ]; then
+            tags="omr-stable omr-${VERSION#v}"
+          elif [ "$REF" = "refs/heads/main" ]; then
+            tags="omr-main"
+          fi
+          echo "tags=$tags" >> "$GITHUB_OUTPUT"
+      - if: steps.channels.outputs.tags != ''
+        name: The channels, as tags of this build
+        env:
+          TAGS: ${{ steps.channels.outputs.tags }}
+        run: |
+          args=""
+          for t in $TAGS; do args="$args -t $IMAGE:$t"; done
+          docker buildx imagetools create $args "$IMAGE:omr-src-$TREE"
+      - id: digest
+        name: The build's digest
+        run: echo "digest=$(docker buildx imagetools inspect "$IMAGE:omr-src-$TREE" --format '{{json .Manifest}}' | jq -r .digest)" >> "$GITHUB_OUTPUT"
+      - if: needs.build.result == 'success'
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: ${{ env.IMAGE }}
+          subject-digest: ${{ steps.digest.outputs.digest }}
+          push-to-registry: true

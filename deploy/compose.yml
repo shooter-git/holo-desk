@@ -1,6 +1,7 @@
 # HO[LO] Desk in Docker. Run from the repository's root. Two ways to run it:
 #   pnpm run update   the image CI publishes (ghcr.io/shooter-git/holo-desk, HOLO_CHANNEL main or stable),
-#                     pulled and started; `pnpm run autoupdate on` keeps it up to date by itself
+#                     and the recognition engines' beside it, pulled and started; `pnpm run autoupdate on`
+#                     keeps them up to date by itself
 #   pnpm run up       built from this checkout (holo-desk:local): your own changes, auto-update paused
 # Paths below are relative to the repository's root. Settings come from .env (see .env.example).
 name: holo
@@ -21,8 +22,9 @@ services:
       # network MIDI listens in here; the ports below decide who can reach it (pnpm netmidi on / off)
       HOLO_NETWORK_MIDI: "on"
       HOLO_NETWORK_MIDI_REACH: ${HOLO_NETWORK_MIDI_BIND:-127.0.0.1}
-      # the recognition engines, when they're on (pnpm omr on): reached on their own network
-      HOLO_OMR_URL: ${HOLO_OMR_URL:-}
+      # the recognition engines, which read scans into songs: their container, on a network of their
+      # own (pnpm omr off sets this empty, and they're off)
+      HOLO_OMR_URL: ${HOLO_OMR_URL-http://omr:8070}
       # other names the studio is reached by (a reverse proxy's), besides this machine, LAN and tailnet
       HOLO_ALLOWED_HOSTS: ${HOLO_ALLOWED_HOSTS:-}
     # this machine only: your devices reach it over HTTPS on your tailnet (pnpm tailnet on)
@@ -36,16 +38,17 @@ services:
       - ${HOLO_CREATIONS_DIR:-./data/creations}:/creations
     networks: [default, engines]
 
-  # sheet-music recognition engines, a second reader of scans (pnpm omr on / off). Audiveris and homr
-  # (AGPL-3.0) run inside, unmodified; the container has no way out to the internet, and nothing
-  # outside this machine's HO[LO] can reach it
+  # the sheet-music recognition engines, which read scans into songs: on unless `pnpm omr off`.
+  # Audiveris and homr (AGPL-3.0) run inside, unmodified; the container has no way out to the internet,
+  # and nothing outside this machine's HO[LO] can reach it. The image CI publishes from deploy/omr
+  # (tools/update.mjs follows its channel), or one built from this checkout (pnpm omr build)
   omr:
-    profiles: ["omr"]
-    build:
-      context: deploy/omr
-    image: holo-omr:local
+    image: ${HOLO_OMR_IMAGE:-ghcr.io/shooter-git/holo-desk:omr-stable}
     restart: unless-stopped
     networks: [engines]
+    deploy:
+      # 0 while they're off
+      replicas: ${HOLO_OMR_REPLICAS:-1}
 
   # HTTPS on your local network, for devices that aren't on a tailnet (pnpm lan on / off)
   lan:

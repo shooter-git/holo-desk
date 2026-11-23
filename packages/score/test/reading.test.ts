@@ -190,6 +190,34 @@ describe('reading a scan with the recognition engines', () => {
     expect(readScanWithEngines(song, scan, readings).pages[0]?.engine).toBe('audiveris');
   });
 
+  it('lays the bars on the systems the engine marked, where the page’s bar lines weren’t found', () => {
+    const song = songWith(track('Flute', ''));
+    // handwriting: two systems, no bar lines found in either
+    const scan = scanOf(song, [[system(0, 1), system(1, 1)]]);
+    // the engine read four bars, its second system starting at the third
+    const read = page([track('Flute', FOUR_BARS)]).replace(
+      /(<measure number="3"[^>]*>)/,
+      '$1<print new-system="yes"/>',
+    );
+    const reading = readScanWithEngines(song, scan, [{ page: 0, engine: 'audiveris', musicxml: read }]);
+    expect(reading.systems.map((s) => s.bars)).toEqual([
+      [1, 2],
+      [3, 4],
+    ]);
+  });
+
+  it('shares out the bars an engine read beyond what the bar lines say, rather than leaving them out', () => {
+    const song = songWith(track('Flute', ''));
+    const scan = scanOf(song, [[system(0, 1), system(1, 1)]]);
+    const reading = readScanWithEngines(song, scan, [
+      { page: 0, engine: 'audiveris', musicxml: page([track('Flute', FOUR_BARS)]) },
+    ]);
+    expect(reading.systems.map((s) => s.bars)).toEqual([
+      [1, 2],
+      [3, 4],
+    ]);
+  });
+
   it('adds a track for a part the song lacks, and writes each part into its own', () => {
     const song = songWith(track('Flute', ''));
     const scan = scanOf(song, [[system(0, 2, { staves: 2 }), system(1, 2, { staves: 2 })]]);
@@ -280,7 +308,8 @@ describe('reading a scan with the recognition engines', () => {
     const reading = readScanWithEngines(song, scan, readings);
     expect(reading.warnings[0]).toMatch(/^page 1: oemer's reading couldn't be read/);
     expect(reading.warnings[1]).toBe('page 1: no engine has read it');
-    expect(reading.systems.map((s) => [s.page, s.bars])).toEqual([[1, [1, 2]]]);
+    // (the page's one system, all four bars the engine read on it)
+    expect(reading.systems.map((s) => [s.page, s.bars])).toEqual([[1, [1, 4]]]);
   });
 
   it('keeps a system new, flagged with why, when its bars are refused', () => {

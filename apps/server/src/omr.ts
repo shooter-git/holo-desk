@@ -1,9 +1,11 @@
 /**
- * The recognition engines, as a second reader of scanned pages (optional: `pnpm omr on` starts their
- * container, which the server reaches at HOLO_OMR_URL on a network with no way out). Their readings
- * are kept beside the scan; where they differ from the bars written into the song, the systems are
- * flagged, for you or the agent to look at. With no agent to read a scan in, the studio reads it in
- * from those readings: the systems not read yet, as one change to the song.
+ * The recognition engines, which read scanned pages into songs, and read them again as a second
+ * reader. On by default: in Docker they're a container of their own on a network with no way out
+ * (HOLO_OMR_URL, which the compose file sets); run without Docker, the server runs them itself in a
+ * container with no network at all (omr-docker.ts). `pnpm omr off` turns them off. Their readings are
+ * kept beside the scan; where they differ from the bars written into the song, the systems are flagged,
+ * for you or the agent to look at. The studio reads a scan in from those readings: the systems not
+ * read yet, as one change to the song.
  */
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -17,24 +19,94 @@ import {
 } from '@holo/score';
 import type { Op, Project } from '@holo/session';
 import type { FastifyInstance } from 'fastify';
+import { dockerEngines } from './omr-docker.ts';
 
 export interface OmrOptions {
+  /** Where they answer (their container in Docker), or null. */
   url: string | null;
+  /** Without an address: the image the server runs them from itself, or null (off). */
+  image?: string | null;
   dataDir: string;
   scan: (id: string) => Scan | null;
   save: (scan: Scan) => void;
   project: (id: string) => Project | null;
 }
 
-interface Reading {
+/** How long the engines may take over a page (both of them, one after the other). */
+const PAGE_MS = 6 * 60 * 1000;
+/** An engine's reading of a page, as it's kept: `<page>-<engine>.musicxml`. */
+const KEPT = /^(\d{1,3})-([a-z]{2,20})\.musicxml$/;
+
+/** An engine's reading of a page: its MusicXML, or why it has none. */
+export interface Reading {
   engine: string;
   musicxml?: string;
   error?: string;
 }
 
-const PAGE_MS = 6 * 60 * 1000;
-/** An engine's reading of a page, as it's kept: `<page>-<engine>.musicxml`. */
-const KEPT = /^(\d{1,3})-([a-z]{2,20})\.musicxml$/;
+/**
+ * Whether the engines are here to read (`GET /api/omr`), and which. When they aren't, why: being got
+ * ready (the first start fetches them), turned off, no Docker to run them in, or not answering.
+ */
+export interface OmrStatus {
+  available: boolean;
+  engines: string[];
+  why?: 'starting' | 'off' | 'no-docker' | 'unreachable';
+  /** What went wrong, in the words of what failed. */
+  detail?: string;
+}
+
+/** The engines, however they're reached: whether they're here, and a page read by each. */
+export interface Engines {
+  /** (Asking may start them: they say "starting" until they answer.) */
+  status(): Promise<OmrStatus>;
+  read(page: Buffer, type: string): Promise<Reading[]>;
+  close?(): Promise<void>;
+}
+
+/** The engines' server at an address: their container, in Docker. */
+export function urlEngines(url: string, pageMs = PAGE_MS): Engines {
+  return {
+    async status() {
+      try {
+        const res = await fetch(`${url}/health`, { signal: AbortSignal.timeout(2000) });
+        const body = (await res.json()) as { engines?: string[] };
+        if (res.ok) return { available: true, engines: body.engines ?? [] };
+        return { available: false, engines: [], why: 'unreachable', detail: `they answered ${res.status}` };
+      } catch (e) {
+        return {
+          available: false,
+          engines: [],
+          why: 'unreachable',
+          detail: e instanceof Error ? e.message : String(e),
+        };
+      }
+    },
+    async read(page, type) {
+      const res = await fetch(`${url}/read`, {
+        method: 'POST',
+        headers: { 'content-type': type },
+        body: page,
+        signal: AbortSignal.timeout(pageMs),
+      });
+      return ((await res.json()) as { readings?: Reading[] }).readings ?? [];
+    },
+  };
+}
+
+const OFF: Engines = {
+  status: async () => ({ available: false, engines: [], why: 'off' }),
+  read: async () => [],
+};
+
+/** Why the engines can't read now, as the studio says it to whoever pressed the button. */
+export function unavailable(s: OmrStatus): string {
+  if (s.why === 'starting') return 'The recognition engines are getting ready: try again in a moment';
+  if (s.why === 'off') return 'The recognition engines are turned off (pnpm omr on)';
+  if (s.why === 'no-docker')
+    return `The recognition engines need Docker where HO[LO] runs (${s.detail ?? 'none here'})`;
+  return `The recognition engines aren’t answering${s.detail ? ` (${s.detail})` : ''}`;
+}
 
 /**
  * The engines' reading of a scan as a change to its song (`GET /api/scans/:id/engines/reading`). The
@@ -56,7 +128,9 @@ export interface EngineReadingAnswer {
   warnings: string[];
 }
 
-export function omrRoutes(app: FastifyInstance, opts: OmrOptions): void {
+export function omrRoutes(app: FastifyInstance, opts: OmrOptions): Engines {
+  const engines = opts.url ? urlEngines(opts.url) : opts.image ? dockerEngines(opts.image, opts.dataDir) : OFF;
+
   /** The engines' readings kept beside a scan, page by page. */
   const kept = (scan: Scan): PageReading[] => {
     const dir = join(opts.dataDir, 'scans', scan.id, 'engines');
@@ -74,26 +148,13 @@ export function omrRoutes(app: FastifyInstance, opts: OmrOptions): void {
     return out;
   };
 
-  const health = async (): Promise<{ available: boolean; engines: string[] }> => {
-    if (!opts.url) return { available: false, engines: [] };
-    try {
-      const res = await fetch(`${opts.url}/health`, { signal: AbortSignal.timeout(2000) });
-      const body = (await res.json()) as { engines?: string[] };
-      return { available: res.ok, engines: body.engines ?? [] };
-    } catch {
-      return { available: false, engines: [] };
-    }
-  };
-
-  app.get('/api/omr', async () => health());
+  app.get('/api/omr', async (): Promise<OmrStatus> => engines.status());
 
   app.post<{ Params: { id: string } }>('/api/scans/:id/engines', async (req, reply) => {
     const scan = opts.scan(req.params.id);
     if (!scan) return reply.code(404).send({ error: 'No such scan' });
-    const status = await health();
-    if (!status.available || !opts.url) {
-      return reply.code(409).send({ error: 'The recognition engines aren’t running (pnpm omr on)' });
-    }
+    const status = await engines.status();
+    if (!status.available) return reply.code(409).send({ error: unavailable(status), reason: status.why });
     const project = opts.project(scan.project);
     if (!project) return reply.code(404).send({ error: 'The scan’s song is gone' });
     const dir = join(opts.dataDir, 'scans', scan.id);
@@ -108,13 +169,7 @@ export function omrRoutes(app: FastifyInstance, opts: OmrOptions): void {
       const type = file.endsWith('.jpeg') ? 'image/jpeg' : file.endsWith('.webp') ? 'image/webp' : 'image/png';
       let readings: Reading[] = [];
       try {
-        const res = await fetch(`${opts.url}/read`, {
-          method: 'POST',
-          headers: { 'content-type': type },
-          body: readFileSync(join(dir, 'pages', file)),
-          signal: AbortSignal.timeout(PAGE_MS),
-        });
-        readings = ((await res.json()) as { readings?: Reading[] }).readings ?? [];
+        readings = await engines.read(readFileSync(join(dir, 'pages', file)), type);
       } catch (e) {
         summary.push(`page ${page.n + 1}: the engines didn't answer (${e instanceof Error ? e.message : String(e)})`);
         continue;
@@ -191,4 +246,6 @@ export function omrRoutes(app: FastifyInstance, opts: OmrOptions): void {
       warnings: write.warnings,
     } satisfies EngineReadingAnswer;
   });
+
+  return engines;
 }

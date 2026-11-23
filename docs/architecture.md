@@ -357,8 +357,12 @@ the studio that asked ◄── server ◄── /api/agent/jobs/:job/* ◄─�
   since (undo, redo, their own steps). The next prompt has a "since your last reply" part, so the agent
   hears what was undone or changed. A new harness, or *Start a new conversation with the agent*, starts a new thread.
 
-A scan can also be read in without the agent, by the recognition engines (`pnpm omr on`): the Scan
-window writes their reading (`packages/score/src/scan/reading.ts`) into the song as one undo step.
+A scan can also be read in without the agent, by the recognition engines (Audiveris and homr, on by
+default): the Scan window writes their reading (`packages/score/src/scan/reading.ts`) into the song as
+one undo step. In Docker they're a container beside the studio's (the image CI publishes from
+`deploy/omr`, pulled with the studio's), on a network with no way out. Run without Docker, the server
+runs the same image itself (`apps/server/src/omr-docker.ts`) the first time a scan wants it, in a
+container with no network at all, and talks to it through `docker exec`. `pnpm omr off` turns them off.
 
 ## Samples
 

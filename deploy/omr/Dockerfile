@@ -1,5 +1,8 @@
-# HO[LO] Desk's recognition engines: a second reader of scanned sheet music (optional).
-# `pnpm omr on` builds and starts it; HO[LO]'s server reaches it on a network with no way out.
+# HO[LO] Desk's recognition engines, which read scanned sheet music into songs (on by default). CI
+# publishes this image beside the studio's (ghcr.io/shooter-git/holo-desk:omr-stable, .github/workflows/
+# omr-image.yml) and hosts pull it with the studio; `pnpm omr build` builds it here instead. HO[LO]'s
+# server reaches it on a network with no way out (in Docker), or through `docker exec` into a container
+# with no network at all (run without Docker).
 #
 # Audiveris (https://github.com/Audiveris/audiveris) and homr (https://github.com/liebharc/homr) are
 # AGPL-3.0 programs. They are built from their published sources at the versions pinned below, used
@@ -42,6 +45,8 @@ RUN python -m venv /opt/homr \
  && /opt/homr/bin/homr --init
 RUN useradd --create-home --uid 1000 reader
 COPY server.py /app/server.py
+LABEL org.opencontainers.image.title="HO[LO] Desk's recognition engines" \
+      org.opencontainers.image.description="Audiveris and homr (AGPL-3.0, unmodified, built from their published sources at the versions in this Dockerfile) behind HO[LO] Desk's reader (MIT)"
 USER reader
 EXPOSE 8070
 HEALTHCHECK --interval=30s --timeout=3s CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8070/health', timeout=2)"

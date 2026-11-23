@@ -1,17 +1,20 @@
 /**
  * Scanning sheet music into the song: photos or PDFs picked, each page's corners set (guessed, then
  * dragged), the music found on it, and the scan saved; then the review, a system at a time: its strip
- * from the page above the bars written from it, for you to approve. The recognition engines, when
- * they're running, read it in or check what was written; the agent (from the bar, Ctrl /) can too.
+ * from the page above the bars written from it, for you to approve. The recognition engines (on by
+ * default) read it in or check what was written; while they can't, the review says why. The agent can
+ * read it too, from the bar: the window covers the studio, so its header carries the studio's own
+ * Commands button (on a phone or a tablet the page opens over the review, under that header).
  */
 import { notate, type Scan, type ScanSystem, toMEI } from '@holo/score';
 import { Check, Play, X } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { apply, locate, saveSoon, togglePlay } from '../../app/actions.ts';
 import { store, toast, useApp } from '../../app/store.ts';
+import { BarButton } from '../../ui/ControlBar.tsx';
 import { useFocusInside } from '../../ui/focus-inside.ts';
 import { renderEach } from '../verovio.ts';
-import { compareEngines, getScan, omrStatus, readWithEngines, setSystem } from './client.ts';
+import { compareEngines, getScan, type OmrStatus, omrStatus, readWithEngines, setSystem } from './client.ts';
 import { NewScan } from './NewScan.tsx';
 
 export default function ScanWindow() {
@@ -53,11 +56,32 @@ const STATE_WORDS: Record<ScanSystem['state'], string> = {
   approved: 'approved',
 };
 
+/** Why the recognition engines can't read the scan in now, in a line under the review's title. */
+function enginesAway(o: OmrStatus | null): string {
+  if (!o) return 'Looking for the recognition engines…';
+  if (o.why === 'starting') return 'Getting the recognition engines ready (the first time, a download of a few GB)…';
+  if (o.why === 'off') return 'The recognition engines are turned off where HO[LO] runs (pnpm omr on turns them on).';
+  if (o.why === 'no-docker') return 'The recognition engines need Docker on the computer HO[LO] runs on.';
+  return 'The recognition engines aren’t answering yet.';
+}
+
+/** How far the review has got, in what there is: "3 approved · 4 to read". */
+function progress(counts: Record<string, number>): string {
+  const parts = [
+    counts.approved && `${counts.approved} approved`,
+    counts.checked && `${counts.checked} checked`,
+    counts.read && `${counts.read} read`,
+    counts.new && `${counts.new} to read`,
+  ].filter(Boolean);
+  return parts.length ? parts.join(' · ') : 'No systems found';
+}
+
 function Review({ id }: { id: string }) {
   const project = useApp((s) => s.project);
   const tick = useApp((s) => s.scanTick);
   const [scan, setScan] = useState<Scan | null>(null);
-  const [engines, setEngines] = useState<string[]>([]);
+  const [omr, setOmr] = useState<OmrStatus | null>(null);
+  const engines = omr?.available ? omr.engines : [];
   const [comparing, setComparing] = useState(false);
   /** While the engines' reading is on its way: what's happening. */
   const [reading, setReading] = useState<string | null>(null);
@@ -67,26 +91,37 @@ function Review({ id }: { id: string }) {
   useEffect(() => {
     void getScan(id).then(setScan, (e: Error) => toast(e.message, 'error'));
   }, [id, tick]);
+  // the engines: asked again every 15 s, or every 3 s while they're getting ready (asking starts them
+  // where the server runs them itself)
   useEffect(() => {
+    let live = true;
+    let t = 0;
     const check = () => {
-      void omrStatus().then(
-        (o) => setEngines(o.available ? o.engines : []),
-        () => setEngines([]),
-      );
+      void omrStatus()
+        .catch((): OmrStatus => ({ available: false, engines: [], why: 'unreachable' }))
+        .then((o) => {
+          if (!live) return;
+          setOmr(o);
+          t = window.setTimeout(check, o.why === 'starting' ? 3000 : 15_000);
+        });
     };
     check();
-    const t = window.setInterval(check, 15_000);
-    return () => window.clearInterval(t);
+    return () => {
+      live = false;
+      window.clearTimeout(t);
+    };
   }, []);
 
-  // Escape closes the review, as the other windows do: everything in it is kept as it's made. (A
-  // new scan keeps the key from closing it: its pages and their corners would be lost.)
+  // Escape closes the review, as the other windows do: everything in it is kept as it's made. The bar
+  // or the page open over it closes first (heard before the studio's keys are: app/keys.ts closes it).
+  // (A new scan keeps the key from closing it: its pages and their corners would be lost.)
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && store.get().dialog === null) close();
+      const s = store.get();
+      if (e.key === 'Escape' && s.dialog === null && !s.bar) close();
     };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
   }, []);
 
   const systems = useMemo(() => scan?.pages.flatMap((p) => p.systems.map((s) => ({ page: p.n, s }))) ?? [], [scan]);
@@ -191,54 +226,73 @@ function Review({ id }: { id: string }) {
 
   return (
     <>
-      <header className="scan-bar">
-        <span className="title">{scan.title}</span>
-        <span className="muted">
-          {counts.approved ?? 0} approved · {counts.checked ?? 0} checked · {counts.read ?? 0} read · {counts.new ?? 0}{' '}
-          to read
+      <header className="scan-bar review">
+        <span className="scan-heading">
+          <span className="title">{scan.title}</span>
+          <span className="muted">{progress(counts)}</span>
         </span>
-        <span className="grow" />
-        {engines.length > 0 && (
-          <>
-            <button
-              type="button"
-              className="btn primary"
-              disabled={reading !== null || comparing || !counts.new}
-              title={`${engines.join(' and ')} read each page, and what they read of the systems not read yet is written into the song (one undo step)`}
-              onClick={() => void readIn()}
-            >
-              {reading ?? 'Read with the recognition engines'}
-            </button>
-            <button
-              type="button"
-              className="btn"
-              disabled={comparing || reading !== null || !counts.read}
-              title={`Read each page with ${engines.join(' and ')} too, and flag the bars they read differently`}
-              onClick={() => {
-                setComparing(true);
-                void compareEngines(scan.id)
-                  .then((r) =>
-                    toast(
-                      r.flagged
-                        ? `The engines read ${r.flagged} bar${r.flagged === 1 ? '' : 's'} differently: see the flags`
-                        : 'The engines agree with every bar written',
-                      'info',
-                      8000,
-                    ),
-                  )
-                  .catch((e: Error) => toast(e.message, 'error'))
-                  .finally(() => setComparing(false));
-              }}
-            >
-              {comparing ? 'The engines are reading…' : 'Compare with the engines'}
-            </button>
-          </>
-        )}
-        <button type="button" className="btn ghost icon" title="Close" onClick={close}>
-          <X />
-        </button>
+        <span className="scan-tools">
+          {engines.length === 0 ? (
+            <span className="muted scan-away" role="status">
+              {enginesAway(omr)}
+            </span>
+          ) : (
+            <>
+              {/* (once every system is read, there's nothing left for it) */}
+              {(!!counts.new || reading !== null) && (
+                <button
+                  type="button"
+                  className="btn primary"
+                  disabled={reading !== null || comparing}
+                  title={`${engines.join(' and ')} read each page, and what they read of the systems not read yet is written into the song (one undo step)`}
+                  onClick={() => void readIn()}
+                >
+                  {reading ?? 'Read with the recognition engines'}
+                </button>
+              )}
+              {systems.some(({ s }) => s.written) && (
+                <button
+                  type="button"
+                  className="btn"
+                  disabled={comparing || reading !== null || !counts.read}
+                  title={`Read each page with ${engines.join(' and ')} too, and flag the bars they read differently`}
+                  onClick={() => {
+                    setComparing(true);
+                    void compareEngines(scan.id)
+                      .then((r) =>
+                        toast(
+                          r.flagged
+                            ? `The engines read ${r.flagged} bar${r.flagged === 1 ? '' : 's'} differently: see the flags`
+                            : 'The engines agree with every bar written',
+                          'info',
+                          8000,
+                        ),
+                      )
+                      .catch((e: Error) => toast(e.message, 'error'))
+                      .finally(() => setComparing(false));
+                  }}
+                >
+                  {comparing ? 'The engines are reading…' : 'Compare with the engines'}
+                </button>
+              )}
+            </>
+          )}
+        </span>
+        <span className="scan-end">
+          {/* the studio's commands (the bar, or a phone's page): the window covers its control bar */}
+          <BarButton />
+          <button type="button" className="btn ghost icon" title="Close" onClick={close}>
+            <X />
+          </button>
+        </span>
       </header>
       <div className="scan-review">
+        {systems.length > 0 && !systems.some(({ s }) => s.written) && (
+          <p className="muted scan-guide">
+            Each system goes into the song when it’s read in. Then listen to it, check it against the page, and approve
+            it.
+          </p>
+        )}
         {systems.map(({ page, s }, i) => (
           <section key={`${page}.${s.k}`} className={`scan-row ${s.state}`}>
             <div className="scan-row-head">
@@ -269,16 +323,18 @@ function Review({ id }: { id: string }) {
                   Edit in the Score
                 </button>
               )}
-              <button
-                type="button"
-                className={`btn${s.state === 'approved' ? ' on' : ''}`}
-                disabled={!s.written}
-                onClick={() =>
-                  void setSystem(scan.id, page, s.k, { state: s.state === 'approved' ? 'checked' : 'approved' })
-                }
-              >
-                <Check /> {s.state === 'approved' ? 'Approved' : 'Approve'}
-              </button>
+              {/* (approving is for what's been written: before then there's nothing to approve) */}
+              {s.written && (
+                <button
+                  type="button"
+                  className={`btn${s.state === 'approved' ? ' on' : ''}`}
+                  onClick={() =>
+                    void setSystem(scan.id, page, s.k, { state: s.state === 'approved' ? 'checked' : 'approved' })
+                  }
+                >
+                  <Check /> {s.state === 'approved' ? 'Approved' : 'Approve'}
+                </button>
+              )}
             </div>
             {s.flags?.length ? (
               <ul className="scan-flags">

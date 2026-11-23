@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 // @ts-expect-error: a plain script, without types
-import { followCheckout, lingerNote, runnerPath, runnerUnit } from '../update.mjs';
+import { followCheckout, followsOmr, lingerNote, omrImage, omrOn, runnerPath, runnerUnit } from '../update.mjs';
 
 const made: string[] = [];
 afterEach(() => {
@@ -156,5 +156,22 @@ describe('lingerNote', () => {
     const unknown = lingerNote('the runner', { linger: null, user: 'ana' });
     expect(unknown).toMatch(/^Without linger, the runner stops when you log out/);
     expect(unknown).toContain('sudo loginctl enable-linger ana');
+  });
+});
+
+describe('the recognition engines', () => {
+  it('are on unless turned off', () => {
+    expect(omrOn({})).toBe(true);
+    expect(omrOn({ HOLO_OMR_URL: 'http://omr:8070' })).toBe(true);
+    expect(omrOn({ HOLO_OMR_URL: '' })).toBe(false);
+    expect(omrOn({ HOLO_OMR_REPLICAS: '0' })).toBe(false);
+  });
+
+  it('follow the studio’s channel, unless their image was built here', () => {
+    expect(omrImage('stable', 'ghcr.io/o/holo-desk')).toBe('ghcr.io/o/holo-desk:omr-stable');
+    expect(omrImage('main', 'ghcr.io/o/holo-desk')).toBe('ghcr.io/o/holo-desk:omr-main');
+    expect(followsOmr(undefined, 'ghcr.io/o/holo-desk')).toBe(true);
+    expect(followsOmr('ghcr.io/o/holo-desk:omr-main', 'ghcr.io/o/holo-desk')).toBe(true);
+    expect(followsOmr('holo-omr:local', 'ghcr.io/o/holo-desk')).toBe(false);
   });
 });

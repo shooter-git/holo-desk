@@ -36,16 +36,18 @@ import { TalkBody } from './talk.tsx';
  * Where the studio's parts the page keeps clear of are, as the room's --studio-top (the control bar's
  * foot, or the transport row's on a phone on its side), --studio-bottom (the transport's top, from the
  * foot of the screen, on a phone held upright) and --studio-left (the content column's left edge, on
- * a phone on its side): measured while it's open, and again as they or the window change.
+ * a phone on its side): measured while it's open, and again as they or the window change. Over Scan,
+ * which covers them all, it keeps clear of Scan's header (where the Commands button is) instead.
  */
-function usePageRoom(room: RefObject<HTMLElement | null>, layout: Layout): void {
+function usePageRoom(room: RefObject<HTMLElement | null>, layout: Layout, scan: boolean): void {
   useLayoutEffect(() => {
     const el = room.current;
     if (!el) return;
     const sideways = layout === 'phone-landscape';
-    const top = document.querySelector(sideways ? '.phone-transport.top' : '.app > .control-bar');
-    const dock = layout === 'phone-portrait' ? document.querySelector('.phone-dock .phone-transport') : null;
-    const column = sideways ? document.querySelector('.phone-main') : null;
+    const over = scan ? document.querySelector('.scan-window .scan-bar') : null;
+    const top = over ?? document.querySelector(sideways ? '.phone-transport.top' : '.app > .control-bar');
+    const dock = !over && layout === 'phone-portrait' ? document.querySelector('.phone-dock .phone-transport') : null;
+    const column = !over && sideways ? document.querySelector('.phone-main') : null;
     const fit = () => {
       // (rounded away from what it keeps clear of: not a pixel over the control bar or the transport)
       const px = (n: number) => `${Math.max(0, Math.ceil(n - 0.01))}px`;
@@ -61,7 +63,7 @@ function usePageRoom(room: RefObject<HTMLElement | null>, layout: Layout): void 
       watch.disconnect();
       window.removeEventListener('resize', fit);
     };
-  }, [room, layout]);
+  }, [room, layout, scan]);
 }
 
 /**
@@ -177,8 +179,9 @@ export function TalkPage() {
   );
   const title = useApp((s) => s.project?.title ?? '');
   const turn = useApp((s) => s.barTurn);
-  // a dialog over the studio is over the page too: it takes no keys or taps from behind it
-  const behind = useApp((s) => s.dialog !== null || s.printView !== null || s.scanView !== null);
+  // a dialog over the studio is over the page too, and so is Print: it takes no keys or taps from behind
+  // them (Scan is under it: the page opens over the review, from the Commands button in its header)
+  const behind = useApp((s) => s.dialog !== null || s.printView !== null);
   const room = useRef<HTMLDivElement>(null);
   const page = useRef<HTMLElement>(null);
   const head = useRef<HTMLDivElement>(null);
@@ -187,12 +190,13 @@ export function TalkPage() {
   const below = useBelowWindows(page);
   const [opened, setOpened] = useState<ReadonlySet<string>>(() => new Set(turn ? [turn] : []));
   const covers = pageCovers(layout);
+  const scanOpen = useApp((s) => s.scanView !== null);
   const sideways = layout === 'phone-landscape';
   // typing on a phone on its side, with the keyboard up: across the column, over the keyboard
   const keyboard = useKeyboardUp(layout);
   const wide = sideways && focused && keyboard;
   useShownRoom(room);
-  usePageRoom(room, layout);
+  usePageRoom(room, layout, scanOpen);
   useSwipeToClose(covers ? head : page, page, covers ? 'down' : 'right');
   useHoldToSeeThrough(head, page);
 

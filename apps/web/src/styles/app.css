@@ -7614,6 +7614,61 @@ footer.scan-bar {
   font-weight: 650;
 }
 
+/* a scan's review: its title and progress, what reads it in (or why nothing can yet), and the studio's
+   commands and Close at the right. Where a row hasn't the room (a phone, a tablet), the title keeps the
+   first line with Commands and Close, and what reads it in has the line under it */
+.scan-bar.review {
+  display: grid;
+  grid-template-columns: minmax(0, auto) minmax(0, 1fr) auto;
+  grid-template-areas: "heading tools end";
+}
+
+html:not([data-layout="desktop"]) .scan-bar.review {
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas:
+    "heading end"
+    "tools tools";
+}
+
+.scan-heading {
+  display: flex;
+  flex-wrap: wrap;
+  grid-area: heading;
+  gap: 2px 8px;
+  align-items: baseline;
+  min-width: 0;
+}
+
+.scan-tools {
+  display: flex;
+  flex-wrap: wrap;
+  grid-area: tools;
+  gap: 8px;
+  align-items: center;
+  justify-content: flex-end;
+  min-width: 0;
+}
+
+html:not([data-layout="desktop"]) .scan-tools {
+  justify-content: flex-start;
+}
+
+.scan-end {
+  display: flex;
+  grid-area: end;
+  gap: 4px;
+  align-items: center;
+}
+
+.scan-away {
+  line-height: 1.35;
+}
+
+.scan-guide {
+  margin: 0 0 12px;
+  line-height: 1.4;
+}
+
 .scan-body {
   position: relative;
   grid-row: 4;

@@ -1,13 +1,14 @@
 // HO[LO] in Docker, kept up to date (`pnpm run update`, `pnpm run up`, `pnpm run autoupdate`).
 //
 //   update [main|stable]   follow the image CI publishes (ghcr.io/shooter-git/holo-desk:<channel>):
-//                          pull it and start it. The channel is kept in .env (HOLO_CHANNEL).
+//                          pull it and start it, with the recognition engines' beside it (omr-<channel>;
+//                          `pnpm omr off` leaves them out). The channel is kept in .env (HOLO_CHANNEL).
 //   source                 build from this checkout instead (holo-desk:local): your own changes. Auto-update
 //                          waits until you run `update` again, so it never replaces your build.
 //   autoupdate on|off|status
 //                          a timer (systemd, as you) that runs `tick` every 15 minutes
 //   tick                   one look: when following a channel and no studio is playing or recording, pull;
-//                          a new image is started, the same one changes nothing
+//                          a new image is started, the same one changes nothing (the engines' too)
 //   runner-service on|off|status
 //                          the runner (`pnpm runner`: creations' renders, and the agent's harness when the
 //                          agent is on) as a service (systemd, as you), started again after each update
@@ -27,10 +28,10 @@ import { dirname, isAbsolute, join, resolve } from 'node:path';
 const root = resolve(import.meta.dirname, '..');
 const envFile = join(root, '.env');
 const LOCAL = 'holo-desk:local';
-const REPO = process.env.HOLO_IMAGE_REPO ?? 'ghcr.io/shooter-git/holo-desk';
+export const REPO = process.env.HOLO_IMAGE_REPO ?? 'ghcr.io/shooter-git/holo-desk';
 const [command = 'update', arg] = process.argv.slice(2);
 
-function readEnv() {
+export function readEnv() {
   if (!existsSync(envFile)) writeFileSync(envFile, readFileSync(join(root, '.env.example'), 'utf8'));
   const text = readFileSync(envFile, 'utf8');
   const values = {};
@@ -41,14 +42,31 @@ function readEnv() {
   return { text, values };
 }
 
-function setEnv(key, value) {
+export function setEnv(key, value) {
   const { text } = readEnv();
   const line = `${key}=${value}`;
   const re = new RegExp(`^${key}=.*$`, 'm');
   writeFileSync(envFile, re.test(text) ? text.replace(re, line) : `${text.replace(/\n*$/, '\n')}${line}\n`);
 }
 
-function compose(...args) {
+/** A setting taken out of .env, so the compose file's (or the server's) default holds. */
+export function unsetEnv(key) {
+  const { text } = readEnv();
+  writeFileSync(envFile, text.replace(new RegExp(`^${key}=.*\\n?`, 'm'), ''));
+}
+
+/** Whether the recognition engines are on: they are unless `pnpm omr off` (HOLO_OMR_URL set empty). */
+export function omrOn(values) {
+  return values.HOLO_OMR_URL !== '' && values.HOLO_OMR_REPLICAS !== '0';
+}
+
+/** The engines' image CI publishes for a channel (from deploy/omr), beside the studio's. */
+export const omrImage = (channel, repo = REPO) => `${repo}:omr-${channel}`;
+
+/** Whether the engines' image follows CI's (not set yet, or one of its channels): not one built here. */
+export const followsOmr = (image, repo = REPO) => !image || image.startsWith(`${repo}:omr-`);
+
+export function compose(...args) {
   const r = spawnSync(
     'docker',
     ['compose', '--project-directory', '.', '-f', 'deploy/compose.yml', '--env-file', '.env', ...args],
@@ -63,6 +81,40 @@ function imageId(ref) {
   } catch {
     return null;
   }
+}
+
+/**
+ * The recognition engines started beside the studio (pulled first when `pull`, and their image is
+ * CI's). Never fatal: a studio whose engines can't be fetched yet runs without them, and the next look
+ * tries again.
+ */
+export function startEngines(pull = true, quiet = false) {
+  const { values } = readEnv();
+  if (!omrOn(values)) return;
+  const image = values.HOLO_OMR_IMAGE || omrImage('stable');
+  const later = (why) =>
+    console.log(`The recognition engines aren’t running yet (${why}): the next update tries again`);
+  if (pull && followsOmr(values.HOLO_OMR_IMAGE)) {
+    try {
+      compose('pull', ...(quiet ? ['--quiet'] : []), 'omr');
+    } catch (err) {
+      // (offline, or not published yet: the image here, if there is one, still starts)
+      if (!imageId(image)) return later(err instanceof Error ? err.message : err);
+    }
+  }
+  try {
+    // (up to date and running, nothing happens)
+    compose('up', '-d', '--no-build', 'omr');
+  } catch (err) {
+    later(err instanceof Error ? err.message : err);
+  }
+}
+
+/** The engines' image set to follow the studio's channel, unless it's one built here (`pnpm omr build`). */
+function followOmr(channel) {
+  const { values } = readEnv();
+  if (followsOmr(values.HOLO_OMR_IMAGE) && values.HOLO_OMR_IMAGE !== omrImage(channel))
+    setEnv('HOLO_OMR_IMAGE', omrImage(channel));
 }
 
 /** What the server says of itself (/api/health), or null when it doesn't answer. */
@@ -139,6 +191,7 @@ async function follow(image, start = false) {
   console.log(`This checkout moved to ${target.replace(/^refs\/(tags|remotes)\//, '')} (${moved.slice(0, 7)})`);
   // its compose file may be new (nothing happens when it isn't), and the runner runs from it
   compose('up', '-d', '--no-build', 'holo');
+  startEngines(false);
   if (existsSync(join(units, RUNNER_UNIT))) systemctl('try-restart', RUNNER_UNIT);
 }
 
@@ -149,9 +202,11 @@ async function update(channel) {
   const image = `${REPO}:${ch}`;
   setEnv('HOLO_CHANNEL', ch);
   setEnv('HOLO_IMAGE', image);
+  followOmr(ch);
   console.log(`Following ${image}`);
   compose('pull', 'holo');
   compose('up', '-d', '--no-build', 'holo');
+  startEngines();
   await follow(image, true);
 }
 
@@ -160,6 +215,8 @@ function source() {
   setEnv('HOLO_IMAGE', LOCAL);
   console.log(`Building ${LOCAL} from this checkout (auto-update waits until \`pnpm run update\`)`);
   compose('up', '-d', '--build', 'holo');
+  // the engines as they are (fetched the first time)
+  startEngines(false);
 }
 
 async function tick() {
@@ -173,12 +230,16 @@ async function tick() {
     console.log('A studio is playing or recording: next time');
     return;
   }
+  // (a host set up before the engines were on by default gets them on its first look)
+  const channel = image.slice(REPO.length + 1);
+  if (channel === 'main' || channel === 'stable') followOmr(channel);
   const before = imageId(image);
   compose('pull', '--quiet', 'holo');
   if (imageId(image) !== before) {
     console.log(`New ${image}: starting it`);
     compose('up', '-d', '--no-build', 'holo');
   }
+  startEngines(true, true);
   // (each look: a checkout that fell behind catches up, the same image or not)
   await follow(image);
 }

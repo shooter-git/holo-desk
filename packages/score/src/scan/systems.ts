@@ -187,8 +187,12 @@ function joined(ink: Uint8Array, w: number, x: number, from: number, to: number,
   let n = 0;
   let total = 0;
   let gap = 0;
+  // (a line leans a little; a slur's end, a glissando or a scribble crossing at the left leans far
+  // more: it may wander a staff space from where it started, no further)
+  const start = x;
+  const reach = Math.max(3, space);
   for (let y = Math.round(from); y <= Math.round(to); y++, total++) {
-    const at = [x, x - 1, x + 1].find((c) => c >= 0 && c < w && ink[y * w + c]);
+    const at = [x, x - 1, x + 1].find((c) => c >= 0 && c < w && Math.abs(c - start) <= reach && ink[y * w + c]);
     if (at === undefined) {
       if (++gap > space / 2) return false;
       continue;

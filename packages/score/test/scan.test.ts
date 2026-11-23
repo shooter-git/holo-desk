@@ -149,6 +149,17 @@ describe('finding the music on a page', () => {
     expect(layout.systems.map((s) => s.staves.length)).toEqual([2, 1, 1, 1]);
   });
 
+  it('keeps apart two systems with a stroke slanting across the gap at their left', () => {
+    const { gray } = page();
+    stroke(gray, [100, 549], [100, 599], 2, paper);
+    // a slur's end, or a scribble, from the upper staff down to the lower one: at 45°, and at 30°
+    // from upright
+    stroke(gray, [100, 548], [152, 600]);
+    stroke(gray, [104, 548], [134, 600]);
+    const layout = findSystems(binarize(gray), gray.w, gray.h);
+    expect(layout.systems.map((s) => s.staves.length)).toEqual([2, 1, 1, 1]);
+  });
+
   it('reads a page under a shadow', () => {
     const { gray } = page();
     // darken the right side as a lamp's falloff would

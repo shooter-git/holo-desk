@@ -7714,6 +7714,33 @@ html:not([data-layout="desktop"]) .scan-tools {
   color: var(--text-3);
 }
 
+/* an earlier scan: open it (what it is, and when it was made), or delete it, asked first */
+.scan-earlier-row {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  width: 100%;
+  max-width: 480px;
+}
+.scan-earlier-row .scan-open {
+  flex: 1;
+  min-width: 0;
+  height: auto;
+  min-height: var(--control);
+  padding: 6px 12px;
+  flex-direction: column;
+  gap: 2px;
+  white-space: normal;
+}
+.scan-earlier-row .scan-open .muted {
+  font-size: 0.9em;
+}
+.scan-earlier-row.asking {
+  flex-wrap: wrap;
+  text-align: center;
+}
+
 .btn.big {
   height: 48px;
   padding: 0 18px;

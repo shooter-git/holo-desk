@@ -4,10 +4,11 @@
  * and by a phone's Remote (it needs nothing of the studio's own).
  */
 import type { FoundSystem, Point, Scan } from '@holo/score';
-import { Camera, FileUp, X } from 'lucide-react';
+import { Camera, FileUp, Trash2, X } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useSize } from '../../ui/frame.ts';
 import {
+  deleteScan,
   listScans,
   omrStatus,
   type PickedPage,
@@ -16,6 +17,9 @@ import {
   readPages,
   saveScan,
 } from './client.ts';
+
+/** When a scan was made, as the song list says when a song was saved. */
+const scanned = (iso: string) => new Date(iso).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' });
 
 export interface NewScanProps {
   project: { id: string; title: string } | null;
@@ -34,6 +38,8 @@ export function NewScan({ project, track, notify, onClose, onSaved, onOpen }: Ne
   const [enhance, setEnhance] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
   const [earlier, setEarlier] = useState<Awaited<ReturnType<typeof listScans>>>([]);
+  // the earlier scan whose delete is being asked about
+  const [deleting, setDeleting] = useState<string | null>(null);
   const camera = useRef<HTMLInputElement>(null);
   const files = useRef<HTMLInputElement>(null);
 
@@ -52,6 +58,17 @@ export function NewScan({ project, track, notify, onClose, onSaved, onOpen }: Ne
     },
     [pages],
   );
+
+  // a scan deleted for good: its pages, strips and review; what it read into the song stays there
+  const remove = async (id: string) => {
+    setDeleting(null);
+    try {
+      await deleteScan(id);
+      setEarlier((list) => list.filter((s) => s.id !== id));
+    } catch (e) {
+      notify(`The scan wasn’t deleted: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  };
 
   const pick = async (list: FileList | null) => {
     if (!list?.length) return;
@@ -135,11 +152,39 @@ export function NewScan({ project, track, notify, onClose, onSaved, onOpen }: Ne
             {onOpen && earlier.length > 0 && (
               <div className="scan-earlier">
                 <h3>Scans of this song</h3>
-                {earlier.map((s) => (
-                  <button key={s.id} type="button" className="btn" onClick={() => onOpen(s.id)}>
-                    {s.title} · {s.pages} page{s.pages === 1 ? '' : 's'} · {s.progress.approved ?? 0} approved
-                  </button>
-                ))}
+                {earlier.map((s) =>
+                  deleting === s.id ? (
+                    <div key={s.id} className="scan-earlier-row asking">
+                      <span className="muted">Delete this scan for good? What it read into the song stays.</span>
+                      <span className="hstack">
+                        <button type="button" className="btn danger" onClick={() => void remove(s.id)}>
+                          Delete
+                        </button>
+                        <button type="button" className="btn ghost" onClick={() => setDeleting(null)}>
+                          Keep
+                        </button>
+                      </span>
+                    </div>
+                  ) : (
+                    <div key={s.id} className="scan-earlier-row">
+                      <button type="button" className="btn scan-open" onClick={() => onOpen(s.id)}>
+                        <span>
+                          {s.title} · {s.pages} page{s.pages === 1 ? '' : 's'} · {s.progress.approved ?? 0} approved
+                        </span>
+                        <span className="muted">{scanned(s.created)}</span>
+                      </button>
+                      <button
+                        type="button"
+                        className="btn ghost icon"
+                        title="Delete this scan"
+                        aria-label={`Delete the scan “${s.title}” of ${scanned(s.created)}`}
+                        onClick={() => setDeleting(s.id)}
+                      >
+                        <Trash2 />
+                      </button>
+                    </div>
+                  ),
+                )}
               </div>
             )}
           </div>

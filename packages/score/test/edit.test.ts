@@ -3,14 +3,19 @@ import { describe, expect, it } from 'vitest';
 import {
   addMark,
   type Caret,
+  clipNotes,
   enter,
   extend,
   letterPitch,
+  moveOnStaff,
   notate,
+  pasteClip,
   quantizeToScore,
   respell,
   scoreText,
+  setAccidental,
   setForm,
+  setLength,
   staffPlace,
   toggleArticulation,
   writeScoreText,
@@ -130,6 +135,101 @@ describe('editing a score', () => {
     const next = applyOps(p, quantizeToScore(p, notate(p), id).ops);
     expect(next.tracks[0]?.regions[0]?.notes.map((n) => n.t)).toEqual([0, 480, 960, 1440]);
     expect(last(next)).toBe(last(p));
+  });
+});
+
+/** The notes of the first region, in order. */
+const notesOf = (p: Project) => p.tracks[0]?.regions[0]?.notes.slice().sort((a, b) => a.t - b.t) ?? [];
+const nth = (p: Project, i: number) => {
+  const n = notesOf(p)[i];
+  if (!n) throw new Error(`no note ${i}`);
+  return n;
+};
+
+describe('changing notes already written', () => {
+  it('moves notes up and down the staff, a line or space a step, in the key', () => {
+    const p = flute();
+    // E5 up a step in D major is F♯5; D5 down a step is C♯5
+    let next = applyOps(p, moveOnStaff(p, notate(p), [nth(p, 1)], 1).ops);
+    expect(last(next)).toBe('  P1: d5:q f#5:q f5:q g5:q');
+    next = applyOps(next, moveOnStaff(next, notate(next), [nth(next, 0)], -1).ops);
+    expect(last(next)).toBe('  P1: c#5:q f#5:q f5:q g5:q');
+    // a whole chord of notes moves together, by a third
+    const r = moveOnStaff(next, notate(next), [nth(next, 2), nth(next, 3)], 2);
+    expect(r.notes.map((n) => n.p)).toEqual([81, 83]);
+  });
+
+  it('moves a transposing part as it reads, and leaves a drum part alone', () => {
+    const p = flute();
+    const t = p.tracks[0];
+    if (t) t.name = 'Clarinet in Bb';
+    // the sounding D5 reads E5; a step up reads F♯5 (the clarinet's E major) and sounds E5
+    const r = moveOnStaff(p, notate(p), [nth(p, 0)], 1);
+    expect(r.notes[0]?.p).toBe(76);
+    if (t) t.name = 'Drums';
+    expect(moveOnStaff(p, notate(p), [nth(p, 0)], 1).ops).toEqual([]);
+  });
+
+  it('gives notes a sharp, a flat or a natural on their own letter, and takes it off again', () => {
+    const p = flute();
+    // the F written natural in D major takes a sharp; pressed again, it's natural once more
+    let next = applyOps(p, setAccidental(p, notate(p), [nth(p, 2)], 1).ops);
+    expect(nth(next, 2).p).toBe(78);
+    next = applyOps(next, setAccidental(next, notate(next), [nth(next, 2)], 1).ops);
+    expect(nth(next, 2).p).toBe(77);
+    next = applyOps(next, setAccidental(next, notate(next), [nth(next, 1)], -1).ops);
+    expect(nth(next, 1).p).toBe(75);
+    expect(nth(next, 1).n?.sp).toEqual([2, -1, 75]);
+    expect(last(next)).toBe('  P1: d5:q eb5:q f5:q g5:q');
+  });
+
+  it('writes a note a new value over what follows, and a shorter one leaves a rest', () => {
+    const p = flute();
+    let next = applyOps(p, setLength(p, notate(p), [nth(p, 0)], 2 * q).ops);
+    expect(last(next)).toBe('  P1: d5:h f5:q g5:q');
+    next = applyOps(next, setLength(next, notate(next), [nth(next, 2)], q / 2).ops);
+    expect(last(next)).toBe('  P1: d5:h f5:q g5:e r:e');
+    // a dotted half from the F runs past the region, which grows to hold it
+    next = applyOps(next, setLength(next, notate(next), [nth(next, 1)], 3 * q).ops);
+    expect(notesOf(next).map((n) => n.p)).toEqual([74, 77]);
+    expect(next.tracks[0]?.regions[0]?.length).toBe(5 * q);
+  });
+
+  it('sets a whole chord’s value from one of its notes, and keeps a staccato short', () => {
+    const p = flute('D5:2 E5:2 F5:2 G5:2');
+    const r = p.tracks[0]?.regions[0];
+    if (r) r.notes.push({ t: 0, d: q, p: 78, v: 80 });
+    let next = applyOps(p, toggleArticulation(p, notate(p), [nth(p, 0)], 'stacc').ops);
+    const d5 = notesOf(next).find((n) => n.p === 74);
+    if (!d5) throw new Error('no d5');
+    const result = setLength(next, notate(next), [d5], 2 * q);
+    next = applyOps(next, result.ops);
+    expect(result.notes.map((n) => n.p).sort()).toEqual([74, 78]);
+    const long = notesOf(next).find((n) => n.p === 74);
+    expect(long?.n?.w).toEqual([2 * q, q]);
+    expect(notesOf(next).find((n) => n.p === 78)?.d).toBe(2 * q);
+  });
+
+  it('copies notes and pastes them over what was there, at the caret', () => {
+    const p = flute();
+    const id = p.tracks[0]?.id as string;
+    const clip = clipNotes(p, notate(p), [nth(p, 1), nth(p, 0)]);
+    expect(clip?.length).toBe(2 * q);
+    expect(clip?.notes.map((c) => [c.at, c.note.p])).toEqual([
+      [0, 74],
+      [q, 76],
+    ]);
+    if (!clip) throw new Error('no clip');
+    const caret: Caret = { track: id, staff: 1, voice: 1, tick: 2 * q };
+    let next = applyOps(p, pasteClip(p, notate(p), clip, caret).ops);
+    expect(last(next)).toBe('  P1: d5:q e5:q d5:q e5:q');
+    // past the region's end, the region grows to hold them
+    const r = pasteClip(next, notate(next), clip, { ...caret, tick: 4 * q });
+    next = applyOps(next, r.ops);
+    expect(next.tracks[0]?.regions.map((x) => x.length)).toEqual([6 * q]);
+    expect(r.notes.map((n) => n.p)).toEqual([74, 76]);
+    // (the song's notes aren't the clip's: pasting twice makes two of each)
+    expect(r.notes[0]).not.toBe(clip.notes[0]?.note);
   });
 });
 

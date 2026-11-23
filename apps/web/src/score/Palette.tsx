@@ -20,7 +20,7 @@ const VALUES: [number, string, string][] = [
 ];
 
 /** A note value drawn small: a head (open for whole and half), a stem, its flags. */
-function NoteIcon({ value }: { value: number }) {
+export function NoteIcon({ value }: { value: number }) {
   const open = value <= 2;
   const flags = value >= 8 ? Math.log2(value) - 2 : 0;
   return (

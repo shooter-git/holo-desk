@@ -140,41 +140,9 @@ export function enter(
   const part = doc.parts.find((p) => p.track === track.id);
   const places = placesOf(doc);
   const end = caret.tick + len;
-  const mine = (n: Note) => {
-    const at = places.get(n);
-    return at ? at.staff === caret.staff && at.voice === caret.voice : caret.staff === 1 && caret.voice === 1;
-  };
   // make room in every region of the track
   const changed = new Map<string, Note[]>();
-  for (const r of track.regions) {
-    if (r.audio) continue;
-    let touched = false;
-    const kept: Note[] = [];
-    for (const n of r.notes) {
-      const s = r.start + n.t;
-      if (n.n?.g || !mine(n)) {
-        kept.push(n);
-        continue;
-      }
-      const e = s + writtenLength(n);
-      if (s >= caret.tick && s < end) {
-        touched = true;
-        continue;
-      }
-      if (s < caret.tick && e > caret.tick) {
-        touched = true;
-        const written = caret.tick - s;
-        const d = Math.max(1, Math.min(n.d, Math.round(written * (n.d / writtenLength(n)))));
-        const hints: NoteNotation = { ...n.n };
-        if (d !== written) hints.w = [written, d];
-        else delete hints.w;
-        kept.push({ ...n, d, n: hints });
-        continue;
-      }
-      kept.push(n);
-    }
-    if (touched) changed.set(r.id, kept);
-  }
+  clearSpan(track, inVoice(places, caret.staff, caret.voice), caret.tick, end, changed);
   const ops: Op[] = [];
   const notes: Note[] = [];
   if (pitches.length) {
@@ -201,6 +169,57 @@ export function enter(
   }
   for (const [region, list] of changed) ops.push({ op: 'setNotes', track: track.id, region, notes: list });
   return { ops, notes };
+}
+
+/** Whether a note is in a staff's voice, as drawn (a note not drawn yet counts as the first staff's first voice). */
+function inVoice(places: Map<Note, Place>, staff: number, voice: number): (n: Note) => boolean {
+  return (n) => {
+    const at = places.get(n);
+    return at ? at.staff === staff && at.voice === voice : staff === 1 && voice === 1;
+  };
+}
+
+/**
+ * Room made in a voice from `from` to `to`, in every region of a track: what starts there goes, a
+ * note sounding into it is cut back to it. Grace notes stay. Works on (and into) `changed`, the
+ * regions' notes as earlier edits left them.
+ */
+function clearSpan(
+  track: Track,
+  mine: (n: Note) => boolean,
+  from: number,
+  to: number,
+  changed: Map<string, Note[]>,
+): void {
+  for (const r of track.regions) {
+    if (r.audio) continue;
+    let touched = false;
+    const kept: Note[] = [];
+    for (const n of changed.get(r.id) ?? r.notes) {
+      const s = r.start + n.t;
+      if (n.n?.g || !mine(n)) {
+        kept.push(n);
+        continue;
+      }
+      const e = s + writtenLength(n);
+      if (s >= from && s < to) {
+        touched = true;
+        continue;
+      }
+      if (s < from && e > from) {
+        touched = true;
+        const written = from - s;
+        const d = Math.max(1, Math.min(n.d, Math.round(written * (n.d / writtenLength(n)))));
+        const hints: NoteNotation = { ...n.n };
+        if (d !== written) hints.w = [written, d];
+        else delete hints.w;
+        kept.push({ ...n, d, n: hints });
+        continue;
+      }
+      kept.push(n);
+    }
+    if (touched) changed.set(r.id, kept);
+  }
 }
 
 /** Add pitches to the chord of notes just entered (the same start and length). */
@@ -335,6 +354,241 @@ export function setVoice(project: Project, notes: readonly Note[], voice: number
     else hints.vo = 1;
     return { ...n, n: hints };
   });
+}
+
+// ---- notes already written: moved on the staff, given an accidental, a new length, copied ----
+
+/** A note's length as written (a staccato quarter's quarter, not the eighth it sounds). */
+export const noteWrittenLength = (n: Note): number => writtenLength(n);
+
+/** A note with these hints (none: no hints at all). */
+function withHints(n: Note, hints: NoteNotation): Note {
+  const out: Note = { ...n };
+  if (Object.keys(hints).length) out.n = hints;
+  else delete out.n;
+  return out;
+}
+
+/** The notes of these a pitch can change for: drawn, and not on a drum part (a line there is a drum). */
+function pitchedOf(doc: ScoreDoc, places: Map<Note, Place>, notes: readonly Note[]): Note[] {
+  return notes.filter((n) => {
+    const at = places.get(n);
+    return !!at && !doc.parts.find((p) => p.track === at.track)?.drums;
+  });
+}
+
+/**
+ * A note written another way on its staff: what it sounds then (moved from what it sounds now by as
+ * much as the writing moved, so a clef or octave line under it counts once), spelled as written.
+ */
+function rewritten(
+  doc: ScoreDoc,
+  n: Note,
+  at: Place,
+  track: Track,
+  region: Region,
+  written: Spelling,
+  spellNatural: boolean,
+): Note {
+  const caret: Caret = { track: track.id, staff: at.staff, voice: at.voice, tick: region.start + n.t };
+  const p = n.p + pitchOf(written) - pitchOf(at.written);
+  if (p < 0 || p > 127) return n;
+  const sp = fromWritten(doc, caret, written).sp as [number, number];
+  const hints: NoteNotation = { ...n.n };
+  if (spellNatural || sp[1] !== 0) hints.sp = [sp[0], sp[1], p];
+  else delete hints.sp;
+  return withHints({ ...n, p }, hints);
+}
+
+/**
+ * Notes moved up (`steps` above 0) or down the staff a line or space at a time, as a dragged note
+ * moves: each lands on the letter there, sharp or flat as its key has it. Drum parts' notes stay.
+ */
+export function moveOnStaff(project: Project, doc: ScoreDoc, notes: readonly Note[], steps: number): EditResult {
+  if (!steps) return { ops: [], notes: [] };
+  const places = placesOf(doc);
+  return mapNotes(project, pitchedOf(doc, places, notes), (n, track, region) => {
+    const at = places.get(n) as Place;
+    const index = at.written.octave * 7 + at.written.step + steps;
+    const step = ((index % 7) + 7) % 7;
+    const alter = keyAlters(writtenKeyAt(project, doc, track.id, region.start + n.t))[step] ?? 0;
+    return rewritten(doc, n, at, track, region, { step, alter, octave: Math.floor(index / 7) }, false);
+  });
+}
+
+/**
+ * Notes given an accidental on their own letter, as from a notation program's palette: a sharp (1),
+ * a flat (−1) or a natural (0). A sharp or flat they all have already comes off again.
+ */
+export function setAccidental(project: Project, doc: ScoreDoc, notes: readonly Note[], alter: number): EditResult {
+  const places = placesOf(doc);
+  const pitched = pitchedOf(doc, places, notes);
+  const off = alter !== 0 && pitched.length > 0 && pitched.every((n) => places.get(n)?.written.alter === alter);
+  const to = off ? 0 : alter;
+  return mapNotes(project, pitched, (n, track, region) => {
+    const at = places.get(n) as Place;
+    return rewritten(doc, n, at, track, region, { ...at.written, alter: to }, true);
+  });
+}
+
+/** Each drawn chord's notes struck there, by each of them (grace notes are left out). */
+function chordsOf(doc: ScoreDoc): Map<Note, Note[]> {
+  const out = new Map<Note, Note[]>();
+  for (const part of doc.parts) {
+    for (const staff of part.staves) {
+      for (const b of staff.bars) {
+        for (const v of b.voices) {
+          for (const e of v.events) {
+            if (e.kind !== 'chord' || e.grace) continue;
+            const struck = e.heads.filter((h) => h.ref.piece === 0).map((h) => h.ref.note);
+            for (const n of struck) if (!out.has(n)) out.set(n, struck);
+          }
+        }
+      }
+    }
+  }
+  return out;
+}
+
+/**
+ * Notes written `len` ticks long (a value, dotted or not), as a notation program sets a selected
+ * note's value: the whole chord a note is in (its notes share one), from where it starts. What its
+ * voice had in the way goes, as entry overwrites; a shorter note leaves a rest. Grace notes keep
+ * theirs; a note's sound keeps its share of the written length (a staccato stays short).
+ */
+export function setLength(project: Project, doc: ScoreDoc, notes: readonly Note[], len: number): EditResult {
+  const places = placesOf(doc);
+  const chords = chordsOf(doc);
+  // the chords, each once, in time order
+  const groups: { track: Track; staff: number; voice: number; start: number; notes: Note[] }[] = [];
+  const seen = new Set<Note>();
+  for (const n of notes) {
+    if (seen.has(n) || n.n?.g) continue;
+    const found = locate(project, n);
+    if (!found || found.region.audio) continue;
+    const chord = (chords.get(n) ?? [n]).filter((x) => !!locate(project, x));
+    for (const x of chord) seen.add(x);
+    const at = places.get(n);
+    const start = Math.min(...chord.map((x) => (locate(project, x)?.region.start ?? 0) + x.t));
+    groups.push({ track: found.track, staff: at?.staff ?? 1, voice: at?.voice ?? 1, start, notes: chord });
+  }
+  groups.sort((a, b) => a.start - b.start);
+  const changed = new Map<string, Note[]>();
+  const lengths = new Map<string, { track: string; length: number }>();
+  const out: Note[] = [];
+  for (const g of groups) {
+    const own = new Set(g.notes);
+    // an earlier chord grown over this one has written it out already
+    const live = (r: Region) => changed.get(r.id) ?? r.notes;
+    if (!g.track.regions.some((r) => live(r).some((n) => own.has(n)))) continue;
+    const mine = inVoice(places, g.staff, g.voice);
+    clearSpan(g.track, (n) => mine(n) && !own.has(n), g.start, g.start + len, changed);
+    for (const r of g.track.regions) {
+      const list = live(r);
+      if (!list.some((n) => own.has(n))) continue;
+      changed.set(
+        r.id,
+        list.map((n) => {
+          if (!own.has(n)) return n;
+          const d = Math.max(1, Math.round(len * (n.d / writtenLength(n))));
+          const hints: NoteNotation = { ...n.n };
+          if (d !== len) hints.w = [len, d];
+          else delete hints.w;
+          const next = withHints({ ...n, d }, hints);
+          out.push(next);
+          const end = n.t + len;
+          if (end > r.length && end > (lengths.get(r.id)?.length ?? 0))
+            lengths.set(r.id, { track: g.track.id, length: end });
+          return next;
+        }),
+      );
+    }
+  }
+  const ops: Op[] = [];
+  for (const [region, { track, length }] of lengths) ops.push({ op: 'updateRegion', track, region, patch: { length } });
+  for (const track of project.tracks)
+    for (const r of track.regions) {
+      const list = changed.get(r.id);
+      if (list) ops.push({ op: 'setNotes', track: track.id, region: r.id, notes: list });
+    }
+  return { ops, notes: out };
+}
+
+/** Notes copied from a score: where each starts after the first, its staff (from the top one copied) and voice. */
+export interface NoteClip {
+  /** The track they're from. */
+  track: string;
+  /** From the first one's start to the last one's written end. */
+  length: number;
+  notes: { at: number; staff: number; voice: number; note: Note }[];
+}
+
+/** Notes copied (those of the first one's track), for pasting later as they were written. */
+export function clipNotes(project: Project, doc: ScoreDoc, notes: readonly Note[]): NoteClip | null {
+  const places = placesOf(doc);
+  const first = notes.map((n) => locate(project, n)).find((x) => !!x);
+  if (!first) return null;
+  const found = notes.flatMap((n) => {
+    const where = locate(project, n);
+    return where && where.track === first.track && !where.region.audio
+      ? [{ n, start: where.region.start + n.t, at: places.get(n) }]
+      : [];
+  });
+  if (!found.length) return null;
+  const start = Math.min(...found.map((x) => x.start));
+  const top = Math.min(...found.map((x) => x.at?.staff ?? 1));
+  const end = Math.max(...found.map((x) => x.start + writtenLength(x.n)));
+  return {
+    track: first.track.id,
+    length: end - start,
+    notes: found
+      .map((x) => ({
+        at: x.start - start,
+        staff: (x.at?.staff ?? 1) - top,
+        voice: x.at?.voice ?? 1,
+        note: structuredClone(x.n),
+      }))
+      .sort((a, b) => a.at - b.at),
+  };
+}
+
+/**
+ * Copied notes written in from a caret, the first where it is, over what their voices had there for
+ * as long as they last (as a notation program pastes); the staves counted down from the caret's.
+ */
+export function pasteClip(project: Project, doc: ScoreDoc, clip: NoteClip, caret: Caret): EditResult {
+  const track = project.tracks.find((t) => t.id === caret.track);
+  if (!track || !clip.notes.length) return { ops: [], notes: [] };
+  const staves = doc.parts.find((p) => p.track === track.id)?.staves.length ?? 1;
+  const places = placesOf(doc);
+  const from = caret.tick;
+  const to = from + Math.max(1, clip.length);
+  const placed = clip.notes.map((c) => ({ ...c, staff: Math.min(staves, caret.staff + c.staff) }));
+  const changed = new Map<string, Note[]>();
+  const cleared = new Set<string>();
+  for (const c of placed) {
+    const k = `${c.staff}|${c.voice}`;
+    if (cleared.has(k)) continue;
+    cleared.add(k);
+    clearSpan(track, inVoice(places, c.staff, c.voice), from, to, changed);
+  }
+  const { region, ops } = regionFor(project, track, from, to);
+  // (a keyswitch or a tab string is the track's own: another track works its own out)
+  const other = clip.track !== track.id;
+  const notes = placed.map((c) => {
+    const n: Note = { ...structuredClone(c.note), t: from + c.at - region.start };
+    if (other) delete n.art;
+    const hints: NoteNotation = { ...n.n };
+    if (staves > 1) hints.st = c.staff;
+    else delete hints.st;
+    if (c.voice > 1) hints.vo = c.voice;
+    else if (hints.vo !== undefined) hints.vo = 1;
+    if (other) delete hints.tb;
+    return withHints(n, hints);
+  });
+  changed.set(region.id, [...(changed.get(region.id) ?? region.notes), ...notes]);
+  for (const [id, list] of changed) ops.push({ op: 'setNotes', track: track.id, region: id, notes: list });
+  return { ops, notes };
 }
 
 /**

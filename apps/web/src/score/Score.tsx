@@ -1,54 +1,76 @@
 /**
  * The Score: the selected track's part, or every track as a full score, engraved as you'd read it
- * and kept in step with the song. Click a note to select it (the Piano Roll selects it too), click
- * anywhere else in a bar to put the playhead there; the playhead follows as it plays.
+ * and kept in step with the song. Click a note to select it (the Piano Roll selects it too; Shift
+ * adds), click anywhere else in a bar to put the playhead there; the playhead follows as it plays.
+ *
+ * Editing, as in a notation program: drag a note up or down the staff (a finger holds it a moment
+ * first, so a swipe still scrolls), drag a box over notes with a mouse, and a right click or a long
+ * press opens the menu for what's there. The keys and a touch screen's tools are in editing.ts.
  *
  * Writing (the Write button, or Shift+N): a caret on a staff takes letters, digits, a MIDI keyboard
  * and clicks on the staff (a note where you click), with a row of tools above the music.
  */
-import { clefAt, keyAlters, notate, type ScoreDoc, staffPlace, toMEI, writtenKeyAt } from '@holo/score';
-import type { Note, Project } from '@holo/session';
+import { clefAt, keyAlters, type ScoreDoc, staffPlace, toMEI, writtenKeyAt } from '@holo/score';
+import type { Note } from '@holo/session';
 import { PenLine, Printer, ScanLine, ZoomIn, ZoomOut } from 'lucide-react';
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import {
+  type MouseEvent as ReactMouseEvent,
+  type PointerEvent as ReactPointerEvent,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from 'react';
 import { apply, ensureAudio, locate } from '../app/actions.ts';
 import { setKeyScope } from '../app/keys.ts';
 import { isPhone, useLayout } from '../app/layout.ts';
 import { store, useApp } from '../app/store.ts';
 import { engine } from '../audio/engine.ts';
 import { midi } from '../audio/midi.ts';
-import { useFrame, useSize } from '../ui/frame.ts';
+import { useFrame, useMedia, useSize } from '../ui/frame.ts';
+import { capture, type Gesture, isMenuPress, LONG_PRESS_MS } from '../ui/gesture.ts';
+import { openMenu } from '../ui/menu.tsx';
 import { UndoRedo } from '../ui/UndoRedo.tsx';
 import { UprightBar } from '../ui/UprightBar.tsx';
-import { Entry } from './entry.ts';
+import { entry, scoreOf } from './doc.ts';
+import { DraggedNotes, halfSpaceAt, nameAfter } from './drag.ts';
+import {
+  editState,
+  hearMoved,
+  moveNotes,
+  noteItems,
+  type StaffSpot,
+  scoreKey,
+  selectionIn,
+  setAdding,
+  spotItems,
+} from './editing.ts';
 import { buildIndex, placeOf, type ScoreIndex, tickAt } from './layout-index.ts';
 import { Palette } from './Palette.tsx';
-import { sameMusic } from './same-music.ts';
+import { SelectionBar } from './SelectionBar.tsx';
 import { renderScore } from './verovio.ts';
 
 const ZOOM_RANGE: [number, number] = [20, 120];
 
 /**
- * The score as laid out now: shared by the drawing and the writing, made again only when the
- * song's music changes. A change to the mix (a fader, a knob, a mute) is a new song with the same
- * music, and keeps the score it has: nothing is notated, engraved or measured again for it.
+ * The click that ends a drag or a long press is the gesture's: let it go by (it would select, or put
+ * the playhead there, or press an item of a menu that has just opened under the finger).
  */
-let cached: { project: Project; key: string; doc: ScoreDoc } | null = null;
-
-function scoreOf(project: Project): ScoreDoc {
-  const s = store.get();
-  const track = project.tracks.find((t) => t.id === s.selectedTrack);
-  const part = !s.scoreAll && track?.kind === 'instrument' ? track.id : null;
-  const key = s.scoreAll ? '*' : (part ?? '');
-  if (cached && cached.key === key && sameMusic(cached.project, project)) {
-    cached.project = project;
-    return cached.doc;
-  }
-  const doc = notate(project, s.scoreAll || !part ? {} : { tracks: [part] });
-  cached = { project, key, doc };
-  return doc;
+function swallowClick(): void {
+  const stop = (e: MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    done();
+  };
+  const done = () => {
+    window.removeEventListener('click', stop, true);
+    window.clearTimeout(timer);
+  };
+  window.addEventListener('click', stop, true);
+  const timer = window.setTimeout(done, 400);
 }
-
-const entry = new Entry(scoreOf);
 
 export function ScoreBar() {
   const all = useApp((s) => s.scoreAll);
@@ -212,10 +234,16 @@ export function Score() {
   const zoom = useApp((s) => s.scoreZoom);
   const selected = useApp((s) => s.selectedNotes);
   const write = useApp((s) => s.scoreWrite);
+  // a touch screen has the selected notes' tools under the music (a mouse has the menu and the keys)
+  const coarse = useMedia('(pointer: coarse)');
+  const layout = useLayout();
+  const touchTools = coarse || isPhone(layout);
   const box = useRef<HTMLDivElement>(null);
   const page = useRef<HTMLDivElement>(null);
   const cursor = useRef<HTMLDivElement>(null);
   const caretEl = useRef<HTMLDivElement>(null);
+  const tip = useRef<HTMLDivElement>(null);
+  const boxEl = useRef<HTMLDivElement>(null);
   const index = useRef<ScoreIndex>({ bars: [] });
   const size = useSize(box);
   const [svg, setSvg] = useState('');
@@ -283,6 +311,10 @@ export function Score() {
     const chosen = new Set(selected);
     for (const [id, ref] of doc.refs) if (chosen.has(ref.note)) el.querySelector(`[id="${id}"]`)?.classList.add('sel');
   }, [selected, svg, doc]);
+  // nothing selected here: a tap selects one note again
+  useEffect(() => {
+    if (!doc || !selectionIn(doc, selected).length) setAdding(false);
+  }, [doc, selected]);
 
   // writing: start at the selected note or the playhead, on the part shown; keys and MIDI come here
   useEffect(() => {
@@ -300,9 +332,13 @@ export function Score() {
       entry.start(doc, selectedTrack, at);
     }
   }, [write, doc, selectedTrack]);
+  // the Score takes keys first while it's open (copy and paste, and writing's or editing's keys)
+  useEffect(() => {
+    setKeyScope(scoreKey);
+    return () => setKeyScope(null);
+  }, []);
   useEffect(() => {
     if (!write) return;
-    setKeyScope((e) => entry.key_(e));
     let chord: number[] = [];
     let timer = 0;
     const off = midi.onEvent((e) => {
@@ -317,13 +353,18 @@ export function Score() {
       }, CHORD_MS);
     });
     return () => {
-      setKeyScope(null);
       off();
       clearTimeout(timer);
     };
   }, [write]);
-  // leaving the Score stops writing
-  useEffect(() => () => store.set({ scoreWrite: false }), []);
+  // leaving the Score stops writing (and selecting more)
+  useEffect(
+    () => () => {
+      store.set({ scoreWrite: false });
+      setAdding(false);
+    },
+    [],
+  );
 
   // the caret: where the next note goes, on its staff
   // biome-ignore lint/correctness/useExhaustiveDependencies: redrawn when the page is placed again
@@ -373,6 +414,29 @@ export function Score() {
     }
   });
 
+  /** The staff nearest a place on the page, in the bar there: its bar, its lines, and its part's track and number. */
+  const staffNear = (x: number, y: number) => {
+    const bar = index.current.bars.find((b) => x >= b.left && x <= b.right && y >= b.top - 60 && y <= b.bottom + 60);
+    const staff = bar?.staves.reduce((best, s) => {
+      const d = (v: { top: number; bottom: number }) => (y < v.top ? v.top - y : y > v.bottom ? y - v.bottom : 0);
+      return !best || d(s) < d(best) ? s : best;
+    }, bar?.staves[0]);
+    const where = staff && doc ? staffAt(doc, staff.n) : null;
+    return bar && staff && where ? { bar, staff, where } : null;
+  };
+
+  /** A place on a staff, from a place on the page (the menus' "here"). */
+  const spotAt = (clientX: number, clientY: number): StaffSpot | null => {
+    const el = page.current;
+    if (!el) return null;
+    const r = el.getBoundingClientRect();
+    const x = clientX - r.left;
+    const y = clientY - r.top;
+    const tick = tickAt(index.current, x, y);
+    const near = staffNear(x, y);
+    return tick !== null && near ? { track: near.where.track, staff: near.where.local, tick } : null;
+  };
+
   // a click: a note selects it (and plays it); while writing, a click on a staff writes a note there;
   // anywhere else in a bar puts the playhead there
   const click = useRef<(e: MouseEvent) => void>(() => {});
@@ -385,9 +449,10 @@ export function Score() {
     const y = e.clientY - r.top;
     const hit = (e.target as Element).closest('g.note, g.chord');
     const found = hit ? ids.get(hit.getAttribute('id') ?? '') : undefined;
+    const adding = e.shiftKey || editState().adding;
     if (found) {
       const current = store.get().selectedNotes;
-      const next = e.shiftKey
+      const next = adding
         ? found.notes.every((n: Note) => current.includes(n))
           ? current.filter((n) => !found.notes.includes(n))
           : [...current, ...found.notes.filter((n: Note) => !current.includes(n))]
@@ -422,13 +487,9 @@ export function Score() {
     if (tick === null) return;
     if (write && entry.state) {
       // which staff, and which line or space on it
-      const bar = index.current.bars.find((b) => x >= b.left && x <= b.right && y >= b.top - 60 && y <= b.bottom + 60);
-      const staff = bar?.staves.reduce((best, s) => {
-        const d = (v: { top: number; bottom: number }) => (y < v.top ? v.top - y : y > v.bottom ? y - v.bottom : 0);
-        return !best || d(s) < d(best) ? s : best;
-      }, bar?.staves[0]);
-      const where = staff ? staffAt(doc, staff.n) : null;
-      if (!bar || !staff || !where) return;
+      const near = staffNear(x, y);
+      if (!near) return;
+      const { bar, staff, where } = near;
       const len = entry.length();
       const at = bar.bar.start + Math.max(0, Math.floor((tick - bar.bar.start) / len + 0.25)) * len;
       const half = (staff.bottom - staff.top) / 8;
@@ -440,14 +501,243 @@ export function Score() {
       return;
     }
     locate(tick);
-    store.set({ selectedNotes: [] });
+    // (selecting more, a tap beside the notes keeps them)
+    if (!editState().adding) store.set({ selectedNotes: [] });
   };
+
+  // pressing on the page: a note dragged up or down the staff (a mouse as it moves, a finger once it's
+  // held: a finger that moves first scrolls the page), a box drawn with a mouse beside the notes, a
+  // finger held still for the menu
+  const gesture = useRef<Gesture | null>(null);
+  /** A finger is holding a note: the page doesn't scroll under it. */
+  const holding = useRef(false);
+  /** Fingers down on the page now (a second one is a pinch or a scroll, not a press). */
+  const fingers = useRef(new Set<number>());
+  const lastPointer = useRef('mouse');
+  useEffect(() => () => gesture.current?.abort(), []);
+
+  const showTip = (text: string, clientX: number, clientY: number, touch: boolean) => {
+    const t = tip.current;
+    const sheet = page.current?.parentElement;
+    const view = box.current;
+    if (!t || !sheet || !view) return;
+    const r = sheet.getBoundingClientRect();
+    t.textContent = text;
+    t.style.display = text ? '' : 'none';
+    // above a finger (which would cover it), beside a mouse; beside the finger too where the music's
+    // top edge (or the writing tools pinned there) leaves no room above it
+    const top = Math.max(
+      view.getBoundingClientRect().top,
+      view.querySelector('.score-palette')?.getBoundingClientRect().bottom ?? 0,
+    );
+    let x = clientX + (touch ? -18 : 16);
+    let y = clientY - (touch ? 64 : 30);
+    if (y < top + 4) {
+      x = clientX + (touch ? 36 : 16);
+      y = Math.max(top + 4, clientY - 14);
+    }
+    t.style.transform = `translate(${Math.round(x - r.left)}px, ${Math.round(y - r.top)}px)`;
+  };
+  const hideTip = () => {
+    if (tip.current) tip.current.style.display = 'none';
+  };
+
+  const pressNote = (e: ReactPointerEvent<HTMLDivElement>, found: { track: string; notes: Note[] }, touch: boolean) => {
+    const el = page.current;
+    const p = store.get().project;
+    if (!el || !doc || !p) return;
+    const r = el.getBoundingClientRect();
+    const half = halfSpaceAt(index.current, e.clientX - r.left, e.clientY - r.top);
+    const drums = !!doc.parts.find((x) => x.track === found.track)?.drums;
+    const held = found.notes[0] as Note;
+    const spot = spotAt(e.clientX, e.clientY);
+    let drag: DraggedNotes | null = null;
+    let lifted = false;
+    let timer = 0;
+    // what a drag moves: the selection when it holds this note, else this note (or chord, by its stem)
+    const lift = () => {
+      lifted = true;
+      const sel = store.get().selectedNotes;
+      const inSel = found.notes.every((n) => sel.includes(n));
+      const moving = inSel ? selectionIn(doc, sel) : found.notes;
+      if (!inSel) store.set({ selectedNotes: moving, selectedTrack: found.track });
+      if (!drums) drag = new DraggedNotes(el, doc, moving, e.clientY, half, touch);
+    };
+    const end = () => {
+      window.clearTimeout(timer);
+      holding.current = false;
+      drag?.drop();
+      hideTip();
+      if (gesture.current === g) gesture.current = null;
+    };
+    const g = capture(e, {
+      lazy: true,
+      onMove: (ev, gg) => {
+        if (!lifted) {
+          // a finger that moves before it's held is scrolling; a mouse lifts the note as it moves
+          if (touch || !gg.moved) return;
+          lift();
+        }
+        if (drag?.follow(ev.clientY)) {
+          showTip(nameAfter(p, doc, held, drag.steps), ev.clientX, ev.clientY, touch);
+          hearMoved(found.track, drag.notes, drag.steps);
+        }
+      },
+      onUp: (ev, gg) => {
+        const steps = drag?.steps ?? 0;
+        const moving = drag?.notes ?? [];
+        const wasLifted = lifted;
+        end();
+        // a tap: the click selects the note
+        if (!wasLifted) return;
+        swallowClick();
+        if (steps) moveNotes(moving, steps);
+        else if (touch && !gg.moved) openMenu(ev.clientX, ev.clientY, noteItems(doc, spot, touchTools, false));
+      },
+      onAbort: end,
+    });
+    gesture.current = g;
+    if (touch) {
+      timer = window.setTimeout(() => {
+        if (gesture.current !== g || g.moved) return;
+        lift();
+        holding.current = true;
+        navigator.vibrate?.(10);
+        hearMoved(found.track, drag?.notes ?? found.notes, 0);
+        if (drag) showTip(nameAfter(p, doc, held, 0), e.clientX, e.clientY, true);
+      }, LONG_PRESS_MS);
+    }
+  };
+
+  /** A finger held still beside the notes: the menu for that place. */
+  const pressSpot = (e: ReactPointerEvent<HTMLDivElement>) => {
+    const spot = spotAt(e.clientX, e.clientY);
+    if (!spot) return;
+    let timer = 0;
+    const end = () => {
+      window.clearTimeout(timer);
+      if (gesture.current === g) gesture.current = null;
+    };
+    const g = capture(e, { lazy: true, onUp: end, onAbort: end });
+    gesture.current = g;
+    timer = window.setTimeout(() => {
+      if (gesture.current !== g || g.moved) return;
+      const at = g.last;
+      g.abort();
+      navigator.vibrate?.(10);
+      swallowClick();
+      openMenu(at.clientX, at.clientY, spotItems(spot, false));
+    }, LONG_PRESS_MS);
+  };
+
+  /** A mouse dragged beside the notes: a box, and the notes in it selected (with Shift, added). */
+  const pressBox = (e: ReactPointerEvent<HTMLDivElement>) => {
+    const el = page.current;
+    const b = boxEl.current;
+    if (!el || !b) return;
+    const x0 = e.clientX;
+    const y0 = e.clientY;
+    const add = e.shiftKey;
+    const rect = (ev: PointerEvent) => ({
+      left: Math.min(x0, ev.clientX),
+      right: Math.max(x0, ev.clientX),
+      top: Math.min(y0, ev.clientY),
+      bottom: Math.max(y0, ev.clientY),
+    });
+    const end = () => {
+      b.style.display = 'none';
+      if (gesture.current === g) gesture.current = null;
+    };
+    const g = capture(e, {
+      lazy: true,
+      threshold: 4,
+      onMove: (ev, gg) => {
+        if (!gg.moved) return;
+        const sheet = el.parentElement?.getBoundingClientRect();
+        if (!sheet) return;
+        const r = rect(ev);
+        b.style.display = '';
+        b.style.transform = `translate(${Math.round(r.left - sheet.left)}px, ${Math.round(r.top - sheet.top)}px)`;
+        b.style.width = `${Math.round(r.right - r.left)}px`;
+        b.style.height = `${Math.round(r.bottom - r.top)}px`;
+      },
+      onUp: (ev, gg) => {
+        end();
+        if (!gg.moved) return;
+        swallowClick();
+        const r = rect(ev);
+        const picked = new Set<Note>(add ? store.get().selectedNotes : []);
+        let track: string | null = null;
+        for (const head of el.querySelectorAll('g.note')) {
+          const h = head.getBoundingClientRect();
+          if (h.right < r.left || h.left > r.right || h.bottom < r.top || h.top > r.bottom) continue;
+          const found = ids.get(head.getAttribute('id') ?? '');
+          if (!found) continue;
+          track ??= found.track;
+          for (const n of found.notes) picked.add(n);
+        }
+        store.set({ selectedNotes: [...picked], ...(track ? { selectedTrack: track } : {}) });
+      },
+      onAbort: end,
+    });
+    gesture.current = g;
+  };
+
+  const press = (e: ReactPointerEvent<HTMLDivElement>) => {
+    lastPointer.current = e.pointerType;
+    const touch = e.pointerType === 'touch';
+    if (touch) {
+      const id = e.pointerId;
+      fingers.current.add(id);
+      const gone = (ev: PointerEvent) => {
+        if (ev.pointerId !== id) return;
+        fingers.current.delete(id);
+        window.removeEventListener('pointerup', gone);
+        window.removeEventListener('pointercancel', gone);
+      };
+      window.addEventListener('pointerup', gone);
+      window.addEventListener('pointercancel', gone);
+    }
+    // a second finger ends the first one's press
+    gesture.current?.abort();
+    if (fingers.current.size > 1 || isMenuPress(e) || e.button !== 0) return;
+    const hit = (e.target as Element).closest('g.note, g.chord');
+    const found = hit ? ids.get(hit.getAttribute('id') ?? '') : undefined;
+    if (found) pressNote(e, found, touch);
+    else if (touch) pressSpot(e);
+    else pressBox(e);
+  };
+
+  /** A right click: the menu for the note there (selected, if it wasn't), or for the place. */
+  const contextMenu = (e: ReactMouseEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    // (a finger held still has its own menu, from the press)
+    if (lastPointer.current === 'touch' || !doc) return;
+    const hit = (e.target as Element).closest('g.note, g.chord');
+    const found = hit ? ids.get(hit.getAttribute('id') ?? '') : undefined;
+    const spot = spotAt(e.clientX, e.clientY);
+    if (found) {
+      const sel = store.get().selectedNotes;
+      if (!found.notes.every((n: Note) => sel.includes(n)))
+        store.set({ selectedNotes: found.notes, selectedTrack: found.track });
+      openMenu(e.clientX, e.clientY, noteItems(doc, spot, touchTools));
+    } else if (spot) openMenu(e.clientX, e.clientY, spotItems(spot));
+  };
+
   useEffect(() => {
     const el = page.current;
     if (!el) return;
     const on = (e: MouseEvent) => click.current(e);
+    // a finger holding a note keeps the page still (one that moves before then scrolls it, as ever)
+    const still = (e: TouchEvent) => {
+      if (holding.current && e.cancelable) e.preventDefault();
+    };
     el.addEventListener('click', on);
-    return () => el.removeEventListener('click', on);
+    el.addEventListener('touchmove', still, { passive: false });
+    return () => {
+      el.removeEventListener('click', on);
+      el.removeEventListener('touchmove', still);
+    };
   });
 
   if (!project) return <div className="score" />;
@@ -460,17 +750,26 @@ export function Score() {
   }
 
   return (
-    <div className={`score${write ? ' writing' : ''}`} ref={box}>
+    <div className={`score${write ? ' writing' : ''}${touchTools ? ' touch-tools' : ''}`} ref={box}>
       {write && <Palette entry={entry} />}
       <div className="score-sheet">
         {/* the engraving is drawn here from the song itself (its text escaped into the MEI) */}
-        {/* biome-ignore lint/security/noDangerouslySetInnerHtml: Verovio's SVG of this song */}
-        <div className="score-page" ref={page} dangerouslySetInnerHTML={{ __html: svg }} />
+        <div
+          className="score-page"
+          ref={page}
+          onPointerDown={press}
+          onContextMenu={contextMenu}
+          // biome-ignore lint/security/noDangerouslySetInnerHtml: Verovio's SVG of this song
+          dangerouslySetInnerHTML={{ __html: svg }}
+        />
         <div className="score-cursor" ref={cursor} />
         <div className="score-caret" ref={caretEl} />
+        <div className="score-box" ref={boxEl} style={{ display: 'none' }} />
+        <div className="score-drag-tip" ref={tip} style={{ display: 'none' }} />
       </div>
       {error && <p className="score-note bad">The score couldn’t be drawn: {error}</p>}
       {!svg && !error && <p className="score-note">Engraving…</p>}
+      {touchTools && doc && svg && <SelectionBar doc={doc} />}
     </div>
   );
 }

@@ -524,11 +524,14 @@ function planLine(
           const clef = clefAt(staff.clefs, at);
           const writtenPitch = pitchOf(h.written);
           const p = part.drums ? drumAt(track, h.written) : writtenPitch - tr[0] - 12 * clefShift(clef) + 12 * octave;
-          // a note tied from before grows instead of starting again
-          const held = state.ties.get(p);
+          // a note tied from before (earlier in this bar, or from the bar before) grows instead of
+          // starting again
+          const here = ties.get(p);
+          const held = here ?? state.ties.get(p);
           if (held && held._start + held.d === at && !tok.grace) {
             held.d += len;
-            state.ties.delete(p);
+            if (here) ties.delete(p);
+            else state.ties.delete(p);
             if (h.tie) ties.set(p, held);
             chord.push(held);
             continue;

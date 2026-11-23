@@ -128,6 +128,22 @@ describe('writing a score as text', () => {
     expect(shown).toContain('  P1: a5:h ! r:h');
   });
 
+  it('holds a note tied to the next in the same bar, a chord’s too, and on across the bar line', () => {
+    const p = emptied(song());
+    const text = ['bar 1', '  P1: c5:q~ c5:e d5:e [e5 g5]:q.~ [e5 g5]:e~', 'bar 2', '  P1: [e5 g5]:q r:q r:h'].join(
+      '\n',
+    );
+    const result = writeScoreText(p, text);
+    expect(result.errors).toEqual([]);
+    const notes = applyOps(p, result.ops).tracks[0]?.regions[0]?.notes ?? [];
+    const held = (pitch: number) => notes.filter((n) => n.p === pitch).map((n) => [n.t, n.n?.w?.[0] ?? n.d]);
+    // one C5 a dotted quarter long, not two; E5 and G5 each one note from beat 3 to the end of bar 2's first beat
+    expect(held(72)).toEqual([[0, 1.5 * q]]);
+    expect(held(76)).toEqual([[2 * q, 3 * q]]);
+    expect(held(79)).toEqual([[2 * q, 3 * q]]);
+    expect(notes).toHaveLength(4);
+  });
+
   it('adds the time, key, tempo and repeats a header names', () => {
     const p = song();
     const result = writeScoreText(

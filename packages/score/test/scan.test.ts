@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   binarize,
+  type FoundSystem,
   findPage,
   findSystems,
   flatten,
@@ -166,6 +167,48 @@ describe('finding the music on a page', () => {
     const layout = findSystems(binarize(gray), w, h);
     expect(layout.systems.map((s) => s.staves.length)).toEqual([1, 1]);
     expect(Math.round((layout.systems[1]?.staves[0]?.lines[0] ?? 0) - 400)).toBeLessThanOrEqual(2);
+  });
+
+  it('finds a short last system on a curled page, its lines sloping', () => {
+    const w = 1200;
+    const h = 600;
+    const gray: Gray = { w, h, data: new Uint8Array(w * h).fill(235) };
+    // the full system level; the short one (a quarter of the page) its lines dropping 10 px, as curl bends them
+    for (let i = 0; i < 5; i++) stroke(gray, [100, 150 + i * 12], [1100, 150 + i * 12]);
+    for (let i = 0; i < 5; i++) stroke(gray, [100, 400 + i * 12], [400, 410 + i * 12]);
+    for (const x of [100, 250, 400]) stroke(gray, [x, 400 + ((x - 100) / 300) * 10], [x, 448 + ((x - 100) / 300) * 10]);
+    const layout = findSystems(binarize(gray), w, h);
+    expect(layout.systems.map((s) => s.staves.length)).toEqual([1, 1]);
+  });
+
+  it('gives the first and last strips room for notes on many ledger lines, up to clear paper', () => {
+    const w = 1200;
+    const h = 900;
+    const gray: Gray = { w, h, data: new Uint8Array(w * h).fill(235) };
+    // two single staves, a melody climbing seven ledger lines above the first and falling seven below
+    // the last; a title further up, clear paper between
+    for (const top of [300, 560]) {
+      for (let i = 0; i < 5; i++) stroke(gray, [100, top + i * 12], [1100, top + i * 12]);
+      for (const x of [100, 600, 1100]) stroke(gray, [x, top], [x, top + 48]);
+    }
+    for (let k = 1; k <= 7; k++) {
+      // a note on the k-th ledger line, every ledger line under it drawn
+      const x = 150 + k * 50;
+      for (let j = 1; j <= k; j++) {
+        stroke(gray, [x - 9, 300 - j * 12], [x + 9, 300 - j * 12]);
+        stroke(gray, [x - 9, 608 + j * 12], [x + 9, 608 + j * 12]);
+      }
+      stroke(gray, [x - 5, 300 - k * 12 - 3], [x + 5, 300 - k * 12 - 3], 6);
+      stroke(gray, [x - 5, 608 + k * 12 - 3], [x + 5, 608 + k * 12 - 3], 6);
+    }
+    stroke(gray, [400, 120], [800, 120], 14);
+    const layout = findSystems(binarize(gray), w, h);
+    expect(layout.systems.map((s) => s.staves.length)).toEqual([1, 1]);
+    const [first, last] = layout.systems as [FoundSystem, FoundSystem];
+    // the highest note's head (rows 213–219) and the lowest's (689–695) are in; the title isn't
+    expect(first.top).toBeLessThan(210);
+    expect(first.top).toBeGreaterThan(134);
+    expect(last.bottom).toBeGreaterThan(698);
   });
 
   it('keeps apart two systems with a stroke slanting across the gap at their left', () => {

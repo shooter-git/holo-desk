@@ -88,56 +88,51 @@ function lineRows(ink: Uint8Array, w: number, h: number, thickness: number, spac
   // need five evenly spaced lines, so a little generosity here finds no false ones)
   const at = (x: number, y: number) =>
     ink[y * w + x] || (y > 0 && ink[(y - 1) * w + x]) || (y + 1 < h && ink[(y + 1) * w + x]) ? 1 : 0;
-  // (the longest run, over gaps no wider than a line's thickness or two: a staff line's notes and
-  // bar lines don't break it, a line of text or a beam is far shorter)
-  const longest = Math.max(w * 0.15, spacing * 12);
-  const gapOk = thickness * 2 + 2;
+  // (how much of the row is ink over a stretch of it, an eighth of the page or eight staff spaces,
+  // wherever along the row that's most: a short system's line nearly fills such a stretch, uneven or
+  // broken as a photo leaves it, where a line of text, a beam or a row of noteheads doesn't come near)
+  const stretch = Math.round(Math.max(w * 0.12, spacing * 8));
   const counts: number[] = [];
   const runs: number[] = [];
+  const sums = new Int32Array(w + 1);
   for (let y = 0; y < h; y++) {
     let n = 0;
     for (let x = x0; x < x1; x++) n += at(x, y);
     counts.push(n);
-    let best = 0;
-    let start = -1;
-    let gap = 0;
-    for (let x = 0; x < w; x++) {
-      if (at(x, y)) {
-        if (start < 0) start = x;
-        gap = 0;
-        best = Math.max(best, x - start + 1);
-      } else if (start >= 0 && ++gap > gapOk) {
-        start = -1;
-        gap = 0;
-      }
-    }
-    runs.push(best);
+    for (let x = 0; x < w; x++) sums[x + 1] = (sums[x] as number) + at(x, y);
+    let most = 0;
+    for (let x = 0; x + stretch <= w; x += 4)
+      most = Math.max(most, (sums[x + stretch] as number) - (sums[x] as number));
+    runs.push(most / stretch);
   }
   const across = counts.map((n) => n > span * 0.4);
-  const rows = across.map((a, y) => a || (runs[y] as number) >= longest);
-  const lines: (LineRow & { across: boolean })[] = [];
-  for (let y = 0; y < h; ) {
-    if (!rows[y]) {
-      y++;
-      continue;
+  // the rows of each kind merged into lines, each line a few rows thick at most
+  const bands = (take: (y: number) => boolean, cover: (y0: number, y1: number) => number): LineRow[] => {
+    const out: LineRow[] = [];
+    for (let y = 0; y < h; ) {
+      if (!take(y)) {
+        y++;
+        continue;
+      }
+      let end = y;
+      while (end + 1 < h && take(end + 1)) end++;
+      if (end - y + 1 <= thickness * 3 + 4) out.push({ y: (y + end) / 2, cover: cover(y, end) });
+      y = end + 1;
     }
-    let end = y;
-    while (end + 1 < h && rows[end + 1]) end++;
-    if (end - y + 1 <= thickness * 3 + 4) {
-      const cover = Math.max(...counts.slice(y, end + 1)) / span;
-      lines.push({
-        y: (y + end) / 2,
-        cover: Math.max(cover, Math.max(...runs.slice(y, end + 1)) / span),
-        across: across.slice(y, end + 1).some(Boolean),
-      });
-    }
-    y = end + 1;
-  }
-  // a long run alone counts only away from the lines found across the page: a short last system's,
-  // not a curled page's line caught again at its other height beside itself
-  return lines
-    .filter((l) => l.across || !lines.some((o) => o.across && Math.abs(o.y - l.y) < spacing * 2.5))
-    .map(({ y, cover }) => ({ y, cover }));
+    return out;
+  };
+  const found = bands(
+    (y) => !!across[y],
+    (a, b) => Math.max(...counts.slice(a, b + 1)) / span,
+  );
+  // a long run alone, apart from the lines across the page, is a line too unless it lies beside one of
+  // them, nearer than a staff space: a curled page's line caught again at its other height (a staff's
+  // next line is a whole space away, and a short last system has no line across the page at all)
+  const alone = bands(
+    (y) => !across[y] && (runs[y] as number) >= 0.6,
+    (a, b) => (Math.max(...runs.slice(a, b + 1)) * stretch) / span,
+  ).filter((l) => !found.some((o) => Math.abs(o.y - l.y) < spacing * 0.7));
+  return [...found, ...alone].sort((a, b) => a.y - b.y);
 }
 
 /**
@@ -198,14 +193,67 @@ function staves(lines: LineRow[], spacing: number): number[][] {
 }
 
 /** Where a staff's lines start and end across the page. */
-function extent(ink: Uint8Array, w: number, lines: number[]): { left: number; right: number } {
-  const hits = (x: number) =>
-    lines.filter((y) => ink[Math.round(y) * w + x] || ink[(Math.round(y) + 1) * w + x]).length;
+/**
+ * Where a staff's lines start and end across the page: followed out from its middle each way while
+ * four of its five lines go on, a row up or down a column at most (a curled page bends a staff, so
+ * at its ends its lines aren't where they were across the middle), over gaps of up to a staff space;
+ * or, where it reaches further, scanned in from the page's edge.
+ */
+function extent(
+  ink: Uint8Array,
+  w: number,
+  h: number,
+  lines: number[],
+  space: number,
+): { left: number; right: number } {
+  const hits = (x: number, d: number) =>
+    lines.filter((y) => {
+      const r = Math.round(y + d);
+      return [r - 1, r, r + 1].some((row) => row >= 0 && row < h && ink[row * w + x]);
+    }).length;
+  // a column where the lines are as found, nearest the page's middle
+  let mid = -1;
+  for (let k = 0; k < w && mid < 0; k++) {
+    for (const x of [Math.floor(w / 2) - k, Math.floor(w / 2) + k]) {
+      if (x >= 0 && x < w && hits(x, 0) >= 4) {
+        mid = x;
+        break;
+      }
+    }
+  }
+  // (as before: from each side of the page in, the first column with four lines where they were found
+  // across the middle; a bar line at a staff's end is found so, where its lines may have faded)
   let left = 0;
-  while (left < w && hits(left) < 4) left++;
+  while (left < w && hits(left, 0) < 4) left++;
   let right = w - 1;
-  while (right > left && hits(right) < 4) right--;
-  return { left, right };
+  while (right > left && hits(right, 0) < 4) right--;
+  if (mid < 0) return { left, right };
+  const reach = Math.max(2, Math.round(space * 0.6));
+  const follow = (by: number) => {
+    let d = 0;
+    let last = mid;
+    let gap = 0;
+    for (let x = mid + by; x >= 0 && x < w; x += by) {
+      let best = -1;
+      let most = 0;
+      for (const t of [d, d - 1, d + 1]) {
+        if (Math.abs(t) > reach) continue;
+        const n = hits(x, t);
+        if (n > most) {
+          most = n;
+          best = t;
+        }
+      }
+      if (most >= 4) {
+        d = best;
+        last = x;
+        gap = 0;
+      } else if (++gap > space) break;
+    }
+    return last;
+  };
+  // whichever reaches further: following finds a curled staff's start the scan from the edge passes
+  return { left: Math.min(left, follow(-1)), right: Math.max(right, follow(1)) };
 }
 
 /**
@@ -318,11 +366,48 @@ function quietRow(ink: Uint8Array, w: number, from: number, to: number): number 
   return best;
 }
 
+/**
+ * Going from row `from` toward row `to` (up or down), the middle of the first band of clear paper
+ * across columns x0 to x1: a space and a half of rows with next to no ink, more than lies between two
+ * ledger lines, so where the music around a staff ends. With none (a title or text crowding in), the
+ * row with least ink, the nearest of equals.
+ */
+function clearRow(
+  ink: Uint8Array,
+  w: number,
+  h: number,
+  x0: number,
+  x1: number,
+  from: number,
+  to: number,
+  spacing: number,
+): number {
+  const by = to < from ? -1 : 1;
+  const need = Math.max(3, Math.round(spacing * 1.5));
+  // a speck or two of dust is clear paper still
+  const most = Math.max(2, Math.round((x1 - x0) / 400));
+  let run = 0;
+  let best = Math.round(from);
+  let least = Number.POSITIVE_INFINITY;
+  for (let y = Math.round(from); by < 0 ? y >= to : y <= to; y += by) {
+    if (y < 0 || y >= h) break;
+    let n = 0;
+    for (let x = Math.max(0, x0); x < Math.min(w, x1); x += 2) n += ink[y * w + x] as number;
+    if (n < least) {
+      least = n;
+      best = y;
+    }
+    run = n <= most ? run + 1 : 0;
+    if (run >= need) return y - (by * need) / 2;
+  }
+  return Math.max(0, Math.min(h, best));
+}
+
 export function findSystems(ink: Uint8Array, w: number, h: number): PageLayout {
   const { thickness, gap } = measureLines(ink, w, h);
   const spacing = gap + thickness;
   const found = staves(lineRows(ink, w, h, thickness, spacing), spacing).map(
-    (lines): FoundStaff => ({ lines, ...extent(ink, w, lines) }),
+    (lines): FoundStaff => ({ lines, ...extent(ink, w, h, lines, spacing) }),
   );
   // staves joined at the left are one system
   const groups: FoundStaff[][] = [];
@@ -352,16 +437,25 @@ export function findSystems(ink: Uint8Array, w: number, h: number): PageLayout {
     right: Math.max(...g.map((s) => s.right)),
   }));
   // the strips: cut in the quietest row between systems; the first and last get room for what
-  // stands above and below them (dynamics, lyrics, ledger lines)
+  // stands above and below them (dynamics, lyrics, ledger lines), and more where notes on many ledger
+  // lines reach further: on to the first clear paper, as far as a dozen spaces out
   systems.forEach((sys, i) => {
     const top = (sys.staves[0] as FoundStaff).lines[0] as number;
     const bottom = (sys.staves[sys.staves.length - 1] as FoundStaff).lines[4] as number;
     const prev = systems[i - 1];
     const next = systems[i + 1];
-    sys.top = prev ? prev.bottom : Math.max(0, Math.round(top - spacing * 5));
+    sys.top = prev
+      ? prev.bottom
+      : Math.max(
+          0,
+          Math.round(clearRow(ink, w, h, sys.left, sys.right, top - spacing * 5, top - spacing * 12, spacing)),
+        );
     sys.bottom = next
       ? quietRow(ink, w, bottom, (next.staves[0] as FoundStaff).lines[0] as number)
-      : Math.min(h, Math.round(bottom + spacing * 6));
+      : Math.min(
+          h,
+          Math.round(clearRow(ink, w, h, sys.left, sys.right, bottom + spacing * 6, bottom + spacing * 12, spacing)),
+        );
   });
   return { space: spacing, thickness, systems };
 }

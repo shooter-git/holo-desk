@@ -8,6 +8,7 @@ import { toolWords } from '../src/harness/adapter.ts';
 import { notationLength } from '../src/index.ts';
 import { describeTool, LABEL_MAX, stepLabel, type Tool } from '../src/tools/common.ts';
 import { TOOLS, toolNamed } from '../src/tools/index.ts';
+import { writePngRgb } from '../src/tools/png.ts';
 import { checkDock, checkGo, checkView } from '../src/view.ts';
 import { allOps, BAR, call, lastOps, memoryOf, refused, setup } from './helpers.ts';
 
@@ -641,6 +642,55 @@ describe('the score', () => {
     const shown = await call(api, 'scan_show', { scan: scan.id, system: '0.0' });
     expect(shown.images).toEqual([{ mime: 'image/png', data: 'iVBO' }]);
     expect((await call(api, 'scan_show', { scan: scan.id })).text).toContain('0.0: 2 staves, about 1 bar, new');
+  });
+
+  it('shows a system whole, then enlarged in parts with guides', async () => {
+    // a grand staff's strip: two staves, a bar line joining them at the left
+    const w = 1800;
+    const h = 260;
+    const rgb = new Uint8Array(w * h * 3).fill(240);
+    const ink = (x: number, y: number) => rgb.fill(20, (y * w + x) * 3, (y * w + x) * 3 + 3);
+    for (const top of [60, 160]) for (let i = 0; i < 5; i++) for (let x = 20; x < w - 20; x++) ink(x, top + i * 12);
+    for (let y = 60; y <= 208; y++) ink(20, y);
+    const strip = { mime: 'image/png', data: writePngRgb({ w, h, data: rgb }).toString('base64') };
+    const scan: Scan = {
+      id: 'scn_abcdef34',
+      project: 'x',
+      title: 'Hymn',
+      created: '',
+      pages: [
+        {
+          n: 0,
+          w,
+          h,
+          type: 'png',
+          systems: [{ k: 0, top: 0, bottom: h, left: 0, right: w, staves: 2, bars: [0, 1], state: 'new' }],
+        },
+      ],
+    };
+    const api = setup({ scans: { [scan.id]: scan }, strips: { [`${scan.id}/0/0`]: strip } });
+    const shown = await call(api, 'scan_show', { scan: scan.id, system: '0.0', clefs: 'treble,bass' });
+    expect(shown.images?.[0]).toEqual(strip);
+    expect(shown.images?.length).toBeGreaterThan(2);
+    expect(shown.text).toContain(`enlarged in ${(shown.images?.length ?? 0) - 1} parts`);
+    expect(shown.text).toContain('as pitches for the clefs given (treble, bass');
+    expect(shown.text).toContain('green dots through its middle is in that space');
+    // the clefs given don't match the staves found: places, not pitches
+    const one = await call(api, 'scan_show', { scan: scan.id, system: '0.0', clefs: 'treble' });
+    expect(one.text).toContain('by place, not pitch');
+    expect(await refused(api, 'scan_show', { scan: scan.id, system: '0.0', clefs: 'treble,banjo' })).toContain(
+      '"banjo"',
+    );
+    // a part looked at closer: twice as large, in pieces, named for its own staves' clefs
+    const parts = (shown.images?.length ?? 1) - 1;
+    expect(shown.text).toContain(`"part" (1 to ${parts})`);
+    const closer = await call(api, 'scan_show', { scan: scan.id, system: '0.0', clefs: 'treble,bass', part: 1 });
+    expect(closer.text).toContain(`Part 1 of ${parts}, closer`);
+    expect(closer.text).toContain('as pitches for the clefs given (treble, bass');
+    expect(closer.images?.length).toBeGreaterThan(1);
+    expect(await refused(api, 'scan_show', { scan: scan.id, system: '0.0', part: parts + 1 })).toContain(
+      `1 to ${parts}`,
+    );
   });
 });
 

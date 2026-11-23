@@ -969,7 +969,7 @@ change may also post a line under the bar (`…/progress`).
 | `played` | play | What the user just played (up to 60 s back). |
 | `analyze_played` | see | Tempo, meter, key, pickup and grid of a performance, and its notes as score text. |
 | `compare` | play | A/B at once: some bars as they were before the request, then as they are now (only when the user asked to hear it now; a view's play buttons let them compare at their own pace). |
-| `scan_show` | see | A scan's pages and systems, or one system's strip as an image. |
+| `scan_show` | see | A scan's pages and systems; or one system as images: its strip, then the strip enlarged in parts with guides (below). |
 | `scan_status` | change | Mark how far a scanned system's reading got. |
 | `attachment_get` | see | An attachment: a picture, a recording's measurements and notes, a MIDI file's notes, a text. |
 | `import` | change | Bring an attachment into the song: a recording onto an audio track, a MIDI or MusicXML file as tracks (below). |
@@ -978,6 +978,39 @@ change may also post a line under the bar (`…/progress`).
 | `hand_off` | ask | A brief for the user's own coding agent, only for a change to HO[LO] Desk's code, holo-packs or a creation (no commands or code in it; never to read or send files, keys, passwords or tokens). |
 | `version` | change | Keep the song as it is now as a named version, for the reply's view to play or keep. |
 | `finish` | ask | End the turn, always, a question's too: the undo step's label, the reply (one or two short sentences of plain text, about 200 characters at most: what changed and where, or the answer), what shows under it (`view`) and where the studio goes as it arrives (`go`, when they asked to see something). |
+
+### Reading a scan: zoomed parts and guides
+
+A model is shown a picture no more than about 1,600 pixels a side, so a whole system came through with
+its staff lines a dozen or so pixels apart, and a notehead on a line looked much like one in the space
+beside it. `scan_show` with a system (`packages/agent/src/tools/scan.ts`, `packages/score/src/scan/zoom.ts`)
+gives the strip as it is, for the whole system at once, then the strip cut into overlapping parts, each
+enlarged so its staff lines are about 34 pixels apart (and cut across, a group of staves at a time, when
+a system is too tall), each within the model's size. On the parts, guides:
+
+- every staff line drawn over in blue, following the page as it bends (each staff traced across, its
+  five lines together);
+- the middle of every space, and of every space between ledger lines, dotted in green;
+- where ledger lines go above and below, dashed in orange, out to the sixth or halfway to the next staff;
+- at both margins, each line and space named: as pitches for the clefs given (`clefs`, each staff's, top
+  to bottom), or by place (L1 to L5, S1 to S4, +1 and -1 for the first ledger lines) when no clefs are
+  given or the staves found aren't as many as the clefs given.
+
+So a notehead has exactly one guide through its middle: solid blue for a line, green dots for a space.
+Where one could still be on a line or in the space beside it (small or heavy writing, a head touching
+both lines), `scan_show` with `part` shows that part again twice as large (staff lines about 68 pixels
+apart), in pieces, with the same guides, its margins named for that part's own staves; the reading
+instructions ask for that look before such a note is written.
+The reading instructions (`apps/server/src/agent/prompt.ts`) ask for every notehead read from where it
+sits, bar by bar; for every head on a stem (a chord, an octave), on ledger lines too, a stem that runs on
+past a head ending at another however slight the mark there. They say that a handwritten head may be a
+small stroke, a slash, a dash or a cross through its ledger line, its pitch where its middle is (not its
+heavier end); that a ledger line on its own is not a note; and that off the staff the ledger lines drawn
+on the page name a note, not its distance, since a hand seldom spaces them as evenly as the staff: with
+none drawn through it or between it and the staff, a note is in the space just beyond the staff.
+
+The strips are the studio's PNGs, read and written by `packages/agent/src/tools/png.ts` (Node's zlib, no
+other library). A strip that can't be read as a picture is shown as it is, without parts.
 
 There are no tools for opening, creating or exporting songs, or for creations. What the user attached
 comes into the open song through `import`; a bounce, sending the song to its creation and the

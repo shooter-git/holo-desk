@@ -128,6 +128,39 @@ describe('writing a score as text', () => {
     expect(shown).toContain('  P1: a5:h ! r:h');
   });
 
+  it('holds a note tied to the next in the same bar, a chord’s too, and on across the bar line', () => {
+    const p = emptied(song());
+    const text = ['bar 1', '  P1: c5:q~ c5:e d5:e [e5 g5]:q.~ [e5 g5]:e~', 'bar 2', '  P1: [e5 g5]:q r:q r:h'].join(
+      '\n',
+    );
+    const result = writeScoreText(p, text);
+    expect(result.errors).toEqual([]);
+    const notes = applyOps(p, result.ops).tracks[0]?.regions[0]?.notes ?? [];
+    const held = (pitch: number) => notes.filter((n) => n.p === pitch).map((n) => [n.t, n.n?.w?.[0] ?? n.d]);
+    // one C5 a dotted quarter long, not two; E5 and G5 each one note from beat 3 to the end of bar 2's first beat
+    expect(held(72)).toEqual([[0, 1.5 * q]]);
+    expect(held(76)).toEqual([[2 * q, 3 * q]]);
+    expect(held(79)).toEqual([[2 * q, 3 * q]]);
+    expect(notes).toHaveLength(4);
+  });
+
+  it('leaves a chord’s note tied on alone, and a grace note tied to its note, struck as written', () => {
+    // held, the C5 would sound under the E5 and the score show two voices for a bar written as one;
+    // a grace note is struck before its note, not held into it
+    const p = emptied(song());
+    const result = writeScoreText(p, 'bar 1\n  P1: [c5~ e5]:q c5:q c5:e+grace~ c5:q r:q');
+    expect(result.errors).toEqual([]);
+    const next = applyOps(p, result.ops);
+    const notes = next.tracks[0]?.regions[0]?.notes ?? [];
+    expect(notes.filter((n) => n.p === 72 && !n.n?.g).map((n) => [n.t, n.n?.w?.[0] ?? n.d])).toEqual([
+      [0, q],
+      [q, q],
+      [2 * q, q],
+    ]);
+    expect(notes.filter((n) => n.n?.g)).toHaveLength(1);
+    expect(show(next).split('\n')).toContain('  P1: [c5 e5]:q c5:q c5:s+grace c5:q r:q');
+  });
+
   it('adds the time, key, tempo and repeats a header names', () => {
     const p = song();
     const result = writeScoreText(

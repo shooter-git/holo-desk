@@ -21,10 +21,10 @@ export interface Ran {
   missing?: boolean;
 }
 
-export type Docker = (args: string[], opts: { input?: Buffer; timeout: number }) => Promise<Ran>;
+export type Docker = (args: string[], opts: { input?: Buffer; timeout: number; signal?: AbortSignal }) => Promise<Ran>;
 
-/** The docker command, run with `args`: `input` on its stdin, killed after `timeout` ms. */
-export const docker: Docker = (args, { input, timeout }) =>
+/** The docker command, run with `args`: `input` on its stdin, killed after `timeout` ms or when `signal` says. */
+export const docker: Docker = (args, { input, timeout, signal }) =>
   new Promise((resolve) => {
     const out: Buffer[] = [];
     let err = '';
@@ -35,7 +35,7 @@ export const docker: Docker = (args, { input, timeout }) =>
       clearTimeout(timer);
       resolve(r);
     };
-    const child = spawn('docker', args, { stdio: ['pipe', 'pipe', 'pipe'] });
+    const child = spawn('docker', args, { stdio: ['pipe', 'pipe', 'pipe'], ...(signal ? { signal } : {}) });
     const timer = setTimeout(() => child.kill('SIGKILL'), timeout);
     child.stdout.on('data', (b: Buffer) => out.push(b));
     child.stderr.on('data', (b: Buffer) => {
@@ -94,11 +94,16 @@ export function dockerEngines(image: string, dataDir: string, run: Docker = dock
   let starting: Promise<void> | null = null;
   let ours = false;
   let closed = false;
+  // (what's under way when the server stops is stopped with it: a first pull, above all, which would
+  // otherwise go on to start a container nobody removes)
+  const stop = new AbortController();
+  const { signal } = stop;
 
   const ask = async (path: string, timeout: number, page?: { data: Buffer; type: string }): Promise<unknown> => {
     const r = await run(['exec', '-i', name, 'python', '-c', ASK, path, ...(page ? [page.type] : [])], {
       input: page?.data,
       timeout,
+      signal,
     });
     if (r.code !== 0) throw new Error(said(r.err, `docker exec ended with ${r.code}`));
     return JSON.parse(r.out.toString('utf8'));
@@ -126,7 +131,7 @@ export function dockerEngines(image: string, dataDir: string, run: Docker = dock
       // (the first time, this pulls the image)
       const started = await run(
         ['run', '-d', '--rm', '--name', name, '--network', 'none', '--label', 'holo.omr=1', image],
-        { timeout: PULL_MS },
+        { timeout: PULL_MS, signal },
       );
       if (started.code !== 0) {
         state = { kind: 'failed', why: 'unreachable', detail: said(started.err, 'it didn’t start'), at: Date.now() };
@@ -145,7 +150,7 @@ export function dockerEngines(image: string, dataDir: string, run: Docker = dock
       try {
         state = { kind: 'ready', engines: await engines(10_000), checked: Date.now() };
         // a newer image, if there is one, for the next start (the one running stays)
-        if (image.includes('/')) void run(['pull', '--quiet', image], { timeout: PULL_MS });
+        if (image.includes('/')) void run(['pull', '--quiet', image], { timeout: PULL_MS, signal });
         return;
       } catch (e) {
         last = e instanceof Error ? e.message : String(e);
@@ -194,8 +199,12 @@ export function dockerEngines(image: string, dataDir: string, run: Docker = dock
       return body.readings ?? [];
     },
     async close(): Promise<void> {
+      if (closed) return;
       closed = true;
-      if (ours) await run(['rm', '-f', name], { timeout: 10_000 });
+      const starting = state.kind === 'starting';
+      stop.abort();
+      // (one stopped while it started may have got as far as making its container)
+      if (ours || starting) await run(['rm', '-f', name], { timeout: 10_000 });
     },
   };
 }

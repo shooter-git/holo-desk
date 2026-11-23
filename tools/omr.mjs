@@ -12,6 +12,8 @@
 //   on       back on, from the image CI publishes
 //   build    their image built from this checkout's deploy/omr instead (holo-omr:local), and used
 import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
+import { resolve } from 'node:path';
 import { compose, omrImage, omrOn, readEnv, setEnv, startEngines, unsetEnv } from './update.mjs';
 
 const [command = 'status'] = process.argv.slice(2);
@@ -30,10 +32,15 @@ function docker(...args) {
   }
 }
 
-/** The containers a server run without Docker started for itself (labelled holo.omr). */
+/**
+ * The container a server run without Docker starts for itself from this checkout: named for its data
+ * folder, as apps/server/src/omr-docker.ts names it (another studio's on this computer is left alone).
+ */
 function ownContainers() {
+  const data = resolve(import.meta.dirname, '..', readEnv().values.HOLO_DATA_DIR ?? './data');
+  const name = `holo-omr-${createHash('sha256').update(data).digest('hex').slice(0, 10)}`;
   try {
-    return execFileSync('docker', ['ps', '-aq', '--filter', 'label=holo.omr=1'], { encoding: 'utf8' })
+    return execFileSync('docker', ['ps', '-aq', '--filter', `name=^${name}$`], { encoding: 'utf8' })
       .split('\n')
       .filter(Boolean);
   } catch {

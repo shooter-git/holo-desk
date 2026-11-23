@@ -167,8 +167,10 @@ function buildBars(project: Project, keys: KeyPoint[]): Bar[] {
   applyForm(bars, form);
   const last = bars.at(-1);
   if (last && last.right === 'single') last.right = 'final';
+  // a break at a bar's start; one that falls inside a bar (read from a page whose bars ran over their
+  // time, so its systems start between the bars here) goes on that bar
   for (const [tick, kind] of project.score?.breaks ?? []) {
-    const b = bars.find((x) => x.start === tick);
+    const b = bars.find((x) => x.start === tick) ?? bars.find((x) => x.start < tick && tick < x.start + x.length);
     if (b) b.break = kind;
   }
   return bars;

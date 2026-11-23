@@ -25,6 +25,8 @@ export interface Config {
    * container of its own (with no network) the first time a scan wants it. Null: it doesn't.
    */
   omrImage?: string | null;
+  /** Off because the server runs in a container that wasn't given their address (not turned off). */
+  omrUnset?: boolean;
   /**
    * Sites besides HO[LO]'s usual kinds (this computer, the local network, a tailnet) whose pages may
    * use the live channel and the agent: host names, host:port, or origins (HOLO_ALLOWED_HOSTS).
@@ -62,9 +64,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env, inContainer = e
  * without Docker runs them itself, from HOLO_OMR_IMAGE (in a container of its own, when the computer
  * has Docker); one in a container it wasn't given them for goes without.
  */
-function omr(env: NodeJS.ProcessEnv, inContainer: boolean): Pick<Config, 'omrUrl' | 'omrImage'> {
+function omr(env: NodeJS.ProcessEnv, inContainer: boolean): Pick<Config, 'omrUrl' | 'omrImage' | 'omrUnset'> {
   const url = env.HOLO_OMR_URL;
   if (url !== undefined) return { omrUrl: url.trim().replace(/\/$/, '') || null, omrImage: null };
-  if (inContainer) return { omrUrl: null, omrImage: null };
+  if (inContainer) return { omrUrl: null, omrImage: null, omrUnset: true };
   return { omrUrl: null, omrImage: env.HOLO_OMR_IMAGE?.trim() || OMR_IMAGE };
 }

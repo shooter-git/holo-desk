@@ -31,7 +31,7 @@ describe('the engines a server runs itself', () => {
     });
     expect(loadConfig({ HOLO_OMR_URL: '' }, false)).toMatchObject({ omrUrl: null, omrImage: null });
     // in a container it wasn't given them for, it doesn't try to run Docker
-    expect(loadConfig({}, true)).toMatchObject({ omrUrl: null, omrImage: null });
+    expect(loadConfig({}, true)).toMatchObject({ omrUrl: null, omrImage: null, omrUnset: true });
   });
 
   it('start in a container with no network the first time they are asked for, then read through it', async () => {
@@ -115,17 +115,27 @@ describe('the engines a server runs itself', () => {
     });
   });
 
-  it('leave nothing running when the server stopped while they started', async () => {
+  it('stop a first pull when the server stops, and leave nothing running', async () => {
     let release = () => {};
-    const { run, calls } = fakeDocker((args) => {
+    let pulling: AbortSignal | undefined;
+    const calls: string[][] = [];
+    const run: Docker = async (args, { signal }) => {
+      calls.push(args);
       if (args[0] === 'inspect') return failed('No such object');
-      if (args[0] === 'run') return new Promise<Ran>((r) => (release = () => r(ok('id'))));
+      if (args[0] === 'run') {
+        pulling = signal;
+        return new Promise<Ran>((r) => (release = () => r(ok('id'))));
+      }
       return ok();
-    });
+    };
     const engines = dockerEngines('img', '/data/a', run);
     await engines.status();
     for (let i = 0; i < 5; i++) await settle();
     await engines.close?.();
+    // the pull is stopped, and whatever it made is removed
+    expect(pulling?.aborted).toBe(true);
+    expect(calls.at(-1)?.slice(0, 2)).toEqual(['rm', '-f']);
+    // (a docker that finished anyway: removed too, and nothing's asked of it)
     release();
     for (let i = 0; i < 5; i++) await settle();
     expect(calls.at(-1)?.slice(0, 2)).toEqual(['rm', '-f']);

@@ -60,9 +60,11 @@ const STATE_WORDS: Record<ScanSystem['state'], string> = {
 function enginesAway(o: OmrStatus | null): string {
   if (!o) return 'Looking for the recognition engines…';
   if (o.why === 'starting') return 'Getting the recognition engines ready (the first time, a download of a few GB)…';
+  // (a studio in a container it wasn't given them for: what it says it needs)
+  if (o.why === 'off' && o.detail) return `The recognition engines aren’t set up here: ${o.detail}.`;
   if (o.why === 'off') return 'The recognition engines are turned off where HO[LO] runs (pnpm omr on turns them on).';
   if (o.why === 'no-docker') return 'The recognition engines need Docker on the computer HO[LO] runs on.';
-  return 'The recognition engines aren’t answering yet.';
+  return 'The recognition engines aren’t answering. If that lasts, pnpm omr on, where HO[LO] runs, starts them.';
 }
 
 /** How far the review has got, in what there is: "3 approved · 4 to read". */
@@ -113,15 +115,26 @@ function Review({ id }: { id: string }) {
   }, []);
 
   // Escape closes the review, as the other windows do: everything in it is kept as it's made. The bar
-  // or the page open over it closes first (heard before the studio's keys are: app/keys.ts closes it).
+  // or the page open over it closes first (app/keys.ts closes it). Whether this Escape is the review's
+  // is decided before the studio's keys hear it (they may close the bar), and the review closes after
+  // them, so they hear it with the review still up and leave what's selected behind it as it was.
   // (A new scan keeps the key from closing it: its pages and their corners would be lost.)
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
+    let ours = false;
+    const decide = (e: KeyboardEvent) => {
       const s = store.get();
-      if (e.key === 'Escape' && s.dialog === null && !s.bar) close();
+      ours = e.key === 'Escape' && s.dialog === null && !s.bar;
     };
-    window.addEventListener('keydown', onKey, true);
-    return () => window.removeEventListener('keydown', onKey, true);
+    const act = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && ours) close();
+      ours = false;
+    };
+    window.addEventListener('keydown', decide, true);
+    window.addEventListener('keydown', act);
+    return () => {
+      window.removeEventListener('keydown', decide, true);
+      window.removeEventListener('keydown', act);
+    };
   }, []);
 
   const systems = useMemo(() => scan?.pages.flatMap((p) => p.systems.map((s) => ({ page: p.n, s }))) ?? [], [scan]);

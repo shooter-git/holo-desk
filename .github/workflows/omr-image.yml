@@ -7,7 +7,9 @@ name: Recognition engines image
 #
 # It's built once for each version of deploy/omr, as `omr-src-<its tree>`, on each architecture's own
 # runner (amd64, arm64), then joined into one tag; the channels are tags of that build, so a release
-# that doesn't change the engines only retags. Each build carries a signed record of the commit and
+# that doesn't change the engines only retags. If one architecture fails to build, the other is still
+# published to the channels (hosts on the failed one just go without, for now), but not as the
+# version's build, so the next run builds both again. Each build carries a signed record of the commit and
 # workflow that built it (gh attestation verify oci://ghcr.io/<owner>/holo-desk:omr-main --owner <owner>).
 on:
   push:
@@ -64,7 +66,7 @@ jobs:
     needs: source
     if: needs.source.outputs.built != 'true'
     strategy:
-      fail-fast: true
+      fail-fast: false
       matrix:
         include:
           - runner: ubuntu-24.04
@@ -110,8 +112,9 @@ jobs:
 
   publish:
     needs: [source, build]
-    # (after a build, or with none needed)
-    if: always() && needs.source.result == 'success' && (needs.build.result == 'success' || needs.build.result == 'skipped')
+    # (after a build, even one where an architecture failed, or with none needed)
+    if: always() && needs.source.result == 'success' && needs.build.result != 'cancelled'
+
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -127,16 +130,37 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - if: needs.build.result == 'success'
+      - if: needs.build.result != 'skipped'
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        continue-on-error: true
         with:
           pattern: omr-digest-*
           merge-multiple: true
           path: digests
-      - if: needs.build.result == 'success'
-        name: One tag for both architectures
-        working-directory: digests
-        run: docker buildx imagetools create -t "$IMAGE:omr-src-$TREE" $(printf "$IMAGE@sha256:%s " *)
+      - id: joined
+        name: One tag for both architectures (or what built)
+        env:
+          BUILT: ${{ needs.build.result }}
+        run: |
+          if [ "$BUILT" = "skipped" ]; then
+            echo "from=$IMAGE:omr-src-$TREE" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          count=$(ls digests 2>/dev/null | wc -l)
+          if [ "$count" -eq 0 ]; then
+            echo "::error::Neither architecture built"
+            exit 1
+          fi
+          refs=$(cd digests && printf "$IMAGE@sha256:%s " *)
+          if [ "$count" -eq 2 ]; then
+            docker buildx imagetools create -t "$IMAGE:omr-src-$TREE" $refs
+            echo "from=$IMAGE:omr-src-$TREE" >> "$GITHUB_OUTPUT"
+          else
+            # (not the version's build: the next run builds both again)
+            echo "::warning::Only one architecture built; it's published to the channels without the other"
+            docker buildx imagetools create -t "$IMAGE:omr-partial-$TREE" $refs
+            echo "from=$IMAGE:omr-partial-$TREE" >> "$GITHUB_OUTPUT"
+          fi
       - id: channels
         name: The channels this run moves
         env:
@@ -148,6 +172,9 @@ jobs:
           tags=""
           if [ "$EVENT" = "release" ] && [ "$PRERELEASE" != "true" ]; then
             tags="omr-stable omr-${VERSION#v}"
+          elif [ "$EVENT" = "workflow_dispatch" ] && [[ "$REF" == refs/tags/v* ]]; then
+            # (run by hand on a release's tag: that release's, when its own run failed. The newest only)
+            tags="omr-stable omr-${REF#refs/tags/v}"
           elif [ "$REF" = "refs/heads/main" ]; then
             tags="omr-main"
           fi
@@ -156,14 +183,17 @@ jobs:
         name: The channels, as tags of this build
         env:
           TAGS: ${{ steps.channels.outputs.tags }}
+          FROM: ${{ steps.joined.outputs.from }}
         run: |
           args=""
           for t in $TAGS; do args="$args -t $IMAGE:$t"; done
-          docker buildx imagetools create $args "$IMAGE:omr-src-$TREE"
+          docker buildx imagetools create $args "$FROM"
       - id: digest
         name: The build's digest
-        run: echo "digest=$(docker buildx imagetools inspect "$IMAGE:omr-src-$TREE" --format '{{json .Manifest}}' | jq -r .digest)" >> "$GITHUB_OUTPUT"
-      - if: needs.build.result == 'success'
+        env:
+          FROM: ${{ steps.joined.outputs.from }}
+        run: echo "digest=$(docker buildx imagetools inspect "$FROM" --format '{{json .Manifest}}' | jq -r .digest)" >> "$GITHUB_OUTPUT"
+      - if: needs.build.result != 'skipped'
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-name: ${{ env.IMAGE }}

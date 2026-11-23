@@ -250,6 +250,7 @@ export async function buildApp(config: Config): Promise<{ app: FastifyInstance; 
   const engines = omrRoutes(app, {
     url: config.omrUrl ?? null,
     image: config.omrImage ?? null,
+    unset: config.omrUnset ?? false,
     dataDir: config.dataDir,
     scan: scans.get,
     save: scans.save,

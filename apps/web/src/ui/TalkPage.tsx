@@ -44,23 +44,46 @@ function usePageRoom(room: RefObject<HTMLElement | null>, layout: Layout, scan: 
     const el = room.current;
     if (!el) return;
     const sideways = layout === 'phone-landscape';
-    const over = scan ? document.querySelector('.scan-window .scan-bar') : null;
-    const top = over ?? document.querySelector(sideways ? '.phone-transport.top' : '.app > .control-bar');
-    const dock = !over && layout === 'phone-portrait' ? document.querySelector('.phone-dock .phone-transport') : null;
-    const column = !over && sideways ? document.querySelector('.phone-main') : null;
+    // what it keeps clear of, found again whenever Scan's window changes (its header comes once the
+    // scan has loaded, and a new scan's goes when it's saved and the review takes its place)
+    const parts = () => {
+      const over = scan ? document.querySelector('.scan-window .scan-bar') : null;
+      return {
+        top: over ?? document.querySelector(sideways ? '.phone-transport.top' : '.app > .control-bar'),
+        dock: !over && layout === 'phone-portrait' ? document.querySelector('.phone-dock .phone-transport') : null,
+        column: !over && sideways ? document.querySelector('.phone-main') : null,
+      };
+    };
+    let at = parts();
     const fit = () => {
+      const { top, dock, column } = at;
       // (rounded away from what it keeps clear of: not a pixel over the control bar or the transport)
       const px = (n: number) => `${Math.max(0, Math.ceil(n - 0.01))}px`;
       el.style.setProperty('--studio-top', px(top?.getBoundingClientRect().bottom ?? 0));
       el.style.setProperty('--studio-bottom', px(dock ? window.innerHeight - dock.getBoundingClientRect().top : 0));
       el.style.setProperty('--studio-left', px(column?.getBoundingClientRect().left ?? 0));
     };
-    fit();
     const watch = new ResizeObserver(fit);
-    for (const part of [top, dock, column]) if (part) watch.observe(part);
+    const observe = () => {
+      watch.disconnect();
+      for (const part of [at.top, at.dock, at.column]) if (part) watch.observe(part);
+      fit();
+    };
+    observe();
+    // (only while Scan is up: what's added and taken away under the page then is its window's)
+    const changes = scan
+      ? new MutationObserver(() => {
+          const now = parts();
+          if (now.top === at.top && now.dock === at.dock && now.column === at.column) return;
+          at = now;
+          observe();
+        })
+      : null;
+    changes?.observe(document.body, { childList: true, subtree: true });
     window.addEventListener('resize', fit);
     return () => {
       watch.disconnect();
+      changes?.disconnect();
       window.removeEventListener('resize', fit);
     };
   }, [room, layout, scan]);

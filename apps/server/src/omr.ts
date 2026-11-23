@@ -26,6 +26,8 @@ export interface OmrOptions {
   url: string | null;
   /** Without an address: the image the server runs them from itself, or null (off). */
   image?: string | null;
+  /** Off because the server runs in a container it wasn't given them for (not turned off). */
+  unset?: boolean;
   dataDir: string;
   scan: (id: string) => Scan | null;
   save: (scan: Scan) => void;
@@ -94,14 +96,21 @@ export function urlEngines(url: string, pageMs = PAGE_MS): Engines {
   };
 }
 
-const OFF: Engines = {
-  status: async () => ({ available: false, engines: [], why: 'off' }),
+/** Off: turned off, or (`unset`) a server in a container nobody gave their address. */
+const off = (unset = false): Engines => ({
+  status: async () => ({
+    available: false,
+    engines: [],
+    why: 'off',
+    ...(unset ? { detail: 'HO[LO] runs in a container here; give it HOLO_OMR_URL, their address' } : {}),
+  }),
   read: async () => [],
-};
+});
 
 /** Why the engines can't read now, as the studio says it to whoever pressed the button. */
 export function unavailable(s: OmrStatus): string {
   if (s.why === 'starting') return 'The recognition engines are getting ready: try again in a moment';
+  if (s.why === 'off' && s.detail) return `The recognition engines aren’t set up here: ${s.detail}`;
   if (s.why === 'off') return 'The recognition engines are turned off (pnpm omr on)';
   if (s.why === 'no-docker')
     return `The recognition engines need Docker where HO[LO] runs (${s.detail ?? 'none here'})`;
@@ -129,7 +138,11 @@ export interface EngineReadingAnswer {
 }
 
 export function omrRoutes(app: FastifyInstance, opts: OmrOptions): Engines {
-  const engines = opts.url ? urlEngines(opts.url) : opts.image ? dockerEngines(opts.image, opts.dataDir) : OFF;
+  const engines = opts.url
+    ? urlEngines(opts.url)
+    : opts.image
+      ? dockerEngines(opts.image, opts.dataDir)
+      : off(opts.unset);
 
   /** The engines' readings kept beside a scan, page by page. */
   const kept = (scan: Scan): PageReading[] => {

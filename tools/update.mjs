@@ -110,11 +110,16 @@ export function startEngines(pull = true, quiet = false) {
   }
 }
 
-/** The engines' image set to follow the studio's channel, unless it's one built here (`pnpm omr build`). */
+/**
+ * The engines' image set to follow the studio's channel, unless it's one built here (`pnpm omr build`).
+ * A host that turned them off before they were on by default (HOLO_OMR_URL empty, nothing else) gets
+ * the rest of off too, so a plain `docker compose up` doesn't start them.
+ */
 function followOmr(channel) {
   const { values } = readEnv();
   if (followsOmr(values.HOLO_OMR_IMAGE) && values.HOLO_OMR_IMAGE !== omrImage(channel))
     setEnv('HOLO_OMR_IMAGE', omrImage(channel));
+  if (values.HOLO_OMR_URL === '' && values.HOLO_OMR_REPLICAS === undefined) setEnv('HOLO_OMR_REPLICAS', '0');
 }
 
 /** What the server says of itself (/api/health), or null when it doesn't answer. */

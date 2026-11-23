@@ -206,6 +206,21 @@ describe('reading a scan with the recognition engines', () => {
     ]);
   });
 
+  it('keeps the engine’s systems when one of its bars ran over its time', () => {
+    const song = songWith(track('Flute', ''));
+    const scan = scanOf(song, [[system(0, 1), system(1, 1)]]);
+    // four measures of 4/4, the second with five beats in it, the second system starting at the third
+    const measure = (n: number, beats: number, print = '') =>
+      `<measure number="${n}">${n === 1 ? '<attributes><divisions>1</divisions><time><beats>4</beats><beat-type>4</beat-type></time><clef><sign>G</sign><line>2</line></clef></attributes>' : ''}${print}${'<note><pitch><step>C</step><octave>5</octave></pitch><duration>1</duration><type>quarter</type></note>'.repeat(beats)}</measure>`;
+    const read = `<?xml version="1.0"?><score-partwise version="4.0"><part-list><score-part id="P1"><part-name>Flute</part-name></score-part></part-list><part id="P1">${measure(1, 4)}${measure(2, 5)}${measure(3, 4, '<print new-system="yes"/>')}${measure(4, 4)}</part></score-partwise>`;
+    const reading = readScanWithEngines(song, scan, [{ page: 0, engine: 'audiveris', musicxml: read }]);
+    // (the extra beat makes a fifth bar here, at the end of the second system)
+    expect(reading.systems.map((s) => s.bars)).toEqual([
+      [1, 2],
+      [3, 5],
+    ]);
+  });
+
   it('shares out the bars an engine read beyond what the bar lines say, rather than leaving them out', () => {
     const song = songWith(track('Flute', ''));
     const scan = scanOf(song, [[system(0, 1), system(1, 1)]]);

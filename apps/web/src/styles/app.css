@@ -7446,6 +7446,8 @@ html[data-layout^="phone"] .view-item kbd {
 /* ---- the Score: Verovio's engraving in the studio's colors, with the playhead over it ---- */
 .score {
   position: relative;
+  display: flex;
+  flex-direction: column;
   min-height: 0;
   overflow: auto;
   background: var(--bg-1);
@@ -7462,8 +7464,16 @@ html[data-layout^="phone"] .view-item kbd {
 
 .score-sheet {
   position: relative;
+  flex: 1 0 auto;
   width: max-content;
   min-width: 100%;
+}
+
+/* a finger held on a note drags it: no text selection or callout instead */
+.score-page {
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
 }
 
 .score-page svg {
@@ -7582,6 +7592,91 @@ html[data-layout^="phone"] .view-item kbd {
   .score-caret {
     animation: none;
   }
+}
+
+/* editing: the box a mouse draws over notes, and the note a drag would write */
+.score-box {
+  position: absolute;
+  top: 0;
+  left: 0;
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-s);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  pointer-events: none;
+}
+
+.score-drag-tip {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 2;
+  padding: 3px 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--bg-3);
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 700;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+/* the selected notes' tools on a touch screen: over the bottom of the music, where a thumb is (the
+   music has room under it to scroll its last staff above them) */
+.score.touch-tools .score-sheet {
+  padding-bottom: 72px;
+}
+
+.score-selbar-dock {
+  position: sticky;
+  bottom: 0;
+  left: 0;
+  z-index: 3;
+  display: flex;
+  justify-content: center;
+  height: 0;
+  pointer-events: none;
+}
+
+.score-selbar {
+  position: absolute;
+  bottom: 10px;
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  max-width: calc(100% - 16px);
+  overflow-x: auto;
+  padding: 5px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-l);
+  background: var(--bg-2);
+  box-shadow: var(--shadow);
+  pointer-events: auto;
+  scrollbar-width: none;
+}
+
+.score-selbar > * {
+  flex: none;
+}
+
+/* (the narrowest phones: closer together, so it fits whole) */
+@media (max-width: 359px) {
+  .score-selbar {
+    gap: 4px;
+    padding: 4px;
+  }
+
+  .score-selbar .btn.icon {
+    min-width: 33px;
+  }
+}
+
+.score-selbar .glyph {
+  min-width: 12px;
+  font-size: 16px;
+  font-weight: 700;
+  line-height: 1;
+  text-align: center;
 }
 
 /* ---- scanning sheet music: a window over the studio ---- */

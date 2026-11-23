@@ -149,6 +149,25 @@ describe('finding the music on a page', () => {
     expect(layout.systems.map((s) => s.staves.length)).toEqual([2, 1, 1, 1]);
   });
 
+  it('finds a short last system, stopping well before the right margin', () => {
+    const w = 1200;
+    const h = 600;
+    const data = new Uint8Array(w * h).fill(235);
+    const gray: Gray = { w, h, data };
+    // a full system, then the last: a staff a third as wide, at the left, with its notes and bar lines
+    for (const [top, right] of [
+      [150, 1100],
+      [400, 480],
+    ] as const) {
+      for (let i = 0; i < 5; i++) stroke(gray, [100, top + i * 12], [right, top + i * 12]);
+      for (const x of [100, (100 + right) / 2, right]) stroke(gray, [x, top], [x, top + 48]);
+      for (let x = 140; x < right - 20; x += 50) stroke(gray, [x, top + 18], [x + 9, top + 18], 8);
+    }
+    const layout = findSystems(binarize(gray), w, h);
+    expect(layout.systems.map((s) => s.staves.length)).toEqual([1, 1]);
+    expect(Math.round((layout.systems[1]?.staves[0]?.lines[0] ?? 0) - 400)).toBeLessThanOrEqual(2);
+  });
+
   it('keeps apart two systems with a stroke slanting across the gap at their left', () => {
     const { gray } = page();
     stroke(gray, [100, 549], [100, 599], 2, paper);

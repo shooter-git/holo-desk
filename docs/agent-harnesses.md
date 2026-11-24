@@ -765,8 +765,11 @@ the XDG folders inside it, as Cursor's is.
   "/model takes no arguments", exit 2); rules files in the folders above the workspace weren't read.
 - **Tripwire** (`antigravityReader`): any tool step but `mcp_holo_*`, `call_mcp_tool` or the resource tools
   for the `holo` server, and `manage_task` (its own background tasks, of which it can start none); any
-  `subagent_info`; any `denied_actions`; an `init` whose `agent` isn't `holo`; one of HO[LO]'s tools refused
-  for a permission. A tool's own error (state `ERROR`, "No such track") isn't a trip.
+  `subagent_info`; any `denied_actions` (where a call Antigravity refuses shows, one of HO[LO]'s included:
+  `antigravity-mcp-denied.jsonl`); an `init` whose `agent` isn't `holo`. A tool's own error (state `ERROR`,
+  "No such track") isn't a trip, and its words are never read for one: until v0.9.25 an error that said
+  "permission" was taken for a refusal, and HO[LO]'s own tools say `ask_permission` in theirs (`measure`
+  of a song not bounced yet), which stopped a run that had done nothing wrong.
 
 **The prompt.** `-p` takes the prompt as its value ("-p took "--output-format" as its prompt"), so it's
 passed with `--input-format=stream-json` as one line, `{"event":"user","message":{"content":"…"}}`, and

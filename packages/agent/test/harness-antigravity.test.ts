@@ -363,6 +363,8 @@ describe('Antigravity: a sealed run', () => {
     expect(JSON.stringify(config)).not.toContain(TOKEN);
     expect(holo.timeoutSeconds).toBe(240);
     expect(holo.env.HOLO_MCP_READY_FILE).toBe(join(j.workspace, '.holo-mcp-ready'));
+    // HO[LO]'s tools are told how big a picture may be: a bigger one never reaches Antigravity's model
+    expect(holo.env.HOLO_PICTURE_BYTES).toBe('9000');
     expect(Object.keys(holo.tools)).toEqual(TOOLS.map((t) => t.name));
     expect(Object.values(holo.tools).every((t) => (t as { eager: boolean }).eager === true)).toBe(true);
     expect(statSync(join(j.workspace, '.agents', 'mcp_config.json')).mode & 0o777).toBe(0o600);

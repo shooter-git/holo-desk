@@ -181,8 +181,8 @@ export const FAILED_ONCE_FILE = '.holo-failed-once';
 /**
  * Antigravity's files: the workspace's MCP config (HO[LO]'s server, each of its tools loaded up front,
  * so the model has them without the built-in tools that read their schemas; told to mark when it's
- * started, which Antigravity doesn't say), the custom agent, and the private home (kept for resume: the
- * conversations are in it).
+ * started, which Antigravity doesn't say, and how big a picture may be), the custom agent, and the
+ * private home (kept for resume: the conversations are in it).
  */
 export function antigravityFiles(
   workspace: string,
@@ -199,7 +199,11 @@ export function antigravityFiles(
       mcpServers: {
         holo: {
           ...server,
-          env: { ...server.env, HOLO_MCP_READY_FILE: ready },
+          env: {
+            ...server.env,
+            HOLO_MCP_READY_FILE: ready,
+            HOLO_PICTURE_BYTES: String(ANTIGRAVITY_PICTURE_BYTES),
+          },
           // a call (and the server's start) may take as long as Claude's and Codex's
           timeoutSeconds: TOOL_TIMEOUT_MS / 1000,
           tools: Object.fromEntries(tools.map((t) => [t, { eager: true }])),
@@ -210,6 +214,15 @@ export function antigravityFiles(
   writePrivate(join(privateDir(join(dir, 'agents')), `${ANTIGRAVITY_AGENT}.md`), antigravityAgent(instructions));
   return { home: privateDir(join(workspace, 'home')) };
 }
+
+/**
+ * The largest picture (bytes) HO[LO]'s tools give an Antigravity run. Antigravity passes its model a
+ * tool's picture only when the file is small: one of 9,905 bytes was seen and one of 12,318 wasn't
+ * (1.5.15, whatever the model, the picture's size in pixels or how many came at once). A bigger one is
+ * saved to a file the agent has no tool to open, and can't be given one: its file viewer can't be held
+ * to that folder (docs/agent-harnesses.md).
+ */
+export const ANTIGRAVITY_PICTURE_BYTES = 9000;
 
 /** Where Antigravity keeps its sign-in when the desktop has no keyring, under a home. */
 export const ANTIGRAVITY_TOKEN = ['.gemini', 'antigravity-cli', 'antigravity-oauth-token'] as const;

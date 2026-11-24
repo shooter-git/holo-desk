@@ -1009,8 +1009,33 @@ heavier end); that a ledger line on its own is not a note; and that off the staf
 on the page name a note, not its distance, since a hand seldom spaces them as evenly as the staff: with
 none drawn through it or between it and the staff, a note is in the space just beyond the staff.
 
+**Where a harness shows its model only small pictures** (Antigravity: a file of about 10 KB at most,
+docs/agent-harnesses.md), a part in colour, 100 KB to 1 MB, would never be seen. The runner tells HO[LO]'s
+server the limit (`HOLO_PICTURE_BYTES`; `pictureBytes` in a tool's context), and `scan_show` then gives:
+
+- each part in a palette's few colours (`fewColours`): the paper white, its tone and shadows evened out
+  (most of a photographed page's bytes; a dark edge with no paper near stays ink), the ink in four
+  shades, or two for a part that doesn't fit in four, and the guides in their own colours. It reads as
+  well as the part in colour at about a twentieth of the size;
+- the parts cut narrower (`maxWidth`: 640 px down to 300) until every one fits, each still with its named
+  margins, and repeating two staff spaces of the one before at least, so a notehead at an edge is whole in
+  one of them. The cut is chosen with every staff's names as pitches, whatever clefs were given (they
+  change a part's size by a hundred bytes or so), so a part's number is the same with clefs and without,
+  and it's kept for the run (a system is asked for again for each closer look). A handwritten grand staff
+  comes to a dozen or two parts, a printed one fewer;
+- forty parts to a reply: a system in more (four staves across a wide page) says where the rest are, and
+  `from` shows them;
+- the whole system first, made small;
+- the same for a part looked at closer, whose stretch of the strip is too narrow to find its staves by:
+  they're the strip's, as found there (`found`), moved to where its lines are in that stretch.
+
+When nothing fits, there are no pictures and the tool's text tells the model to say so, not to guess. Any
+other tool's picture past the limit (an attached photo) is left out by the server, with a line saying it
+was. Without a limit, a system's pictures are what they were.
+
 The strips are the studio's PNGs, read and written by `packages/agent/src/tools/png.ts` (Node's zlib, no
-other library). A strip that can't be read as a picture is shown as it is, without parts.
+other library; a palette's pictures are written a few bits a pixel). A strip that can't be read as a
+picture is shown as it is, without parts.
 
 There are no tools for opening, creating or exporting songs, or for creations. What the user attached
 comes into the open song through `import`; a bounce, sending the song to its creation and the

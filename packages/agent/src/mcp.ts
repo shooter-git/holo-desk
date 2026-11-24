@@ -123,10 +123,19 @@ export function createServer(opts: ServerOptions): Server {
         log(`progress: ${err instanceof Error ? err.message : String(err)}`);
       });
     }
+    // a picture bigger than the harness shows its model would never be seen: left out, and said
+    const limit = ctx.pictureBytes;
+    const images = result.images ?? [];
+    const fits = limit === undefined ? images : images.filter((i) => Buffer.byteLength(i.data, 'base64') <= limit);
+    const left = images.length - fits.length;
+    const note =
+      left && limit !== undefined
+        ? `\n(${left === 1 ? 'A picture was' : `${left} pictures were`} left out: here you are shown only pictures up to ${Math.round(limit / 1000)} KB, and ${left === 1 ? 'it is' : 'they are'} bigger. Say that you can't see ${left === 1 ? 'it' : 'them'}; don't guess what ${left === 1 ? 'it shows' : 'they show'}.)`
+        : '';
     return reply(id, {
       content: [
-        { type: 'text', text: result.text },
-        ...(result.images ?? []).map((i) => ({ type: 'image', data: i.data, mimeType: i.mime })),
+        { type: 'text', text: `${result.text}${note}` },
+        ...fits.map((i) => ({ type: 'image', data: i.data, mimeType: i.mime })),
       ],
     });
   }
@@ -245,7 +254,14 @@ async function main(): Promise<void> {
     process.exit(2);
   }
   // one memory for the run: a listen in parts is heard as one, and the last one is kept
-  const ctx: ToolContext = { api, middleC, memory: newMemory() };
+  // the largest picture the harness shows its model, when it has such a limit (the runner knows it)
+  const pictureBytes = Number(process.env.HOLO_PICTURE_BYTES);
+  const ctx: ToolContext = {
+    api,
+    middleC,
+    memory: newMemory(),
+    ...(Number.isInteger(pictureBytes) && pictureBytes > 0 ? { pictureBytes } : {}),
+  };
   const ready = process.env.HOLO_MCP_READY_FILE;
   const onInitialize = ready
     ? () => {

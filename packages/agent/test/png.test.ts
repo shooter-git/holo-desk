@@ -1,6 +1,6 @@
 import { deflateSync, inflateSync } from 'node:zlib';
 import { describe, expect, it } from 'vitest';
-import { readPngGray, writePngRgb } from '../src/tools/png.ts';
+import { readPngGray, writePngIndexed, writePngRgb } from '../src/tools/png.ts';
 
 const SIG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 
@@ -85,6 +85,45 @@ describe('PNGs for the agent', () => {
     const img = { w: 3, h: 1, data: new Uint8Array([255, 0, 0, 0, 255, 0, 40, 110, 255]) };
     const back = readPngGray(writePngRgb(img));
     expect([...back.data]).toEqual([76, 150, 106]);
+  });
+
+  it('writes a palette’s picture packed small, and reads it back', () => {
+    // two, four, seven and twenty colours: one, two, four and eight bits a pixel
+    for (const colours of [2, 4, 7, 20]) {
+      const palette = Array.from({ length: colours }, (_, i): [number, number, number] => {
+        const v = Math.round((255 * i) / (colours - 1));
+        return [v, v, v];
+      });
+      // a width that doesn't fill its last byte, every colour used
+      const w = 13;
+      const h = 9;
+      const data = Uint8Array.from({ length: w * h }, (_, i) => (i * 5 + Math.floor(i / w)) % colours);
+      const file = writePngIndexed({ w, h, data, palette });
+      const back = readPngGray(file);
+      expect([back.w, back.h]).toEqual([w, h]);
+      expect([...back.data]).toEqual([...data].map((i) => (palette[i] as number[])[0]));
+    }
+    // a page of ink on paper: far smaller than the same picture in colour
+    const w = 600;
+    const h = 400;
+    const page = new Uint8Array(w * h);
+    for (let y = 40; y < h; y += 40) page.fill(1, y * w + 20, y * w + w - 20);
+    const rgb = new Uint8Array(w * h * 3);
+    page.forEach((v, i) => {
+      rgb.fill(v ? 0 : 255, i * 3, i * 3 + 3);
+    });
+    const small = writePngIndexed({
+      w,
+      h,
+      data: page,
+      palette: [
+        [255, 255, 255],
+        [0, 0, 0],
+      ],
+    });
+    expect(small.length).toBeLessThan(writePngRgb({ w, h, data: rgb }).length);
+    expect(small.length).toBeLessThan(1000);
+    expect(() => writePngIndexed({ w: 1, h: 1, data: new Uint8Array(1), palette: [] })).toThrow('1 to 256 colours');
   });
 
   it('refuses what isn’t a PNG it can read', () => {

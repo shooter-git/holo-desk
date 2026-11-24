@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { type Gray, placeName, type Rgb, zoomSystem } from '../src/index.ts';
+import { fewColours, type Gray, overview, placeName, type Rgb, stavesOf, zoomSystem } from '../src/index.ts';
 
 /** A strip of paper with staves drawn on it: each staff's top line, how far its lines fall across it. */
 function strip(w: number, h: number, tops: number[], gap = 12, fall = 0): Gray {
@@ -140,6 +140,133 @@ describe('a system zoomed for the agent', () => {
   it('gives no parts for a strip with no staff on it', () => {
     const blank: Gray = { w: 2400, h: 700, data: new Uint8Array(2400 * 700).fill(240) };
     expect(zoomSystem(blank, {}).parts).toEqual([]);
+  });
+
+  it('cuts narrower parts when asked, each still repeating a notehead’s width of the one before', () => {
+    const s = strip(1900, 260, [60, 160]);
+    const wide = zoomSystem(s, {});
+    const narrow = zoomSystem(s, { maxWidth: 380 });
+    expect(narrow.parts.length).toBeGreaterThan(wide.parts.length);
+    for (const p of narrow.parts) expect(p.img.w).toBeLessThanOrEqual(380);
+    expect(narrow.parts[0]?.x0).toBe(0);
+    expect(narrow.parts.at(-1)?.x1).toBe(s.w);
+    // two staff spaces of the strip at least, where a share of so narrow a part would be less
+    for (let i = 1; i < narrow.parts.length; i++) {
+      const lap = (narrow.parts[i - 1]?.x1 as number) - (narrow.parts[i]?.x0 as number);
+      expect(lap).toBeGreaterThanOrEqual(2 * narrow.space - 1);
+    }
+    // parts cut no narrower repeat a share of each, as they did: a closer look's pieces too, though that's
+    // under two of its staff spaces
+    const lap = (wide.parts[0]?.x1 as number) - (wide.parts[1]?.x0 as number);
+    expect(lap).toBeGreaterThan(4 * wide.space);
+    // (a closer look's pieces too: as many as a share of each makes, though that's under two of its spaces)
+    const closer = zoomSystem(strip(600, 260, [60, 160]), { space: 68 });
+    const span = (closer.parts[0]?.x1 as number) - (closer.parts[0]?.x0 as number);
+    const rows = new Set(closer.parts.map((p) => p.y0)).size;
+    expect(span * 0.12).toBeLessThan(2 * closer.space);
+    expect(closer.parts).toHaveLength(rows * (Math.ceil((600 - span) / Math.floor(span * 0.88)) + 1));
+  });
+
+  it('puts a part in a few flat colours: paper white under a shadow, ink dark, the guides their own', () => {
+    // a page darker toward its right edge, as under a lamp
+    const s = strip(1900, 260, [60, 160]);
+    for (let y = 0; y < s.h; y++)
+      for (let x = 0; x < s.w; x++)
+        s.data[y * s.w + x] = Math.round((s.data[y * s.w + x] as number) * (1 - 0.4 * (x / s.w)));
+    const z = zoomSystem(s, { clefs: ['treble', 'bass'] });
+    const part = z.parts.at(-1) as (typeof z.parts)[number];
+    for (const greys of [4, 2] as const) {
+      const few = fewColours(part.img, greys, part.margin);
+      expect(few.palette).toHaveLength(greys + 3);
+      expect(few.palette[0]).toEqual([255, 255, 255]);
+      expect(few.palette.slice(-3)).toEqual([
+        [40, 110, 255],
+        [30, 160, 70],
+        [235, 130, 20],
+      ]);
+      const count = new Array(few.palette.length).fill(0);
+      for (const v of few.data) count[v]++;
+      // mostly paper, though the page there is two thirds as light; some ink; every guide colour
+      expect(count[0] / few.data.length).toBeGreaterThan(0.6);
+      expect(count[greys - 1]).toBeGreaterThan(200);
+      for (const guide of [greys, greys + 1, greys + 2]) expect(count[guide]).toBeGreaterThan(100);
+      // a guide's pixel stays that guide's colour
+      for (let i = 0; i < few.data.length; i += 97) {
+        const px = [part.img.data[i * 3], part.img.data[i * 3 + 1], part.img.data[i * 3 + 2]];
+        if (isBlue(part.img, i % part.img.w, Math.floor(i / part.img.w)))
+          expect(few.palette[few.data[i] as number]).toEqual(px);
+      }
+    }
+  });
+
+  it('takes a strip’s staves as given, where a stretch of it is too narrow to find them by', () => {
+    const s = strip(1900, 260, [60, 160], 12, 8);
+    const found = stavesOf(s);
+    expect(found.staves).toHaveLength(2);
+    const whole = zoomSystem(s, {});
+    expect(whole.curves).toHaveLength(2);
+    // 90 columns from the strip's right, where its lines have fallen most: the staves moved there
+    const x0 = 1700;
+    const crop: Gray = { w: 90, h: s.h, data: new Uint8Array(90 * s.h) };
+    for (let y = 0; y < s.h; y++) crop.data.set(s.data.subarray(y * s.w + x0, y * s.w + x0 + 90), y * 90);
+    const staves = found.staves.map((staff, i) => ({
+      lines: staff.lines.map((y) => y + ((whole.curves[i] as Float32Array)[x0 + 45] as number)),
+      left: 0,
+      right: 89,
+    }));
+    const near = zoomSystem(crop, { clefs: ['treble', 'bass'], found: { staves, space: found.space }, space: 68 });
+    expect(near.staves).toHaveLength(2);
+    expect(near.pitches).toBe(true);
+    // each staff's top line drawn over where the page has it in the stretch (within a row of the strip)
+    [60, 160].forEach((top, staff) => {
+      const p = near.parts.find((q) => q.staves.includes(staff)) as (typeof near.parts)[number];
+      const pageY = top + 0.5 + (8 * (x0 + 45)) / s.w;
+      const y = (pageY - p.y0 + 0.5) * near.scale - 0.5;
+      const x = p.margin + (45 - p.x0) * near.scale;
+      const reach = Math.ceil(near.scale * 1.5);
+      const drawn = Array.from({ length: reach * 2 + 1 }, (_, k) => k - reach).some((d) => isBlue(p.img, x, y + d));
+      expect(drawn, `staff ${staff}`).toBe(true);
+    });
+  });
+
+  it('keeps a dark edge ink, not paper', () => {
+    // a band along the strip's right end with no paper in it (the desk under the page's edge)
+    const s = strip(1900, 260, [60, 160]);
+    let seed = 5;
+    for (let y = 0; y < s.h; y++)
+      for (let x = s.w - 70; x < s.w; x++) {
+        seed = (seed * 1103515245 + 12345) & 0x7fffffff;
+        s.data[y * s.w + x] = 20 + (seed % 40);
+      }
+    const z = zoomSystem(s, {});
+    const part = z.parts.at(-1) as (typeof z.parts)[number];
+    const few = fewColours(part.img, 4, part.margin);
+    // the band's pixels, at the part's right end before its margin: ink and the darker grey, no paper
+    let light = 0;
+    let all = 0;
+    for (let y = 0; y < few.h; y += 3)
+      for (let x = few.w - part.margin - 100; x < few.w - part.margin - 10; x += 3) {
+        const v = few.data[y * few.w + x] as number;
+        if (v > 3) continue;
+        all++;
+        if (v < 2) light++;
+      }
+    expect(light / all).toBeLessThan(0.02);
+  });
+
+  it('shows a strip whole and small', () => {
+    const s = strip(1900, 260, [60, 160]);
+    const small = overview(s, 640);
+    expect(small.w).toBeLessThanOrEqual(640);
+    expect(small.w / small.h).toBeCloseTo(s.w / s.h, 0);
+    // (a strip narrower than asked stays as it is)
+    expect(overview(s, 4000).w).toBe(1900);
+    // no guide on it: only the shades in its palette
+    expect(fewColours(small, 2).palette).toEqual([
+      [255, 255, 255],
+      [0, 0, 0],
+    ]);
+    expect(fewColours(small, 4).palette).toHaveLength(4);
   });
 
   it('names a staff’s lines and spaces as written, by clef', () => {

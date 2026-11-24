@@ -880,6 +880,16 @@ with HO[LO]'s own MCP server had all its tools and called `song_status`.
   So a refused request isn't carried on: docs/agent.md, "Ending early". (A turn stopped mid-reply
   isn't one: Antigravity leaves the stopped step out of what it sends next, and the conversation
   went on.) How each harness says one: "A refused conversation", below.
+- **An argument's key with a space in it gets the whole reply refused.** Seen again on 2026-11-24, and
+  it's what the 2026-11-22 refusals were: in each of the three refused replies the model was calling
+  `track_set` with `sends` as an object keyed by bus name, and a bus named in two words was among the
+  keys (`{"Gated Room": -13, …}`; on the 22nd the model had even put the key in quotes of its own,
+  `"\"Gated Room\""`). Over the same four conversations, 190 replies whose calls had only one-word keys
+  went through, and none with a space in a key ever did. The 400 comes as the reply ends, before any of
+  its calls runs, so calls of an earlier reply in the same turn have already changed the song. Not
+  tried in isolation against the API. So no tool takes an object keyed by names the user chose: `sends`
+  is a list, `[{"bus": "Gated Room", "level": -13}]` (an `ArgDef` with `pairs`, which still reads the
+  object from a harness that sends one). What's left keyed are ids HO[LO] makes (`knobs`, `params`).
 
 ## A refused conversation
 

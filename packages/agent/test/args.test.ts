@@ -125,4 +125,26 @@ describe('checking arguments', () => {
       args: { meta: [1, { a: null }] },
     });
   });
+  it('reads an object as the pairs of a list that pairs a name with a value', () => {
+    const defs: ArgDef[] = [
+      { name: 'sends', type: 'array', items: 'object', pairs: ['bus', 'level'], describe: 'Sends', maxLength: 3 },
+    ];
+    // the list, as the schema shows it
+    expect(toJsonSchema(defs)).toMatchObject({ properties: { sends: { type: 'array', items: { type: 'object' } } } });
+    const list = [{ bus: 'Gated Room', level: -13 }];
+    expect(check(defs, { sends: list })).toEqual({ ok: true, args: { sends: list } });
+    // an object keyed by name, and one as text
+    const pairs = [
+      { bus: 'Gated Room', level: -13 },
+      { bus: 'Hall', level: -18 },
+    ];
+    expect(check(defs, { sends: { 'Gated Room': -13, Hall: -18 } })).toEqual({ ok: true, args: { sends: pairs } });
+    expect(check(defs, { sends: '{"Gated Room": -13, "Hall": -18}' })).toEqual({ ok: true, args: { sends: pairs } });
+    // its most items count the pairs too, and what's neither says the form
+    expect(check(defs, { sends: { a: 1, b: 2, c: 3, d: 4 } })).toMatchObject({ ok: false });
+    const bad = check(defs, { sends: 'loud' });
+    expect(bad.ok === false && bad.errors[0]).toContain('[{"bus": …, "level": …}]');
+    // a list without pairs takes no object
+    expect(check([{ name: 'ops', type: 'array', items: 'object', describe: 'Ops' }], { ops: { a: 1 } }).ok).toBe(false);
+  });
 });

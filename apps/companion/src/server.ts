@@ -19,7 +19,7 @@ import { memoryPath } from './memory.ts';
 import type { RenderData } from './render.ts';
 import type { ToRenderer } from './renderer.ts';
 
-export const VERSION = '0.9.25';
+export const VERSION = '0.9.26';
 
 export interface Options {
   port: number;

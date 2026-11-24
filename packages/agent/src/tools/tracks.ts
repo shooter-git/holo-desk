@@ -128,7 +128,7 @@ export const trackSet: Tool = {
   name: 'track_set',
   kind: 'change',
   summary:
-    'Change a track: its name, fader (volume in dB, 0 is unity), pan (-1 left … 1 right), mute, solo, record arm, instrument ("synth:PRESET" or "pack/name"), its place in the track list (1 is the top), its sends to buses ({"Reverb": -12}, in dB; -144 or less is off), or whether it\'s inactive (switched off: kept and still editable, but not played, loaded or recorded, which frees its CPU and memory; it\'s disarmed too). Example: {"track": "Strings", "volume": -4, "pan": -0.3}.',
+    'Change a track: its name, fader (volume in dB, 0 is unity), pan (-1 left … 1 right), mute, solo, record arm, instrument ("synth:PRESET" or "pack/name"), its place in the track list (1 is the top), its sends to buses ([{"bus": "Reverb", "level": -12}], in dB; -144 or less is off), or whether it\'s inactive (switched off: kept and still editable, but not played, loaded or recorded, which frees its CPU and memory; it\'s disarmed too). Example: {"track": "Strings", "volume": -4, "pan": -0.3}.',
   args: [
     { name: 'track', type: 'string', describe: 'The track: its name (or the start of it) or id', required: true },
     { name: 'name', type: 'string', describe: 'A new name', maxLength: 60 },
@@ -139,7 +139,17 @@ export const trackSet: Tool = {
     { name: 'armed', type: 'boolean', describe: 'Arm it to record live MIDI' },
     { name: 'instrument', type: 'string', describe: 'synth:PRESET or pack/name' },
     { name: 'index', type: 'integer', describe: 'Its place in the track list, 1 at the top', min: 1 },
-    { name: 'sends', type: 'object', describe: 'Send levels by bus name, in dB, e.g. {"Reverb": -12}' },
+    // (a list, not an object keyed by bus name: a bus is often named in two words, and a model whose
+    // harness can't send an argument's key with a space in it has its whole reply refused, see
+    // docs/agent-harnesses.md, "A refused conversation")
+    {
+      name: 'sends',
+      type: 'array',
+      items: 'object',
+      pairs: ['bus', 'level'],
+      describe: 'Send levels, each a bus (its name) and a level in dB, e.g. [{"bus": "Reverb", "level": -12}]',
+      maxLength: 32,
+    },
     {
       name: 'inactive',
       type: 'boolean',
@@ -172,10 +182,14 @@ export const trackSet: Tool = {
       ch.solo = solo;
       done.push(solo ? 'solo' : 'solo off');
     }
-    const sends = obj(args, 'sends');
-    if (sends) {
+    const sends = Array.isArray(args.sends) ? (args.sends as Record<string, unknown>[]) : null;
+    if (sends?.length) {
       const next = track.channel.sends.slice();
-      for (const [busName, level] of Object.entries(sends)) {
+      for (const send of sends) {
+        const busName = typeof send.bus === 'string' ? send.bus.trim() : '';
+        const level = send.level;
+        if (!busName || level === undefined)
+          throw new ToolError('Each send is a bus and a level: {"bus": "Reverb", "level": -12}');
         const bus = project.buses.find((b) => b.name.toLowerCase() === busName.toLowerCase() || b.id === busName);
         if (!bus)
           throw new ToolError(`No bus "${busName}": ${project.buses.map((b) => `"${b.name}"`).join(', ') || 'none'}`);

@@ -370,7 +370,7 @@ describe('tracks', () => {
       pan: -0.3,
       mute: true,
       name: 'Low',
-      sends: { reverb: -9 },
+      sends: [{ bus: 'reverb', level: -9 }],
     });
     const ops = lastOps(api);
     expect(ops[0]).toMatchObject({
@@ -383,6 +383,43 @@ describe('tracks', () => {
     ]);
     expect(ops[1]).toEqual({ op: 'updateTrack', track: 'trk_bass', patch: { name: 'Low' } });
     expect(await refused(api, 'track_set', { track: 'Low' })).toContain('Say what to change');
+  });
+
+  it('takes sends as a list of buses and levels, and still reads an object keyed by bus name', async () => {
+    const api = setup();
+    api.project.buses.push(newBus('Gated Room'), newBus('Short Verb'));
+    const [hall, room, short] = api.project.buses.map((b) => b.id);
+    // the list is the form it's shown: a bus named in two words is a value there, never a key
+    const sends = (toolNamed('track_set') as Tool).args.find((a) => a.name === 'sends');
+    expect(sends).toMatchObject({ type: 'array', items: 'object' });
+    const said = await call(api, 'track_set', {
+      track: 'Bass',
+      sends: [
+        { bus: 'Gated Room', level: -13 },
+        { bus: 'short verb', level: '-8' },
+      ],
+    });
+    expect(said.text).toContain('send to Gated Room -13 dB');
+    const sent = () => {
+      const op = lastOps(api)[0];
+      return op?.op === 'updateChannel' ? op.patch.sends : undefined;
+    };
+    expect(sent()).toEqual([
+      { bus: room, level: -13, pre: false },
+      { bus: short, level: -8, pre: false },
+    ]);
+    // the object some models still send, and one as text
+    await call(api, 'track_set', { track: 'Bass', sends: { 'Gated Room': -20, Reverb: -9 } });
+    expect(sent()).toContainEqual({ bus: room, level: -20, pre: false });
+    expect(sent()).toContainEqual({ bus: hall, level: -9, pre: false });
+    await call(api, 'track_set', { track: 'Bass', sends: '{"Short Verb": -30}' });
+    expect(sent()).toContainEqual({ bus: short, level: -30, pre: false });
+    expect(await refused(api, 'track_set', { track: 'Bass', sends: [{ bus: 'Nowhere', level: -9 }] })).toContain(
+      'No bus "Nowhere"',
+    );
+    expect(await refused(api, 'track_set', { track: 'Bass', sends: [{ name: 'Reverb' }] })).toContain(
+      'Each send is a bus and a level',
+    );
   });
 
   it('names its undo step within what the studio takes, however much it set (a long name, many sends)', async () => {

@@ -21,6 +21,12 @@ export interface ArgDef {
   maxLength?: number;
   /** An array's items, when they're all one kind. */
   items?: 'string' | 'number' | 'object';
+  /**
+   * For an array of objects that pair a name with a value ([{"bus": "Hall", "level": -12}]): the two
+   * fields' names. An object given instead ({"Hall": -12}) is read as its pairs. The list is the form
+   * the model is shown: a name with a space in it is then a value, never a key (see tools/tracks.ts).
+   */
+  pairs?: readonly [string, string];
   /** Used when the argument is left out. */
   default?: unknown;
 }
@@ -131,8 +137,17 @@ function coerce(def: ArgDef, value: unknown): { value: unknown } | { error: stri
       return { value: v };
     }
     case 'array': {
-      const parsed = typeof value === 'string' && value.trim().startsWith('[') ? parseJson(value) : value;
-      if (!Array.isArray(parsed)) return { error: `${name} must be a list, e.g. [1, 2]` };
+      const given = typeof value === 'string' && /^[[{]/.test(value.trim()) ? parseJson(value) : value;
+      const [key, val] = def.pairs ?? [];
+      const parsed =
+        key && val && isPlainObject(given) ? Object.entries(given).map(([k, v]) => ({ [key]: k, [val]: v })) : given;
+      if (!Array.isArray(parsed))
+        return {
+          error:
+            key && val
+              ? `${name} must be a list, e.g. [{"${key}": …, "${val}": …}]`
+              : `${name} must be a list, e.g. [1, 2]`,
+        };
       // a list of text forgives a number among it, as a text argument does ([2] is ["2"])
       const v =
         def.items === 'string'

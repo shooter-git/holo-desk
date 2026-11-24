@@ -2,7 +2,8 @@
 // to one side, with the name set over it in the studio's own typeface. Nothing in it is drawn by hand.
 //
 //   node tools/banner.mjs        writes docs/images/banner.jpg (needs Playwright: its index.mjs in
-//                                PLAYWRIGHT if it isn't installed here, and ImageMagick's `convert`)
+//                                PLAYWRIGHT if it isn't installed here, PLAYWRIGHT_CHROMIUM for a
+//                                Chromium already on the machine, and ImageMagick's `convert`)
 import { execFileSync } from 'node:child_process';
 import { readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -47,7 +48,9 @@ html, body { margin: 0; }
   <div class="tag">Headphones On [Lights Out]</div>
 </div></div></body></html>`;
 
-const browser = await chromium.launch();
+const browser = await chromium.launch(
+  process.env.PLAYWRIGHT_CHROMIUM ? { executablePath: process.env.PLAYWRIGHT_CHROMIUM } : {},
+);
 const page = await browser.newPage({ viewport: { width: 1600, height: 520 }, deviceScaleFactor: 1 });
 await page.setContent(html);
 await page.evaluate(() => document.fonts.ready);

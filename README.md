@@ -1,27 +1,151 @@
 <p align="center"><img src="docs/images/banner.jpg" alt="HO[LO] Desk: a studio for writing, recording and mixing music. Headphones On [Lights Out]." width="100%"></p>
 
-<p align="center">A studio in your browser for writing, playing and mixing music: tracks, a Piano Roll and a mixer laid out the way Logic users expect, live MIDI from your keyboard and drum pads, orchestral sample packs, and an AI collaborator that works in the open session with you.</p>
+<p align="center"><b>A music studio that runs in your browser.</b><br>Write a song, play it on your keyboard, record your voice or your guitar, mix it, and print the score:<br>on your computer, your tablet and your phone, with nothing to sign up for.</p>
 
-![The studio: tracks, the Inspector with its channel strips, and the Piano Roll](docs/images/studio.jpg)
+![HO[LO] Desk playing a song: the tracks, one track's channel strip on the left, and its notes in the Piano Roll below](docs/images/studio.jpg)
 
-## What it does
+## What it is
 
-- **Write and edit.** Tracks and regions on a timeline. A Piano Roll with the keyboard down the left: drag notes to new pitches and times, stretch them, set velocities, and draw any controller (mod wheel, expression, sustain, pitch bend, aftertouch, any CC). Quantize, transpose, split, repeat, undo everything.
-- **Play it live.** USB MIDI keyboards and drum pads through Web MIDI, delivered to the audio engine through shared memory: a key you press sounds in the next 128-frame block. You can also play the computer keyboard (Musical Typing) or the touch keyboard and drum pads on a phone. Record with count-in, cycle and metronome (right-click the metronome, or open Settings › Metronome, for its sound and volume). For the shortest time from key to ear, run [HO[LO] Engine](#play-it-in-a-few-milliseconds-holo-engine) on the computer you play on.
-- **Scores.** Any track as notation (press <kbd>N</kbd>): the score and the Piano Roll are the same notes, so an edit in either shows in both. Write by typing letters and note values, playing a MIDI keyboard, or clicking on a staff; edit as in a notation program (drag a note up or down, give it a sharp, flat or new value, copy and paste, from the keys, a right click, a long press or a touch screen's tools); add dynamics, articulations, slurs, lyrics, chord symbols, repeats and endings, D.C. and D.S. jumps, guitar tab and drum parts. Markings sound as they read, and playback follows the repeats. MusicXML goes in and out (MuseScore, Sibelius, Finale, Dorico), and the full score or each part prints, or saves as a PDF.
-- **Scan sheet music.** Photograph a page with your phone or open an image or a PDF: HO[LO] straightens it, finds the systems and shows each line of the page above the bars it became, for a quick review. Open-source recognition engines (Audiveris and homr, on by default) read it into the song as one undo step, and read it again to flag the bars where they differ from what's written. The agent, if you turn it on, can read it too.
-- **Record and edit audio.** Audio tracks record a microphone or an instrument through an audio interface (lined up with what you heard, using this device's measured round trip), or take WAV, FLAC, MP3, Ogg and AIFF files dropped on the tracks. Trim from either edge, drag fades, set gain, normalize, and time-stretch without changing pitch (Alt-drag a region's end, as in Logic) in the tracks area or the Audio Editor.
-- **Mix and automate.** Channel strips with instruments, MIDI effects, audio effects, sends, buses, pan, faders and meters. Put a channel on a **Stage**: a near seat and a far seat, each with its own rooms and depth, and a Distance that moves it between them. Automation lanes (press <kbd>A</kbd>) draw how volume, pan, mute, sends, distance and any plugin parameter move through the song, in straight lines or smooth curves, sample-accurately.
-- **Bounce.** <kbd>Ctrl B</kbd> renders the song (or the cycle) to a 24-bit WAV with the same engine, faster than real time, and keeps a copy with the song. The stock plugins are Channel EQ, Parametric EQ (eight free bands), Studio EQ (cuts to 48 dB an octave, shelves, four bells and Proportional Q), Compressor, Character Compressor (Clean, FET, VCA and Opto circuits, with an output stage and a limiter), Noise Gate, Transient Softener, Limiter (with a soft knee), Space Designer (convolution with generated rooms, halls and cathedrals, or any impulse response), Shimmer, Space Reverb, Room Reverb (early reflections from a room's walls, then a tail with its own decay for the lows and highs), Smooth Hall, Tape Delay, Dual Delay (each side its own note, groove, feedback and crossfeed), Chorus, Wow & Flutter, Rotary Speaker, Phaser, Tremolo (or auto-pan), String Resonance (a grand's strings ringing in sympathy, with an extended grand's bass strings), Stereo Width, Tape Warmth, Saturation, Lo-fi, Drum Replacer (each hit on a drum track played again on any kit, and turned into notes), Pitch Correction (a voice pulled to the nearest note of a key and scale, hard and robotic or natural), Arpeggiator, Harmonizer, Scale Quantizer, Velocity Processor and Session Drummer (a drummer that plays along in ten styles, with fills). Plugins that look ahead (the limiter, Shimmer, the Drum Replacer, Pitch Correction) are delay-compensated: everything else waits for them, so it all arrives together. A song can carry its **finish** (mastering to a loudness under a true-peak ceiling, with glue) and be marked a **loop**, so a game's music renders as it plays forever, its end ringing into its start.
-- **Real instruments.** Free sample libraries (VSCO 2 Community Edition, the Versilian Community Sample Library, Karoryfer's Meatbass, a FreePats guitar, a Steinway Model D, and rock, prog and jazz drum kits) with every sample measured for its true pitch, level and loop. **Performance** instruments play a whole part as a real player would (dynamic layers, round robins, legato hand-overs, re-bowing, attacks that land on the beat), and **Glass** is a bowed-glass voice. There are about sixty built-in synths in eight families, so something always plays, with no download: **Fat Mono** and **Fat Poly** (three drifting oscillators driven into a transistor-ladder filter), **Ethereal Pad** and **Ethereal Keys** (a wide supersaw in a shimmering hall of its own), a **tonewheel organ** with its rotating speaker, modeled **tine, reed and clav** electric keys, a four-operator **FM** synth, a morphing **wavetable** synth, evolving **drones**, an analog-style **drum machine** (four kits on the General MIDI drum keys), modeled **flutes, pipes, zithers, lutes, free reeds, a glass harmonica, a choir, taiko and war drums, gongs, an anvil, a kalimba and a shimmering bell**. Each has six knobs in its window (the button on its instrument slot). **Import your own packs** as SFZ or folders of WAV files.
-- **An AI collaborator.** A [Claude Code](https://claude.com/claude-code) skill that reads the open session and writes into it as undoable steps. It harmonizes, writes counter-melodies and bass lines, sets up a live harmonizer that follows your playing, and listens to what you play and answers it. The studio's command bar can take the same kind of request too, carried out by your own Claude Code, Codex or Cursor, once you turn that on.
-- **Round trips with your own projects.** A game or an app whose music is code can send a piece into HO[LO] and get your edits back, and render the song itself so you can compare its own sound with the studio's, edits and all ([how](docs/creations.md)).
-- **Music for your next project.** `holo init` gives a new game or app ("an experience") its songs folder and a pinned copy of HO[LO]'s engine, so the project builds its own music, sample for sample as the studio renders it, with or without HO[LO] Desk; `holo update-engine` moves it on when you choose ([how](docs/creations.md#music-for-a-new-project-an-experience)).
-- **Everywhere.** Desktop, tablet and phone (portrait and landscape), installable as an app, in Docker, reached by your own devices over HTTPS on your tailnet.
+HO[LO] Desk is a digital audio workstation, the kind of program music is made in (Logic Pro, GarageBand,
+Ableton Live, Cubase), built to run in a web browser. You start it on one computer of your own, and
+then open it like a web page: on that computer, or on any other device you own.
 
-<p align="center"><img src="docs/images/phone.jpg" width="820" alt="The Piano Roll, the mixer and the touch keyboard on a phone"></p>
+- **Free and open source.** MIT licensed. No account, no subscription, no ads, and nothing is sent anywhere.
+- **Yours.** It runs on your computer, and your songs stay in a folder there.
+- **A whole studio.** Tracks, a Piano Roll, a score, audio recording, a mixer, 33 effects, 90 built-in
+  synths and 66 free sample packs, from concert grands to a full orchestra and about twenty drum kits.
+- **Familiar.** It's laid out the way Logic is, with Logic's key commands, so if you've used a studio
+  before you already know where things are.
+- **On every screen.** The same studio on a desktop, a tablet and a phone, and your phone can be its
+  remote control.
+- **With a helper, if you want one.** You can ask for things in plain words ("write a counter-melody for
+  the clarinet") and an AI agent does them in your song. It's off until you turn it on, and the studio
+  is complete without it.
 
-## Quick start
+**Jump to:** [A look around](#a-look-around) · [Is it for you?](#is-it-for-you) · [Install it](#install-it) ·
+[Reference](#reference)
+
+## A look around
+
+Every picture here is the real studio playing "Night Window", the demo song that comes with the
+repository.
+
+### Write
+
+A song is a stack of **tracks**, one for each instrument, running left to right in time. Select a track
+and its notes open in the **Piano Roll** underneath: each colored strip is a note: higher up is higher in pitch,
+and a longer strip is a longer note. Drag notes where you want them, stretch them, draw new ones, set how hard each is
+played, and undo anything. That's the picture at the top of this page.
+
+You don't have to click notes in. Plug in a MIDI keyboard or drum pads and play, type on your computer's
+keyboard, or tap the keys and pads on a touch screen, and record what you played with a metronome and a
+count-in.
+
+### Read it as a score
+
+Press <kbd>N</kbd> and the same notes are sheet music. The score and the Piano Roll are two views of one
+song: change a note in either and it changes in both. You can write the way you would in a notation
+program (type letters and note values, play them in, or click on the staff), add dynamics, slurs,
+lyrics, chord symbols and repeats, and print the full score or each player's part.
+
+![The whole song as a score: piano, pad, cellos, upright bass and vibes on their staves, with chord symbols above](docs/images/score.jpg)
+
+Already have the music on paper? **Scan** it: photograph a page with your phone, or open a PDF, and
+HO[LO] reads it into the song, then shows each line of the page above the bars it became so you can
+check it. Scores also come and go as MusicXML, to and from MuseScore, Sibelius, Finale and Dorico.
+
+### Record
+
+Audio tracks record a microphone, a guitar or anything else through your audio interface, or take the
+audio files you drop on them. Trim a take, fade it, change its length without changing its pitch, and
+even edit a recording note by note: nudge a sung note that's flat, straighten its drift, move it in time.
+
+### Mix
+
+Every track has a channel strip: its instrument, its effects, how much it sends to shared reverbs, where
+it sits left to right, and a fader. There are 33 effects built in (equalizers, compressors, reverbs,
+delays, tape and tube colors, a pitch corrector, a drummer that plays along), each with its own window,
+and anything you can turn can be **automated**: drawn as a line that moves it through the song.
+
+![The mixer while the song plays, with the piano's compressor open and a palette of orchestral sounds in the Library on the right](docs/images/mixer.jpg)
+
+On the right is the **Library**, where sounds come from. **Palettes** are ready-made sets for a style
+(a symphony orchestra, a felt piano with strings, a gamelan, cinematic synth-pop): click a sound and it
+arrives on a new track with its effects and its room already set. The sampled instruments are free
+libraries HO[LO] downloads when you ask for them, and you can import your own. When the song is done,
+<kbd>Ctrl B</kbd> bounces it to an audio file.
+
+### On your phone
+
+The studio isn't a cut-down "mobile version" on a phone: it's all there, rearranged for a small screen
+and a finger. Tracks, the Piano Roll, the score, the mixer, the Library, and a keyboard and drum pads to
+play.
+
+<p align="center"><img src="docs/images/phone.jpg" width="820" alt="HO[LO] Desk on a phone: the tracks, the Piano Roll and the touch keyboard"></p>
+
+A phone can also be **HO[LO] Remote**: prop it by your instrument and it drives the studio on your
+computer's screen. Play, stop, record, pick a track, ride its fader, jump to a marker.
+
+<p align="center"><img src="docs/images/remote.jpg" width="820" alt="HO[LO] Remote on a phone: the tracks, their faders, and the song's markers"></p>
+
+### Ask for it in plain words (optional)
+
+HO[LO] has a command bar (<kbd>Ctrl /</kbd>) where every command, track and marker is found by name.
+If you turn the **agent** on, the same bar also takes requests in plain words, and an AI agent carries
+them out in the open song: write a bass line, harmonize a melody, fix what's muddy in the mix, read a
+scanned page.
+
+![A request typed in the bar and the agent's reply: three clarinet counter-melodies, each with a play button, and buttons to keep one](docs/images/agent.jpg)
+
+This is a real request and its real reply. The agent wrote three clarinet lines (the notes in the Piano
+Roll underneath are one of them) and laid out its own controls for what comes next: play each, play the
+song without, keep the one you like. What matters about it:
+
+- **It's off by default**, and while it's off nothing in the studio mentions it.
+- **It uses an AI subscription you already have**: your own Claude Code, Codex, Cursor or Antigravity,
+  installed on the computer that runs HO[LO] and signed in as you. HO[LO] has no AI service of its own
+  and no API keys.
+- **It can only touch the open song.** No files, no shell, no web. Everything it does for one request
+  is a single step you can undo.
+- **You press play.** It doesn't start playback or move your view unless that's what you asked for.
+
+On a phone the conversation gets a page of its own, and the controls from the last reply stay within
+reach above the transport while you listen:
+
+<p align="center"><img src="docs/images/phone-agent.jpg" width="560" alt="The agent on a phone: the song's conversation as a page, and the reply's play buttons kept above the transport"></p>
+
+If you work in a terminal, the `holo` command and a Claude Code skill do all of this from there too.
+[More about the agent](#the-agent-and-the-holo-command).
+
+### Music for games and apps
+
+If you're building a game or an app whose music is code, HO[LO] can be its studio. A piece goes from the
+project into HO[LO] and your edits go back, and `holo init` gives a new project its songs folder and a
+pinned copy of HO[LO]'s engine, so the project builds its own music, sample for sample as the studio
+plays it, with or without HO[LO] Desk installed ([how](docs/creations.md)).
+
+## Is it for you?
+
+**A good fit if you**
+
+- want a free studio to write, arrange and record songs, and don't want an account or a subscription;
+- write for real instruments (piano, strings, orchestra, band) and want notation and a studio in one place;
+- want the same song on your desktop, your laptop, your tablet and your phone;
+- are comfortable running a few commands in a terminal once, to install it (or you already use Docker);
+- make music for a game or an app and want it built from source, reproducibly.
+
+**Probably not if you**
+
+- need your VST, AU or AAX plugins: HO[LO] plays its own instruments and effects, and sample packs
+  (SFZ, Logic's EXS, folders of WAV files), not third-party plugins;
+- want a website to sign in to: there isn't one, you run HO[LO] yourself;
+- need a double-click installer today: installing takes Node.js or Docker and a terminal.
+
+**What you need:** a computer to run it on (Linux, macOS or Windows) with Node.js 24 or Docker, a few
+GB of disk for the sampled instruments, and a current browser. Chrome, Edge and Firefox can use a USB
+MIDI keyboard; an iPhone or iPad reaches one over network MIDI. Headphones recommended, lights optional.
+
+## Install it
 
 You need Node.js 24 or newer and pnpm 10 (`corepack enable`), or just Docker.
 
@@ -33,7 +157,8 @@ pnpm packs install          # the sample libraries (a few GB), or install them f
 pnpm build && pnpm start    # or `pnpm dev` while working on HO[LO] itself
 ```
 
-Open <http://localhost:47800> and press **Start the studio**. Scanned sheet music is read by recognition
+Open <http://localhost:47800> and press **Start the studio**. There are ninety built-in synths,
+so something plays before any pack is installed. Scanned sheet music is read by recognition
 engines that run in Docker: with Docker on this computer, the server fetches them (a few GB) and starts
 them the first time a scan needs them (`pnpm omr off` if you'd rather not).
 
@@ -65,6 +190,73 @@ yet: bring it up to date once.)
 To run your own changes instead, `pnpm run up` builds from this checkout (`holo-desk:local`); automatic
 updates wait until you `pnpm run update` again.
 
+## Reference
+
+Everything below is the detail: what's in the box, how to reach HO[LO] from your other devices, how to
+set up the agent, the sample packs, the key commands, and how the repository is laid out.
+
+- [Everything it does](#everything-it-does)
+- [Your other devices](#your-other-devices), and [a studio, a screen and a remote](#a-studio-a-screen-and-a-remote)
+- [Play it in a few milliseconds: HO[LO] Engine](#play-it-in-a-few-milliseconds-holo-engine)
+- [The agent and the `holo` command](#the-agent-and-the-holo-command)
+- [Sample packs](#sample-packs)
+- [Key commands](#key-commands)
+- [Development](#development)
+- [Privacy and security](#privacy-and-security)
+- [Made with HO[LO] Desk](#made-with-holo-desk)
+
+## Everything it does
+
+- **Write and edit.** Tracks and regions on a timeline. A Piano Roll with the keyboard down the left: drag notes to new pitches and times, stretch them, set velocities, and draw any controller (mod wheel, expression, sustain, pitch bend, aftertouch, any CC). Quantize, transpose, split, repeat, undo everything: the undo history is a menu you can step back through, and it's kept across a reload. Drag tracks into a new order, and **Make inactive** the ones you aren't using: they stay in the song, but nothing is loaded or played for them.
+- **Play it live.** USB MIDI keyboards and drum pads through Web MIDI, delivered to the audio engine through shared memory: a key you press sounds in the next 128-frame block. You can also play the computer keyboard (Musical Typing) or the touch keyboard (one row of keys or two) and drum pads on a phone. Record with count-in, cycle and metronome (right-click the metronome, or open Settings › Metronome, for its sound and volume), and tap a tempo in. For the shortest time from key to ear, run [HO[LO] Engine](#play-it-in-a-few-milliseconds-holo-engine) on the computer you play on.
+- **Scores.** Any track as notation (press <kbd>N</kbd>): the score and the Piano Roll are the same notes, so an edit in either shows in both. Write by typing letters and note values, playing a MIDI keyboard, or clicking on a staff; edit as in a notation program (drag a note up or down, give it a sharp, flat or new value, copy and paste, from the keys, a right click, a long press or a touch screen's tools); add dynamics, articulations, slurs, lyrics, chord symbols, repeats and endings, D.C. and D.S. jumps, guitar tab and drum parts. Markings sound as they read, and playback follows the repeats. MusicXML goes in and out (MuseScore, Sibelius, Finale, Dorico), and the full score or each part prints, or saves as a PDF.
+- **Scan sheet music.** Photograph a page with your phone or open an image or a PDF: HO[LO] straightens it, finds the systems and shows each line of the page above the bars it became, for a quick review. Open-source recognition engines (Audiveris and homr, on by default) read it into the song as one undo step, and read it again to flag the bars where they differ from what's written. The agent, if you turn it on, can read it too.
+- **Record and edit audio.** Audio tracks record a microphone or an instrument through an audio interface (lined up with what you heard, using this device's measured round trip), or take WAV, FLAC, MP3, Ogg and AIFF files dropped on the tracks. Trim from either edge, drag fades, set gain, normalize, and time-stretch without changing pitch (Alt-drag a region's end, as in Logic) in the tracks area or the Audio Editor. The Audio Editor's **Notes** view shows a recording as the notes in it, each one editable: its pitch, drift and vibrato, the glide into it, its formant, level and timing, split, joined, or pasted over with another note's sound.
+- **Mix and automate.** Channel strips with instruments, MIDI effects, audio effects, sends, buses, pan, faders and meters. Put a channel on a **Stage**: a near seat and a far seat, each with its own rooms and depth, and a Distance that moves it between them. Automation lanes (press <kbd>A</kbd>) draw how volume, pan, mute, sends, distance and any plugin parameter move through the song, in straight lines or smooth curves, sample-accurately. Plugin windows have presets, and their values can be typed.
+- **Bounce.** <kbd>Ctrl B</kbd> renders the song (or the cycle) to a 24-bit WAV with the same engine, faster than real time, and keeps a copy with the song. A song can carry its **finish** (mastering to a loudness under a true-peak ceiling, with glue) and be marked a **loop**, so a game's music renders as it plays forever, its end ringing into its start.
+- **Real instruments.** Free sample libraries ([66 packs](#sample-packs): concert grands, a full orchestra, about twenty drum kits, guitars and basses, saxophones, gamelan, tabla, erhu and more) with every sample measured for its true pitch, level and loop. **Performance** instruments play a whole part as a real player would (dynamic layers, round robins, legato hand-overs, re-bowing, attacks that land on the beat), and **Glass** is a bowed-glass voice. **Import your own packs** as SFZ, Logic's EXS or folders of WAV files.
+- **Built-in synths.** Ninety of them in eight families (keys, organs and reeds, synths, bells and glass, textures, voices, world, drums and percussion), so something always plays, with no download.
+- **An AI collaborator, if you want one.** A [Claude Code](https://claude.com/claude-code) skill that reads the open session and writes into it as undoable steps. It harmonizes, writes counter-melodies and bass lines, sets up a live harmonizer that follows your playing, and listens to what you play and answers it. The studio's command bar can take the same kind of request too, carried out by your own Claude Code, Codex, Cursor or Antigravity, once you turn that on.
+- **Round trips with your own projects.** A game or an app whose music is code can send a piece into HO[LO] and get your edits back, and render the song itself so you can compare its own sound with the studio's, edits and all ([how](docs/creations.md)).
+- **Music for your next project.** `holo init` gives a new game or app ("an experience") its songs folder and a pinned copy of HO[LO]'s engine, so the project builds its own music, sample for sample as the studio renders it, with or without HO[LO] Desk; `holo update-engine` moves it on when you choose ([how](docs/creations.md#music-for-a-new-project-an-experience)).
+- **Everywhere.** Desktop, tablet and phone (portrait and landscape), installable as an app, in Docker, reached by your own devices over HTTPS on your tailnet. Changes you haven't saved yet, and takes you've just recorded, are kept on the device until the host has them.
+
+<details>
+<summary><b>The 33 stock plugins</b></summary>
+
+| | |
+|---|---|
+| **EQ** | Channel EQ, Parametric EQ (eight free bands), Studio EQ (cuts to 48 dB an octave, shelves, four bells and Proportional Q) |
+| **Dynamics** | Compressor, Character Compressor (Clean, FET, VCA and Opto circuits, with an output stage and a limiter), Noise Gate, Transient Softener, Limiter (with a soft knee) |
+| **Reverb** | Space Designer (convolution with generated rooms, halls and cathedrals, or any impulse response), Shimmer, Space Reverb, Room Reverb (early reflections from a room's walls, then a tail with its own decay for the lows and highs), Smooth Hall, String Resonance (a grand's strings ringing in sympathy, with an extended grand's bass strings) |
+| **Delay** | Tape Delay, Dual Delay (each side its own note, groove, feedback and crossfeed) |
+| **Modulation** | Chorus, Wow & Flutter, Rotary Speaker, Phaser, Tremolo (or auto-pan) |
+| **Color** | Tape Warmth, Saturation, Lo-fi |
+| **Tools** | Stereo Width, Drum Replacer (each hit on a drum track played again on any kit, and turned into notes), Pitch Correction (a voice pulled to the nearest note of a key and scale, hard and robotic or natural) |
+| **MIDI effects** | Arpeggiator, Harmonizer, Scale Quantizer, Velocity Processor, Session Drummer (a drummer that plays along in ten styles, with fills) |
+
+Plugins that look ahead (the limiter, Shimmer, the Drum Replacer, Pitch Correction) are
+delay-compensated: everything else waits for them, so it all arrives together. **Low Latency Mode**
+(Settings › Audio) lets them stop holding the sound back while you play; bounces always use them in full.
+
+</details>
+
+<details>
+<summary><b>The built-in synths</b></summary>
+
+Ninety sounds in eight families, from these engines: **Fat Mono** and **Fat Poly** (three drifting
+oscillators driven into a transistor-ladder filter), **Ethereal Pad** and **Ethereal Keys** (a wide
+supersaw in a shimmering hall of its own), a **tonewheel organ** with its rotating speaker, modeled
+**tine, reed and clav** electric keys, a four-operator **FM** synth, a **six-operator FM** synth with a
+free matrix and a window of its own, a morphing **wavetable** synth, **Prism** (a synth that morphs
+between four sources: oscillators, partials, a sample and grains, with a window of its own), evolving
+**drones**, an analog-style **drum machine** (four machines and a drum synth, on the General MIDI drum
+keys), and modeled **flutes, pipes, zithers, lutes, free reeds, a glass harmonica, a choir, taiko and
+war drums, gongs, an anvil, a kalimba and a shimmering bell**. Most have six knobs in their window (the
+button on the instrument slot).
+
+</details>
+
 ## Your other devices
 
 Browsers only allow MIDI and shared-memory audio on a secure page. HO[LO] listens on this machine only
@@ -92,8 +284,6 @@ metronome and count-in, undo, the tracks (select, mute, solo, arm) and their fad
 bar*, and a keyboard and drum pads that play into the selected (or armed) track. Add it to the Home
 Screen to open it like an app; it keeps the screen awake. Press **Start the studio** on the computer
 once, and the remote does the rest.
-
-![HO[LO] Remote on a phone: the display, the transport and the tracks](docs/images/remote.jpg)
 
 Devices that aren't on a tailnet can use HTTPS on your local network instead:
 
@@ -144,7 +334,12 @@ From the repository: `pnpm engine:build` once (it needs [Zig 0.16](https://zigla
 C compiler for this computer), then `pnpm engine`. `pnpm engine:build --release win32-x64 linux-x64` makes
 the downloads in `apps/companion/dist` (the macOS ones build on a Mac).
 
-## The AI collaborator
+## The agent and the `holo` command
+
+There are two ways to have an AI work in your song, and they can do the same things: from a terminal,
+with the `holo` command and its Claude Code skill, or from the studio's own bar, with the agent.
+
+### From a terminal
 
 ```bash
 pnpm skill:install          # the `holo` command, and the Claude Code skill in every project
@@ -160,6 +355,8 @@ Everything the agent in the studio's bar can do on a song, the `holo` command ca
 agent's own tools: edit regions and whole bars (`holo regions`, `holo timeline`), measure takes, the mix,
 tracks and plugins (`holo measure`), hear what was just played (`holo played --analyze`), bring a MIDI
 file, a score or a recording into the song (`holo import`), and any of its tools by name (`holo tool`).
+There are many more (songs, tracks, instruments, synths, automation, tempo and key, markers, the
+transport, bouncing, MIDI and score export, creations): `holo help` lists them.
 
 Then ask Claude things like *"harmonize the melody in bars 9 to 16 with a counter-line on the oboe"*
 or *"put a live harmonizer on my keys in A lydian, thirds and fifths"*. Each change appears in the
@@ -167,73 +364,103 @@ open studio as one step you can undo. See [skills/holo/SKILL.md](skills/holo/SKI
 
 Claude reads and writes notation too (`holo score show`, `holo score write`).
 
+The `holo` command and the skill work as they always have, with the agent on or off.
+
 ### The agent in the studio
 
 The studio can take requests in plain words too, in its bar (<kbd>Ctrl /</kbd>). This is off until you
-turn it on in **Settings › Agent**, and while it's off nothing in the studio mentions it. The agent runs
-your own Claude Code, Codex, Cursor or Antigravity on the host, signed in as you, with the runner going there
-(`pnpm runner`, the one that also renders [creations](docs/creations.md); on Linux,
-`pnpm run runner-service on` keeps it running as a service). Settings › Agent lists all four: one the
-host doesn't have has an **Install** button, which runs its vendor's official installer there once you
-confirm (it says what runs, and where). One you install yourself in a terminal shows up with **Look
-again**, or, if it went somewhere the runner doesn't look, once you run `pnpm run runner-service on`
-again.
+turn it on in **Settings › Agent**, and while it's off nothing in the studio mentions it.
 
-The first device pairs with a 6-digit code from the host: run `pnpm holo pair` there. It prints the
-code, a link that opens Settings › Agent with the code filled in for each way your setup opens HO[LO]
-to other devices (`pnpm tailnet on`, `pnpm lan on`), and a QR code a phone can scan. The code works once,
-for 10 minutes. (A running runner prints one too when a studio turns the agent on.) A later device asks
-to join, and a device already allowed approves it in its own Settings › Agent, where any device can
-also be removed, at once. A device that has lost its way back in (its site data cleared, or the only
-allowed device lost) pairs with a new code, the same way. If the runner can't serve the agent (none is
-connected, or it's from an older HO[LO] than the studio, or reads another data folder), Settings › Agent
-says which and what to do. The
-harness, its model and effort, its install, its sign-in and its updates are there too. An install or
-an update runs only when you click it and confirm, and it's the same harness your terminal uses. The
-models and efforts are the harness's own, as it lists them on the host, and they're looked at again
-when you open Settings › Agent an hour or more after the last look. Requests use, under them, says which
-model and effort a request uses. Codex and Cursor run with their own defaults when you choose none, and
-it names them; Antigravity does too, without naming them; Claude Code has none it can say, so choose its
-model and effort there before its first request. Antigravity runs on your Google AI plan, but Google's FAQ
-says running it inside another app isn't supported on consumer plans and can get the account suspended:
-Settings › Agent says so before you sign in or use it, and HO[LO] never picks it unless you do. The choice is kept on the host, so every device you use runs the agent the same way.
+**Setting it up**
+
+1. **A harness on the host.** The agent runs your own Claude Code, Codex, Cursor or Antigravity on the
+   computer that hosts HO[LO], signed in as you. Settings › Agent lists all four: one the host doesn't
+   have has an **Install** button, which runs its vendor's official installer there once you confirm
+   (it says what runs, and where). One you install yourself in a terminal shows up with **Look
+   again**, or, if it went somewhere the runner doesn't look, once you run `pnpm run runner-service on`
+   again.
+2. **The runner going there**: `pnpm runner`, the one that also renders [creations](docs/creations.md);
+   on Linux, `pnpm run runner-service on` keeps it running as a service.
+3. **Pair your first device** with a 6-digit code from the host: run `pnpm holo pair` there. It prints
+   the code, a link that opens Settings › Agent with the code filled in for each way your setup opens
+   HO[LO] to other devices (`pnpm tailnet on`, `pnpm lan on`), and a QR code a phone can scan. The code
+   works once, for 10 minutes. (A running runner prints one too when a studio turns the agent on.)
+
+A later device asks to join, and a device already allowed approves it in its own Settings › Agent,
+where any device can also be removed, at once. A device that has lost its way back in (its site data
+cleared, or the only allowed device lost) pairs with a new code, the same way. If the runner can't serve
+the agent (none is connected, or it's from an older HO[LO] than the studio, or reads another data
+folder), Settings › Agent says which and what to do.
+
+<details>
+<summary><b>Choosing the harness, its model and its effort</b></summary>
+
+The harness, its model and effort, its install, its sign-in and its updates are in Settings › Agent.
+An install or an update runs only when you click it and confirm, and it's the same harness your
+terminal uses. The models and efforts are the harness's own, as it lists them on the host, and they're
+looked at again when you open Settings › Agent an hour or more after the last look. Requests use, under
+them, says which model and effort a request uses. Codex and Cursor run with their own defaults when you
+choose none, and it names them; Antigravity does too, without naming them; Claude Code has none it can
+say, so choose its model and effort there before its first request. Antigravity runs on your Google AI
+plan, but Google's FAQ says running it inside another app isn't supported on consumer plans and can get
+the account suspended: Settings › Agent says so before you sign in or use it, and HO[LO] never picks it
+unless you do. The choice is kept on the host, so every device you use runs the agent the same way.
+
+</details>
+
+**Asking**
 
 Type a request and press Enter. A picture, a recording, a MIDI or MusicXML file or a text file dropped
 or pasted on the bar goes with it (a picture is redrawn on your device first, without its location
 data). The reply is a sentence or two under the field, with a button when the agent needs your click:
-to install a pack, send the song to its creation, share the screen, take a photo or record from the
-microphone. Under the reply the agent shows what you'll want to do next with its work, composed in the
-studio's own buttons, switches, sliders and lists: play the original against its change, try the
-versions it made and keep one, set how much, or go to the bars it means. Nothing plays or moves until
-you click, unless you asked to see or hear something. On a phone or a tablet the bar opens as a page
-with the song's whole conversation: on a phone held upright it fills the room between the control bar
-and the transport, which stay in reach; on its side and on a tablet it's a sheet down the right edge,
-beside the studio. Earlier requests fold to a line you tap to open, the one at work says how long it has
-worked, and holding the page's header lets you see the studio through it. Done or a swipe puts it away.
-When a reply leaves you something to decide while you listen (three takes to try, one to keep), the
-agent may give it a short row of those controls: on a phone, once you've read the reply, that row waits
-above the transport (at the foot of the screen on its side) until you swipe it away, press ×, or ask the
-next thing; ^ opens the page again.
+to install a pack, send the song to its creation or have the creation render it, bounce the song, share
+the screen, take a photo or record from the microphone. Under the reply the agent shows what you'll want
+to do next with its work, composed in the studio's own buttons, switches, sliders and lists: play the
+original against its change, try the versions it made and keep one, set how much, or go to the bars it
+means. Nothing plays or moves until you click, unless you asked to see or hear something.
+
+A request runs as long as the agent keeps working, up to 2 hours (3 for reading a scan); it ends if it
+goes quiet for 15 minutes, and Stop on the bar ends it at any time.
+
+**On a phone or a tablet**
+
+The bar opens as a page with the song's whole conversation: on a phone held upright it fills the room
+between the control bar and the transport, which stay in reach; on its side and on a tablet it's a sheet
+down the right edge, beside the studio. Earlier requests fold to a line you tap to open, the one at work
+says how long it has worked, and holding the page's header lets you see the studio through it. Done or a
+swipe puts it away. When a reply leaves you something to decide while you listen (three takes to try,
+one to keep), the agent may give it a short row of those controls: on a phone, once you've read the
+reply, that row waits above the transport (at the foot of the screen on its side) until you swipe it
+away, press ×, or ask the next thing; ^ opens the page again.
+
+**While you're away**
+
 Close the bar (or the page) and the work goes on: the bar's button shows a turning ring while the
 agent works, then a dot until you open the bar again (a phone has the bar's button too, at the top).
 You can even leave: switch your phone to another app or close the tab, and its changes still land in the
 song; come back to find them as one undo step, the ring if it's still at work, or the dot and its reply
-if it's done. What needs you there (playing to you, listening) waits for its reply's buttons. To hear
-of a reply while you're away, turn on **Tell me outside HO[LO]** in Settings › Agent on that device:
-**Long runs** (replies that took more than a minute) or **Every reply**, and either way when the agent
-needs your OK. The notice comes only to the device that asked, only while HO[LO] isn't in front there,
-and a tap opens the song at that reply; HO[LO]'s Home Screen icon counts the replies not seen yet. It
-needs HO[LO] opened over HTTPS (`pnpm tailnet on` or `pnpm lan on`) and the host to reach the internet.
-Android phones and computers can have it in a browser tab; an iPhone or iPad only from HO[LO] added to
-its Home Screen, which is a device of its own, so allow it as one first. A
-request runs as long as the agent keeps working, up to 2 hours; it ends if it goes quiet for 15 minutes,
-and Stop on the bar ends it at any time. The agent works on the open song and nothing else:
+if it's done. What needs you there (playing to you, listening) waits for its reply's buttons.
 
-- its notes, score, tracks, instruments, effects, mix, automation, tempo, key, meter, markers and cycle;
+To hear of a reply while you're away, turn on **Tell me outside HO[LO]** in Settings › Agent on that
+device: **Long runs** (replies that took more than a minute) or **Every reply**, and either way when the
+agent needs your OK. The notice comes only to the device that asked, only while HO[LO] isn't in front
+there, and a tap opens the song at that reply; HO[LO]'s Home Screen icon counts the replies not seen
+yet. It needs HO[LO] opened over HTTPS (`pnpm tailnet on` or `pnpm lan on`) and the host to reach the
+internet. Android phones and computers can have it in a browser tab; an iPhone or iPad only from HO[LO]
+added to its Home Screen, which is a device of its own, so allow it as one first.
+
+**What it can and can't do**
+
+The agent works on the open song and nothing else:
+
+- its notes, score, regions, tracks, instruments, effects, mix, automation, tempo, key, meter, markers
+  and cycle, its finish and whether it loops;
+- recordings: bringing one in, and editing the notes in it;
+- measuring: a take, a track, a plugin, the mix;
 - playing to you, listening as you play, and reading what you just played (its tempo, meter, key and
   pickup);
 - finding sounds, and installing a HO[LO] Pack once you've clicked;
-- playing the bars it changed as they were, then as they are;
+- keeping versions of its work, and playing the bars it changed as they were, then as they are;
 - with the Scan window open, **Read this scan**, **Check it** and **Fix flagged** (from the Commands
   button in its header, on a phone or a tablet too).
 
@@ -243,8 +470,6 @@ any file: asked to, it writes a brief for you to copy into your own coding agent
 (only for a change to that code, never to read or send your files, keys or passwords).
 Its harness runs with HO[LO]'s tools and nothing else: no shell, files or web, and none of your own
 settings, skills or MCP servers. [docs/agent.md](docs/agent.md) has how it works.
-
-The `holo` command and the skill work as they always have, with the agent on or off.
 
 ## Sample packs
 
@@ -266,13 +491,15 @@ shows how far it has got. Every file is checked against its pinned checksum. **R
 installed pack, frees the disk it takes: it names the songs that play it first, and More packs can
 install it again.
 
-**Palettes** are sets of ready-made sounds for a style: a cinematic hybrid score, a classic symphony
-orchestra, a felt piano with chamber strings, cold glassy pulses, minimalist patterns, a darker Viennese
-voicing of the grand, and instruments of Asian traditions (gamelan, Chinese, Japanese, Indian, Southeast
-Asian and Korean). Each sound is an instrument with its effects, its room and a level matched to the
-rest of its palette. In the Library, **Palettes** lists them by family: a click installs the packs that
-sound plays (if they aren't installed yet) and adds a new track ready to play. A palette has no audio of
-its own, and a sound that waits for something HO[LO] doesn't have yet is shown as coming.
+**Palettes** are sets of ready-made sounds for a style. There are eighteen: a cinematic hybrid score, a
+classic symphony orchestra, a heroic adventure orchestra, a felt piano with chamber strings, bamboo
+flutes and Celtic pipes over choir and strings, cold glassy pulses, dreamy glass and tines, minimalist
+patterns, cinematic synth-pop, a darker Viennese voicing of the grand, the morphing synth and the
+six-operator FM synth ready to play, and instruments of Asian traditions (gamelan, Chinese, Japanese,
+Indian, Southeast Asian and Korean). Each sound is an instrument with its effects, its room and a level
+matched to the rest of its palette. In the Library, **Palettes** lists them by family: a click installs
+the packs that sound plays (if they aren't installed yet) and adds a new track ready to play. A palette
+has no audio of its own, and a sound that waits for something HO[LO] doesn't have yet is shown as coming.
 
 **The packs live in their own repository, [HO[LO] Packs](https://github.com/shooter-git/holo-packs).**
 Each pack there has its own page: where its sounds come from, every instrument, its license, its size
@@ -286,13 +513,16 @@ pnpm packs lock                        # pin HO[LO] Packs' latest commit (then c
 pnpm packs lock --check                # every pinned map fetched and checked against the lock
 ```
 
-Today they include:
-- a Steinway Model D (bitKlavier Grand, CC BY 4.0);
-- three drum kits: Rock, Prog and Jazz;
-- VSCO 2's orchestra and the Versilian Community Sample Library;
-- a jazz double bass;
-- a classical guitar;
-- the University of Iowa's clarinet and bassoon.
+Today the lock pins 84 packs: the 18 palettes and 66 sample packs with about 290 instruments between
+them. Among them:
+- pianos: a Steinway Model D (bitKlavier Grand, CC BY 4.0), a Yamaha C5, a Yamaha C3 and an upright;
+- electric pianos, vintage keys, a transistor organ and an accordion;
+- about twenty drum kits, from brushes and bop to rock, soul, lo-fi and metal;
+- orchestras: VSCO 2's, the Versilian Community Sample Library, orchestral sections, and the
+  University of Iowa's winds, brass, strings, mallets and percussion;
+- a solo cello, a harp, saxophones and a tuba;
+- classical and electric guitars, electric basses and a jazz double bass;
+- Balinese and Javanese gamelan, erhu, tabla, singing bowls, a steel drum and more.
 
 [Browse them all](https://github.com/shooter-git/holo-packs#instruments).
 
@@ -313,6 +543,9 @@ saturator (soft or hard), how velocity sets its level (straight in decibels, cub
 drawn as you turn it), and deeper down a pitch envelope, a filter and whether it plays to its end or
 stops when let go. A pack can set them too; a pad left alone plays exactly as the kit always did.
 `holo kit Drums pad:38:drive=40 pad:36:curve=1` sets them from the command line.
+
+<details>
+<summary><b>Importing your own packs: SFZ, Logic's EXS, folders of samples, kits, microphones, trimming, BFD</b></summary>
 
 You can also import your own from the studio: **Library → Import a sample pack (.zip)**. SFZ
 instruments come in with their mapping, their release samples (`trigger=release`: a piano's dampers
@@ -359,16 +592,24 @@ sizes and headers, no audio) to `bfd-inventory.txt` in the data folder, and impo
 files in a folder for each piece as a kit of your own. BFD's own sample format isn't mapped yet: the
 inventory is what the mapping will be written from.
 
+</details>
+
 ## Key commands
 
-They follow Logic's (Ctrl in place of ⌘): Space play/stop, R record, C cycle, K metronome, X mixer,
-P Piano Roll, I Inspector, Y Library, Q quantize, Ctrl T split, Ctrl R repeat, Ctrl Z undo, Ctrl K
-Musical Typing, A automation, Ctrl B bounce. N shows the Score and Shift N writes in it: letters for
-notes, 1–7 for values (as in MuseScore; with notes selected, their values), Alt ↑ ↓ a step in the key,
-Ctrl C, X and V copy, cut and paste notes, Shift L lyrics, Shift Q chord symbols. Ctrl / opens the bar,
-where every command, track and marker is found by name (the slash button, /, in the control bar, or a
-swipe down on a phone's top bar); Escape, a tap outside it or, on a touch screen, a swipe up on it puts
-it away. Press <kbd>?</kbd> in the studio for the whole list.
+They follow Logic's (Ctrl in place of ⌘). Press <kbd>?</kbd> in the studio for the list.
+
+| | |
+|---|---|
+| **Transport** | Space play/stop, R record, C cycle, K metronome, Return to the beginning, `,` and `.` back or forward a bar |
+| **Windows** | X mixer, P Piano Roll, N Score, A automation, I Inspector, Y Library, Ctrl K Musical Typing, Ctrl Shift F full screen, Ctrl / the bar |
+| **Edit** | Ctrl Z undo, Ctrl Shift Z redo, Delete, Ctrl A select all, Q quantize, Ctrl T split, Ctrl R repeat, ↑ ↓ transpose (Shift: an octave) or select a track |
+| **Tracks and song** | M mute, S solo, Alt Ctrl N new track, Ctrl S save now, Ctrl B bounce |
+| **Score** | Shift N writes in it: letters for notes, 1–7 for values (as in MuseScore; with notes selected, their values), `.` dotted, `;` triplet, 0 a rest, T tie, S slur, J respell, Alt 1 and Alt 2 voices, Alt ↑ ↓ a step in the key, Ctrl C, X and V copy, cut and paste notes, Shift L lyrics, Shift Q chord symbols |
+| **Musical Typing** | A S D F… the white keys, W E T… the black, Z X an octave down or up, C V softer or harder |
+
+Ctrl / opens the bar, where every command, track and marker is found by name (the slash button, /, in
+the control bar, or a swipe down on a phone's top bar); Escape, a tap outside it or, on a touch screen, a
+swipe up on it puts it away.
 
 ## Development
 
@@ -383,22 +624,24 @@ pnpm lint       # Biome
 
 | Folder | |
 |---|---|
-| `apps/web` | the studio: React UI, the engine in an AudioWorklet, Web MIDI |
-| `apps/server` | the server: projects (SQLite), packs, the live channel, creations |
+| `apps/web` | the studio: React UI, the engine in an AudioWorklet, Web MIDI, the Score and Scan windows, HO[LO] Remote, the bar and the agent's views |
+| `apps/server` | the server: projects (SQLite), packs, the live channel, creations, scans and their recognition engines, network MIDI, the agent's side (devices, jobs, notices) |
 | `apps/companion` | HO[LO] Engine: the engine on a render thread, the song rendered ahead on worker threads, with native audio and MIDI (one C file over miniaudio and the OS's MIDI) |
 | `packages/engine` | the audio engine: instruments, effects, the mix; the same code live, in bounces and headless (`holo render-audio`) |
-| `packages/session` | the session format, operations, notation, MIDI files |
+| `packages/session` | the session format, operations, the plugin and synth registries, palettes, automation, MIDI files |
+| `packages/score` | scores: notes laid out as notation, MusicXML in and out, tab, and reading scans |
 | `packages/music` | an experience's build: the pinned renderer a project carries, its sample fetching and checks |
-| `packages/cli` | the `holo` command |
+| `packages/cli` | the `holo` command, the runner and pairing |
 | `packages/agent` | the agent in the studio: its tools (an MCP server), its instructions (`AGENT.md`) and how the runner starts each harness sealed |
 | `skills/holo` | the Claude Code skill |
+| `tools` | the scripts behind the `pnpm` commands (update, tailnet, lan, netmidi, omr, ui-check), and the ones that make this page's pictures (`demo-song.mjs`, `screens.mjs`, `banner.mjs`) |
 | `local/` | not in the repository (git ignores it): your own tools for your own creations, such as an importer |
 | `packs.lock.json` | the sample packs HO[LO] plays: a commit of [HO[LO] Packs](https://github.com/shooter-git/holo-packs) (their maps, sources and checksums; no audio) and every pack's hash |
-| `deploy` | Docker |
+| `deploy` | Docker: the image, its compose file, and the recognition engines' image |
 | `docs` | [architecture](docs/architecture.md), [session format](docs/session-format.md), [creations](docs/creations.md), [latency](docs/latency-and-devices.md), [the bar and the agent](docs/agent.md), [the agent's harnesses](docs/agent-harnesses.md) |
 
 The pre-commit hook (`git config core.hooksPath .githooks`) stops commits that would publish a
-secret, an email address or a home-folder path.
+secret, an email address or a home-folder path. [CONTRIBUTING.md](CONTRIBUTING.md) has the rest.
 
 ## Privacy and security
 
@@ -409,7 +652,9 @@ off unless you turn it on, and off, no harness is run and nothing is looked up f
 it reads (the song, a scanned page, a file you attached) to Anthropic, OpenAI, Cursor or Google as any session
 of yours does, as you, and only the devices you've allowed can ask it anything. The recognition engines that read
 scans run on this computer, in a container with no way out to the internet. HO[LO] binds to
-`127.0.0.1`, and only devices on your own tailnet can reach it when you turn that on. HO[LO] Engine
+`127.0.0.1`: other devices reach it only when you open it to them, on your own tailnet (`pnpm tailnet
+on`), on your local network (`pnpm lan on`, for as long as it's on), or under a name you list in
+`HOLO_ALLOWED_HOSTS` (a reverse proxy's, say; `.env.example` has how). HO[LO] Engine
 listens on `127.0.0.1:47830` only, and lets in a studio served from this computer, the local network or
 a tailnet (`--origin` names any other). Your songs and packs stay in `./data`. Read
 [SECURITY.md](SECURITY.md) before exposing it any other way.

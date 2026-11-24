@@ -1,7 +1,8 @@
 /**
  * The page: the bar, on a phone or a tablet (app/page-layout.ts). It holds the open song's whole
- * conversation with the agent, newest at the bottom beside the field, and the command search: what's
- * typed finds the studio's commands, tracks and markers in a list over the field, as the bar does.
+ * conversation with the agent, from its top down (one longer than the page is at its newest turn, at
+ * the foot beside the field), and the command search: what's typed finds the studio's commands, tracks
+ * and markers in a list over the field, as the bar does.
  *
  * Where it goes:
  *  - a phone held upright: a solid panel between the control bar and the transport, which stay in
@@ -11,13 +12,18 @@
  *    newest turn folds to a line;
  *  - a tablet: a sheet a third of the width, under the control bar, beside the studio.
  *
- * Earlier turns are a line each, opened with a tap; the newest is whole. While a request works its
- * turn says what it's on, how long it has worked, and Stop. A window opened after it (a plugin's, an
+ * Earlier turns are a line each, opened with a tap; the newest is whole. A conversation shorter than
+ * the page gives the room it leaves to its earlier turns, which show more lines of themselves
+ * (ui/turn-room.ts). While a request works its turn says what it's on, how long it has worked, and Stop. A window opened after it (a plugin's, an
  * instrument's) goes over it, whole: on a phone it's a sheet over everything, on a tablet it floats,
- * beside the sheet where there's room (ui/window.tsx). A press on the page brings it back over. Done closes it, and so does a swipe down
- * from its header (held upright) or to the right (a sheet); held still, the header lets the studio
- * show through (ui/page-swipe.ts). A tab closes it on a phone held upright, and a reply's go or command
- * does where it covers the studio. The song plays on.
+ * beside the sheet where there's room (ui/window.tsx). A press on the page brings it back over.
+ *
+ * Its header is a grip on a phone held upright (the song's name is in the control bar over it, and the
+ * Commands button there closes it), with Done only while the keyboard is up, when the control bar may
+ * be out of sight; a sheet's header is Done. A swipe closes it too: down, from the header or from
+ * anywhere on a page that has nothing above to scroll to (held upright), or to the right (a sheet).
+ * Held still, the header lets the studio show through (ui/page-swipe.ts). A tab closes it on a phone
+ * held upright, and a reply's go or command does where it covers the studio. The song plays on.
  */
 import { ChevronRight } from 'lucide-react';
 import { type RefObject, useEffect, useLayoutEffect, useRef, useState } from 'react';
@@ -31,6 +37,7 @@ import { atEnd, useShownRoom } from './bar-swipe.ts';
 import { CommandField, CommandList, useCommandField } from './command-field.tsx';
 import { useHoldToSeeThrough, useSwipeToClose } from './page-swipe.ts';
 import { TalkBody } from './talk.tsx';
+import { useTurnRoom } from './turn-room.ts';
 
 /**
  * Where the studio's parts the page keeps clear of are, as the room's --studio-top (the control bar's
@@ -200,7 +207,6 @@ export function TalkPage() {
     useAgent((a) => a),
     f.project,
   );
-  const title = useApp((s) => s.project?.title ?? '');
   const turn = useApp((s) => s.barTurn);
   // a dialog over the studio is over the page too, and so is Print: it takes no keys or taps from behind
   // them (Scan is under it: the page opens over the review, from the Commands button in its header)
@@ -220,8 +226,11 @@ export function TalkPage() {
   const wide = sideways && focused && keyboard;
   useShownRoom(room);
   usePageRoom(room, layout, scanOpen);
-  useSwipeToClose(covers ? head : page, page, covers ? 'down' : 'right');
+  useSwipeToClose(page, page, covers ? 'down' : 'right');
   useHoldToSeeThrough(head, page);
+  // the room a short conversation leaves goes to its earlier turns (not across a phone on its side,
+  // typing: the newest turn is a line there to leave the room to the field)
+  useTurnRoom(thread, !wide);
 
   const { project, busy } = f;
   const newest = talk[talk.length - 1];
@@ -251,8 +260,8 @@ export function TalkPage() {
     if (turn) setOpened((was) => (was.has(turn) ? was : new Set([...was, turn])));
   }, [turn]);
 
-  // the thread keeps to its newest turn while it's at the foot (a reply growing, a view drawn, the
-  // keyboard coming up), and opens there; scrolled back, it stays where it's put
+  // a thread longer than the page keeps to its newest turn while it's at the foot (a reply growing, a
+  // view drawn, the keyboard coming up), and opens there; scrolled back, it stays where it's put
   const stuck = useRef(!turn);
   useEffect(() => {
     const el = thread.current;
@@ -313,8 +322,8 @@ export function TalkPage() {
       >
         <div ref={head} className="talk-head">
           {covers && <span className="talk-grip" aria-hidden="true" />}
-          <span className="talk-song">{title}</span>
-          <button type="button" className="btn ghost" onClick={closeBar}>
+          {/* (held upright it shows only with the keyboard up, or focused from a keyboard of keys: styles/app.css) */}
+          <button type="button" className="btn ghost talk-done" onClick={closeBar}>
             Done
           </button>
         </div>

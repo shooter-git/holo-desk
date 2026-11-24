@@ -4157,14 +4157,15 @@ html[data-layout="tablet"] .talk-room[data-covered] .talk-page {
   padding-bottom: 0;
 }
 
-/* its header: the song, and Done. Held still, it lets the studio show through; drawn down (upright)
-   or across (a sheet), the page goes with it */
+/* its header. A sheet's is Done, at its right. On a phone held upright it's a grip: the song's name is
+   in the control bar over it, whose Commands button closes the page. Held still, it lets the studio
+   show through; drawn down (upright) or across (a sheet), the page goes with it */
 .talk-head {
   position: relative;
   display: flex;
   flex: none;
   align-items: center;
-  gap: 8px;
+  justify-content: flex-end;
   min-height: 44px;
   padding: 0 6px 0 14px;
   border-bottom: 1px solid var(--line);
@@ -4174,9 +4175,20 @@ html[data-layout="tablet"] .talk-room[data-covered] .talk-page {
   touch-action: none;
 }
 
+html[data-layout="phone-portrait"] .talk-head {
+  min-height: 22px;
+}
+
+/* (a finger's worth to hold: the grip takes presses a little way under itself too) */
+html[data-layout="phone-portrait"] .talk-head::after {
+  content: "";
+  position: absolute;
+  inset: 0 0 -12px;
+}
+
 .talk-grip {
   position: absolute;
-  top: 5px;
+  top: 9px;
   left: 50%;
   width: 36px;
   height: 4px;
@@ -4185,21 +4197,38 @@ html[data-layout="tablet"] .talk-room[data-covered] .talk-page {
   background: var(--line-3);
 }
 
-.talk-song {
-  flex: 1;
+.talk-done {
+  position: relative;
+  z-index: 1;
+}
+
+/* held upright, Done is out of sight (still there for a screen reader, which the page keeps to itself)
+   until the keyboard is up, when the control bar may be scrolled out of sight, or until it's focused
+   from a keyboard of keys */
+html[data-layout="phone-portrait"] .talk-room:not([data-covered]) .talk-done:not(:focus-visible) {
+  position: absolute;
+  width: 1px;
   min-width: 0;
+  height: 1px;
+  min-height: 0;
+  padding: 0;
+  border: 0;
   overflow: hidden;
-  color: var(--text-2);
-  font-size: 13px;
-  text-overflow: ellipsis;
+  clip-path: inset(50%);
   white-space: nowrap;
+}
+
+html[data-layout="phone-portrait"] .talk-room[data-covered] .talk-head,
+html[data-layout="phone-portrait"] .talk-head:has(.talk-done:focus-visible) {
+  min-height: 44px;
 }
 
 .talk-page[data-wide] .talk-head {
   display: none;
 }
 
-/* the conversation, newest at the foot beside the field; it has what the list and the field leave */
+/* the conversation, from the top down; it has what the list and the field leave, and one longer than
+   that scrolls, kept at its newest turn (ui/TalkPage.tsx) */
 .talk-thread {
   display: flex;
   flex: 1 1 0;
@@ -4210,7 +4239,6 @@ html[data-layout="tablet"] .talk-room[data-covered] .talk-page {
 }
 
 .talk-body {
-  margin-top: auto;
   padding-bottom: 4px;
 }
 
@@ -4284,6 +4312,45 @@ html[data-layout="tablet"] .talk-room[data-covered] .talk-page {
   color: var(--text);
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* with room to spare on the page (ui/turn-room.ts), a turn cut short shows more of itself: its request,
+   then the start of its reply under it, each to the lines it's given */
+.talk-turn:not(.open) > .talk-row[data-roomy] {
+  flex-wrap: wrap;
+  align-items: flex-start;
+  row-gap: 2px;
+  padding-top: 9px;
+  padding-bottom: 10px;
+}
+
+.talk-turn:not(.open) > .talk-row[data-roomy] .chev {
+  margin-top: 3px;
+}
+
+.convo .talk-turn:not(.open) > .talk-row[data-roomy] .you {
+  display: -webkit-box;
+  flex: 1 1 0;
+  max-width: none;
+  white-space: normal;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: var(--you-lines, 1);
+}
+
+.talk-turn:not(.open) > .talk-row[data-roomy] .said {
+  display: -webkit-box;
+  flex: 0 0 100%;
+  box-sizing: border-box;
+  padding-left: 22px;
+  line-height: 1.5;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: var(--said-lines, 1);
+}
+
+.talk-turn:not(.open) > .talk-row[data-roomy] .said:empty {
+  display: none;
 }
 
 /* open, the request is said whole on its line, and not again under it */

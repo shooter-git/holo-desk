@@ -93,7 +93,8 @@ body,
    140 (until then it read body's, so body keeps it too). Each box that scrolls sideways (the mixer's
    strips, an editor's bar…) keeps a swipe past its end to itself as well (overscroll-behavior-x:
    contain), so it isn't passed on to the page. On iOS, a swipe that starts at the very edge of the
-   screen is the system's back gesture, whatever the page says. */
+   screen is the system's back gesture, whatever the page says: the studio takes those touches itself
+   (app/edge-swipe.ts). */
 html {
   overscroll-behavior: none;
 }

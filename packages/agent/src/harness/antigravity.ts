@@ -170,11 +170,9 @@ export function antigravityReader(): Reader {
           out.push({ kind: 'trip', why: `Antigravity tried a tool that isn’t HO[LO]’s (${name || 'unknown'})` });
           return out;
         }
-        const error = isObject(info.error) && typeof info.error.message === 'string' ? info.error.message : '';
-        if (tool !== null && /permission/i.test(error)) {
-          out.push({ kind: 'trip', why: 'Antigravity refused one of HO[LO]’s tools: its permissions aren’t as set' });
-          return out;
-        }
+        // (a step's error is never read for a refusal: it's the tool's own words when the tool ran, and
+        // HO[LO]'s tools say "ask_permission" in theirs. A call Antigravity refuses is in the result's
+        // denied_actions)
         const index = typeof step.step_index === 'number' ? step.step_index : -1;
         if (tool && !said.has(index)) {
           said.add(index);

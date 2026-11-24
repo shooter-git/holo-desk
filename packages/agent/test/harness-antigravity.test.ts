@@ -696,25 +696,16 @@ describe('Antigravity: a sealed run', () => {
     expect(step('mcp_holo_echo', {}, { subagent_info: { subagents: [] } })).toEqual([
       { kind: 'trip', why: 'Antigravity started a subagent' },
     ]);
-    // one of HO[LO]'s tools refused by its permissions: they aren't as set
-    expect(
-      step(
-        'mcp_holo_echo',
-        {},
-        {
-          state: 'ERROR',
-          tool_info: { name: 'mcp_holo_echo', error: { message: 'Permission denied for mcp(holo/echo)' } },
-        },
-      )[0]?.kind,
-    ).toBe('trip');
-    // a tool's own error isn't a trip
-    expect(
-      step(
-        'mcp_holo_echo',
-        {},
-        { state: 'ERROR', tool_info: { name: 'mcp_holo_echo', error: { message: 'No such track' } } },
-      ),
-    ).toEqual([{ kind: 'tool', name: 'echo' }]);
+    // a tool's own error isn't a trip, whatever it says: HO[LO]'s tools name ask_permission in theirs
+    // (a call Antigravity refuses is in the result's denied_actions, below)
+    for (const message of [
+      'No such track',
+      'The song hasn’t been bounced: ask the user to bounce it (ask_permission "bounce"), or measure the mix by rendering it (source "render")',
+      'Permission denied for mcp(holo/echo)',
+    ])
+      expect(
+        step('mcp_holo_echo', {}, { state: 'ERROR', tool_info: { name: 'mcp_holo_echo', error: { message } } }),
+      ).toEqual([{ kind: 'tool', name: 'echo' }]);
     const r = antigravityReader();
     expect(r.event({ event: 'init', conversation_id: 'c1', init: { agent: 'default' } })).toEqual([
       { kind: 'session', id: 'c1' },

@@ -4,6 +4,7 @@ import './styles/app.css';
 import { lazy, StrictMode, Suspense } from 'react';
 import { createRoot } from 'react-dom/client';
 import { findCompanion, openTurn, startup } from './app/actions.ts';
+import { installEdgeGuard } from './app/edge-swipe.ts';
 import { installKeys } from './app/keys.ts';
 import { connectLive, device } from './app/live.ts';
 import { installNotices } from './app/notify.ts';
@@ -34,6 +35,8 @@ if (isRemote) {
   connectRemote(`Remote (${device().replace(/ on an? /, ', ')})`);
 } else {
   installKeys();
+  // an iPhone's swipe from the side of the screen doesn't take the studio away
+  installEdgeGuard();
   // a pairing link from `holo pair`: Settings › Agent, with its code filled in
   const paired = () => {
     if (readPairLink()) openSettings('agent');

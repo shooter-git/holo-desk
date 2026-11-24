@@ -782,19 +782,28 @@ slash button and the swipe down all bring it; a second press of the slash button
   transport and the column are is measured while it's open; it keeps to what shows above a keyboard
   that covers the page (iOS). On Android the keyboard makes the page shorter, so the field sits just
   above the transport.
-- **What it holds.** A header (the song's name, Done), then the song's conversation, oldest first
+- **What it holds.** A header (a grip on a phone held upright, where the song's name and the Commands
+  button are in the control bar over it; Done on a sheet), then the song's conversation, oldest first
   (`conversation()` in apps/web/src/app/agent.ts: every turn the host keeps, the jobs it told of
   standing for theirs, a request on its way and one turned down; its last is always what the bar would
   show). Earlier turns are a line each, the request then the start of the reply, opened with a tap; a
-  reply's view is drawn only for a turn that's open. The newest is whole, at the foot beside the field.
+  reply's view is drawn only for a turn that's open. The newest is whole. The conversation starts
+  under the header; one longer than the page scrolls, kept at its newest turn, at the foot beside the
+  field. One shorter gives the room it leaves to its earlier turns: a turn whose line cuts it short
+  shows its request over the start of its reply, on as many lines as there's room for (to three and
+  six), the turn nearest the newest first, never so many that the page would scroll
+  (`apps/web/src/ui/turn-room.ts`).
   A request working shows its line, how long it has worked (on the host's clock, a second at a time,
   only while it's shown) and Stop. What's typed finds commands in a list over the field, its first row
   nearest it; the field grows with the words to six lines, Enter sends or runs the row, Shift Enter
   starts a new line. A row of the list closes the page, as the bar does.
 - **Opening and closing.** It opens at the foot of the conversation and reads it afresh (again if the
   song changes while it's open). On a touch screen the field doesn't take the keyboard as it opens
-  when there's a conversation to read. Done closes it, and so do a swipe down from its header (held
-  upright) or to the right (a sheet), and a tab on a phone held upright. Holding the header still, or
+  when there's a conversation to read. The Commands button closes it, and so do Done (a sheet's; on a
+  phone held upright it shows only while the keyboard is up, when the control bar may be out of sight,
+  and is always there for a screen reader), a swipe down from its header or from anywhere on a page
+  with nothing above to scroll to (held upright) or to the right (a sheet), and a tab on a phone held
+  upright. Holding the header still (the grip, and a little way under it), or
   drawing the page partway, fades it to almost clear (13%) while the finger stays, so the studio under
   it shows; it takes no taps while faded (`apps/web/src/ui/page-swipe.ts`).
 - **Windows.** A window opened after it (a plugin's, an instrument's, a stage's) shows whole, over it:

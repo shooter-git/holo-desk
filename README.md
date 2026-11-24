@@ -427,8 +427,8 @@ goes quiet for 15 minutes, and Stop on the bar ends it at any time.
 The bar opens as a page with the song's whole conversation: on a phone held upright it fills the room
 between the control bar and the transport, which stay in reach; on its side and on a tablet it's a sheet
 down the right edge, beside the studio. Earlier requests fold to a line you tap to open, the one at work
-says how long it has worked, and holding the page's header lets you see the studio through it. Done or a
-swipe puts it away. When a reply leaves you something to decide while you listen (three takes to try,
+says how long it has worked, and holding the page's header lets you see the studio through it. The
+Commands button or a swipe puts it away. When a reply leaves you something to decide while you listen (three takes to try,
 one to keep), the agent may give it a short row of those controls: on a phone, once you've read the
 reply, that row waits above the transport (at the foot of the screen on its side) until you swipe it
 away, press ×, or ask the next thing; ^ opens the page again.

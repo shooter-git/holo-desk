@@ -194,7 +194,7 @@ if (pair) {
   await p.page.locator('.talk-room .agent-view').first().waitFor();
   await p.page.waitForTimeout(1000);
   await shoot(p.page, 'phone-page');
-  await p.page.getByRole('button', { name: 'Done' }).tap();
+  await p.page.locator('.cb-bar').tap();
   await p.page.waitForTimeout(1200);
   await shoot(p.page, 'phone-tray');
   await p.ctx.close();

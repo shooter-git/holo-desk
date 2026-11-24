@@ -595,6 +595,38 @@ async function fitsOnce() {
 }
 
 /**
+ * The page's conversation in its room: it starts under the header, with nothing left blank over it; an
+ * earlier turn shown on more than a line never makes it longer than the page; and a phone held upright
+ * has a grip for a header (the song's name and the way to close it are in the control bar), a sheet Done.
+ */
+function threadRoom() {
+  const page = document.querySelector('.talk-page');
+  const thread = page?.querySelector('.talk-thread');
+  const body = thread?.firstElementChild;
+  if (!page || !thread || !body) return [];
+  const out = [];
+  const scrolls = thread.scrollHeight > thread.clientHeight + 1;
+  const over = body.getBoundingClientRect().top - thread.getBoundingClientRect().top;
+  if (!scrolls && over > 1) out.push(`${Math.round(over)} px is left blank over the conversation`);
+  const roomy = thread.querySelectorAll('.talk-row[data-roomy]').length;
+  if (roomy && scrolls) out.push(`${roomy} earlier turn(s) opened out, and the conversation no longer fits the page`);
+  for (const row of thread.querySelectorAll('.talk-turn.open > .talk-row[data-roomy]'))
+    out.push(`an opened turn is still laid out as a line with room ("${row.textContent.slice(0, 30)}")`);
+  const head = page.querySelector('.talk-head');
+  const done = head?.querySelector('.talk-done');
+  if (head && done && getComputedStyle(head).display !== 'none') {
+    const upright = document.documentElement.dataset.layout === 'phone-portrait';
+    const h = head.getBoundingClientRect().height;
+    const d = done.getBoundingClientRect();
+    if (upright && h > 30) out.push(`the header is ${Math.round(h)} px tall: it should be a grip`);
+    if (upright && d.width > 2) out.push('Done shows on a phone held upright with no keyboard up');
+    if (!upright && d.width < 30) out.push('the sheet’s header has no Done');
+    if (head.textContent.trim() !== 'Done') out.push(`the header says more than Done ("${head.textContent.trim()}")`);
+  }
+  return out;
+}
+
+/**
  * The commands opened from a scan's review: over it (what's in the middle of where they are is theirs),
  * under its header (whose Commands button, beside Close, stays in reach), and the review still there.
  */
@@ -642,6 +674,7 @@ const CHECKS = {
   tray,
   noTray,
   viewFits,
+  threadRoom,
   fitsOnce,
 };
 
@@ -991,13 +1024,14 @@ const control = (page, text) =>
 function commands(page, layout, press) {
   const page_ = layout !== 'desktop';
   const open = () => (page_ ? press(control(page, 'Commands')) : page.keyboard.press('Control+/'));
-  // (across a phone on its side, typing, the sheet has no header: the slash button, beside it, puts it away)
+  // (a phone held upright has a grip for a header, and across a phone on its side, typing, the sheet has
+  // none: the Commands button, over or beside it, puts it away; a tablet's sheet has Done)
   const shut = () =>
     !page_
       ? page.keyboard.press('Escape')
-      : layout === 'phone-landscape'
-        ? press(control(page, 'Commands'))
-        : press(page.locator('.talk-head button', { hasText: 'Done' }));
+      : layout === 'tablet'
+        ? press(page.locator('.talk-head button', { hasText: 'Done' }))
+        : press(control(page, 'Commands'));
   const field = () => page.locator('.talk-page .field textarea, .bar .field input').first();
   const name = layout === 'desktop' ? 'Commands' : layout === 'phone-portrait' ? 'Commands page' : 'Commands sheet';
   const checks = page_ ? ['transportClear', 'solid'] : ['solid'];
@@ -1110,10 +1144,10 @@ function agentViews(page, layout, finger, running) {
       ]
     : [['No tray', read, null, ['noTray']]];
   return running
-    ? [[`${where}: working turn`, open, shut, [...checks, 'workingFits']]]
+    ? [[`${where}: working turn`, open, shut, [...checks, 'workingFits', 'threadRoom']]]
     : [
         settings,
-        [`${where} with a thread`, open, shut, [...checks, 'viewFits', 'fitsOnce']],
+        [`${where} with a thread`, open, shut, [...checks, 'viewFits', 'fitsOnce', 'threadRoom']],
         // an earlier turn opened: its view drawn
         [
           `${where} with a thread, a turn opened`,
@@ -1122,7 +1156,7 @@ function agentViews(page, layout, finger, running) {
             if (layout !== 'desktop') await press(page.locator('.talk-row').last());
           },
           shut,
-          [...checks, 'viewFits'],
+          [...checks, 'viewFits', 'threadRoom'],
         ],
         ...tray,
         ...scanViews(page, layout, press, true),

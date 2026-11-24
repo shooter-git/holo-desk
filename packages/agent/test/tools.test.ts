@@ -1092,10 +1092,10 @@ describe('reading', () => {
       ],
     };
     const api = setup({ scans: { [scan.id]: scan }, strips: { [`${scan.id}/0/0`]: strip } });
-    const show = (args: Record<string, unknown>, pictureBytes?: number) =>
+    const show = (args: Record<string, unknown>, pictureBytes?: number, clefs: string | null = 'treble,bass') =>
       (toolNamed('scan_show') as Tool).run(
         { api, middleC: 'C4', memory: memoryOf(api), ...(pictureBytes ? { pictureBytes } : {}) },
-        { scan: scan.id, system: '0.0', clefs: 'treble,bass', ...args },
+        { scan: scan.id, system: '0.0', ...(clefs ? { clefs } : {}), ...args },
       );
     const bytes = (r: { images?: { data: string }[] }) =>
       (r.images ?? []).map((i) => Buffer.byteLength(i.data, 'base64'));
@@ -1118,19 +1118,89 @@ describe('reading', () => {
     const tight = await show({}, 5000);
     expect((tight.images?.length ?? 0) - 1).toBeGreaterThan(n);
     expect(Math.max(...bytes(tight))).toBeLessThanOrEqual(5000);
-    // a part of those, closer: its pieces within the limit too
-    const closer = await show({ part: n }, 9000);
-    expect(closer.text).toContain(`Part ${n} of ${n}, closer`);
-    expect(closer.images?.length).toBeGreaterThan(0);
-    expect(Math.max(...bytes(closer))).toBeLessThanOrEqual(9000);
+    const parts = (tight.images?.length ?? 0) - 1;
+    // the parts are the same with clefs, without, and with ones that don't match: "part" numbers them
+    for (const clefs of [null, 'treble']) {
+      const other = await show({}, 5000, clefs);
+      expect((other.images?.length ?? 0) - 1).toBe(parts);
+      expect(Math.max(...bytes(other))).toBeLessThanOrEqual(5000);
+    }
+    // a part of those, closer: its pieces within the limit too, and both its staves known (so narrow a
+    // stretch has too little of them to find them by)
+    for (const part of [1, 2, Math.ceil(parts / 2), parts]) {
+      const closer = await show({ part }, 5000);
+      expect(closer.text).toContain(`Part ${part} of ${parts}, closer`);
+      expect(closer.text).toContain('as pitches for the clefs given (treble, bass');
+      expect(closer.images?.length).toBeGreaterThan(0);
+      expect(Math.max(...bytes(closer))).toBeLessThanOrEqual(5000);
+    }
+    // parts from one on, and none past the last
+    const rest = await show({ from: parts }, 5000);
+    expect(rest.images).toHaveLength(1);
+    expect(rest.text).toContain(`Images 1–1 are parts ${parts}–${parts} of the ${parts} the system is enlarged in`);
+    await expect(show({ from: parts + 1 }, 5000)).rejects.toThrow(`"from" is 1 to ${parts}`);
     // a limit nothing fits: no pictures, and the model told to say so
     const none = await show({}, 300);
     expect(none.images).toEqual([]);
     expect(none.text).toContain("can't be made small enough to show here");
     expect(none.text).toContain("don't guess its notes");
     await expect(show({ part: 1 }, 300)).rejects.toThrow("can't be made small enough");
-    // (each of these cuts the system several ways and packs every part: seconds, on a busy machine)
-  }, 30_000);
+    // (each limit cuts the system several ways and packs every part: seconds, on a busy machine)
+  }, 60_000);
+
+  it('shows a system of many small parts forty at a time', async () => {
+    // four staves across a wide page, in two groups of two: far more parts than one reply should carry
+    const w = 3200;
+    const h = 620;
+    const rgb = new Uint8Array(w * h * 3).fill(238);
+    const ink = (x: number, y: number) => rgb.fill(25, (y * w + x) * 3, (y * w + x) * 3 + 3);
+    const tops = [70, 200, 330, 460];
+    for (const top of tops) {
+      for (let i = 0; i < 5; i++) for (let x = 20; x < w - 20; x++) for (const d of [0, 1]) ink(x, top + i * 12 + d);
+      for (let x = 60; x < w - 40; x += 30)
+        for (let dy = -4; dy <= 4; dy++)
+          for (let dx = -6; dx <= 6; dx++) if (dx * dx + dy * dy * 2 <= 36) ink(x + dx, top + ((x / 30) % 9) * 6 + dy);
+    }
+    for (let y = 70; y <= 508; y++) ink(20, y);
+    const strip = { mime: 'image/png', data: writePngRgb({ w, h, data: rgb }).toString('base64') };
+    const scan: Scan = {
+      id: 'scn_abcdef78',
+      project: 'x',
+      title: 'Chorale',
+      created: '',
+      pages: [
+        {
+          n: 0,
+          w,
+          h,
+          type: 'png',
+          systems: [{ k: 0, top: 0, bottom: h, left: 0, right: w, staves: 4, bars: [0, 1], state: 'new' }],
+        },
+      ],
+    };
+    const api = setup({ scans: { [scan.id]: scan }, strips: { [`${scan.id}/0/0`]: strip } });
+    const show = (args: Record<string, unknown>) =>
+      (toolNamed('scan_show') as Tool).run(
+        { api, middleC: 'C4', memory: memoryOf(api), pictureBytes: 4000 },
+        { scan: scan.id, system: '0.0', ...args },
+      );
+    const first = await show({});
+    const total = Number(/of the (\d+) it is enlarged in/.exec(first.text)?.[1]);
+    expect(total).toBeGreaterThan(40);
+    // the whole system, then parts 1 to 40, and where the rest are
+    expect(first.images).toHaveLength(41);
+    expect(first.text).toContain(`Images 2–41 are parts 1–40 of the ${total} it is enlarged in`);
+    expect(first.text).toContain(`Parts 41–${total} come with "from": 41.`);
+    expect(first.text).toContain(`"part" (1 to ${total})`);
+    const next = await show({ from: 41 });
+    const shown = Math.min(40, total - 40);
+    expect(next.images).toHaveLength(shown);
+    expect(next.text).toContain(
+      `Images 1–${shown} are parts 41–${40 + shown} of the ${total} the system is enlarged in`,
+    );
+    // any of them can be looked at closer, the last too
+    expect((await show({ part: total })).text).toContain(`Part ${total} of ${total}, closer`);
+  }, 60_000);
 
   it('lists instruments, plugins and packs', async () => {
     const api = setup({

@@ -3,6 +3,7 @@
  * The agent sees a system's strip as an image, writes its bars with score_write, and marks how far
  * the reading got.
  */
+import { createHash } from 'node:crypto';
 import {
   type Clef,
   fewColours,
@@ -11,6 +12,7 @@ import {
   type Rgb,
   type ScanSystem,
   type SystemState,
+  stavesOf,
   zoomSystem,
 } from '@holo/score';
 import type { Image } from '../api.ts';
@@ -42,90 +44,152 @@ function guidesText(clefs: Clef[] | undefined, pitches: boolean, staves: number)
 }
 
 const png = (img: Rgb): Image => ({ mime: 'image/png', data: writePngRgb(img).toString('base64') });
-const small = (img: Rgb, greys: 2 | 4, margin = 0): Buffer => writePngIndexed(fewColours(img, greys, margin));
 const picture = (file: Buffer): Image => ({ mime: 'image/png', data: file.toString('base64') });
 
 type Zoomed = ReturnType<typeof zoomSystem>;
+type Found = ReturnType<typeof stavesOf>;
+type Part = Zoomed['parts'][number];
 
 /** The widths a part is cut down to (px), until its picture is small enough for a harness that shows only small ones. */
-const NARROWER = [640, 480, 380, 300];
+const NARROWER = [640, 560, 480, 420, 380, 340, 300];
+/**
+ * What's left of the limit when the cut is chosen (bytes): other clefs' names make a part up to about
+ * 110 bytes bigger than the treble names it's chosen with (and a part past the limit all the same is
+ * shown in two shades of ink, not four).
+ */
+const HEADROOM = 150;
+/** How many of a system's parts one reply shows, where they come small and many. */
+const AT_ONCE = 40;
+
+/** A part in a palette's few colours, as a PNG: four shades of ink when that's within `limit`, else two. */
+function small(part: Part, limit: number): Buffer {
+  const four = writePngIndexed(fewColours(part.img, 4, part.margin));
+  return four.length <= limit ? four : writePngIndexed(fewColours(part.img, 2, part.margin));
+}
 
 /**
- * A zoomed system's parts as pictures. In colour, as wide as a model is shown; or, where the model is
- * shown only pictures up to `limit` bytes, in a palette's few colours and cut narrower until every one
- * fits: each in four shades of ink when that fits (a faint stroke stays), else in two. Null when none
- * of that fits.
+ * How narrow a strip's parts are cut for every one's picture to be within `limit` bytes: as wide as a
+ * model is shown (undefined) when that fits, else the widest of NARROWER that does; null when none does.
+ * Chosen with every staff's lines and spaces named as pitches, whatever clefs were given: the cut, and so
+ * a part's number, is the same with clefs and without, and pitch names are the longest there are.
  */
-function pictures(make: (maxWidth?: number) => Zoomed, limit?: number): { z: Zoomed; images: Image[] } | null {
-  if (limit === undefined) {
-    const z = make();
-    return { z, images: z.parts.map((p) => png(p.img)) };
-  }
-  let widest = Number.POSITIVE_INFINITY;
+function cutFor(strip: Gray, found: Found, space: number | undefined, limit: number): { width?: number } | null {
+  const clefs = found.staves.map((): Clef => 'treble');
+  let last = '';
   // how wide a part's music may be for its picture to fit, going by the parts tried so far (a part's
   // two margins, where its lines and spaces are named, are no part of that)
   let room = Number.POSITIVE_INFINITY;
   let margins = 0;
   for (const width of [undefined, ...NARROWER]) {
-    // (a width the parts already had would cut them the same; one well past the room there is can't fit)
-    if (width !== undefined && (width >= widest || width - margins > room * 1.4)) continue;
-    const z = make(width);
-    if (!z.parts.length) return { z, images: [] };
-    widest = Math.max(...z.parts.map((p) => p.img.w));
+    // (one well past the room there is can't fit)
+    if (width !== undefined && width - margins > room * 1.4) continue;
+    const z = zoomSystem(strip, { clefs, found, maxWidth: width, ...(space ? { space } : {}) });
+    // (the same cut again: parts already as narrow as asked, or as narrow as they go)
+    const cut = z.parts.map((p) => `${p.x0}-${p.x1}`).join(' ');
+    if (cut === last) continue;
+    last = cut;
+    const files = z.parts.map((p) => small(p, limit - HEADROOM));
+    if (files.every((f) => f.length <= limit - HEADROOM)) return width === undefined ? {} : { width };
     margins = 2 * (z.parts[0]?.margin ?? 0);
-    const files = z.parts.map((p) => {
-      const four = small(p.img, 4, p.margin);
-      return four.length <= limit ? four : small(p.img, 2, p.margin);
-    });
-    if (files.every((f) => f.length <= limit)) return { z, images: files.map(picture) };
-    const most = Math.max(...files.map((f) => f.length));
-    room = ((widest - margins) * limit) / most;
+    const widest = Math.max(...z.parts.map((p) => p.img.w));
+    room = ((widest - margins) * (limit - HEADROOM)) / Math.max(...files.map((f) => f.length));
   }
   return null;
 }
 
-/** The whole strip small, in two colours, for a harness that shows only small pictures: null when even that's too big. */
+/**
+ * The cuts chosen so far, by strip and limit: a system is asked for again and again (once whole, then a
+ * part at a time to look closer), and choosing its cut packs every part several ways. Kept as long as
+ * the server runs (a harness's run); a few dozen systems at most matter at once.
+ */
+const cuts = new Map<string, { width?: number } | null>();
+function cutOf(strip: Image, gray: Gray, found: Found, limit: number): { width?: number } | null {
+  const key = `${limit}:${strip.data.length}:${createHash('sha1').update(strip.data).digest('base64')}`;
+  const known = cuts.get(key);
+  if (known !== undefined) return known;
+  const cut = cutFor(gray, found, undefined, limit);
+  if (cuts.size >= 64) cuts.clear();
+  cuts.set(key, cut);
+  return cut;
+}
+
+/** The whole strip small, in few colours, for a harness that shows only small pictures: null when even that's too big. */
 function whole(gray: Gray, limit: number): Image | null {
+  let last = 0;
   for (const width of [900, 640, 480, 320]) {
-    const file = small(overview(gray, width), 2);
-    if (file.length <= limit) return picture(file);
+    const img = overview(gray, width);
+    // (a strip no wider than asked stays as it is: the same picture again)
+    if (img.w === last) continue;
+    last = img.w;
+    for (const greys of [4, 2] as const) {
+      const file = writePngIndexed(fewColours(img, greys));
+      if (file.length <= limit) return picture(file);
+    }
   }
   return null;
+}
+
+/** A part's own stretch of a strip, and the strip's staves as they are in it (where its lines are at its middle). */
+function stretch(gray: Gray, z: Zoomed, p: Part): { crop: Gray; found: Found } {
+  const crop: Gray = { w: p.x1 - p.x0, h: p.y1 - p.y0, data: new Uint8Array((p.x1 - p.x0) * (p.y1 - p.y0)) };
+  for (let y = 0; y < crop.h; y++)
+    crop.data.set(gray.data.subarray((p.y0 + y) * gray.w + p.x0, (p.y0 + y) * gray.w + p.x1), y * crop.w);
+  const middle = Math.min(gray.w - 1, Math.round((p.x0 + p.x1) / 2));
+  const staves = p.staves.map((i) => {
+    const staff = z.staves[i] as Found['staves'][number];
+    const bend = z.curves[i]?.[middle] ?? 0;
+    const left = Math.max(0, Math.min(crop.w - 2, staff.left - p.x0));
+    return {
+      lines: staff.lines.map((y) => y + bend - p.y0),
+      left,
+      right: Math.max(left + 1, Math.min(crop.w - 1, staff.right - p.x0)),
+    };
+  });
+  return { crop, found: { staves, space: z.space } };
 }
 
 const kb = (bytes: number) => `${Math.round(bytes / 1000)} KB`;
 
 /**
  * A system's strip as pictures to read, and what to say of them: the whole strip, then its zoomed parts
- * with guides; or, with `part`, that part again twice as large, in pieces. Where the model is shown only
- * pictures up to `limit` bytes, all of them in few colours and cut to fit. The strip alone when it can't
- * be read as a picture.
+ * with guides (from part `from` on); or, with `part`, that part again twice as large, in pieces. Where
+ * the model is shown only pictures up to `limit` bytes, all of them in few colours and cut to fit,
+ * AT_ONCE parts to a reply. The strip alone when it can't be read as a picture.
  */
 function zoomed(
   strip: Image,
   clefs: Clef[] | undefined,
-  part: number | undefined,
+  ask: { part?: number; from?: number },
   limit: number | undefined,
 ): { images: Image[]; text: string } {
+  const { part } = ask;
   const none = (why: string) => {
     if (part !== undefined) throw new ToolError(`This system can't be shown in parts: ${why}`);
     return { images: [strip], text: '' };
   };
   if (strip.mime !== 'image/png') return none('its strip is not a PNG');
+  const tooBig = `its pictures can't be made small enough to show here (${kb(limit ?? 0)} each at most)`;
   let gray: Gray;
-  let shown: ReturnType<typeof pictures>;
+  let z: Zoomed;
   try {
     gray = readPngGray(Buffer.from(strip.data, 'base64'));
-    shown = pictures((maxWidth) => zoomSystem(gray, { clefs, maxWidth }), limit);
-  } catch {
+    if (limit === undefined) z = zoomSystem(gray, { clefs });
+    else {
+      const found = stavesOf(gray);
+      const cut = found.staves.length ? cutOf(strip, gray, found, limit) : {};
+      if (!cut) {
+        if (part !== undefined) throw new ToolError(`This system can't be shown in parts: ${tooBig}`);
+        return {
+          images: [],
+          text: `This system can't be shown: ${tooBig}. Say so in your reply; don't guess its notes.`,
+        };
+      }
+      z = zoomSystem(gray, { clefs, found, maxWidth: cut.width });
+    }
+  } catch (err) {
+    if (err instanceof ToolError) throw err;
     return none('its strip cannot be read as a picture');
   }
-  const tooBig = `its pictures can't be made small enough to show here (${kb(limit ?? 0)} each at most)`;
-  if (!shown) {
-    if (part !== undefined) throw new ToolError(`This system can't be shown in parts: ${tooBig}`);
-    return { images: [], text: `This system can't be shown: ${tooBig}. Say so in your reply; don't guess its notes.` };
-  }
-  const z = shown.z;
   const n = z.parts.length;
   if (!n) return none('no staff was found on its strip');
   const few =
@@ -138,38 +202,56 @@ function zoomed(
     const p = z.parts[part - 1];
     if (!p) throw new ToolError(`This system has ${n} part${n === 1 ? '' : 's'}: "part" is 1 to ${n}`);
     // the part's own stretch of the strip (and its staves' clefs), enlarged twice as much
-    const crop: Gray = { w: p.x1 - p.x0, h: p.y1 - p.y0, data: new Uint8Array((p.x1 - p.x0) * (p.y1 - p.y0)) };
-    for (let y = 0; y < crop.h; y++)
-      crop.data.set(gray.data.subarray((p.y0 + y) * gray.w + p.x0, (p.y0 + y) * gray.w + p.x1), y * crop.w);
+    const { crop, found } = stretch(gray, z, p);
     const own = clefs && clefs.length === z.staves.length ? p.staves.map((i) => clefs[i] as Clef) : clefs;
-    const near = pictures((maxWidth) => zoomSystem(crop, { clefs: own, space: 68, maxWidth }), limit);
-    if (!near) throw new ToolError(`Part ${part} can't be shown closer: ${tooBig}`);
-    const m = near.images.length;
+    let near: Zoomed;
+    if (limit === undefined) near = zoomSystem(crop, { clefs: own, space: 68 });
+    else {
+      // (so narrow a stretch has too little of its staves to find them by: they're the strip's, as found there)
+      const cut = cutFor(crop, found, 68, limit);
+      if (!cut) throw new ToolError(`Part ${part} can't be shown closer: ${tooBig}`);
+      near = zoomSystem(crop, { clefs: own, found, space: 68, maxWidth: cut.width });
+    }
+    const m = near.parts.length;
     return {
-      images: near.images,
+      images: near.parts.map((q) => (limit === undefined ? png(q.img) : picture(small(q, limit)))),
       text: [
         `Part ${part} of ${n}, closer: twice as large, in ${m} piece${m === 1 ? '' : 's'} left to right, each repeating the end of the one before.`,
         ...few,
-        ...guidesText(own, near.z.pitches, near.z.staves.length),
+        ...guidesText(own, near.pitches, near.staves.length),
       ].join('\n'),
     };
   }
+  const from = ask.from ?? 1;
+  if (from > n) throw new ToolError(`This system has ${n} part${n === 1 ? '' : 's'}: "from" is 1 to ${n}`);
+  const shown = z.parts.slice(from - 1, limit === undefined ? n : from - 1 + AT_ONCE);
+  const last = from - 1 + shown.length;
   // the system whole first: the strip as it is, or made small where only small pictures are shown
-  const first = limit === undefined ? strip : whole(gray, limit);
+  const first = from > 1 ? null : limit === undefined ? strip : whole(gray, limit);
   const across = new Set(z.parts.map((p) => p.y0)).size > 1;
-  const from = first ? 2 : 1;
+  const at = first ? 2 : 1;
+  const all = from === 1 && last === n;
+  const it = first ? 'it' : 'the system';
   const lines = [
-    `${
-      first
-        ? `Image 1 is the whole system${limit === undefined ? '' : ', small'}. Images ${from}–${n + from - 1} are it`
-        : `Images ${from}–${n + from - 1} are the system`
-    } enlarged in ${n} part${n === 1 ? '' : 's'}, left to right${
+    `${first ? `Image 1 is the whole system${limit === undefined ? '' : ', small'}. ` : ''}Images ${at}–${at + shown.length - 1} are ${
+      all
+        ? `${it} enlarged in ${n} part${n === 1 ? '' : 's'}`
+        : `parts ${from}–${last} of the ${n} ${it} is enlarged in`
+    }, left to right${
       across ? ' (and a group of staves at a time, top to bottom)' : ''
-    }; each repeats the end of the one before, so don't write those notes twice. Read the pitches from the parts. Where a notehead could be on a line or in the space beside it, look closer: scan_show with "part" (1 to ${n}) shows that part twice as large.`,
+    }; each repeats the end of the one before, so don't write those notes twice.${
+      last < n ? ` Parts ${last + 1}–${n} come with "from": ${last + 1}.` : ''
+    } Read the pitches from the parts. Where a notehead could be on a line or in the space beside it, look closer: scan_show with "part" (1 to ${n}) shows that part twice as large.`,
     ...few,
     ...guidesText(clefs, z.pitches, z.staves.length),
   ];
-  return { images: [...(first ? [first] : []), ...shown.images], text: lines.join('\n') };
+  return {
+    images: [
+      ...(first ? [first] : []),
+      ...shown.map((p) => (limit === undefined ? png(p.img) : picture(small(p, limit)))),
+    ],
+    text: lines.join('\n'),
+  };
 }
 
 /** "1.2" → page 1, system 2 (both from 0, as scan_show numbers them). */
@@ -206,7 +288,14 @@ export const scanShow: Tool = {
       type: 'integer',
       describe: 'With "system": one of its zoomed parts (from 1), shown again twice as large, to look closer',
       min: 1,
-      max: 99,
+      max: 999,
+    },
+    {
+      name: 'from',
+      type: 'integer',
+      describe: 'With "system": the first of its parts to show, when a reply says more of them come with "from"',
+      min: 1,
+      max: 999,
     },
   ],
   async run(ctx, args) {
@@ -218,7 +307,12 @@ export const scanShow: Tool = {
       const s = scan.pages.find((p) => p.n === page)?.systems.find((x) => x.k === k);
       if (!s) throw new ToolError(`Scan ${id} has no system ${page}.${k}`);
       const image = await ctx.api.scanStrip(id, page, k);
-      const parts = zoomed(image, clefsOf(str(args, 'clefs')), num(args, 'part'), ctx.pictureBytes);
+      const parts = zoomed(
+        image,
+        clefsOf(str(args, 'clefs')),
+        { part: num(args, 'part'), from: num(args, 'from') },
+        ctx.pictureBytes,
+      );
       if (num(args, 'part') !== undefined)
         return { text: `"${scan.title}" (${scan.id}), system ${page}.${k}: ${parts.text}`, images: parts.images };
       return {

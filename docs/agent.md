@@ -1014,18 +1014,24 @@ docs/agent-harnesses.md), a part in colour, 100 KB to 1 MB, would never be seen.
 server the limit (`HOLO_PICTURE_BYTES`; `pictureBytes` in a tool's context), and `scan_show` then gives:
 
 - each part in a palette's few colours (`fewColours`): the paper white, its tone and shadows evened out
-  (most of a photographed page's bytes), the ink in four shades, or two for a part that doesn't fit in
-  four, and the guides in their own colours. It reads as well as the part in colour at about a twentieth
-  of the size;
-- the parts cut narrower (`maxWidth`: 640, 480, 380, then 300 px) until every one fits, each still with its
-  named margins, and repeating two staff spaces of the one before at least, so a notehead at an edge is
-  whole in one of them. A handwritten grand staff comes to a dozen or so parts, a printed one fewer;
-- the whole system first, made small, in two colours;
-- the same for a part looked at closer.
+  (most of a photographed page's bytes; a dark edge with no paper near stays ink), the ink in four
+  shades, or two for a part that doesn't fit in four, and the guides in their own colours. It reads as
+  well as the part in colour at about a twentieth of the size;
+- the parts cut narrower (`maxWidth`: 640 px down to 300) until every one fits, each still with its named
+  margins, and repeating two staff spaces of the one before at least, so a notehead at an edge is whole in
+  one of them. The cut is chosen with every staff's names as pitches, whatever clefs were given (they
+  change a part's size by a hundred bytes or so), so a part's number is the same with clefs and without,
+  and it's kept for the run (a system is asked for again for each closer look). A handwritten grand staff
+  comes to a dozen or two parts, a printed one fewer;
+- forty parts to a reply: a system in more (four staves across a wide page) says where the rest are, and
+  `from` shows them;
+- the whole system first, made small;
+- the same for a part looked at closer, whose stretch of the strip is too narrow to find its staves by:
+  they're the strip's, as found there (`found`), moved to where its lines are in that stretch.
 
 When nothing fits, there are no pictures and the tool's text tells the model to say so, not to guess. Any
 other tool's picture past the limit (an attached photo) is left out by the server, with a line saying it
-was.
+was. Without a limit, a system's pictures are what they were.
 
 The strips are the studio's PNGs, read and written by `packages/agent/src/tools/png.ts` (Node's zlib, no
 other library; a palette's pictures are written a few bits a pixel). A strip that can't be read as a

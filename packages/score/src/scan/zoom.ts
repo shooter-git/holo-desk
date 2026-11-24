@@ -38,13 +38,22 @@ export interface ZoomOptions {
   /** A part's longest side, and its area at most (px). */
   maxSide?: number;
   maxArea?: number;
-  /** A part's width at most (px), for narrower parts than its side and area allow. */
+  /**
+   * A part's width at most (px), for narrower parts than its side and area allow. Such parts repeat two
+   * staff spaces of the one before at least (half of it at most), so a notehead at an edge is whole in
+   * one of them.
+   */
   maxWidth?: number;
+  /**
+   * The strip's staves and the space between their lines, when they're known already (`stavesOf`, or a
+   * larger strip's that this one was cut from): they aren't found again.
+   */
+  found?: { staves: FoundStaff[]; space: number };
   /** Guides drawn on the parts (else they're the strip, enlarged). */
   guides?: boolean;
   /** Each staff's clef, top to bottom, for naming lines and spaces by pitch. */
   clefs?: (Clef | null)[];
-  /** How much of a part the next one repeats (two staff spaces at least, half of it at most). */
+  /** How much of a part the next one repeats. */
   overlap?: number;
 }
 
@@ -68,6 +77,8 @@ export interface ZoomedSystem {
   space: number;
   /** How much the parts are enlarged. */
   scale: number;
+  /** How far each staff's lines are from `staves`' at each of the strip's columns (px; none without guides). */
+  curves: Float32Array[];
   /** Whether the margins name pitches (the clefs given matched the staves found). */
   pitches: boolean;
 }
@@ -324,9 +335,9 @@ export function zoomSystem(strip: Gray, options: ZoomOptions = {}): ZoomedSystem
   const overlap = options.overlap ?? 0.12;
   const guides = options.guides ?? true;
   const ink = binarize(strip);
-  const { staves, space } = theSystem(strip, ink);
+  const { staves, space } = options.found ?? theSystem(strip, ink);
   // no staff found: nothing to size the parts by, nor to draw guides on
-  if (!staves.length) return { parts: [], staves, space, scale: 1, pitches: false };
+  if (!staves.length) return { parts: [], staves, space, scale: 1, curves: [], pitches: false };
   const curves = guides ? staves.map((staff) => staffCurve(ink, strip.w, strip.h, staff, space)) : [];
   // pitch names only when there's a clef for each staff found: one staff missed would name the rest
   // for the wrong clefs
@@ -339,9 +350,10 @@ export function zoomSystem(strip: Gray, options: ZoomOptions = {}): ZoomedSystem
     const height = (y1 - y0) * scale;
     const width = Math.min(maxSide, options.maxWidth ?? maxSide, Math.floor(maxArea / Math.max(1, height)));
     const span = Math.max(40, Math.floor((width - margin * 2) / scale));
-    // each part repeats the end of the one before: a share of it, and two staff spaces at least (a
-    // notehead whole, however narrow the parts), though never more than half of it
-    const lap = Math.min(span / 2, Math.max(span * overlap, space * 2));
+    // each part repeats the end of the one before: a share of it; of parts cut narrower, two staff spaces
+    // at least (a notehead whole), though never more than half of one
+    const lap =
+      options.maxWidth === undefined ? span * overlap : Math.min(span / 2, Math.max(span * overlap, space * 2));
     const step = Math.max(1, Math.floor(span - lap));
     const count = strip.w <= span ? 1 : Math.ceil((strip.w - span) / step) + 1;
     const stride = count > 1 ? (strip.w - span) / (count - 1) : 0;
@@ -393,8 +405,16 @@ export function zoomSystem(strip: Gray, options: ZoomOptions = {}): ZoomedSystem
       parts.push({ img, margin, x0, x1, y0, y1, staves: inGroup });
     }
   }
-  return { parts, staves, space, scale, pitches: !!clefs };
+  return { parts, staves, space, scale, curves, pitches: !!clefs };
 }
+
+/** A strip's staves, top to bottom, and the space between their lines (px): what `zoomSystem` finds first. */
+export function stavesOf(strip: Gray): { staves: FoundStaff[]; space: number } {
+  return theSystem(strip, binarize(strip));
+}
+
+/** The darkest a page's paper is taken to be (of 255): less than that, with no lighter paper near, is ink. */
+const PAPER_FLOOR = 110;
 
 /**
  * The paper's shade around each pixel of columns x0 to x1: the lightest of each block and those beside
@@ -415,11 +435,13 @@ function paperLevel(grey: Uint8Array, skip: Uint8Array, w: number, h: number, x0
       if (v > (most[b] as number)) most[b] = v;
     }
   }
-  // a block all ink (inside a beam, a blot) takes its neighbours' paper
+  // a block all ink (inside a beam, a blot) takes its neighbours' paper; where there's none near (a dark
+  // edge, a blot bigger than that), paper is taken no darker than PAPER_FLOOR, so the dark stays ink
+  // rather than being stretched into every shade
   const wide = new Uint8Array(cols * rows);
   for (let r = 0; r < rows; r++) {
     for (let c = 0; c < cols; c++) {
-      let m = 1;
+      let m = PAPER_FLOOR;
       for (let dr = -1; dr <= 1; dr++)
         for (let dc = -1; dc <= 1; dc++) {
           const rr = r + dr;
@@ -493,7 +515,8 @@ export function fewColours(img: Rgb, greys: 2 | 4 = 4, margin = 0): Indexed {
     const v = Math.min(255, ((grey[i] as number) * 255) / Math.max(1, paper[i] as number));
     data[i] = greys === 2 ? (v < 165 ? 1 : 0) : v < 90 ? 3 : v < 150 ? 2 : v < 205 ? 1 : 0;
   }
-  return { w: img.w, h: img.h, data, palette: [...shades, ...GUIDE_COLOURS] };
+  // (a picture with no guide on it, a strip made small, needs only the shades: fewer bits a pixel)
+  return { w: img.w, h: img.h, data, palette: guide.some((g) => g > 0) ? [...shades, ...GUIDE_COLOURS] : shades };
 }
 
 /** A strip made small, to see a system whole: no wider than `maxWidth`, each pixel the mean of those it covers. */

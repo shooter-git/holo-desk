@@ -54,6 +54,11 @@ export interface ToolContext {
   middleC: MiddleC;
   /** Made once per run (mcp.ts), so a listen in parts is heard as one. */
   memory: ToolMemory;
+  /**
+   * The size (bytes) of the largest picture the harness shows its model, when it has such a limit: a
+   * bigger one never reaches the model, so a tool makes its pictures fit or says it can't.
+   */
+  pictureBytes?: number;
 }
 
 export interface ToolResult {

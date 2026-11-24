@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { type Gray, placeName, type Rgb, zoomSystem } from '../src/index.ts';
+import { fewColours, type Gray, overview, placeName, type Rgb, zoomSystem } from '../src/index.ts';
 
 /** A strip of paper with staves drawn on it: each staff's top line, how far its lines fall across it. */
 function strip(w: number, h: number, tops: number[], gap = 12, fall = 0): Gray {
@@ -140,6 +140,65 @@ describe('a system zoomed for the agent', () => {
   it('gives no parts for a strip with no staff on it', () => {
     const blank: Gray = { w: 2400, h: 700, data: new Uint8Array(2400 * 700).fill(240) };
     expect(zoomSystem(blank, {}).parts).toEqual([]);
+  });
+
+  it('cuts narrower parts when asked, each still repeating a notehead’s width of the one before', () => {
+    const s = strip(1900, 260, [60, 160]);
+    const wide = zoomSystem(s, {});
+    const narrow = zoomSystem(s, { maxWidth: 380 });
+    expect(narrow.parts.length).toBeGreaterThan(wide.parts.length);
+    for (const p of narrow.parts) expect(p.img.w).toBeLessThanOrEqual(380);
+    expect(narrow.parts[0]?.x0).toBe(0);
+    expect(narrow.parts.at(-1)?.x1).toBe(s.w);
+    // two staff spaces of the strip at least, where a share of so narrow a part would be less
+    for (let i = 1; i < narrow.parts.length; i++) {
+      const lap = (narrow.parts[i - 1]?.x1 as number) - (narrow.parts[i]?.x0 as number);
+      expect(lap).toBeGreaterThanOrEqual(2 * narrow.space - 1);
+    }
+    // the parts as wide as a model is shown repeat as they did: a share of each
+    const lap = (wide.parts[0]?.x1 as number) - (wide.parts[1]?.x0 as number);
+    expect(lap).toBeGreaterThan(4 * wide.space);
+  });
+
+  it('puts a part in a few flat colours: paper white under a shadow, ink dark, the guides their own', () => {
+    // a page darker toward its right edge, as under a lamp
+    const s = strip(1900, 260, [60, 160]);
+    for (let y = 0; y < s.h; y++)
+      for (let x = 0; x < s.w; x++)
+        s.data[y * s.w + x] = Math.round((s.data[y * s.w + x] as number) * (1 - 0.4 * (x / s.w)));
+    const z = zoomSystem(s, { clefs: ['treble', 'bass'] });
+    const part = z.parts.at(-1) as (typeof z.parts)[number];
+    for (const greys of [4, 2] as const) {
+      const few = fewColours(part.img, greys, part.margin);
+      expect(few.palette).toHaveLength(greys + 3);
+      expect(few.palette[0]).toEqual([255, 255, 255]);
+      expect(few.palette.slice(-3)).toEqual([
+        [40, 110, 255],
+        [30, 160, 70],
+        [235, 130, 20],
+      ]);
+      const count = new Array(few.palette.length).fill(0);
+      for (const v of few.data) count[v]++;
+      // mostly paper, though the page there is two thirds as light; some ink; every guide colour
+      expect(count[0] / few.data.length).toBeGreaterThan(0.6);
+      expect(count[greys - 1]).toBeGreaterThan(200);
+      for (const guide of [greys, greys + 1, greys + 2]) expect(count[guide]).toBeGreaterThan(100);
+      // a guide's pixel stays that guide's colour
+      for (let i = 0; i < few.data.length; i += 97) {
+        const px = [part.img.data[i * 3], part.img.data[i * 3 + 1], part.img.data[i * 3 + 2]];
+        if (isBlue(part.img, i % part.img.w, Math.floor(i / part.img.w)))
+          expect(few.palette[few.data[i] as number]).toEqual(px);
+      }
+    }
+  });
+
+  it('shows a strip whole and small', () => {
+    const s = strip(1900, 260, [60, 160]);
+    const small = overview(s, 640);
+    expect(small.w).toBeLessThanOrEqual(640);
+    expect(small.w / small.h).toBeCloseTo(s.w / s.h, 0);
+    // (a strip narrower than asked stays as it is)
+    expect(overview(s, 4000).w).toBe(1900);
   });
 
   it('names a staff’s lines and spaces as written, by clef', () => {

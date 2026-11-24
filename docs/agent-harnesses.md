@@ -27,7 +27,7 @@ server of ours as its only tools. The adapters in `packages/agent/src/harness/` 
 | The agent's instructions | `--append-system-prompt-file` | the workspace's `AGENTS.md`, after the user's global `$CODEX_HOME/AGENTS.md`, when a thread starts | the workspace's `AGENTS.md`, when a conversation starts (not on resume: seen) | the custom agent's body: its system prompt |
 | Session id | `init.session_id` | `thread.started.thread_id` | `init.session_id` | `conversation_id`, on every event |
 | Resume | `--resume=<id>`: works | `exec resume … <id> -`: works; `--ephemeral` breaks it | `--resume=<id>`: works only with the same private `HOME` | `--conversation=<id>`: works with the same private `HOME`; an unknown id starts a new conversation (a warning on stderr) |
-| MCP image reaches the model | Yes (named the colour) | Yes | Yes | Yes (named the colour) |
+| MCP image reaches the model | Yes (named the colour) | Yes | Yes | Only a small one: a file of about 10 KB or less (it named the colour). A bigger one is saved to a file the sealed agent can't open, so HO[LO]'s tools make their pictures that small for it (see **Pictures** under Antigravity) |
 | MCP tool timeout | per-server `"timeout"` (ms) in the MCP config | `mcp_servers.holo.tool_timeout_sec` | **fixed at 60 s** in print mode | per-server `timeoutSeconds` in `mcp_config.json` (the start too); 180 s by default |
 | Model / effort | `--model=<alias>` `--effort=<low…max>` | `--model=<id>` `-c model_reasoning_effort="…"` | effort is part of the model id | `--model=<slug>`; a model's effort variants (`…-low`) or `--effort` with the model's family name |
 | Signed-in check | `claude auth status` (JSON, exit 0/1) | `codex login status` (stderr text, exit 0/1) | `cursor-agent status --format json` (exit 0 both) | none: `agy models` lists (exit 0), or says "Please sign in" (exit 1) |
@@ -778,7 +778,42 @@ then `step_update` events (`step_index`, `state` `ACTIVE`/`DONE`/`ERROR`, `step_
 then one `{"event":"result",result:{status,response,error?,denied_actions?,usage,…}}`. `status` is `SUCCESS`,
 or `ERROR`, `CANCELED` and the like with `error`. A run refused before it starts (a model it doesn't know)
 prints only the result and `error: …` and `AGY_ERROR: {…}` on stderr, and exits 1. An MCP image is offloaded
-to a file in its conversation's folder and reaches the model (it named the colour).
+to a file in its conversation's folder (the step's output ends `[Resource offloaded to file://…/media_0.png]`)
+and, when it is small, reaches the model too (it named the colour).
+
+**Pictures.** Only a small picture reaches the model: Antigravity saves every picture a tool returns to
+`<home>/.gemini/antigravity-cli/brain/<conversation>/.system_generated/steps/<n>/media_<k>.png` and gives
+the model the picture itself only when its file is small. Measured on 1.5.15 with a stub server returning
+PNGs of a coloured block, the model asked for the colour (the same on `gemini-4-neon` and
+`gemini-3.8-flash`):
+
+| Picture | File | Seen |
+|---|---|---|
+| 64×64, plain | 155 B | yes |
+| 48×48, noise | 5,722 B | yes |
+| 1560×700, plain | 7,699 B | yes (four at once, and 24 of 420×900 at once: all, in order) |
+| 64×64, noise | 9,905 B | yes |
+| 72×72, noise | 12,318 B | no |
+| 90×90 to 1560×700, noise | 19 KB to 504 KB | no |
+
+So the limit is the file's size, somewhere from 10 to 12 KB, whatever the picture's size in pixels or how
+many come at once; each picture seen costs about 1,200 input tokens. No setting changes it (the changelog
+says of `read_resource` that it "offloads every blob to disk and inlines only small text and image
+resources"). A scan's zoomed part is 100 KB to 1 MB as a PNG in colour, so none ever reached the model: it
+got the `[Resource offloaded …]` line and said it had no way to look.
+
+- **Its file viewer can't be used.** With `tools: ["view_file"]` the model opens the saved picture by
+  itself (a `read_file` step, "Showing binary file of type image/png") and sees it. But reading can't be
+  held to that folder: without `read_file(*)` in `deny` it read a file beside the sign-in file and
+  `/etc/hostname` (reads are allowed unless denied; an `allow` of `read_file(<folder>/**)` limits nothing);
+  with the deny and that allow, the deny wins and the picture is refused too; `read_file(!<folder>/**)` is
+  no negation. So the agent stays without it.
+- **HO[LO] makes its pictures small instead.** The workspace's MCP config tells HO[LO]'s server the limit
+  (`HOLO_PICTURE_BYTES`, 9,000: `ANTIGRAVITY_PICTURE_BYTES`). `scan_show` then gives a system's parts in a
+  palette's few colours, cut narrower until each fits (docs/agent.md, "Reading a scan"), and the server
+  leaves out any other picture past the limit (an attached photo) and says so in the tool's text, so the
+  model reports it instead of guessing. Should Antigravity lower the limit, the model is back to
+  `[Resource offloaded …]` lines: it says it can't see the pictures.
 
 **Signed out.** `agy models` says "Please sign in to view available models" at once (exit 1). A print-mode
 run doesn't: it starts its browser sign-in and waits, silently, with nothing on stdout or stderr (its log

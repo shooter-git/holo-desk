@@ -8,7 +8,7 @@ import { applyOps, describeProject, newProject, type Op, type Project } from '@h
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { fakeJobApi } from '../src/api.ts';
 import { createServer as createMcp } from '../src/mcp.ts';
-import { newMemory } from '../src/tools/common.ts';
+import { newMemory, type Tool } from '../src/tools/common.ts';
 import { TOOLS } from '../src/tools/index.ts';
 
 const TOKEN = 'job-token-for-the-test';
@@ -441,6 +441,48 @@ describe('the MCP server in process', () => {
     // the second write read the song only once the first had been applied
     const methods = api.calls.map((c) => c.method);
     expect(methods.lastIndexOf('song')).toBeGreaterThan(methods.indexOf('ops'));
+  });
+
+  it('leaves out a picture bigger than the harness shows its model, and says so', async () => {
+    const big = Buffer.alloc(12_000, 7).toString('base64');
+    const little = Buffer.alloc(800, 7).toString('base64');
+    const show: Tool = {
+      name: 'show',
+      kind: 'see',
+      summary: 'Two pictures.',
+      args: [],
+      run: async () => ({
+        text: 'Two pictures.',
+        images: [
+          { mime: 'image/png', data: big },
+          { mime: 'image/png', data: little },
+        ],
+      }),
+    };
+    const call = async (pictureBytes?: number) => {
+      const server = createMcp({
+        tools: [show],
+        ctx: {
+          api: fakeJobApi(newProject('P')),
+          middleC: 'C4',
+          memory: newMemory(),
+          ...(pictureBytes ? { pictureBytes } : {}),
+        },
+      });
+      const answer = (await server.handle(
+        JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'show', arguments: {} } }),
+      )) as { result: { content: { type: string; text?: string; data?: string }[] } };
+      return answer.result.content;
+    };
+    // no limit: both, as they are
+    expect((await call()).map((c) => c.type)).toEqual(['text', 'image', 'image']);
+    expect((await call())[0]?.text).toBe('Two pictures.');
+    // a limit: the one that fits, and a line about the other
+    const limited = await call(9000);
+    expect(limited.map((c) => c.type)).toEqual(['text', 'image']);
+    expect(limited[1]?.data).toBe(little);
+    expect(limited[0]?.text).toContain('A picture was left out');
+    expect(limited[0]?.text).toContain('up to 9 KB');
   });
 
   it('answers a batch of requests together', async () => {

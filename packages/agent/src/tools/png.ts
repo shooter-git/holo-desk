@@ -1,10 +1,11 @@
 /**
  * PNGs, read and written with Node's zlib and nothing else: a scan's strips as the studio saved them
- * (8 bits a sample, not interlaced: grey, grey and alpha, colour, colour and alpha), read into grey;
- * a picture in colour written back, for the agent to see.
+ * (8 bits a sample, not interlaced: grey, grey and alpha, colour, colour and alpha; or a palette's
+ * picture, as written here), read into grey; a picture written back for the agent to see, in colour
+ * or, far smaller, in a palette's few colours.
  */
 import { deflateSync, inflateSync } from 'node:zlib';
-import type { Gray, Rgb } from '@holo/score';
+import type { Gray, Indexed, Rgb } from '@holo/score';
 
 const SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 
@@ -31,6 +32,8 @@ export function readPngGray(png: Buffer): Gray {
   let w = 0;
   let h = 0;
   let type = 0;
+  let depth = 8;
+  let palette: Buffer | null = null;
   const idat: Buffer[] = [];
   while (at + 8 <= png.length) {
     const length = png.readUInt32BE(at);
@@ -39,19 +42,23 @@ export function readPngGray(png: Buffer): Gray {
     if (kind === 'IHDR') {
       w = body.readUInt32BE(0);
       h = body.readUInt32BE(4);
-      const depth = body[8];
+      depth = body[8] as number;
       type = body[9] as number;
-      if (depth !== 8 || body[12] !== 0 || ![0, 2, 4, 6].includes(type))
-        throw new Error('Only 8-bit, non-interlaced grey or colour PNGs are read here');
-    } else if (kind === 'IDAT') idat.push(body);
+      const known = type === 3 ? [1, 2, 4, 8].includes(depth) : depth === 8 && [0, 2, 4, 6].includes(type);
+      if (!known || body[12] !== 0)
+        throw new Error('Only 8-bit grey or colour PNGs, and palette ones, not interlaced, are read here');
+    } else if (kind === 'PLTE') palette = Buffer.from(body);
+    else if (kind === 'IDAT') idat.push(body);
     else if (kind === 'IEND') break;
     at += 12 + length;
   }
   // (a strip is a few thousand pixels a side: anything far bigger isn't one)
   if (!w || !h || w * h > 50_000_000) throw new Error(`A ${w}×${h} PNG isn’t a strip read here`);
-  const channels = ({ 0: 1, 2: 3, 4: 2, 6: 4 } as Record<number, number>)[type] as number;
+  if (type === 3 && !palette) throw new Error('The PNG has no palette');
+  // (a palette's pixels are packed, a byte the unit its rows are filtered by)
+  const channels = ({ 0: 1, 2: 3, 3: 1, 4: 2, 6: 4 } as Record<number, number>)[type] as number;
   const raw = inflateSync(Buffer.concat(idat));
-  const stride = w * channels;
+  const stride = type === 3 ? Math.ceil((w * depth) / 8) : w * channels;
   if (raw.length < (stride + 1) * h) throw new Error('The PNG’s picture is cut short');
   const rows = new Uint8Array(stride * h);
   const prev = new Uint8Array(stride);
@@ -81,6 +88,21 @@ export function readPngGray(png: Buffer): Gray {
     }
   }
   const data = new Uint8Array(w * h);
+  if (type === 3) {
+    const colours = palette as Buffer;
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        const bit = x * depth;
+        const byte = rows[y * stride + (bit >> 3)] as number;
+        const p = ((byte >> (8 - depth - (bit & 7))) & ((1 << depth) - 1)) * 3;
+        if (p + 2 >= colours.length) throw new Error('The PNG names a colour its palette doesn’t have');
+        data[y * w + x] = Math.round(
+          0.299 * (colours[p] as number) + 0.587 * (colours[p + 1] as number) + 0.114 * (colours[p + 2] as number),
+        );
+      }
+    }
+    return { w, h, data };
+  }
   for (let i = 0; i < w * h; i++) {
     const p = i * channels;
     let v: number;
@@ -117,6 +139,38 @@ export function writePngRgb(img: Rgb): Buffer {
     SIGNATURE,
     chunk('IHDR', ihdr),
     chunk('IDAT', deflateSync(raw, { level: 6 })),
+    chunk('IEND', new Uint8Array(0)),
+  ]);
+}
+
+/**
+ * A picture of a palette's few colours as a PNG: one, two or four bits a pixel (eight past sixteen
+ * colours), packed as tightly as they'll go. A page of ink on paper comes out a twentieth the size
+ * of the same picture in colour.
+ */
+export function writePngIndexed(img: Indexed): Buffer {
+  const n = img.palette.length;
+  if (n < 1 || n > 256) throw new Error('A palette has 1 to 256 colours');
+  const depth = n <= 2 ? 1 : n <= 4 ? 2 : n <= 16 ? 4 : 8;
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(img.w);
+  ihdr.writeUInt32BE(img.h, 4);
+  ihdr.set([depth, 3, 0, 0, 0], 8);
+  const stride = Math.ceil((img.w * depth) / 8);
+  const raw = Buffer.alloc((stride + 1) * img.h);
+  for (let y = 0; y < img.h; y++) {
+    const row = y * (stride + 1) + 1;
+    for (let x = 0; x < img.w; x++) {
+      const bit = x * depth;
+      raw[row + (bit >> 3)] =
+        (raw[row + (bit >> 3)] as number) | ((img.data[y * img.w + x] as number) << (8 - depth - (bit & 7)));
+    }
+  }
+  return Buffer.concat([
+    SIGNATURE,
+    chunk('IHDR', ihdr),
+    chunk('PLTE', Buffer.from(img.palette.flat())),
+    chunk('IDAT', deflateSync(raw, { level: 9 })),
     chunk('IEND', new Uint8Array(0)),
   ]);
 }

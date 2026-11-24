@@ -1009,8 +1009,27 @@ heavier end); that a ledger line on its own is not a note; and that off the staf
 on the page name a note, not its distance, since a hand seldom spaces them as evenly as the staff: with
 none drawn through it or between it and the staff, a note is in the space just beyond the staff.
 
+**Where a harness shows its model only small pictures** (Antigravity: a file of about 10 KB at most,
+docs/agent-harnesses.md), a part in colour, 100 KB to 1 MB, would never be seen. The runner tells HO[LO]'s
+server the limit (`HOLO_PICTURE_BYTES`; `pictureBytes` in a tool's context), and `scan_show` then gives:
+
+- each part in a palette's few colours (`fewColours`): the paper white, its tone and shadows evened out
+  (most of a photographed page's bytes), the ink in four shades, or two for a part that doesn't fit in
+  four, and the guides in their own colours. It reads as well as the part in colour at about a twentieth
+  of the size;
+- the parts cut narrower (`maxWidth`: 640, 480, 380, then 300 px) until every one fits, each still with its
+  named margins, and repeating two staff spaces of the one before at least, so a notehead at an edge is
+  whole in one of them. A handwritten grand staff comes to a dozen or so parts, a printed one fewer;
+- the whole system first, made small, in two colours;
+- the same for a part looked at closer.
+
+When nothing fits, there are no pictures and the tool's text tells the model to say so, not to guess. Any
+other tool's picture past the limit (an attached photo) is left out by the server, with a line saying it
+was.
+
 The strips are the studio's PNGs, read and written by `packages/agent/src/tools/png.ts` (Node's zlib, no
-other library). A strip that can't be read as a picture is shown as it is, without parts.
+other library; a palette's pictures are written a few bits a pixel). A strip that can't be read as a
+picture is shown as it is, without parts.
 
 There are no tools for opening, creating or exporting songs, or for creations. What the user attached
 comes into the open song through `import`; a bounce, sending the song to its creation and the

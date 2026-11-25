@@ -7,6 +7,7 @@ import { afterAll, afterEach, describe, expect, it } from 'vitest';
 import { pushKey } from '../src/agent/keys.ts';
 import {
   allowedEndpoint,
+  bounceNotice,
   checkSubscription,
   encrypt,
   LONG_MS,
@@ -351,6 +352,50 @@ describe('what a notice says', () => {
   });
 });
 
+describe('what a bounce’s notice says', () => {
+  const bounce = (state: string, took: number, more: { name?: string; seconds?: number | null } = {}) => ({
+    project: 'prj_1',
+    name: more.name ?? 'Lantern Sketch',
+    state,
+    started: 1_000_000,
+    finished: 1_000_000 + took,
+    seconds: more.seconds === undefined ? 247 : more.seconds,
+  });
+
+  it('is that the bounce is ready, with its length, or that it failed: which song, and no more', () => {
+    expect(bounceNotice(bounce('done', 500_000), 'every')).toEqual({
+      title: 'HO[LO] Desk',
+      body: 'Lantern Sketch: the bounce is ready (4:07).',
+      kind: 'bounce',
+      song: 'prj_1',
+    });
+    expect(bounceNotice(bounce('failed', 500_000), 'every')?.body).toBe('Lantern Sketch: the bounce failed.');
+    // (a length nobody knows, and one that rounds up to the minute)
+    expect(bounceNotice(bounce('done', 500_000, { seconds: null }), 'every')?.body).toBe(
+      'Lantern Sketch: the bounce is ready.',
+    );
+    expect(bounceNotice(bounce('done', 500_000, { seconds: 59.6 }), 'every')?.body).toBe(
+      'Lantern Sketch: the bounce is ready (1:00).',
+    );
+  });
+
+  it('follows the device’s mode: every one, or only one that took more than a minute', () => {
+    expect(bounceNotice(bounce('done', 5_000), 'every')).not.toBeNull();
+    expect(bounceNotice(bounce('done', 5_000), 'long')).toBeNull();
+    expect(bounceNotice(bounce('done', LONG_MS), 'long')).toBeNull();
+    expect(bounceNotice(bounce('done', LONG_MS + 1), 'long')).not.toBeNull();
+    expect(bounceNotice(bounce('failed', LONG_MS + 1), 'long')).not.toBeNull();
+    // (not one that's still waiting or being made)
+    expect(bounceNotice(bounce('running', LONG_MS + 1), 'every')).toBeNull();
+  });
+
+  it('names the song on one line, at most 60 characters, however long the bounce was named', () => {
+    const told = bounceNotice(bounce('done', 500_000, { name: `A\nvery ${'long '.repeat(120)}name` }), 'every');
+    expect(told?.body).toMatch(/^A very long .{0,60}…: the bounce is ready \(4:07\)\.$/);
+    expect(JSON.stringify(told).length).toBeLessThan(250);
+  });
+});
+
 describe('a device’s unseen replies', () => {
   it('keeps the newest 50 a device asked for; a song seen anywhere counts on none', () => {
     const s = new AgentStore(new DatabaseSync(':memory:'));
@@ -565,6 +610,124 @@ describe('the routes, and the notices a device gets', () => {
     await w.runTo('done', 1_000);
     expect(w.service.calls.length).toBe(4);
     expect(w.said.filter((l) => l.startsWith('A notice went to Desk')).length).toBe(4);
+  });
+
+  it('tells a device of a bounce the host made for it, by its mode, on a topic of its own, counting nothing unseen', async () => {
+    const w = await world();
+    const d = device();
+    await w.push('PUT', { mode: 'long', subscription: d.subscription });
+    const bounce = (took: number, state = 'done') => ({
+      project: w.s.id,
+      name: 'Song (cycle)',
+      state,
+      started: Date.now() - took,
+      finished: Date.now(),
+      seconds: 247,
+    });
+    // a short one: nothing, with Long runs
+    w.services.notify.bounced(bounce(5_000), w.device.id);
+    await w.services.notify.idle();
+    expect(w.service.calls).toEqual([]);
+    // one that took minutes: told
+    w.services.notify.bounced(bounce(LONG_MS + 60_000), w.device.id);
+    await w.services.notify.idle();
+    expect(w.service.calls.length).toBe(1);
+    expect(d.read((w.service.calls[0] as Call).body)).toEqual({
+      title: 'HO[LO] Desk',
+      body: 'Song (cycle): the bounce is ready (4:07).',
+      kind: 'bounce',
+      song: w.s.id,
+    });
+    // (not the song's own topic: it doesn't take the place of the agent's notice waiting for a device that's off)
+    expect((w.service.calls[0] as Call).headers.topic).toBe(topic(`bounce:${w.s.id}`));
+    expect((w.service.calls[0] as Call).headers.topic).not.toBe(topic(w.s.id));
+    expect(w.unseenRows()).toEqual([]);
+    // one that failed, and a short one with Every reply
+    w.services.notify.bounced(bounce(LONG_MS + 60_000, 'failed'), w.device.id);
+    await w.services.notify.idle();
+    expect(d.read((w.service.calls[1] as Call).body).body).toBe('Song (cycle): the bounce failed.');
+    await w.push('PUT', { mode: 'every', subscription: d.subscription });
+    w.services.notify.bounced(bounce(5_000), w.device.id);
+    await w.services.notify.idle();
+    expect(w.service.calls.length).toBe(3);
+  });
+
+  it('tells the device that asked the host for a bounce when the host has made it, and no other', async () => {
+    const w = await world();
+    const d = device();
+    await w.push('PUT', { mode: 'every', subscription: d.subscription });
+    front(w.desk, false);
+    const ask = (headers: Record<string, string>) =>
+      w.app.inject({
+        method: 'POST',
+        url: `/api/projects/${w.s.id}/bounces/host`,
+        headers,
+        payload: { doc: w.s, from: 0, to: 960, tail: 0, name: 'Song' },
+      });
+    const made = async (res: Awaited<ReturnType<typeof ask>>) => {
+      expect(res.statusCode, res.body).toBe(202);
+      const { id } = res.json() as { id: string };
+      await waitFor(() => w.services.bounces.get(id)?.state === 'done', 30_000);
+      await w.services.notify.idle();
+    };
+    // asked with no token: made, and nobody told
+    await made(await ask({}));
+    expect(w.service.calls).toEqual([]);
+    // asked by the device: told, once
+    await made(await ask(auth(w.token)));
+    expect(w.service.calls.length).toBe(1);
+    expect(d.read((w.service.calls[0] as Call).body)).toMatchObject({ kind: 'bounce', song: w.s.id });
+    expect(d.read((w.service.calls[0] as Call).body).body).toMatch(/^Song: the bounce is ready/);
+  }, 60_000);
+
+  it('tells nothing of a bounce to a device without notices, one HO[LO] is in front on, or with the agent off', async () => {
+    const w = await world();
+    const d = device();
+    const bounce = { project: w.s.id, name: 'Song', state: 'done', started: 0, finished: 500_000, seconds: 30 };
+    // no notices on this device
+    w.services.notify.bounced(bounce, w.device.id);
+    // a device the agent doesn't know
+    w.services.notify.bounced(bounce, 'dev_nosuchdevice');
+    await w.services.notify.idle();
+    expect(w.service.calls).toEqual([]);
+    await w.push('PUT', { mode: 'every', subscription: d.subscription });
+    // HO[LO] in front there, and saying so: the studio shows it
+    front(w.desk, true);
+    w.services.notify.bounced(bounce, w.device.id);
+    await w.services.notify.idle();
+    expect(w.service.calls).toEqual([]);
+    front(w.desk, false);
+    w.services.notify.bounced(bounce, w.device.id);
+    await w.services.notify.idle();
+    expect(w.service.calls.length).toBe(1);
+    // the agent turned off: its notices are its setting
+    const off = await w.app.inject({
+      method: 'PUT',
+      url: '/api/agent/settings',
+      headers: auth(w.token),
+      payload: { enabled: false },
+    });
+    expect(off.statusCode, off.body).toBe(200);
+    w.services.notify.bounced(bounce, w.device.id);
+    await w.services.notify.idle();
+    expect(w.service.calls.length).toBe(1);
+    expect(w.said.filter((l) => /failed/.test(l))).toEqual([]);
+  });
+
+  it('lets go of a subscription the push service says is gone, told of a bounce', async () => {
+    const w = await world();
+    const d = device();
+    await w.push('PUT', { mode: 'every', subscription: d.subscription });
+    front(w.desk, false);
+    const gone = pushService(410);
+    w.services.notify.fetch = gone.fetch;
+    w.services.notify.bounced(
+      { project: w.s.id, name: 'Song', state: 'done', started: 0, finished: 1, seconds: 1 },
+      w.device.id,
+    );
+    await w.services.notify.idle();
+    expect(gone.calls.length).toBe(1);
+    expect((await w.push('GET')).json()).toMatchObject({ mode: 'off' });
   });
 
   it('only tells the device that asked', async () => {

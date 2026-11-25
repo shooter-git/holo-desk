@@ -297,6 +297,11 @@ its line, when the app is closed and opened again. A host that was started again
 forgotten its jobs but not their files: the page finds the bounce among the song's
 (`GET /api/projects/:id/bounces`), by its name and by when the host began it.
 
+**A device with the agent's notices on is told when its bounce is done** (docs/agent.md, Notices
+outside HO[LO]): it sends its agent token with the request, and the host, when the bounce ends,
+sends it a notice by the rule the agent's follow. A tap opens HO[LO] on the song, with the bounce's
+line waiting.
+
 ## A recording's waveform
 
 A recording is drawn from its peaks: the lowest and the highest value of every 256 frames. The host

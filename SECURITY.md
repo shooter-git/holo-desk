@@ -114,16 +114,20 @@ keeps it to the open song:
 A device allowed to use the agent can turn on **Tell me outside HO[LO]** in Settings › Agent (Off by
 default, per device). Then, when a request that device asked ends, or stops to ask for its OK, while
 HO[LO] isn't in front on it, the host sends it a notice through its browser's push service (Web Push).
-See `apps/server/src/agent/push.ts`.
+See `apps/server/src/agent/push.ts`. The same goes for a bounce the host made for that device
+(Settings › Audio, Bounce on), done or failed, while the agent is on: to say whom to tell, the device
+sends its agent token with its request for the bounce, as it does with every request to the agent.
 
 - **What is sent.** About 200 bytes: "HO[LO] Desk", the song's name and what happened ("a reply is
   ready", "it needs your OK to go on", "the request stopped"), the song's and the turn's ids, and how
-  many replies are unseen. Never the request, the reply or anything from the song. It's encrypted end
+  many replies are unseen. For a bounce: the name it was bounced under (the song's, cut to 60
+  characters), "the bounce is ready" with its length or "the bounce failed", and the song's id.
+  Never the request, the reply, why a bounce failed, or anything from the song. It's encrypted end
   to end for that device (RFC 8291, aes128gcm, a new key pair and salt each time): only the browser
   holding the subscription's private key and auth secret can read it.
 - **What the push service sees.** The host's IP address, when each notice is sent and its size, which
   browser installation it's for (the subscription's endpoint), a topic header that's a hash of the
-  song's id, HO[LO]'s VAPID public key and the JWT's `sub`, which is the project's URL
+  song's id (another for its bounces), HO[LO]'s VAPID public key and the JWT's `sub`, which is the project's URL
   (`https://github.com/shooter-git/holo-desk`), never an email address. Never what a notice says.
 - **Keys.** The VAPID key pair (RFC 8292, P-256) is made the first time a device turns notices on
   (it asks for the public key to subscribe with; until then the host makes none, however often a studio

@@ -8,7 +8,8 @@
 //   Samples (/packs) have their own cache, filled by the studio as instruments load.
 // - The agent's notices outside HO[LO] (a device turns them on in Settings › Agent: app/notify.ts)
 //   arrive here as pushes from the host, and are shown, with the badge set to the unseen replies. A
-//   tap brings HO[LO] up on that song with the page open at the reply.
+//   tap brings HO[LO] up on that song with the page open at the reply. The same devices are told of a
+//   bounce the host made for them: a notice of its own, and a tap brings HO[LO] up on the song.
 const BUILD = /* BUILD */ null;
 const SHELL = `holo-shell-${BUILD.version}`;
 // big files only some devices use (the score's engraver): kept the first time they're fetched
@@ -105,6 +106,21 @@ function readNotice(event) {
     // (not one of HO[LO]'s: shown plainly all the same)
   }
   const text = (v, max, or) => (typeof v === 'string' && v ? v.slice(0, max) : or);
+  // a bounce the host made (`kind: 'bounce'`, its song as `song`): a notice of its own beside the
+  // agent's for that song, and a tap opens HO[LO] on the song, where the bounce waits to be saved,
+  // not the agent's page
+  if (data.kind === 'bounce') {
+    const song = typeof data.song === 'string' && SONG.test(data.song) ? data.song : null;
+    return {
+      title: text(data.title, 60, 'HO[LO] Desk'),
+      body: text(data.body, 200, 'A bounce is ready.'),
+      tag: song ? `bounce:${song}` : 'holo:bounce',
+      project: null,
+      job: null,
+      url: at(song ? `./?${new URLSearchParams({ project: song })}` : './'),
+      unseen: null,
+    };
+  }
   const project = typeof data.project === 'string' && SONG.test(data.project) ? data.project : null;
   const job = typeof data.job === 'string' && TURN.test(data.job) ? data.job : null;
   const query = new URLSearchParams();
@@ -114,6 +130,7 @@ function readNotice(event) {
   return {
     title: text(data.title, 60, 'HO[LO] Desk'),
     body: text(data.body, 200, 'The agent has something for you.'),
+    tag: project ?? 'holo',
     project,
     job,
     url: at(search ? `./?${search}` : './'),
@@ -135,7 +152,7 @@ self.addEventListener('push', (event) => {
     Promise.all([
       self.registration.showNotification(n.title, {
         body: n.body,
-        tag: n.project ?? 'holo',
+        tag: n.tag,
         renotify: true,
         icon: at('icons/icon-192.png'),
         data: { url: n.url, project: n.project, job: n.job },

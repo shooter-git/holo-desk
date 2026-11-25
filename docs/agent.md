@@ -880,6 +880,14 @@ iPhone or iPad HO[LO] opened from the Home Screen, or the notices it has blocked
   own, begun at the click, so the wait for the OK never counts). Both: it ended `awaiting` (it needs the user's OK). Never
   for `cancelled`. Every ending but a cancel is kept as unseen (`agent_unseen`, the device's newest
   50), the badge's count.
+- **A bounce the host made** (`Notify.bounced`, on `HostBounces.onEnd`: docs/architecture.md, A bounce
+  on the host). A device that asks the host for a bounce sends its agent token with the request, when
+  it has one; done or failed, the host tells that device by the same rule (Every reply: always; Long
+  runs: a bounce that took over 60 s; not while HO[LO] is in front), and only while the agent is on.
+  The notice is "<song>: the bounce is ready (4:07)." or "<song>: the bounce failed.", `kind: 'bounce'`
+  with its `song`, on a topic and a tag of its own, so it sits beside the agent's notice for that song
+  and doesn't replace it. It counts as nothing unseen (the badge is the agent's replies). A tap brings
+  the open studio to the front, or opens HO[LO] on the song; the bounce is there, waiting to be saved.
 - **Not while HO[LO] is in front.** Each of the device's studios that last said it isn't hidden is
   asked `agent-front`; if one answers `front: true` within 1.5 s, nothing is sent. A frozen page (an
   iPhone in another app) may still read as not hidden, but can't answer, so the notice goes.

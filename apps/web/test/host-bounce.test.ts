@@ -59,6 +59,21 @@ describe('a bounce asked of the host', () => {
     expect(body.doc).toMatchObject({ id: 'prj_one', title: 'Lantern Sketch' });
   });
 
+  it('sends this device’s token when the agent knows it, to be told when it’s done, and none otherwise', async () => {
+    const sent: RequestInit[] = [];
+    const host = (async (_url: string, init: RequestInit) => {
+      sent.push(init);
+      return json({ id: 'bnc_abc', started: 1 }, 202);
+    }) as typeof fetch;
+    await startHostBounce({ ...ask(), token: 'a'.repeat(64) }, host);
+    await startHostBounce(ask(), host);
+    const headers = (i: number) => (sent[i]?.headers ?? {}) as Record<string, string>;
+    expect(headers(0).authorization).toBe(`Bearer ${'a'.repeat(64)}`);
+    expect(Object.keys(headers(1))).toEqual(['content-type']);
+    // (and never in what's sent of the song)
+    expect(String(sent[0]?.body)).not.toContain('a'.repeat(64));
+  });
+
   it.each([
     ['one from before it made bounces', () => json({ error: 'Not found' }, 404)],
     ['one with too many waiting', () => json({ error: 'The host has bounces waiting already' }, 503)],

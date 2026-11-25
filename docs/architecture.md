@@ -270,8 +270,8 @@ A studio renders its own bounce in the page, its instruments' samples loaded the
 the song can sound: see Samples): more than a phone's browser holds for a big song. So a device can have the host make it
 (`apps/server/src/host-bounce.ts`): the page sends the song as it has it, the stretch to bounce and
 the tail (`POST /api/projects/:id/bounces/host`), then asks how far it has got
-(`GET /api/bounce-jobs/:id`) and, when it's done, downloads the file straight from the host, never
-holding it. The host renders as the studio's worker does, with the same options, its samples and
+(`GET /api/bounce-jobs/:id`). When it's done, a computer downloads the file straight from the host,
+never holding it. The host renders as the studio's worker does, with the same options, its samples and
 recordings read from the data folder, so the file is the one that studio would have made (a test
 compares them to the byte).
 
@@ -284,6 +284,18 @@ waiting, started again meanwhile), the device makes it as it always has. A bounc
 and couldn't make (a pack that isn't installed, out of memory) is said to have failed, with why.
 **Settings › Audio, Bounce on** chooses, on each device: Automatic (the host on a phone or a
 tablet, this device elsewhere), This device, or The host.
+
+**A phone or a tablet saves a bounce from a tap** (`apps/web/src/app/bounce-save.ts`). Its line
+stays when the bounce is done ("Bounced 4:07 of …", with Save), until it's saved or put away, and
+nothing downloads by itself: an installed iPhone or iPad app has no browser around it, and a link
+to a download takes it to a page of the file with no way back. There, Save hands the file to the
+share sheet (Save to Files, AirDrop…), which opens only straight from a tap, so the file is
+fetched as the line appears and held until then; on other touch devices Save follows the link.
+The bounce a device asked for is kept on it (`apps/web/src/app/host-bounce.ts`): one still being
+made is followed again after a reload, and on a phone or a tablet a finished one is there, with
+its line, when the app is closed and opened again. A host that was started again meanwhile has
+forgotten its jobs but not their files: the page finds the bounce among the song's
+(`GET /api/projects/:id/bounces`), by its name and by when the host began it.
 
 ## A recording's waveform
 

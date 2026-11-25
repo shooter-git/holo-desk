@@ -253,7 +253,9 @@ describe('a bounce asked of the host', () => {
       // asked for properly: a job to ask about, and an update waits for it
       const res = await ask(whole);
       expect(res.statusCode).toBe(202);
-      const { id } = res.json() as { id: string };
+      const { id, started } = res.json() as { id: string; started: number };
+      // (when it began, by the host's clock: what its file will be stamped after)
+      expect(Math.abs(started - Date.now())).toBeLessThan(5000);
       expect(children).toHaveLength(1);
       expect((await app.inject({ method: 'GET', url: '/api/health' })).json().busy).toBe(true);
       children[0]?.say({ type: 'progress', id, line: 'Loading instruments (1/2)' });

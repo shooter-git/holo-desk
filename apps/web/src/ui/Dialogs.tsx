@@ -33,7 +33,7 @@ import { Wordmark } from './controls.tsx';
 import { useFocusInside } from './focus-inside.ts';
 import { useFrame } from './frame.ts';
 import { MetronomeSettings } from './Metronome.tsx';
-import { SongGroups } from './Songs.tsx';
+import { SongBounces, SongGroups } from './Songs.tsx';
 import { SETTINGS_TABS, tabForKey } from './settings-tabs.ts';
 import { ViewOptions } from './ViewMenu.tsx';
 
@@ -215,6 +215,7 @@ function ProjectsDialog() {
           </button>
         </div>
       )}
+      {current && <SongBounces id={current.id} title={current.title} when={when} />}
       <SongGroups rows={rows} creations={creations} current={current?.id ?? null} when={when} reload={load} />
     </Dialog>
   );

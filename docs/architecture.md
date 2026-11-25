@@ -297,6 +297,18 @@ its line, when the app is closed and opened again. A host that was started again
 forgotten its jobs but not their files: the page finds the bounce among the song's
 (`GET /api/projects/:id/bounces`), by its name and by when the host began it.
 
+**A song's bounces are listed in Songs while it's open** (`SongBounces` in
+`apps/web/src/ui/Songs.tsx`): each with what it's of, when it was made, its length and its size,
+the newest first, to save on this device again or to delete for good (asked first, in its row).
+`GET /api/projects/:id/bounces` answers `{file, bytes, url, made, seconds?}` for each (`made`: the
+file's time, ms; `seconds` when the file says its length), and `DELETE
+/api/projects/:id/bounces/:file` removes one. Saving from the list is saving from the line: a
+computer and a browser on a phone download from the tap, and in an installed iPhone or iPad app
+the bounce becomes the one whose line is showing (the one file held is its), its row saying when
+Save can be pressed. A studio's own bounce is uploaded under a name no list matches
+(`.up_….part`) and takes its own when it's whole, as the host's are, so one on its way is never
+listed, saved or measured half written.
+
 **A device with the agent's notices on is told when its bounce is done** (docs/agent.md, Notices
 outside HO[LO]): it sends its agent token with the request, and the host, when the bounce ends,
 sends it a notice by the rule the agent's follow. A tap opens HO[LO] on the song, with the bounce's

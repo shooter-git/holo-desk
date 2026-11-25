@@ -7539,6 +7539,36 @@ html[data-layout^="phone"] .view-item kbd {
   font-weight: 650;
 }
 
+/* the open song's bounces, above the songs: rows that aren't pressed themselves, each with its buttons */
+.song-bounces .bounce-row:hover {
+  background: none;
+}
+
+.song-bounces .bounce-row .btn {
+  flex-shrink: 0;
+}
+
+/* the question a delete asks takes the row; on a narrow one its buttons go under the words */
+.song-bounces .bounce-row.asking {
+  flex-wrap: wrap;
+}
+
+.song-bounces .bounce-row.asking .grow {
+  flex: 1 1 180px;
+  min-width: 0;
+}
+
+.song-bounces .bounces-all {
+  margin-top: 6px;
+}
+
+/* on a phone a bounce's details (when, how long, how big) take a second line rather than be cut */
+@media (max-width: 600px) {
+  .song-bounces .song-row > .meta {
+    white-space: normal;
+  }
+}
+
 /* the search over every group, above them */
 .song-search {
   display: flex;

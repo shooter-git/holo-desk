@@ -3,9 +3,21 @@
  * bridge to your creations. It has no accounts and no passwords: it listens on this machine only,
  * and your own devices reach it through Tailscale.
  */
-import { createHash } from 'node:crypto';
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs';
+import { createHash, randomBytes } from 'node:crypto';
+import {
+  copyFileSync,
+  createWriteStream,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  statSync,
+} from 'node:fs';
 import { basename, dirname, join } from 'node:path';
+import { pipeline } from 'node:stream/promises';
 import { constants as zlib } from 'node:zlib';
 import fastifyCompress from '@fastify/compress';
 import fastifyStatic from '@fastify/static';
@@ -944,13 +956,35 @@ export async function buildApp(
   const bounceDir = (id: string) => bounceFolder(config.dataDir, id);
   const SAFE_FILE = /^[\w .()'-]+\.wav$/;
 
+  /** An upload on its way: a name no list of bounces matches, the file's own once it's whole. */
+  const UPLOADING = /^\.up_[a-z0-9]+\.part$/;
+  const UPLOAD_STALE_MS = 3600_000;
+
   app.post<{ Params: { id: string }; Querystring: { name?: string } }>(
     '/api/projects/:id/bounces',
     async (req, reply) => {
       const project = store.get(req.params.id);
       if (!project) return reply.code(404).send({ error: 'No such project' });
       const file = bounceFileName(req.query.name ?? project.title);
-      await saveStream(req.body as NodeJS.ReadableStream, join(bounceDir(project.id), file));
+      const dir = bounceDir(project.id);
+      // (what an upload broken off by the host stopping left behind)
+      if (existsSync(dir))
+        for (const f of readdirSync(dir)) {
+          if (!UPLOADING.test(f)) continue;
+          const left = join(dir, f);
+          if (Date.now() - (statSync(left, { throwIfNoEntry: false })?.mtimeMs ?? Date.now()) > UPLOAD_STALE_MS)
+            rmSync(left, { force: true });
+        }
+      const part = join(dir, `.up_${randomBytes(6).toString('hex')}.part`);
+      try {
+        mkdirSync(dir, { recursive: true });
+        // (an upload that breaks off is an error here, and leaves nothing)
+        await pipeline(req.body as NodeJS.ReadableStream, createWriteStream(part));
+        renameSync(part, join(dir, file));
+      } catch (err) {
+        rmSync(part, { force: true });
+        throw err;
+      }
       return reply.code(201).send({
         file,
         url: `/api/projects/${project.id}/bounces/${encodeURIComponent(file)}`,
@@ -959,17 +993,37 @@ export async function buildApp(
     },
   );
 
+  /**
+   * A song's bounces, the newest first (their names begin with when they were made). `made`: the
+   * file's time, ms (what a measurement of a bounce goes by); `seconds`: its length, when the file
+   * says.
+   */
   app.get<{ Params: { id: string } }>('/api/projects/:id/bounces', async (req) => {
     const dir = bounceDir(req.params.id);
     if (!existsSync(dir)) return [];
-    return readdirSync(dir)
-      .filter((f) => SAFE_FILE.test(f))
-      .map((f) => ({
+    const out: { file: string; bytes: number; url: string; made: number; seconds?: number }[] = [];
+    for (const f of readdirSync(dir)) {
+      if (!SAFE_FILE.test(f)) continue;
+      const path = join(dir, f);
+      // (deleted since the folder was read: not listed)
+      const stat = statSync(path, { throwIfNoEntry: false });
+      if (!stat) continue;
+      let seconds: number | undefined;
+      try {
+        const info = audioInfo(path);
+        if (info.frames > 0 && info.rate > 0) seconds = info.frames / info.rate;
+      } catch {
+        // (not a file whose length can be read: listed without it)
+      }
+      out.push({
         file: f,
-        bytes: statSync(join(dir, f)).size,
+        bytes: stat.size,
         url: `/api/projects/${req.params.id}/bounces/${encodeURIComponent(f)}`,
-      }))
-      .sort((a, b) => b.file.localeCompare(a.file));
+        made: stat.mtimeMs,
+        ...(seconds === undefined ? {} : { seconds }),
+      });
+    }
+    return out.sort((a, b) => b.file.localeCompare(a.file));
   });
 
   app.get<{ Params: { id: string; file: string }; Querystring: { as?: string } }>(
@@ -987,6 +1041,15 @@ export async function buildApp(
       return sendFile(reply, path, 'audio/wav', 'no-cache');
     },
   );
+
+  /** A bounce deleted for good (the studio asks first, as for anything it deletes). */
+  app.delete<{ Params: { id: string; file: string } }>('/api/projects/:id/bounces/:file', async (req, reply) => {
+    const file = req.params.file;
+    const path = join(bounceDir(req.params.id), file);
+    if (!SAFE_FILE.test(file) || !existsSync(path)) return reply.code(404).send({ error: 'No such bounce' });
+    rmSync(path, { force: true });
+    return { ok: true };
+  });
 
   /**
    * A bounce made here, for a device that asks (host-bounce.ts): a phone's browser can't hold a big

@@ -21,6 +21,7 @@ import {
 } from 'lucide-react';
 import { useEffect, useMemo, useSyncExternalStore } from 'react';
 import { addSound } from '../app/actions.ts';
+import { diskSize } from '../app/disk-size.ts';
 import { store } from '../app/store.ts';
 import { type AvailablePack, installs, useInstalls } from '../audio/installs.ts';
 import { library, type PackSummary } from '../audio/samples.ts';
@@ -85,12 +86,6 @@ export function soundState(
     }
   }
   return ids.length ? { kind: 'install', ids, bytes } : { kind: 'ready' };
-}
-
-function diskSize(bytes: number): string {
-  if (bytes >= 1e9) return `${(bytes / 1e9).toFixed(1)} GB`;
-  if (bytes >= 1e6) return `${Math.round(bytes / 1e6)} MB`;
-  return `${Math.max(1, Math.round(bytes / 1e3))} KB`;
 }
 
 function useInstalledPacks() {

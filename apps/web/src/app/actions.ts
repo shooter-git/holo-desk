@@ -82,7 +82,9 @@ import {
   type KeptBounce,
   keepBounce,
   keptBounce,
+  type ListedBounce,
   markBounced,
+  removeBounce,
   startHostBounce,
   watchHostBounce,
 } from './host-bounce.ts';
@@ -2673,6 +2675,39 @@ export async function saveBounce(): Promise<void> {
   const b = store.get().bounced;
   if (!b?.ready) return;
   if (await saveFile(b.name, b.url)) putBounceAway();
+}
+
+/**
+ * Save one of the song's bounces from their list. A computer, and a phone or a tablet in a browser,
+ * download it from the tap. An installed iPhone or iPad app saves through the share sheet, which
+ * wants the file beforehand: the bounce becomes the one whose line is showing (the last one's is
+ * put away, its file still with the song), and its row, like that line, says when Save can be
+ * pressed; pressed again, it opens the sheet.
+ */
+export async function saveListedBounce(b: ListedBounce): Promise<void> {
+  const way = thisSaveWay();
+  if (way !== 'share') {
+    await saveFile(b.title, b.url);
+    return;
+  }
+  if (store.get().bounced?.url === b.url) {
+    await saveBounce();
+    return;
+  }
+  putBounceAway();
+  showBounced(null, b.title, b.seconds, b.url, way);
+}
+
+/** Delete one of the song's bounces for good (the list asked first). False when the host didn't. */
+export async function deleteListedBounce(b: ListedBounce): Promise<boolean> {
+  const gone = await removeBounce(b).catch(() => false);
+  if (!gone) {
+    toast(`“${b.title}” wasn’t deleted: the host couldn’t be reached`, 'error', 6000);
+    return false;
+  }
+  // (its line, if it's the one showing: there's nothing left to save)
+  if (store.get().bounced?.url === b.url) putBounceAway();
+  return true;
 }
 
 /**

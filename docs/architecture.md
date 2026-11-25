@@ -202,6 +202,18 @@ Engine's, as Node threads):
   A bounce or a headless render plays every strip through every block, to the same numbers as ever;
   live, the difference is the tails given up, under -120 dB in the mix.
 - **Samples, recordings and halls** are in shared memory: every thread plays the same copy.
+- **Samples and a phone's recordings are held as 16-bit**, half the memory of floats. A sample whose
+  file is 16-bit stays so on every device (taken straight from the file's bytes when it's at the
+  engine's rate), played at a 32768th a step, exactly as its floats would be. On a phone or a
+  tablet a recording is held that way too (`apps/web/src/audio/compact.ts`), fitted to the take:
+  its loudest frame decides what one step is worth, always a power of two, so the engine plays the
+  frames exactly as the floats they stand for; a take that wasn't 16-bit to begin with is rounded
+  to the nearest step, with no dither. It's the copy that device listens to: a bounce and a
+  headless render read the files, and a computer holds floats as ever. A recording whose notes are
+  edited is held as floats everywhere (its patches are rendered from them and join them to the
+  sample): one held as 16-bit is decoded again as floats the first time its notes are edited, or
+  pressed in the Notes view. A plugin's data in the song's files (a drift curve) is never held as
+  16-bit, nor anything while HO[LO] Engine plays.
 - **HO[LO] Engine** runs the same pool on `worker_threads`, started and warmed up with the app and
   given each studio's song as it starts its engine; its render thread plays the master and live
   notes as the studio's audio thread does, and renders each block when the device asks for it, as

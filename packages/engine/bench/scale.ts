@@ -309,7 +309,7 @@ function shared<T extends ToWorklet>(msg: T): T {
         }),
       };
     case 'audio':
-      return { ...msg, channels: msg.channels.map(share) };
+      return { ...msg, channels: msg.channels.map((c) => toShared(c)) };
     case 'impulse': {
       const d = msg.data;
       return {

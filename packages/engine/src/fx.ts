@@ -32,7 +32,7 @@ export interface Host {
   songFrame(): number;
   /** The cycle, while it's on (song frames). */
   loopRange?(): { start: number; end: number } | null;
-  /** Audio the song has loaded, by key (a clip's, or a plugin's data: a drift curve). */
+  /** Audio the song has loaded as floats, by key (a clip's, or a plugin's data: a drift curve); none for a recording held as 16-bit. */
   clip(key: string): Float32Array[] | undefined;
   /** The song's position in quarter notes at the block's start (a tremolo keeps to the beat by it). */
   beatAt?(): number;

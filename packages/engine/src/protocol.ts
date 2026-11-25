@@ -309,8 +309,13 @@ export type ToWorklet =
   | { type: 'impulse'; key: string; data: PreparedImpulse }
   /** No plugin plays this response any more: it's let go (engines before it keep it). */
   | { type: 'forgetImpulse'; key: string }
-  /** Audio for clips: one or two channels at the context's rate (transferred). */
-  | { type: 'audio'; key: string; channels: Float32Array[] }
+  /**
+   * Audio for clips: one or two channels at the context's rate (transferred), all of one kind.
+   * 16-bit channels are a recording held small (a phone's): `scale` is what one step of theirs is
+   * worth, a power of two so they play exactly as the floats they stand for (without it, a full
+   * scale of 32768, as samples'). Floats are played as they are, and `scale` isn't read.
+   */
+  | { type: 'audio'; key: string; channels: SampleFrames[]; scale?: number }
   | { type: 'forgetAudio'; key: string }
   /**
    * A track's clips. `fade`: frames to crossfade from the clips it played to these, both playing

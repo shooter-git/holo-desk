@@ -50,8 +50,10 @@ import {
   type PluginSpec,
   RING_EVENTS,
   RING_HEADER,
+  type SampleFrames,
   type SamplerSpec,
   type SeatSpec,
+  sampleScale,
   type TempoSegment,
   type ToWorklet,
   TR_FINE_CLOCK,
@@ -972,7 +974,9 @@ export class EngineCore implements Host {
   private sendCounter = 0;
   private failed = false;
   /** Audio for clips, by key. */
-  private audio = new Map<string, Float32Array[]>();
+  private audio = new Map<string, SampleFrames[]>();
+  /** What one step is worth in each buffer held as 16-bit (every one of them, and no buffer of floats). */
+  private audioScale = new Map<string, number>();
   /** Space Designer responses, prepared, by key. */
   private impulses = new Map<string, PreparedImpulse>();
   /** Performance instruments' sample files, by instrument and file index. */
@@ -1069,7 +1073,8 @@ export class EngineCore implements Host {
     return c.on && c.end > c.start ? { start: c.start, end: c.end } : null;
   }
   clip(key: string): Float32Array[] | undefined {
-    return this.audio.get(key);
+    // (a plugin reads its data as the numbers they are: nothing for a recording held as 16-bit)
+    return this.audioScale.has(key) ? undefined : (this.audio.get(key) as Float32Array[] | undefined);
   }
 
   beatSeconds(): number {
@@ -1174,9 +1179,13 @@ export class EngineCore implements Host {
         this.barTicks = msg.barTicks;
         this.meterSpans = msg.meters ?? [];
         break;
-      case 'audio':
+      case 'audio': {
         this.audio.set(msg.key, msg.channels);
+        const first = msg.channels[0];
+        if (first instanceof Int16Array) this.audioScale.set(msg.key, msg.scale ?? sampleScale(first));
+        else this.audioScale.delete(msg.key);
         break;
+      }
       case 'impulse': {
         this.impulses.set(msg.key, msg.data);
         // the plugins waiting for it pick it up (those this engine plays)
@@ -1185,6 +1194,7 @@ export class EngineCore implements Host {
       }
       case 'forgetAudio':
         this.audio.delete(msg.key);
+        this.audioScale.delete(msg.key);
         break;
       case 'forgetImpulse':
         // (the studio lets one go once no plugin plays it: a plugin that still did keeps its own copy)
@@ -1938,6 +1948,15 @@ export class EngineCore implements Host {
     }
   }
 
+  /**
+   * A clip's gain over its audio as it's held: its own over floats (exactly as ever), and over 16-bit
+   * frames that times what one step of theirs is worth (as a sampler's layers fold theirs in).
+   */
+  private clipGain(clip: ClipSpec): number {
+    const scale = this.audioScale.get(clip.key);
+    return scale === undefined ? clip.gain : clip.gain * scale;
+  }
+
   /** A list of clips' sound from the song frame `at` on (the first channel, at their gains), into `out`. */
   private soundOf(clips: ClipSpec[], at: number, out: Float32Array): void {
     out.fill(0);
@@ -1948,10 +1967,11 @@ export class EngineCore implements Host {
       if (clip.start >= end) break;
       const L = this.audio.get(clip.key)?.[0];
       if (!L) continue;
+      const gain = this.clipGain(clip);
       const f1 = Math.min(end, clip.end);
       for (let f = Math.max(at, clip.start); f < f1; f++) {
         const i = clip.source + (f - clip.start);
-        if (i >= 0 && i < L.length) out[f - at] = (L[i] as number) * clip.gain;
+        if (i >= 0 && i < L.length) out[f - at] = (L[i] as number) * gain;
       }
     }
   }
@@ -2022,10 +2042,11 @@ export class EngineCore implements Host {
       const from = clip.base === undefined ? clip.source : (clip.at as number);
       const cutIn = !clip.seamIn && from > 0;
       const cutOut = !clip.seamOut && (!whole || from + (clip.end - clip.start) < whole.length);
+      const gain = this.clipGain(clip);
       for (let f = f0; f < f1; f++) {
         const i = clip.source + (f - clip.start);
         if (i < 0 || i >= L.length) continue;
-        let g = clip.gain;
+        let g = gain;
         // the region's fades, then a short ramp wherever this piece starts or stops
         const fromStart = f - clip.regionStart;
         const toEnd = clip.regionEnd - f;
@@ -2144,10 +2165,11 @@ export class EngineCore implements Host {
       const cutIn = !clip.seamIn && from > 0;
       const cutOut = !clip.seamOut && (!whole || from + (clip.end - clip.start) < whole.length);
       const f1 = Math.min(end, clip.end);
+      const gain = this.clipGain(clip);
       for (let f = Math.max(pos, clip.start); f < f1; f++) {
         const i = clip.source + (f - clip.start);
         if (i < 0 || i >= L.length) continue;
-        let g = clip.gain;
+        let g = gain;
         const fromStart = f - clip.regionStart;
         const toEnd = clip.regionEnd - f;
         if (fromStart < clip.fadeIn) g *= fromStart / clip.fadeIn;

@@ -27,6 +27,8 @@ services:
       HOLO_OMR_URL: ${HOLO_OMR_URL-http://omr:8070}
       # other names the studio is reached by (a reverse proxy's), besides this machine, LAN and tailnet
       HOLO_ALLOWED_HOSTS: ${HOLO_ALLOWED_HOSTS:-}
+      # the most threads a bounce made on the host is rendered on (not set: as its cores allow)
+      HOLO_BOUNCE_THREADS: ${HOLO_BOUNCE_THREADS:-}
     # this machine only: your devices reach it over HTTPS on your tailnet (pnpm tailnet on)
     ports:
       - "127.0.0.1:${HOLO_PORT:-47800}:47800"

@@ -32,6 +32,15 @@ export function bounceFileName(name: string, now = new Date()): string {
 }
 
 /** Where a song's bounces are kept. */
+/**
+ * The most threads a bounce is rendered on, from whoever runs the host (HOLO_BOUNCE_THREADS; 1: one
+ * engine, as before there were threads). Not set, or not a number: as many as the host's cores allow.
+ */
+export function threadsAllowed(env: NodeJS.ProcessEnv = process.env): number {
+  const most = Number((env.HOLO_BOUNCE_THREADS ?? '').trim() || Number.NaN);
+  return Number.isFinite(most) && most >= 0 ? most : Number.POSITIVE_INFINITY;
+}
+
 export const bounceDir = (dataDir: string, project: string) => join(dataDir, 'bounces', project.replace(/[^\w-]/g, ''));
 
 /** A bounce the host was asked for, as a studio follows it. */

@@ -2,17 +2,19 @@
  * The process a bounce on the host is rendered in (host-bounce.ts forks one per bounce, at the lowest
  * priority). It renders the song as the studio's own bounce does (apps/web/src/audio/render.worker.ts):
  * the same engine and the same options, its samples and recordings read from the data folder, the
- * result a 24-bit WAV. So the file is the one that studio would have made.
+ * result a 24-bit WAV. So the file is the one that studio would have made. On a host with cores to
+ * spare the render is split over threads of this process (`threads`): the same file to the byte.
  *
  * In: `{type: 'run', id, input}`. Out: `{type: 'progress', id, line}`, then `{type: 'done', id,
  * seconds}` (the file written where it was told to) or `{type: 'failed', id, error}`.
  */
-import { mkdirSync, writeFileSync } from 'node:fs';
-import { setPriority } from 'node:os';
-import { dirname } from 'node:path';
-import { encodeWav, renderSession } from '@holo/engine';
-import { dataFolderSource } from '@holo/engine/node';
+import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { availableParallelism, setPriority } from 'node:os';
+import { dirname, join } from 'node:path';
+import { encodeWav, type RenderCosts, type RenderSplit, renderSession } from '@holo/engine';
+import { dataFolderSource, renderThreads, renderWorkersFor } from '@holo/engine/node';
 import type { Project } from '@holo/session';
+import { threadsAllowed } from './host-bounce.ts';
 
 interface Input {
   dataDir: string;
@@ -43,13 +45,66 @@ const send = (msg: Record<string, unknown>) => {
   if (process.connected) process.send?.(msg);
 };
 
+const read = (path: string): unknown => {
+  try {
+    return JSON.parse(readFileSync(path, 'utf8'));
+  } catch {
+    return null;
+  }
+};
+
+/**
+ * A bounce on the host's other cores (the engine's render.ts, RenderOptions.split): the same file,
+ * sooner. The threads share the song's strips out by what each cost the last time the song was
+ * bounced here, kept beside its bounces; a song bounced for the first time goes by guesses, brought
+ * to this host's speed by what its last bounce of any song found. Null: one engine (a host with
+ * fewer than three cores to itself, or told to).
+ */
+function threads(dataDir: string, song: string): RenderSplit | null {
+  const workers = renderWorkersFor(availableParallelism(), threadsAllowed());
+  if (workers < 2) return null;
+  // (a folder of their own: a song's folder holds its bounces and nothing else)
+  const kept = join(dataDir, 'bounces', '.render');
+  const all = join(kept, 'host.json');
+  const own = join(kept, `${song.replace(/[^\w-]/g, '')}.json`);
+  const costs = (read(own) ?? read(all)) as Partial<RenderCosts> | null;
+  const keep = (path: string, what: unknown) => {
+    try {
+      mkdirSync(dirname(path), { recursive: true });
+      writeFileSync(`${path}.part`, JSON.stringify(what));
+      renameSync(`${path}.part`, path);
+    } catch {
+      // (nowhere to keep it: the next bounce goes by guesses)
+    }
+  };
+  return {
+    ...renderThreads(workers),
+    costs:
+      costs?.scale && typeof costs.scale.tracks === 'number' && typeof costs.scale.buses === 'number'
+        ? { scale: costs.scale, strips: costs.strips && typeof costs.strips === 'object' ? costs.strips : {} }
+        : null,
+    learned(found) {
+      keep(own, found);
+      keep(all, { scale: found.scale, strips: {} });
+    },
+  };
+}
+
 async function bounce(input: Input, line: (text: string) => void): Promise<number> {
   const { project } = input;
+  // (a host where the threads can't even be set up bounces on one engine, as before there were any)
+  let split: RenderSplit | null = null;
+  try {
+    split = threads(input.dataDir, project.id);
+  } catch {
+    split = null;
+  }
   const out = await renderSession(project, dataFolderSource(input.dataDir, project.id), {
     sampleRate: project.sampleRate ?? 48000,
     from: input.from,
     to: input.to,
     tail: input.tail,
+    ...(split ? { split } : {}),
     onProgress: line,
   });
   if (out.errors.length) throw new Error(`The engine stopped: ${out.errors[0]}`);

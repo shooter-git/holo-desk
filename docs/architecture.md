@@ -21,7 +21,8 @@ the MIDI and audio effects, the mixer, and the song's compiler. The same code ru
 - **the studio's audio thread** (and, rendering ahead, its worker threads), live, at your sound
   device's rate;
 - **the studio's Bounce**, in a worker, at the song's rate (`sampleRate` in the session, 48 kHz unless
-  set);
+  set); or, for a device that asks (a phone or a tablet, unless Settings › Audio says otherwise),
+  on the host, the same way from the same files (below);
 - **headless**, on the host: `holo render-audio`, the server, or a creation's build, with no browser.
 
 A bounce and a headless render read samples and audio files with the same WAV decoder (a song's audio
@@ -261,6 +262,27 @@ What comes next, in this order:
 2. **WebAssembly SIMD** for the hottest DSP: sampler voices (the interpolator) and convolution, where
    the workers spend their time.
 3. **Smarter sample memory**: load only the samples a song plays, and stream long ones.
+
+## A bounce on the host
+
+A studio renders its own bounce in the page, every instrument's samples loaded there as floats: more
+than a phone's browser holds for a big song. So a device can have the host make it
+(`apps/server/src/host-bounce.ts`): the page sends the song as it has it, the stretch to bounce and
+the tail (`POST /api/projects/:id/bounces/host`), then asks how far it has got
+(`GET /api/bounce-jobs/:id`) and, when it's done, downloads the file straight from the host, never
+holding it. The host renders as the studio's worker does, with the same options, its samples and
+recordings read from the data folder, so the file is the one that studio would have made (a test
+compares them to the byte).
+
+One bounce at a time, each in a process of its own at the lowest priority, forked when its turn
+comes and gone when it ends: a long render never holds up the server, a small host is slow at it
+and nothing worse, and on Linux the system stops that process, not the server, should memory run
+out. A few may wait their turn. `/api/health` says the host is busy while one waits or runs, so an
+update waits for it. When the host can't take a bounce (one from before it made any, too many
+waiting, started again meanwhile), the device makes it as it always has. A bounce the host tried
+and couldn't make (a pack that isn't installed, out of memory) is said to have failed, with why.
+**Settings › Audio, Bounce on** chooses, on each device: Automatic (the host on a phone or a
+tablet, this device elsewhere), This device, or The host.
 
 ## A recording's waveform
 

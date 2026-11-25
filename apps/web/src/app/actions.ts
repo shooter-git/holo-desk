@@ -58,6 +58,7 @@ import {
   writtenSpans,
 } from '@holo/session';
 import { bounce, bounceRange } from '../audio/bounce.ts';
+import { bouncesOnHost } from '../audio/bounce-on.ts';
 import { companion, STUDIO_ENGINE } from '../audio/companion.ts';
 import { engine, type RecordedTake, warmEngine } from '../audio/engine.ts';
 import { chosenRate, type RateChoice } from '../audio/engine-rate.ts';
@@ -74,6 +75,7 @@ import { AgentError, agent, awayChanges, isLive, jobLabels } from './agent.ts';
 import { ApiError, api } from './api.ts';
 import { comparePlan, type Pass } from './compare.ts';
 import * as history from './history.ts';
+import { type KeptBounce, keepBounce, keptBounce, startHostBounce, watchHostBounce } from './host-bounce.ts';
 import { browserShelf, type Keepable, Keeper, type Restored, sameSong, stepJobs } from './kept-history.ts';
 import { isTouch } from './layout.ts';
 // (live.ts imports this module too: neither uses the other while loading, so the cycle is harmless)
@@ -1062,6 +1064,8 @@ function keepSelectionInSight(): void {
 export async function startup(): Promise<void> {
   keepOnDevice();
   keepSelectionInSight();
+  // (a bounce the host was making for this tab before it was reloaded)
+  void resumeHostBounce();
   void library.refresh();
   warmEngine();
   void api
@@ -2514,22 +2518,105 @@ export async function openPiece(creation: string, piece: string): Promise<void> 
 
 // ---- bouncing ----
 
+type Bounced = { file: string; url: string; path: string; seconds: number };
+/** How long a bounce rings on after its last tick, seconds. */
+const BOUNCE_TAIL = 3;
+/** A bounce is under way (the line that shows it is also a creation's render's, which comes and goes by itself). */
+let bounceUnderWay = false;
+
+const bouncedToast = (seconds: number, name: string, kept: boolean) => {
+  const m = Math.floor(seconds / 60);
+  toast(
+    `Bounced ${m}:${String(Math.round(seconds % 60)).padStart(2, '0')} of “${name}” (24-bit WAV${kept ? ', kept with the song' : ''})`,
+  );
+};
+
 /**
  * Render the song (or the cycle, when it's on) to a WAV file, keep a copy with the song on the host,
- * and download it on this device when asked.
+ * and download it on this device when asked. Made in this page, or by the host for a device that
+ * asks it to (Settings › Audio: a phone or a tablet, unless told otherwise): the same file either
+ * way. When the host can't take it, this page makes it.
  */
-export async function bounceSong(
-  download = true,
-): Promise<{ file: string; url: string; path: string; seconds: number } | null> {
+export async function bounceSong(download = true): Promise<Bounced | null> {
   const p = store.get().project;
-  if (!p || store.get().bouncing) return null;
+  if (!p || store.get().bouncing || bounceUnderWay) return null;
   const range = bounceRange(p, projectEnd(p));
   const name = p.cycle.on ? `${p.title} (cycle)` : p.title;
+  bounceUnderWay = true;
+  try {
+    if (bouncesOnHost(store.get().bounceOn, isTouch())) {
+      store.set({ bouncing: 'Asking the host…' });
+      const id = await startHostBounce({ project: p, from: range.from, to: range.to, tail: BOUNCE_TAIL, name });
+      const made = id ? await followHostBounce({ id, name, download }) : 'lost';
+      if (made !== 'lost') return made;
+      toast('The host couldn’t take the bounce: this device is making it');
+    }
+    return await bounceOnDevice(p, range, name, download);
+  } finally {
+    bounceUnderWay = false;
+    store.set({ bouncing: null });
+  }
+}
+
+/**
+ * A bounce the host is making, followed to its end: its progress shown, the file downloaded when
+ * asked, and what came of it said. 'lost': the host gave it up untried (or was started again), and
+ * this device may make it.
+ */
+async function followHostBounce(kept: KeptBounce): Promise<Bounced | null | 'lost'> {
+  // (kept for this tab: a page reloaded while the host works picks it up again)
+  keepBounce(kept);
+  const made = await watchHostBounce(kept.id, {
+    onLine: (line) => store.set({ bouncing: `On the host: ${line}` }),
+  });
+  keepBounce(null);
+  if (made.state === 'failed') {
+    if (made.lost) return 'lost';
+    toast(`The bounce failed on the host: ${made.error}`, 'error', 8000);
+    return null;
+  }
+  if (kept.download) {
+    const a = document.createElement('a');
+    // (straight from the host to the device's files: the page never holds it)
+    a.href = `${made.url}?as=${encodeURIComponent(kept.name)}`;
+    a.download = `${kept.name}.wav`;
+    a.click();
+  }
+  bouncedToast(made.seconds, kept.name, true);
+  return { file: made.file, url: made.url, path: made.path, seconds: made.seconds };
+}
+
+/**
+ * A bounce the host was making when this page was reloaded (a phone lets a page go and brings it
+ * back): followed again, and finished as it would have been. One the host lost meanwhile is said
+ * to be, and asked for again by hand.
+ */
+export async function resumeHostBounce(): Promise<void> {
+  const kept = keptBounce();
+  if (!kept || bounceUnderWay) return;
+  bounceUnderWay = true;
+  try {
+    store.set({ bouncing: 'On the host: …' });
+    if ((await followHostBounce(kept)) === 'lost')
+      toast(`The host didn’t finish bouncing “${kept.name}”: bounce it again`, 'error', 8000);
+  } finally {
+    bounceUnderWay = false;
+    store.set({ bouncing: null });
+  }
+}
+
+/** A bounce rendered in this page, uploaded to be kept with the song. */
+async function bounceOnDevice(
+  p: Project,
+  range: ReturnType<typeof bounceRange>,
+  name: string,
+  download: boolean,
+): Promise<Bounced | null> {
   store.set({ bouncing: 'Starting…' });
   try {
     const { wav, seconds } = await bounce(p, {
       ...range,
-      tail: 3,
+      tail: BOUNCE_TAIL,
       onProgress: (text) => store.set({ bouncing: text }),
     });
     store.set({ bouncing: 'Saving…' });
@@ -2546,16 +2633,11 @@ export async function bounceSong(
       a.click();
       window.setTimeout(() => URL.revokeObjectURL(a.href), 60_000);
     }
-    const m = Math.floor(seconds / 60);
-    toast(
-      `Bounced ${m}:${String(Math.round(seconds % 60)).padStart(2, '0')} of “${name}” (24-bit WAV${saved ? ', kept with the song' : ''})`,
-    );
+    bouncedToast(seconds, name, saved !== null);
     return saved ? { ...saved, seconds } : null;
   } catch (err) {
     toast(`The bounce failed: ${err instanceof Error ? err.message : String(err)}`, 'error', 8000);
     return null;
-  } finally {
-    store.set({ bouncing: null });
   }
 }
 

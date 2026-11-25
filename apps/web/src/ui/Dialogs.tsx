@@ -23,6 +23,7 @@ import { KEY_COMMANDS } from '../app/keys.ts';
 import { device, renameDevice } from '../app/live.ts';
 import { type SettingsTab, store, toast, useApp } from '../app/store.ts';
 import { useVersion } from '../app/version.ts';
+import type { BounceOn } from '../audio/bounce-on.ts';
 import { companion, STUDIO_ENGINE } from '../audio/companion.ts';
 import { engine } from '../audio/engine.ts';
 import type { RateChoice } from '../audio/engine-rate.ts';
@@ -748,9 +749,16 @@ const RATE_CHOICES: readonly [RateChoice, string][] = [
   [48000, '48 kHz'],
 ];
 
+const BOUNCE_CHOICES: readonly [BounceOn, string][] = [
+  ['auto', 'Automatic'],
+  ['device', 'This device'],
+  ['host', 'The host'],
+];
+
 function AudioSettings() {
   const mode = useApp((s) => s.latencyMode);
   const rate = useApp((s) => s.rateChoice);
+  const bounceOn = useApp((s) => s.bounceOn);
   const lowLatency = useApp((s) => s.lowLatency);
   return (
     <section className="vstack">
@@ -805,6 +813,24 @@ function AudioSettings() {
       <span className="muted">
         Automatic is 44.1 kHz on a phone or tablet, where most instruments then load straight from their files, quicker
         and in less memory, and the sound device's own rate elsewhere. Changing it starts the audio again.
+      </span>
+      <div className="label">Bounce on</div>
+      <div className="seg" style={{ alignSelf: 'flex-start' }}>
+        {BOUNCE_CHOICES.map(([c, label]) => (
+          <button
+            key={c}
+            type="button"
+            className={`btn${(BOUNCE_CHOICES.some(([b]) => b === bounceOn) ? bounceOn : 'auto') === c ? ' on' : ''}`}
+            onClick={() => store.set({ bounceOn: c })}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+      <span className="muted">
+        A bounce made on the host is the same file, and this device loads nothing to make it. Automatic is the host on a
+        phone or tablet, where a big song's sounds are more than the browser holds, and this device elsewhere. When the
+        host can't take one, this device makes it.
       </span>
       <EngineLink />
       <OutputPicker />

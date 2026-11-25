@@ -1288,6 +1288,20 @@ function views(page, layout, finger) {
   const dialogs = [
     ['Songs', () => press(control(page, 'Songs')), () => page.keyboard.press('Escape')],
     ['Settings', () => press(control(page, 'Settings')), () => page.keyboard.press('Escape')],
+    // Settings › Audio: the rate, where bounces are made, the devices
+    [
+      'Settings › Audio',
+      async () => {
+        await press(control(page, 'Settings'));
+        await press(page.getByRole('tab', { name: 'Audio' }));
+        await page.getByText('Bounce on', { exact: true }).scrollIntoViewIfNeeded();
+      },
+      async () => {
+        // (left on its first tab, as the views after this one find it)
+        await press(page.getByRole('tab', { name: 'General' }));
+        await page.keyboard.press('Escape');
+      },
+    ],
   ];
   if (phone) {
     const tab = (label) => [label, () => page.locator('.tabbar button', { hasText: label }).first().tap(), null];

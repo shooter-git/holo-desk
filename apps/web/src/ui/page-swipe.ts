@@ -26,7 +26,8 @@ const AWAY_MS = 180;
 /** How near words that are selected a finger is taken to be going for the selection's handles. */
 const HANDLE_PX = 30;
 
-const reducedMotion = () => typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
+export const reducedMotion = () =>
+  typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
 const vertical = (toward: Toward) => toward === 'up' || toward === 'down';
 
 /** The page faded to see the studio through it, or back: said on it, and to the studio (its panes draw while it's faded). */
@@ -194,13 +195,17 @@ export function useSwipeToClose(
 /**
  * Holding the header still (a finger, a pen or the mouse) fades the page to see the studio through it,
  * until it's let go. A press that moves first is a swipe's, and one on the header's button is the
- * button's.
+ * button's. Not `on` (a desktop's dock, which has the studio beside it, not under it), it does nothing.
  */
-export function useHoldToSeeThrough(header: RefObject<HTMLElement | null>, card: RefObject<HTMLElement | null>): void {
+export function useHoldToSeeThrough(
+  header: RefObject<HTMLElement | null>,
+  card: RefObject<HTMLElement | null>,
+  on = true,
+): void {
   useEffect(() => {
     const el = header.current;
     const page = card.current;
-    if (!el || !page) return;
+    if (!on || !el || !page) return;
     let timer = 0;
     let held: { id: number; x: number; y: number } | null = null;
     let fading = false;
@@ -243,5 +248,5 @@ export function useHoldToSeeThrough(header: RefObject<HTMLElement | null>, card:
       el.removeEventListener('pointerdown', down);
       stop();
     };
-  }, [header, card]);
+  }, [header, card, on]);
 }

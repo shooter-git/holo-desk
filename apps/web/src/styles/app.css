@@ -4212,9 +4212,11 @@ html[data-layout="tablet"] .talk-room[data-covered] .talk-page {
 }
 
 /* a desktop with the agent on: a dock down the right side, under the control bar. It slides in and out
-   (ui/Bar.tsx keeps it drawn while it goes). Where the window is wide enough the studio gives it the
-   room over the same time, so the two edges move as one and nothing is under the dock; in a narrower
-   window it's over the studio's right edge, as a tablet's sheet is */
+   over the studio (ui/Bar.tsx keeps it drawn while it goes), and only the dock moves: the studio is
+   laid out again once each way, not for every frame of the slide. Where the window is wide enough
+   the studio gives it the room once it's out (data-dock), and takes it back as it starts to leave,
+   so nothing is under a dock at rest; in a narrower window it stays over the studio's right edge, as
+   a tablet's sheet is */
 :root {
   --dock-width: 380px;
   --dock-slide: 0.2s cubic-bezier(0.2, 0.8, 0.2, 1);
@@ -4243,12 +4245,10 @@ html[data-layout="desktop"] .talk-page[data-leaving] {
   }
 }
 
+/* (at rest beside the studio it's over nothing, and casts no shadow) */
 @media (min-width: 1360px) {
-  html[data-layout="desktop"] .talk-page {
+  html[data-layout="desktop"][data-dock] .talk-page {
     box-shadow: none;
-  }
-  html[data-layout="desktop"] .app-body {
-    transition: margin-right var(--dock-slide);
   }
   html[data-layout="desktop"][data-dock] .app-body {
     margin-right: var(--dock-width);
@@ -7615,8 +7615,7 @@ html[data-layout^="phone"] .view-item kbd {
   .pad,
   .disclosure > summary::before,
   .remote-deck .remote-lcd,
-  .remote-deck .remote-transport,
-  html[data-layout="desktop"] .app-body {
+  .remote-deck .remote-transport {
     transition: none;
   }
   /* recording still shows its ring, held steady */

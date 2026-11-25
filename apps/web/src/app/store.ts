@@ -5,6 +5,7 @@
 import type { ClickSound } from '@holo/engine';
 import type { DIVISIONS, MiddleC, Note, PitchSnap, Project } from '@holo/session';
 import { useSyncExternalStore } from 'react';
+import type { BounceOn } from '../audio/bounce-on.ts';
 import type { LatencyMode } from '../audio/engine.ts';
 import type { RateChoice } from '../audio/engine-rate.ts';
 import type { MidiStatus, PortInfo } from '../audio/midi.ts';
@@ -128,6 +129,8 @@ export interface AppState {
   latencyMode: LatencyMode;
   /** The rate the studio plays at on this device (Settings › Audio): Automatic, or one of its own. */
   rateChoice: RateChoice;
+  /** Where this device's bounces are made (Settings › Audio): Automatic is the host on a phone or a tablet. */
+  bounceOn: BounceOn;
   /** Logic's Low Latency Mode: nothing that delays the sound while you play. */
   lowLatency: boolean;
   /** This device's chosen sound output ('' = the system's default). */
@@ -269,6 +272,7 @@ const initial: AppState = {
   countIn: 1,
   latencyMode: 'lowest',
   rateChoice: 'auto',
+  bounceOn: 'auto',
   lowLatency: true,
   outputDevice: '',
   inputDevice: '',
@@ -321,6 +325,7 @@ const REMEMBER: (keyof AppState)[] = [
   'countIn',
   'latencyMode',
   'rateChoice',
+  'bounceOn',
   'lowLatency',
   'outputDevice',
   'inputDevice',

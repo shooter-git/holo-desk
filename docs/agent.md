@@ -577,7 +577,8 @@ of the stretch `played` asked for); `length` is ms (null while still held).
    code:
    - `install-pack`: the Library's install queue;
    - `send-creation`: `sendToCreation`;
-   - `bounce` ("Bounce the song"): `bounceSong`, kept with the song on the host and not downloaded;
+   - `bounce` ("Bounce the song"): `bounceSong`, kept with the song on the host and not downloaded (made in that
+     studio's page, or by the host where its device has its bounces made there: Settings › Audio);
      the result says its length and its path under `bounces/`;
    - `render` ("Hear it as my-game"): the creation renders the song (`POST /api/projects/:id/render`),
      and the studio waits (up to 30 minutes) until it's back as a soloed audio track, or failed;

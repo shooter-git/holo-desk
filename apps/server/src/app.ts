@@ -47,6 +47,7 @@ import type { Config } from './config.ts';
 import { Creations, sessionText } from './creations.ts';
 import { type SongDetails, Store } from './db.ts';
 import { guard } from './guard.ts';
+import { bounceFileName, bounceDir as bounceFolder, HostBounces, type HostBouncesOptions } from './host-bounce.ts';
 import { Live, NO_ANSWER, type RenderJob } from './live.ts';
 import { NetworkMidi } from './network-midi.ts';
 import { omrRoutes } from './omr.ts';
@@ -88,9 +89,20 @@ export interface Services {
   jobs: Jobs;
   /** The agent's notices outside HO[LO], for devices that turned them on. */
   notify: Notify;
+  /** The bounces the host makes for devices that ask it to. */
+  bounces: HostBounces;
 }
 
-export async function buildApp(config: Config): Promise<{ app: FastifyInstance; services: Services }> {
+/** What a test puts in place of the server's own. */
+export interface AppOptions {
+  /** The process a bounce on the host is rendered in (host-bounce.ts). */
+  bounceSpawn?: HostBouncesOptions['spawn'];
+}
+
+export async function buildApp(
+  config: Config,
+  options: AppOptions = {},
+): Promise<{ app: FastifyInstance; services: Services }> {
   const app = Fastify({ logger: { level: process.env.HOLO_LOG ?? 'warn' }, bodyLimit: 64 * 1024 * 1024 });
   const store = new Store(config.dataDir);
   // audio kept as FLAC or AIFF (before uploads were made WAV) made WAV, so every renderer reads it
@@ -125,6 +137,11 @@ export async function buildApp(config: Config): Promise<{ app: FastifyInstance; 
     );
   }
   const live = new Live({ key });
+  // (nothing is started for these until a device asks for a bounce)
+  const bounces = new HostBounces({
+    dataDir: config.dataDir,
+    ...(options.bounceSpawn ? { spawn: options.bounceSpawn } : {}),
+  });
   live.latestRevision = (id) => store.get(id)?.revision ?? null;
   const creations = new Creations(config.creationsDir);
   /** The engine this studio plays: what an experience's pinned engine is measured against. */
@@ -198,8 +215,8 @@ export async function buildApp(config: Config): Promise<{ app: FastifyInstance; 
       ok: true,
       version: '0.9.30',
       build,
-      // a studio playing or recording: an update waits for it (tools/update.mjs)
-      busy: editor?.playing === true || editor?.recording === true,
+      // a studio playing or recording, or a bounce the host is making: an update waits for it (tools/update.mjs)
+      busy: editor?.playing === true || editor?.recording === true || bounces.busy(),
       engine: { ...studio, label: engineLabel(studio) },
     };
   });
@@ -917,10 +934,10 @@ export async function buildApp(config: Config): Promise<{ app: FastifyInstance; 
     return reply.type('application/octet-stream').header('cache-control', AUDIO_CACHE).send(Buffer.from(peaks));
   });
 
-  // ---- bounces: songs rendered to WAV by the studio, kept with the song ----
+  // ---- bounces: songs rendered to WAV by the studio (or here, for a device that asks), kept with the song ----
 
   app.addContentTypeParser(['audio/wav', 'audio/x-wav'], (_req, payload, done) => done(null, payload));
-  const bounceDir = (id: string) => join(config.dataDir, 'bounces', id.replace(/[^\w-]/g, ''));
+  const bounceDir = (id: string) => bounceFolder(config.dataDir, id);
   const SAFE_FILE = /^[\w .()'-]+\.wav$/;
 
   app.post<{ Params: { id: string }; Querystring: { name?: string } }>(
@@ -928,13 +945,7 @@ export async function buildApp(config: Config): Promise<{ app: FastifyInstance; 
     async (req, reply) => {
       const project = store.get(req.params.id);
       if (!project) return reply.code(404).send({ error: 'No such project' });
-      const stamp = new Date().toISOString().replace('T', ' ').replace(/:/g, '.').slice(0, 19);
-      const title =
-        (req.query.name ?? project.title)
-          .replace(/[^\w .()'-]+/g, '')
-          .trim()
-          .slice(0, 80) || 'Bounce';
-      const file = `${stamp} ${title}.wav`;
+      const file = bounceFileName(req.query.name ?? project.title);
       await saveStream(req.body as NodeJS.ReadableStream, join(bounceDir(project.id), file));
       return reply.code(201).send({
         file,
@@ -957,12 +968,53 @@ export async function buildApp(config: Config): Promise<{ app: FastifyInstance; 
       .sort((a, b) => b.file.localeCompare(a.file));
   });
 
-  app.get<{ Params: { id: string; file: string } }>('/api/projects/:id/bounces/:file', async (req, reply) => {
-    const file = req.params.file;
-    const path = join(bounceDir(req.params.id), file);
-    if (!SAFE_FILE.test(file) || !existsSync(path)) return reply.code(404).send({ error: 'No such bounce' });
-    reply.header('content-disposition', `attachment; filename="${file}"`);
-    return sendFile(reply, path, 'audio/wav', 'no-cache');
+  app.get<{ Params: { id: string; file: string }; Querystring: { as?: string } }>(
+    '/api/projects/:id/bounces/:file',
+    async (req, reply) => {
+      const file = req.params.file;
+      const path = join(bounceDir(req.params.id), file);
+      if (!SAFE_FILE.test(file) || !existsSync(path)) return reply.code(404).send({ error: 'No such bounce' });
+      // `as`: the name it's saved under on the device (a studio's own bounce is saved under the song's)
+      const as = `${(req.query.as ?? '')
+        .replace(/\.wav$/i, '')
+        .trim()
+        .slice(0, 80)}.wav`;
+      reply.header('content-disposition', `attachment; filename="${SAFE_FILE.test(as) && as !== '.wav' ? as : file}"`);
+      return sendFile(reply, path, 'audio/wav', 'no-cache');
+    },
+  );
+
+  /**
+   * A bounce made here, for a device that asks (host-bounce.ts): a phone's browser can't hold a big
+   * song's samples to render it. The page sends the song as it has it (as its own bounce renders
+   * what it has, saved or not), the stretch to bounce in ticks and the tail in seconds; the answer
+   * is a job to ask about. 503 when too many wait already: the device bounces it itself.
+   */
+  app.post<{
+    Params: { id: string };
+    Body: { doc?: unknown; from?: unknown; to?: unknown; tail?: unknown; name?: unknown };
+  }>('/api/projects/:id/bounces/host', async (req, reply) => {
+    if (!store.row(req.params.id)) return reply.code(404).send({ error: 'No such project' });
+    const { from, to, tail = 3, name } = req.body ?? {};
+    let song: Project;
+    try {
+      song = parseProject(req.body?.doc);
+    } catch (err) {
+      return reply.code(400).send({ error: `Not a song (${err instanceof Error ? err.message : String(err)})` });
+    }
+    if (song.id !== req.params.id) return reply.code(400).send({ error: 'The id does not match' });
+    // (both ends: without them the engine would render the song's loop, another file)
+    const span = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v) && v >= 0;
+    if (!span(from) || !span(to) || to <= from)
+      return reply.code(400).send({ error: 'A bounce needs its start and end' });
+    if (!span(tail) || tail > 60) return reply.code(400).send({ error: 'A tail of 0 to 60 seconds' });
+    const job = bounces.start({ song, from, to, tail, name: typeof name === 'string' && name ? name : song.title });
+    if (!job) return reply.code(503).send({ error: 'The host has bounces waiting already' });
+    return reply.code(202).send({ id: job.id });
+  });
+
+  app.get<{ Params: { id: string } }>('/api/bounce-jobs/:id', async (req, reply) => {
+    return bounces.get(req.params.id) ?? reply.code(404).send({ error: 'No such bounce' });
   });
 
   // ---- the live channel, from the command line ----
@@ -1079,11 +1131,15 @@ export async function buildApp(config: Config): Promise<{ app: FastifyInstance; 
 
   app.addHook('onClose', async () => {
     if (dropping) clearTimeout(dropping);
+    bounces.close();
     agent.close();
     networkMidi?.close();
     store.close();
     // (a container the server started, removed: quick, and nothing in it is kept)
     await engines.close?.().catch(() => undefined);
   });
-  return { app, services: { store, packs, live, creations, audioSwept, jobs: agent.jobs, notify: agent.notify } };
+  return {
+    app,
+    services: { store, packs, live, creations, audioSwept, jobs: agent.jobs, notify: agent.notify, bounces },
+  };
 }

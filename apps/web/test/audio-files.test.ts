@@ -135,6 +135,91 @@ describe('audio files for the engine and the screen', () => {
     expect(Array.from(shared[1] as Float32Array)).toEqual(Array.from(own[1] as Float32Array));
   });
 
+  /** A host that hands out peaks (or doesn't have any), and the file's bytes as ever. */
+  const host = (peaks: 'made' | 'none' | 'down') => {
+    const asked: string[] = [];
+    const made = peaksToBytes({
+      step: 256,
+      rate: 44100,
+      min: new Float32Array([-0.5, -0.25]),
+      max: new Float32Array([0.75, 0.125]),
+    });
+    vi.stubGlobal('fetch', async (url: string) => {
+      asked.push(url);
+      if (!url.endsWith('/peaks')) return new Response(new ArrayBuffer(64));
+      if (peaks === 'down') throw new TypeError('Failed to fetch');
+      return peaks === 'made'
+        ? new Response(made)
+        : new Response('{"error":"No peaks for this file"}', { status: 404 });
+    });
+    return asked;
+  };
+
+  it("draws from the host's peaks, and decodes nothing for them", async () => {
+    const asked = host('made');
+    const files = new AudioFiles();
+    const { state, ctx } = decoder();
+    files.ensurePeaks('prj_a', 'aud_one', ctx);
+    await vi.waitFor(() => expect(files.peaks.has('aud_one')).toBe(true));
+    expect(files.peaks.get('aud_one')).toMatchObject({ step: 256, rate: 44100, max: new Float32Array([0.75, 0.125]) });
+    expect(asked).toEqual(['/api/projects/prj_a/files/aud_one/peaks']);
+    expect(state.calls).toBe(0);
+    // asked again (each frame draws): nothing more is fetched
+    files.ensurePeaks('prj_a', 'aud_one', ctx);
+    expect(asked).toHaveLength(1);
+  });
+
+  it("draws an inactive track's recording from the host's peaks too", async () => {
+    host('made');
+    const files = new AudioFiles();
+    const { state, ctx } = decoder();
+    files.ensurePeaks('prj_a', 'aud_off', ctx, true);
+    await vi.waitFor(() => expect(files.peaks.has('aud_off')).toBe(true));
+    expect(state.calls).toBe(0);
+  });
+
+  it.each(['none', 'down'] as const)('takes them from the file here when the host has %s', async (peaks) => {
+    const asked = host(peaks);
+    const files = new AudioFiles();
+    const { state, ctx } = decoder();
+    files.ensurePeaks('prj_a', 'aud_one', ctx);
+    await vi.waitFor(() => expect(files.peaks.has('aud_one')).toBe(true));
+    expect(state.calls).toBe(1);
+    expect(files.peaks.get('aud_one')?.rate).toBe(48000);
+    expect(asked).toEqual(['/api/projects/prj_a/files/aud_one/peaks', '/api/projects/prj_a/files/aud_one']);
+  });
+
+  it('never decodes an inactive track’s recording for them, and asks the host once', async () => {
+    const asked = host('none');
+    const files = new AudioFiles();
+    const { state, ctx } = decoder();
+    files.ensurePeaks('prj_a', 'aud_off', ctx, true);
+    await vi.waitFor(() => expect(asked).toHaveLength(1));
+    await new Promise((done) => setTimeout(done, 30));
+    files.ensurePeaks('prj_a', 'aud_off', ctx, true);
+    await new Promise((done) => setTimeout(done, 30));
+    expect(asked).toHaveLength(1);
+    expect(state.calls).toBe(0);
+    expect(files.peaks.has('aud_off')).toBe(false);
+  });
+
+  it("keeps the engine's own peaks when its decoding gets there before the host", async () => {
+    const made = peaksToBytes({ step: 256, rate: 44100, min: new Float32Array([-1]), max: new Float32Array([1]) });
+    vi.stubGlobal('fetch', async (url: string) => {
+      if (!url.endsWith('/peaks')) return new Response(new ArrayBuffer(64));
+      await new Promise((done) => setTimeout(done, 80));
+      return new Response(made);
+    });
+    const files = new AudioFiles();
+    const { state, ctx } = decoder();
+    files.ensurePeaks('prj_a', 'aud_one', ctx);
+    await files.load('prj_a', { file: 'aud_one', stretch: 1 }, ctx);
+    expect(files.peaks.get('aud_one')?.rate).toBe(48000);
+    await new Promise((done) => setTimeout(done, 120));
+    expect(files.peaks.get('aud_one')?.rate).toBe(48000);
+    expect(state.calls).toBe(1);
+  });
+
   it('says so when a file is missing, and tries again when asked again', async () => {
     vi.stubGlobal('fetch', async () => new Response('', { status: 404 }));
     const files = new AudioFiles();

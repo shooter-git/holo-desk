@@ -24,7 +24,7 @@ export interface WaveStyle {
   /** Inside the region the gain and fades shape it; outside it's drawn as recorded. */
   shaped: boolean;
   canvasWidth: number;
-  /** Only peaks kept on this device, never the file decoded for them (an inactive track's isn't loaded). */
+  /** Only peaks kept on this device or made by the host, never the file decoded here for them (an inactive track's isn't loaded). */
   keptOnly?: boolean;
 }
 

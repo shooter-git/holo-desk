@@ -62,6 +62,7 @@ import {
   useDataDir,
 } from './pack-install.ts';
 import { Packs } from './packs.ts';
+import { peaksOf } from './peaks.ts';
 import { scanRoutes } from './scans.ts';
 
 const ISOLATION = {
@@ -886,19 +887,34 @@ export async function buildApp(config: Config): Promise<{ app: FastifyInstance; 
     },
   );
 
+  /** Where a song's audio file is kept, whatever its ending (null: no such file). */
+  const audioPath = (id: string, file: string): string | null => {
+    const dir = audioDir(id);
+    if (!/^aud_[a-z0-9]+$/.test(file) || !existsSync(dir)) return null;
+    const found = readdirSync(dir).find((f) => f.startsWith(`${file}.`));
+    return found ? join(dir, found) : null;
+  };
+  // (a file never changes under its id)
+  const AUDIO_CACHE = 'private, max-age=31536000, immutable';
+
   app.get<{ Params: { id: string; file: string } }>('/api/projects/:id/files/:file', async (req, reply) => {
-    const dir = audioDir(req.params.id);
-    if (!/^aud_[a-z0-9]+$/.test(req.params.file) || !existsSync(dir))
-      return reply.code(404).send({ error: 'No such file' });
-    const found = readdirSync(dir).find((f) => f.startsWith(`${req.params.file}.`));
-    if (!found) return reply.code(404).send({ error: 'No such file' });
-    const ext = found.slice(found.lastIndexOf('.'));
-    return sendFile(
-      reply,
-      join(dir, found),
-      AUDIO_EXT[ext] ?? 'application/octet-stream',
-      'private, max-age=31536000, immutable',
-    );
+    const path = audioPath(req.params.id, req.params.file);
+    if (!path) return reply.code(404).send({ error: 'No such file' });
+    const ext = path.slice(path.lastIndexOf('.'));
+    return sendFile(reply, path, AUDIO_EXT[ext] ?? 'application/octet-stream', AUDIO_CACHE);
+  });
+
+  /**
+   * A file's waveform peaks, made here from the WAV and kept beside it (peaks.ts), so a studio draws
+   * a recording without decoding it. A file the host doesn't read (an MP3, say) has none: the studio
+   * takes them from its own decoding of it, as it did before the host made any.
+   */
+  app.get<{ Params: { id: string; file: string } }>('/api/projects/:id/files/:file/peaks', async (req, reply) => {
+    const path = audioPath(req.params.id, req.params.file);
+    if (!path) return reply.code(404).send({ error: 'No such file' });
+    const peaks = path.endsWith('.wav') ? await peaksOf(path).catch(() => null) : null;
+    if (!peaks) return reply.code(404).send({ error: 'No peaks for this file' });
+    return reply.type('application/octet-stream').header('cache-control', AUDIO_CACHE).send(Buffer.from(peaks));
   });
 
   // ---- bounces: songs rendered to WAV by the studio, kept with the song ----

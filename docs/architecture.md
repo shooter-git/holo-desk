@@ -250,6 +250,16 @@ What comes next, in this order:
    the workers spend their time.
 3. **Smarter sample memory**: load only the samples a song plays, and stream long ones.
 
+## A recording's waveform
+
+A recording is drawn from its peaks: the lowest and the highest value of every 256 frames. The host
+makes them from the WAV, read a piece at a time and one file at a time (`apps/server/src/peaks.ts`),
+the first time a studio asks (`GET /api/projects/:id/files/:file/peaks`), and keeps them beside the
+file; the studio keeps them on the device too. So a device draws a long take without decoding it:
+before its audio has started, and for an inactive track, whose recording it never loads. A file the
+host doesn't read (an MP3), or a host that doesn't answer, leaves a device where it was before the
+host made any: the peaks are taken from its own decoding of the file.
+
 ## Sessions and operations
 
 A song is one JSON document (`packages/session`, [format](session-format.md)). Every change is an

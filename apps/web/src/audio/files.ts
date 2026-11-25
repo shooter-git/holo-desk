@@ -23,6 +23,13 @@ export interface Peaks {
 const fileUrl = (project: string, file: string) => `/api/projects/${project}/files/${file}`;
 /** Where a file's peaks are kept in the device's cache (never fetched: no such address on the server). */
 const peaksUrl = (project: string, file: string) => `${fileUrl(project, file)}?peaks=1`;
+/** Where the host hands out a file's peaks, made from the file itself. */
+const hostPeaksUrl = (project: string, file: string) => `${fileUrl(project, file)}/peaks`;
+/**
+ * How long the host is waited for: it makes a song's peaks one file at a time the first time they're
+ * asked for, and a slow one with many long takes needs a while. Past this, the file is decoded here.
+ */
+const HOST_PEAKS_MS = 30_000;
 
 let worker: Worker | null = null;
 let jobs = 0;
@@ -311,9 +318,11 @@ export class AudioFiles {
   }
 
   /**
-   * Peaks for drawing: as kept on this device from the last time, else taken from the file (the
-   * engine's own decoding of it when that's on its way or can be; before the audio starts, one of
-   * its own). `keptOnly`: never decode for them (a recording that isn't loaded, an inactive track's).
+   * Peaks for drawing: as kept on this device from the last time, else as the host makes them from
+   * the file (so a long take isn't decoded here just to be drawn), else taken from the file here: a
+   * file the host doesn't read, or a host that doesn't answer (the engine's own decoding of it when
+   * that's on its way or can be; before the audio starts, one of its own). `keptOnly`: never decode
+   * for them (a recording that isn't loaded, an inactive track's).
    */
   ensurePeaks(project: string, file: string, ctx?: BaseAudioContext, keptOnly = false): void {
     if (this.peaks.has(file) || this.pending.has(file)) return;
@@ -322,9 +331,13 @@ export class AudioFiles {
     void this.keptPeaks(project, file)
       .then(async (kept) => {
         if (this.peaks.has(file)) return;
-        if (kept) {
-          this.peaks.set(file, kept);
+        const peaks = kept ?? (await this.hostPeaks(project, file));
+        // (the engine's decoding of the file may have brought its own meanwhile)
+        if (this.peaks.has(file)) return;
+        if (peaks) {
+          this.peaks.set(file, peaks);
           this.emitSoon();
+          if (!kept) void this.keepPeaks(project, file, peaks);
           return;
         }
         if (keptOnly) {
@@ -349,6 +362,20 @@ export class AudioFiles {
       return res ? peaksFromBytes(await res.arrayBuffer()) : null;
     } catch {
       return null;
+    }
+  }
+
+  /** A file's peaks as the host makes them (null: it has none for this file, or didn't answer in time). */
+  private async hostPeaks(project: string, file: string): Promise<Peaks | null> {
+    const giveUp = new AbortController();
+    const timer = setTimeout(() => giveUp.abort(), HOST_PEAKS_MS);
+    try {
+      const res = await fetch(hostPeaksUrl(project, file), { signal: giveUp.signal });
+      return res.ok ? peaksFromBytes(await res.arrayBuffer()) : null;
+    } catch {
+      return null;
+    } finally {
+      clearTimeout(timer);
     }
   }
 

@@ -6,6 +6,7 @@
 
 import { encodeWav } from '@holo/engine';
 import type { AudioClip, AudioFile } from '@holo/session';
+import { type Compact, compactChannels } from './compact.ts';
 import StretchWorker from './stretch.worker.ts?worker';
 
 export { clipKey } from '@holo/engine';
@@ -315,6 +316,28 @@ export class AudioFiles {
     );
     if (plain) return channels;
     return stretchInWorker(channels, clip.stretch, decoded.sampleRate);
+  }
+
+  /**
+   * A clip's audio as `load` gives it, held as 16-bit (compact.ts): a phone's or a tablet's copy of a
+   * recording, half the memory. Taken straight from the decoder's frames, with no copy of them as
+   * floats between (a stretched clip is stretched as floats first).
+   */
+  async loadCompact(
+    project: string,
+    clip: Pick<AudioClip, 'file' | 'stretch'>,
+    ctx: BaseAudioContext,
+    shared = false,
+  ): Promise<Compact> {
+    const decoded = await this.decode(project, clip.file, ctx);
+    const channels = Array.from({ length: Math.min(2, decoded.numberOfChannels) }, (_, c) => decoded.getChannelData(c));
+    if (Math.abs(clip.stretch - 1) < 1e-4) return compactChannels(channels, shared);
+    const stretched = await stretchInWorker(
+      channels.map((c) => c.slice()),
+      clip.stretch,
+      decoded.sampleRate,
+    );
+    return compactChannels(stretched, shared);
   }
 
   /**

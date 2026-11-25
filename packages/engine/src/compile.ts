@@ -203,6 +203,23 @@ function withPatches(piece: ClipSpec, patches: readonly PatchJob[]): ClipSpec[] 
   return out;
 }
 
+/**
+ * Plugins' data in the song's files, as clips: a Wow & Flutter's drift curve. A plugin reads them as
+ * the numbers they are (seconds of delay, not sound), so whoever loads a song's audio keeps them as
+ * floats, whatever it does with a recording (and a region playing the same file with them).
+ */
+export function pluginClips(project: Project): AudioClip[] {
+  const out: AudioClip[] = [];
+  const channels = [project.master, ...project.buses.map((b) => b.channel), ...project.tracks.map((t) => t.channel)];
+  for (const c of channels) {
+    for (const p of c.inserts) {
+      const file = p.type === 'wow' ? p.settings?.curve : undefined;
+      if (file) out.push({ file, offset: 0, gain: 0, fadeIn: 0, fadeOut: 0, stretch: 1 });
+    }
+  }
+  return out;
+}
+
 /** Every clip of a song, one per key: what the engine needs loaded. */
 export function songClips(project: Project): AudioClip[] {
   const keys = new Map<string, AudioClip>();
@@ -210,15 +227,7 @@ export function songClips(project: Project): AudioClip[] {
     if (t.kind !== 'audio') continue;
     for (const r of t.regions) if (r.audio) keys.set(clipKey(r.audio), r.audio);
   }
-  // plugins' data in the song's files: a Wow & Flutter's drift curve
-  const channels = [project.master, ...project.buses.map((b) => b.channel), ...project.tracks.map((t) => t.channel)];
-  for (const c of channels) {
-    for (const p of c.inserts) {
-      const file = p.type === 'wow' ? p.settings?.curve : undefined;
-      if (file)
-        keys.set(clipKey({ file, stretch: 1 }), { file, offset: 0, gain: 0, fadeIn: 0, fadeOut: 0, stretch: 1 });
-    }
-  }
+  for (const clip of pluginClips(project)) keys.set(clipKey(clip), clip);
   return [...keys.values()];
 }
 

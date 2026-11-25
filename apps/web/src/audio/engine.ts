@@ -37,6 +37,7 @@ import {
   type PreparedImpulse,
   partSamples,
   planTrack,
+  pluginClips,
   RING_EVENTS,
   RING_HEADER,
   RING_INTS,
@@ -74,6 +75,7 @@ import {
 } from '@holo/session';
 import { aheadThreads, loadAheadScale, loadAheadTimings, saveAhead, startAhead, warmAhead } from './ahead.ts';
 import { auditionClips, auditionPatches, auditionRange } from './audition.ts';
+import { type Compact, compactClip } from './compact.ts';
 import { companion, STUDIO_ENGINE } from './companion.ts';
 import { engineRate } from './engine-rate.ts';
 import { audioFiles } from './files.ts';
@@ -237,7 +239,14 @@ export class AudioEngine {
    * audio thread (new latency settings) is handed the same, where a clip decoded again would be held
    * twice until the browser let go of the first.
    */
-  private keptAudio = new Map<string, Float32Array[]>();
+  private keptAudio = new Map<string, { channels: SampleFrames[]; scale?: number }>();
+  /**
+   * A phone's or a tablet's recordings are held as 16-bit, half the memory (compact.ts): set by the
+   * app before the audio starts, as the rate is.
+   */
+  compactRecordings = false;
+  /** The clips the engines hold as 16-bit, by key (the patch workers render from floats: `recordings` has none of these). */
+  private compactSent = new Set<string>();
   /** Sampler keys the song's tracks play (as of the last graph). */
   private usedSamplers = new Set<string>();
   /** Samplers no track plays, and since when: let go after a grace (and halls and Performance data, prefixed). */
@@ -435,6 +444,7 @@ export class AudioEngine {
     this.audioSent.clear();
     this.audioLoaded.clear();
     this.recordings.clear();
+    this.compactSent.clear();
     // note edits: the engines have no patches, and the workers' recordings go (perhaps at another
     // rate); those rendered are kept, under keys that say their rate
     this.patchSent.clear();
@@ -830,8 +840,13 @@ export class AudioEngine {
       this.audioSent.delete(key);
       this.audioLoaded.delete(key);
       this.recordings.delete(key);
+      this.compactSent.delete(key);
       this.post({ type: 'forgetAudio', key });
     }
+    // held as 16-bit here: which clips aren't a plain recording's (known before any is loaded)
+    const small = this.compactRecordings && !this.remote;
+    const pluginData = small ? new Set(pluginClips(project).map(clipKey)) : null;
+    const edited = small ? this.basesOf(songPatches(project, ctx.sampleRate)) : null;
     // (and what was kept at another rate: a clip is loaded again at this one)
     for (const key of this.keptAudio.keys()) {
       const at = key.lastIndexOf('@');
@@ -841,26 +856,54 @@ export class AudioEngine {
       const key = clipKey(clip);
       if (this.audioSent.has(key)) continue;
       this.audioSent.add(key);
+      const compact = compactClip({
+        touch: this.compactRecordings,
+        remote: this.remote,
+        pluginData: pluginData?.has(key) ?? false,
+        patchBase: edited?.has(key) ?? false,
+      });
       // in shared memory from the last audio thread (new latency settings, the same rate): handed over as it is
+      // (but one kept as 16-bit whose notes have been edited since: that's loaded again, as floats)
       const kept = this.keptAudio.get(`${key}@${ctx.sampleRate}`);
-      if (kept && this.ahead) {
-        this.recordings.set(key, kept);
-        this.post({ type: 'audio', key, channels: kept });
+      const keptFloats = kept ? floatChannels(kept.channels) : null;
+      if (kept && this.ahead && (keptFloats || compact)) {
+        if (keptFloats) this.recordings.set(key, keptFloats);
+        else this.compactSent.add(key);
+        this.post({ type: 'audio', key, ...kept });
         this.audioLoaded.add(key);
         if (this.patchBases.has(key)) this.patchesSoon();
         continue;
       }
       this.clipsComing++;
       this.pendingChanged();
-      void audioFiles
-        .load(project.id, clip, ctx, this.ahead !== null)
-        .then((channels) => {
+      const loading: Promise<Float32Array[] | Compact> = compact
+        ? audioFiles.loadCompact(project.id, clip, ctx, this.ahead !== null)
+        : audioFiles.load(project.id, clip, ctx, this.ahead !== null);
+      void loading
+        .then((loaded) => {
           // still wanted, and still the same audio thread?
           if (this.ctx !== ctx || !this.audioSent.has(key)) return;
+          if (!Array.isArray(loaded)) {
+            // as 16-bit: the engines' alone (the patch workers get floats of their own, should its notes be edited)
+            this.compactSent.add(key);
+            if (this.ahead) {
+              this.keptAudio.set(`${key}@${ctx.sampleRate}`, loaded);
+              this.post({ type: 'audio', key, ...loaded });
+            } else {
+              this.post(
+                { type: 'audio', key, ...loaded },
+                loaded.channels.map((c) => c.buffer as ArrayBuffer),
+              );
+            }
+            this.audioLoaded.add(key);
+            if (this.patchBases.has(key)) this.patchesSoon();
+            return;
+          }
+          const channels = loaded;
           if (this.ahead) {
             const shared = channels.map((c) => toShared(c));
             this.recordings.set(key, shared);
-            this.keptAudio.set(`${key}@${ctx.sampleRate}`, shared);
+            this.keptAudio.set(`${key}@${ctx.sampleRate}`, { channels: shared });
             this.post({ type: 'audio', key, channels: shared });
           } else {
             // a recording with note edits: a copy for the patch workers (the audio thread takes this one whole)
@@ -928,10 +971,7 @@ export class AudioEngine {
     const renderer = this.patches();
     // the recordings they're rendered from: given to the workers, let go when no patch needs them
     // (nor a drag in the Notes view)
-    const bases = new Map<string, PatchJob['base']>();
-    for (const j of jobs) bases.set(recordingOf(j), j.base);
-    if (this.previewBase) bases.set(this.previewBase.key, this.previewBase.base);
-    for (const readied of this.readied.values()) for (const j of readied) bases.set(recordingOf(j), j.base);
+    const bases = this.basesOf(jobs);
     this.patchBases = new Set(bases.keys());
     for (const key of renderer.held()) if (!bases.has(key)) renderer.release(key);
     for (const [key, base] of bases) if (!renderer.holds(key)) this.holdRecording(project, key, base, ctx);
@@ -964,9 +1004,25 @@ export class AudioEngine {
   }
 
   /**
+   * The recordings patches are rendered from: those of the song's note edits (`jobs`), the one a drag
+   * in the Notes view plays, and those of versions readied to be compared.
+   */
+  private basesOf(jobs: readonly PatchJob[]): Map<string, PatchJob['base']> {
+    const bases = new Map<string, PatchJob['base']>();
+    for (const j of jobs) bases.set(recordingOf(j), j.base);
+    if (this.previewBase) bases.set(this.previewBase.key, this.previewBase.base);
+    for (const readied of this.readied.values()) for (const j of readied) bases.set(recordingOf(j), j.base);
+    return bases;
+  }
+
+  /**
    * A recording for the patch workers: the engines' own copy in shared memory; else, once the audio
-   * thread has its own, decoded again (it was handed over whole). One still loading is given as it
-   * comes (syncAudio).
+   * thread has its own (handed over whole, or held as 16-bit), decoded again. One still loading is
+   * given as it comes (syncAudio).
+   *
+   * Where the engines held it as 16-bit and read shared memory, they take these floats in its place:
+   * a recording whose notes are edited is one copy of floats, as it always was, and its patches
+   * join it to the sample.
    */
   private holdRecording(project: Project, key: string, base: PatchJob['base'], ctx: AudioContext): void {
     const kept = this.recordings.get(key);
@@ -982,7 +1038,14 @@ export class AudioEngine {
       .load(project.id, base, ctx, shared)
       .then((channels) => {
         if (this.ctx !== ctx || this.patchLoading.get(key) !== token || !this.patchBases.has(key)) return;
-        this.patches().hold(key, shared ? channels.map((c) => toShared(c)) : channels);
+        const held = shared ? channels.map((c) => toShared(c)) : channels;
+        if (this.ahead && this.compactSent.has(key) && this.audioSent.has(key)) {
+          this.compactSent.delete(key);
+          this.recordings.set(key, held);
+          this.keptAudio.set(`${key}@${ctx.sampleRate}`, { channels: held });
+          this.post({ type: 'audio', key, channels: held });
+        }
+        this.patches().hold(key, held);
         this.patchesSoon();
       })
       .catch((err: unknown) => {
@@ -1934,6 +1997,11 @@ function floats(a: SampleFrames): Float32Array {
   const scale = sampleScale(a);
   for (let i = 0; i < a.length; i++) out[i] = (a[i] as number) * scale;
   return out;
+}
+
+/** A clip's channels when they're floats (null: held as 16-bit). */
+function floatChannels(channels: SampleFrames[]): Float32Array[] | null {
+  return channels[0] instanceof Int16Array ? null : (channels as Float32Array[]);
 }
 
 function isShared(a: ArrayBufferView): boolean {

@@ -220,6 +220,44 @@ describe('audio files for the engine and the screen', () => {
     expect(state.calls).toBe(1);
   });
 
+  it('gives a clip as 16-bit frames from the one decoding its floats and its waveform come from', async () => {
+    served();
+    const files = new AudioFiles();
+    const { state, ctx } = decoder();
+    files.ensurePeaks('prj_a', 'aud_one', ctx);
+    const [floats, small] = await Promise.all([
+      files.load('prj_a', { file: 'aud_one', stretch: 1 }, ctx),
+      files.loadCompact('prj_a', { file: 'aud_one', stretch: 1 }, ctx),
+    ]);
+    expect(state.calls).toBe(1);
+    expect(files.peaks.get('aud_one')?.rate).toBe(48000);
+    expect(small.channels).toHaveLength(2);
+    for (const [c, frames] of small.channels.entries()) {
+      expect(frames).toBeInstanceOf(Int16Array);
+      expect(frames.buffer).toBeInstanceOf(ArrayBuffer);
+      const want = floats[c] as Float32Array;
+      expect(frames).toHaveLength(want.length);
+      // each frame within half a step of its float
+      for (let i = 0; i < want.length; i += 37)
+        expect(Math.abs((frames[i] as number) * small.scale - (want[i] as number))).toBeLessThanOrEqual(
+          small.scale / 2,
+        );
+    }
+    // (the decoder's sine reaches full scale: a step is a 16384th)
+    expect(small.scale).toBe(2 / 32768);
+  });
+
+  it('gives 16-bit frames in shared memory when every engine reads the one copy', async () => {
+    served();
+    const files = new AudioFiles();
+    const { ctx } = decoder();
+    const shared = await files.loadCompact('prj_a', { file: 'aud_one', stretch: 1 }, ctx, true);
+    const own = await files.loadCompact('prj_a', { file: 'aud_one', stretch: 1 }, ctx);
+    expect(shared.channels[0]?.buffer).toBeInstanceOf(SharedArrayBuffer);
+    expect(Array.from(shared.channels[1] as Int16Array)).toEqual(Array.from(own.channels[1] as Int16Array));
+    expect(shared.scale).toBe(own.scale);
+  });
+
   it('says so when a file is missing, and tries again when asked again', async () => {
     vi.stubGlobal('fetch', async () => new Response('', { status: 404 }));
     const files = new AudioFiles();

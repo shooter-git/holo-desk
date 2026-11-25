@@ -1181,7 +1181,7 @@ export function ensureAudio(): Promise<void> {
   if (!starting) {
     starting = (async () => {
       try {
-        await engine.start(store.get().latencyMode, wantedRate());
+        await startEngine();
         store.set({ audioReady: true });
         await engine.setInput(store.get().inputDevice);
         const p = store.get().project;
@@ -1217,12 +1217,21 @@ type AppStateLatency = ReturnType<typeof store.get>['latencyMode'];
 /** The rate this device's choice asks the engine for (null: the sound device's own). */
 const wantedRate = () => chosenRate(store.get().rateChoice, isTouch());
 
+/**
+ * The audio started (or started again) as this device plays: at its rate, and on a phone or a tablet
+ * with its recordings held as 16-bit, half the memory.
+ */
+function startEngine(): Promise<void> {
+  engine.compactRecordings = isTouch();
+  return engine.start(store.get().latencyMode, wantedRate());
+}
+
 /** Play at another rate (Settings › Audio): the audio starts again at it, and the song's sounds load at it. */
 export async function setRateChoice(choice: RateChoice): Promise<void> {
   store.set({ rateChoice: choice, roundTrip: null });
   // (before the audio starts, or while HO[LO] Engine plays at its device's rate, it waits for the next start)
   if (engine.ctx && !engine.remote) {
-    await engine.start(store.get().latencyMode, wantedRate());
+    await startEngine();
     syncMetronome();
   }
 }
@@ -1290,7 +1299,7 @@ async function switchEngine(remote: boolean): Promise<void> {
   if (playing) stop();
   starting = null;
   try {
-    await engine.start(store.get().latencyMode, wantedRate());
+    await startEngine();
     store.set({ audioReady: true });
     syncMetronome();
     engine.setLowLatency(store.get().lowLatency);

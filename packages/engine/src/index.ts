@@ -26,6 +26,7 @@ export * from './organ.ts';
 export * from './parts.ts';
 export * from './peq.ts';
 export * from './performance.ts';
+export * from './played.ts';
 export * from './plucked.ts';
 export * from './prism.ts';
 export { bend } from './prism-mod.ts';

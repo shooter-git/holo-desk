@@ -35,6 +35,7 @@ import { finish } from './master.ts';
 import { renderNotePatch } from './notes/patch.ts';
 import { songPatches } from './notes/plan.ts';
 import { isPlanned, type PerformanceManifest, partReach, partSamples, planTrack, wrapPlans } from './parts.ts';
+import { playedKeys, playedZones } from './played.ts';
 import { readPartials } from './prism-sources.ts';
 import { EV_OFF, EV_ON, EVENT_SIZE, type SampleFrames, type SamplerSpec, type SampleZone } from './protocol.ts';
 import { resample } from './resample.ts';
@@ -229,6 +230,11 @@ export interface RenderOptions {
   finish?: boolean;
   /** false: from..to as it plays, even when the song is a loop. */
   loop?: boolean;
+  /**
+   * 'all': every zone of every instrument is loaded. Otherwise only those the song can sound
+   * (played.ts), which renders the same to the byte in less time and memory.
+   */
+  samples?: 'played' | 'all';
   onProgress?: (text: string) => void;
 }
 
@@ -239,18 +245,39 @@ export interface Rendered {
   errors: string[];
 }
 
-/** An instrument's samples at a rate, trimmed to their measured start and end (moved with the rate). */
+/**
+ * The zones of an instrument to load for a song that sends it `keys` (played.ts): all of them for an
+ * instrument that plays through a synth (its zones are a patch's data, found by the synth's own
+ * rule) or has a partial set among them (one that can't be read is left out as it loads), and
+ * where playedZones doesn't reason about a zone.
+ */
+function zonesFor(manifest: InstrumentManifest, keys: readonly number[]): readonly ZoneManifest[] {
+  if (synthExtras(manifest).synth || manifest.zones.some((z) => z.partials)) return manifest.zones;
+  const played = playedZones(
+    manifest.zones.map((z) => ({ lo: z.lo, hi: z.hi, lovel: z.lovel, hivel: z.hivel, ...zoneExtras(z) })),
+    (playingExtras(manifest).mics ?? []).map((m) => m.id),
+    keys,
+  );
+  return played ? manifest.zones.filter((_z, i) => played.has(i)) : manifest.zones;
+}
+
+/**
+ * An instrument's samples at a rate, trimmed to their measured start and end (moved with the rate).
+ * `keys`: the keys a song sends it, to load only the zones those can sound (each loaded just as it
+ * would be among all of them); without them, or with null, every zone.
+ */
 export async function buildSampler(
   source: RenderSource,
   pack: string,
   name: string,
   sampleRate: number,
+  keys?: readonly number[] | null,
 ): Promise<SamplerSpec> {
   const manifest = await source.instrument(pack, name);
   const zones: SampleZone[] = [];
   // zones that play the same stretch of the same file (a drum on two pads) share one copy
   const shared = new Map<string, { left: Float32Array; right: Float32Array | null; k: number }>();
-  for (const z of manifest.zones) {
+  for (const z of keys ? zonesFor(manifest, keys) : manifest.zones) {
     if (z.partials) {
       const zone = partialZone(z, await source.sample(pack, z.file));
       if (zone) zones.push(zone);
@@ -379,11 +406,14 @@ export async function renderSession(written: Project, source: RenderSource, opts
   }
   // and the kits plugins play (a Drum Replacer's)
   for (const kit of songKits(project)) keys.add(kit);
+  // of each, the zones the song can sound (an instrument whose keys can't be told is loaded whole)
+  const played = opts.samples === 'all' ? null : playedKeys(project);
   let k = 0;
   for (const key of keys) {
     opts.onProgress?.(`Loading instruments (${++k}/${keys.size})`);
     const [pack = '', ...rest] = key.split('/');
-    core.receive({ type: 'sampler', spec: await buildSampler(source, pack, rest.join('/'), sr) });
+    const spec = await buildSampler(source, pack, rest.join('/'), sr, played?.get(key) ?? null);
+    core.receive({ type: 'sampler', spec });
   }
   const clips = songClips(project);
   const recordings = new Map<string, Float32Array[]>();

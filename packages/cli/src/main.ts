@@ -65,6 +65,7 @@ const SWITCHES = new Set([
   'linear',
   'no-finish',
   'no-loop',
+  'all-samples',
   // (the commands that do what the agent's tools do)
   'confirm',
   'clear',
@@ -308,9 +309,11 @@ Files and creations
   holo pair                           a code (and a link) that pairs a phone or computer with the agent in
                                       Settings › Agent: run it on the computer HO[LO] runs on
   holo render-audio [--session FILE] [--out FILE.wav] [--rate 44100] [--format float|24] [--from 9 --to 17]
-                    [--no-finish] [--no-loop]
+                    [--no-finish] [--no-loop] [--all-samples]
                                       the song rendered headless by HO[LO]'s engine, exactly as the studio
-                                      bounces it (the open song, --song ID, or a session file)
+                                      bounces it (the open song, --song ID, or a session file); --all-samples
+                                      loads every sample of its instruments, not only those it can sound
+                                      (the same file, slower)
 
 Experiences (a new project whose music is made here and built by the project itself)
   holo init [DIR] [--name N] [--title T] [--out music/build] [--format wav|wav24] [--ref REF]
@@ -1020,6 +1023,7 @@ async function main(): Promise<void> {
         tail: Number(flag('tail') ?? 4),
         ...(flag('no-finish') !== undefined ? { finish: false } : {}),
         ...(flag('no-loop') !== undefined ? { loop: false } : {}),
+        ...(flag('all-samples') !== undefined ? { samples: 'all' as const } : {}),
         onProgress: (text) => process.stderr.write(`\r${text.padEnd(40)}`),
       });
       process.stderr.write('\n');

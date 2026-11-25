@@ -261,12 +261,13 @@ What comes next, in this order:
    strip's floor.
 2. **WebAssembly SIMD** for the hottest DSP: sampler voices (the interpolator) and convolution, where
    the workers spend their time.
-3. **Smarter sample memory**: load only the samples a song plays, and stream long ones.
+3. **Smarter sample memory**: stream long samples and recordings. (A render already loads only the
+   samples its song can sound, below; a phone's studio loads those of the keys its song plays.)
 
 ## A bounce on the host
 
-A studio renders its own bounce in the page, every instrument's samples loaded there as floats: more
-than a phone's browser holds for a big song. So a device can have the host make it
+A studio renders its own bounce in the page, its instruments' samples loaded there as floats (those
+the song can sound: see Samples): more than a phone's browser holds for a big song. So a device can have the host make it
 (`apps/server/src/host-bounce.ts`): the page sends the song as it has it, the stretch to bounce and
 the tail (`POST /api/projects/:id/bounces/host`), then asks how far it has got
 (`GET /api/bounce-jobs/:id`) and, when it's done, downloads the file straight from the host, never
@@ -416,6 +417,25 @@ track uses it, decodes them at the device's sample rate, trims them to their mea
 and hands them to the audio thread (transferred, not copied). Files are kept in the browser's cache
 storage, so the next load needs no network. Zones that play the same stretch of one file (a drum on two
 pads) share one copy.
+
+**A render loads the samples its song can sound** (`packages/engine/src/played.ts`): a bounce, in the
+page or on the host, `holo render-audio`, a measurement, a creation's build. A big sampled
+instrument is thousands of zones, gigabytes once decoded, and a song plays a few dozen keys of it.
+What's rendered is the same to the byte as with every zone loaded, because of how the sampler
+chooses: its zones are in sets (those a note strikes, each part of its release samples, the
+pedal's two), and a note takes from a set the zones that score lowest for it, semitones outside a
+zone's keys first, then velocity outside its range. Only zones at exactly the lowest score are
+ever looked at. So for each key the song's notes send an instrument, every zone less than a
+semitone further from it than the nearest is loaded (each velocity layer and round robin of the
+keys that play it, both neighbours of a key between two); the same of each part of the release
+samples, and for the pedal's own voice; the pedal's sounds whole; and a set with zones on the
+instrument's microphones keeps one. Tests play thousands of made-up instruments and phrases, and
+render made-up songs, both ways and compare them to the byte. Where a song's keys can't be told
+from its notes, the whole instrument is loaded, as it always was: a track with a MIDI effect (an
+arpeggiator, a harmonizer and the Session Drummer play keys of their own), a Drum Replacer's kit,
+an instrument that plays through Prism or has a partial set among its zones. `samples: 'all'`
+(`holo render-audio --all-samples`) loads every zone regardless. A file missing for a zone the
+song can't sound no longer stops its render.
 
 A pack instrument may play through Prism, the morphing synth, instead of the sampler: its `synth` names
 one of Prism's sounds and `params` is its whole patch (the keys in `packages/session/src/prism.ts`). Its

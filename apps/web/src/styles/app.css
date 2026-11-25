@@ -7539,7 +7539,42 @@ html[data-layout^="phone"] .view-item kbd {
   font-weight: 650;
 }
 
-/* the open song's bounces, above the songs: rows that aren't pressed themselves, each with its buttons */
+/* the open song's bounces, nested under its row: one folded line, and opened, a row for each, set
+   in from the songs and quieter than them (the open song's mark runs down beside them) */
+.song-bounces {
+  border-bottom: 1px solid rgba(0, 0, 0, 0.25);
+  background: rgb(var(--accent-rgb) / 0.05);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
+.song-bounces .list-item {
+  padding-left: 34px;
+  border-bottom: 0;
+  font-size: 12px;
+}
+
+.song-bounces .bounces-head {
+  min-height: 26px;
+  color: var(--text-2);
+}
+
+.song-bounces .bounces-head > svg {
+  flex-shrink: 0;
+  margin-left: -20px;
+}
+
+.song-bounces .bounces-all {
+  min-height: 26px;
+}
+
+@media (pointer: coarse) {
+  .song-bounces .bounces-head,
+  .song-bounces .bounces-all {
+    min-height: 40px;
+  }
+}
+
+/* a bounce's row isn't pressed itself: its buttons are */
 .song-bounces .bounce-row:hover {
   background: none;
 }
@@ -7556,10 +7591,6 @@ html[data-layout^="phone"] .view-item kbd {
 .song-bounces .bounce-row.asking .grow {
   flex: 1 1 180px;
   min-width: 0;
-}
-
-.song-bounces .bounces-all {
-  margin-top: 6px;
 }
 
 /* on a phone a bounce's details (when, how long, how big) take a second line rather than be cut */

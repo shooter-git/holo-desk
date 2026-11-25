@@ -4,6 +4,8 @@
  */
 import {
   AudioLines,
+  ChevronDown,
+  ChevronRight,
   Disc3,
   Download,
   FileMusic,
@@ -208,7 +210,7 @@ export function SongGroups({
                   {g.kind === 'creation' ? (g.creation?.exportHelp ?? 'No songs yet.') : 'No songs yet.'}
                 </div>
               )}
-              {g.songs.map((r) =>
+              {g.songs.flatMap((r) => [
                 describing === r.id ? (
                   <div key={r.id} className={`list-item renaming details${current === r.id ? ' active' : ''}`}>
                     <Disc3 size={16} className="muted" />
@@ -369,7 +371,9 @@ export function SongGroups({
                     )}
                   </div>
                 ),
-              )}
+                // the open song's bounces, under its row: one folded line until it's opened
+                current === r.id && <SongBounces key={`${r.id}:bounces`} id={r.id} title={r.title} when={when} />,
+              ])}
               {g.pieces.map((p) => (
                 <button
                   key={p.piece}
@@ -394,15 +398,17 @@ export function SongGroups({
   );
 }
 
-/** How many of a song's bounces show before the rest are asked for. */
+/** How many of a song's bounces show, once they're opened, before the rest are asked for. */
 const BOUNCES_SHOWN = 3;
 
 /**
- * The open song's bounces, kept with it on the host: each to save on this device again, or to
- * delete for good. Nothing is shown of a song with none.
+ * The open song's bounces, kept with it on the host, nested under its row in Songs: one line saying
+ * how many there are, folded until it's pressed; opened, each bounce to save on this device again
+ * or to delete for good. Nothing is shown of a song with none.
  */
-export function SongBounces({ id, title, when }: { id: string; title: string; when: (iso: string) => string }) {
+function SongBounces({ id, title, when }: { id: string; title: string; when: (iso: string) => string }) {
   const [rows, setRows] = useState<ListedBounce[]>([]);
+  const [open, setOpen] = useState(false);
   const [all, setAll] = useState(false);
   // the bounce whose delete is being asked about
   const [deleting, setDeleting] = useState<string | null>(null);
@@ -432,16 +438,21 @@ export function SongBounces({ id, title, when }: { id: string; title: string; wh
   };
   const visible = all ? rows : rows.slice(0, BOUNCES_SHOWN);
   return (
-    <section className="song-group song-bounces" aria-label={`Bounces of ${title}`}>
-      <div className="song-group-head">
-        <span className="song-group-title">Bounces of “{title}”</span>
-        <span className="muted">
-          {rows.length === 1 ? '1 file' : `${rows.length} files`} ·{' '}
-          {diskSize(rows.reduce((sum, b) => sum + b.bytes, 0))} on the host
-        </span>
-      </div>
-      <div className="list boxed">
-        {visible.map((b) => {
+    // biome-ignore lint/a11y/useSemanticElements: a part of the list of songs, not a form's set of fields
+    <div className="song-bounces" role="group" aria-label={`Bounces of ${title}`}>
+      <button
+        type="button"
+        className="list-item bounces-head"
+        aria-expanded={open}
+        title={open ? 'Fold this song’s bounces away' : 'This song’s bounces, to save again or delete'}
+        onClick={() => setOpen(!open)}
+      >
+        {open ? <ChevronDown size={14} aria-hidden="true" /> : <ChevronRight size={14} aria-hidden="true" />}
+        <span>{rows.length === 1 ? '1 bounce' : `${rows.length} bounces`}</span>
+        <span className="meta">{diskSize(rows.reduce((sum, b) => sum + b.bytes, 0))} on the host</span>
+      </button>
+      {open &&
+        visible.map((b) => {
           const made = b.made ? when(new Date(b.made).toISOString()) : '';
           // (its length and size stay together: on a narrow row they go under when it was made, whole)
           const size = [b.seconds === null ? '' : bounceClock(b.seconds), diskSize(b.bytes)]
@@ -464,25 +475,20 @@ export function SongBounces({ id, title, when }: { id: string; title: string; wh
             </div>
           ) : (
             <div key={b.file} className="list-item still song-row bounce-row">
-              <AudioLines size={16} className="muted" />
+              <AudioLines size={14} className="muted" />
               <span className="song-name">
-                <span className="strong">{b.title}</span>
+                <span>{b.title}</span>
               </span>
               <span className="meta">{details}</span>
               <button
                 type="button"
-                className={`btn${mine?.ready ? ' primary' : ''}`}
+                className={`btn${mine?.ready ? ' primary' : ' ghost'}${mine && !mine.ready ? '' : ' icon'}`}
                 disabled={mine !== null && !mine.ready}
+                title={mine?.ready ? 'Save it now' : 'Save on this device'}
                 aria-label={`Save the bounce “${b.title}”${made ? ` of ${made}` : ''} on this device`}
                 onClick={() => void saveListedBounce(b)}
               >
-                {mine && !mine.ready ? (
-                  'Getting…'
-                ) : (
-                  <>
-                    <Download /> Save
-                  </>
-                )}
+                {mine && !mine.ready ? 'Getting…' : <Download />}
               </button>
               <button
                 type="button"
@@ -496,12 +502,11 @@ export function SongBounces({ id, title, when }: { id: string; title: string; wh
             </div>
           );
         })}
-      </div>
-      {!all && rows.length > BOUNCES_SHOWN && (
-        <button type="button" className="btn ghost bounces-all" onClick={() => setAll(true)}>
+      {open && !all && rows.length > BOUNCES_SHOWN && (
+        <button type="button" className="list-item muted bounces-all" onClick={() => setAll(true)}>
           All {rows.length} bounces
         </button>
       )}
-    </section>
+    </div>
   );
 }

@@ -298,7 +298,8 @@ forgotten its jobs but not their files: the page finds the bounce among the song
 (`GET /api/projects/:id/bounces`), by its name and by when the host began it.
 
 **A song's bounces are listed in Songs while it's open** (`SongBounces` in
-`apps/web/src/ui/Songs.tsx`): each with what it's of, when it was made, its length and its size,
+`apps/web/src/ui/Songs.tsx`), nested under its row: one line saying how many there are, folded
+until it's pressed, so the list of songs stays a list of songs. Opened, each shows with what it's of, when it was made, its length and its size,
 the newest first, to save on this device again or to delete for good (asked first, in its row).
 `GET /api/projects/:id/bounces` answers `{file, bytes, url, made, seconds?}` for each (`made`: the
 file's time, ms; `seconds` when the file says its length), and `DELETE

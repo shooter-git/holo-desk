@@ -213,7 +213,7 @@ export async function buildApp(
     const editor = live.state().state;
     return {
       ok: true,
-      version: '0.9.30',
+      version: '0.9.31',
       build,
       // a studio playing or recording, or a bounce the host is making: an update waits for it (tools/update.mjs)
       busy: editor?.playing === true || editor?.recording === true || bounces.busy(),

@@ -560,6 +560,45 @@ describe('a split render whose thread goes wrong', () => {
     expect(Date.now() - t0).toBeLessThan(60_000);
   }, 120_000);
 
+  it('is made on one engine when a thread can’t be started, the ones that were started ended', async () => {
+    for (const failing of [0, 1]) {
+      const real = renderThreads(2);
+      let ended = 0;
+      let n = 0;
+      const split: RenderSplit = {
+        ...real,
+        start(spec, sampleRate, failed) {
+          if (n++ === failing) throw new Error('This computer has no threads to give');
+          const thread = real.start(spec, sampleRate, failed);
+          return {
+            ...thread,
+            end: () => {
+              ended++;
+              return thread.end();
+            },
+          };
+        },
+      };
+      await again(split);
+      expect(ended).toBe(failing);
+    }
+  }, 120_000);
+
+  it('is made on one engine when what its threads run isn’t there, or a thread can’t be spoken to', async () => {
+    await again(renderThreads(2, new URL('./no-such-thread.ts', import.meta.url)));
+    const { split } = spoiled((_thread, n) => ({
+      post: () => {
+        if (n === 1) throw new Error('The thread is gone');
+      },
+    }));
+    await again(split);
+  }, 120_000);
+
+  it('is made on one engine when whoever starts the threads ends them badly', async () => {
+    const { split } = spoiled(() => ({ end: () => Promise.reject(new Error('It wouldn’t end')) }));
+    await again(split);
+  }, 120_000);
+
   it('says what a song’s own fault is, as one engine does', async () => {
     // a song whose instrument can't be loaded fails the same either way: before any thread starts
     const song = rich(1);

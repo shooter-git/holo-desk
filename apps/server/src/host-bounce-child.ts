@@ -92,7 +92,13 @@ function threads(dataDir: string, song: string): RenderSplit | null {
 
 async function bounce(input: Input, line: (text: string) => void): Promise<number> {
   const { project } = input;
-  const split = threads(input.dataDir, project.id);
+  // (a host where the threads can't even be set up bounces on one engine, as before there were any)
+  let split: RenderSplit | null = null;
+  try {
+    split = threads(input.dataDir, project.id);
+  } catch {
+    split = null;
+  }
   const out = await renderSession(project, dataFolderSource(input.dataDir, project.id), {
     sampleRate: project.sampleRate ?? 48000,
     from: input.from,

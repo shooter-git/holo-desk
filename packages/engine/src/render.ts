@@ -482,8 +482,10 @@ interface Played {
  *   hands starts afresh where it lands: its notes and its plugins' tails are cut);
  * - each block is waited for, as long as it takes (playing live, a late block is silence).
  *
- * Null when it can't be trusted or didn't finish: an engine reported an error (it hands silence on
- * from there), a thread stopped, or no block came for too long. The caller renders again on one.
+ * Null when it can't be trusted or didn't finish: a thread couldn't be started, an engine reported
+ * an error (it hands silence on from there), a thread stopped, no block came for too long, or
+ * anything at all was thrown on the way. The caller renders again on one engine, so the worst a
+ * split can do is take longer than no split.
  */
 async function playSplit(
   split: RenderSplit,
@@ -575,9 +577,11 @@ async function playSplit(
       }
     }
     return played;
-  } catch (err) {
-    if (err instanceof GivenUp) return null;
-    throw err;
+  } catch {
+    // given up, or anything else that went wrong on the way (a thread that couldn't be started, a
+    // computer without what the threads share memory through): the caller's one engine makes the
+    // render, and says what's wrong with the song if it was the song
+    return null;
   } finally {
     await Promise.all(threads.map((t) => t.end().catch(() => null)));
     pool?.close();
@@ -614,7 +618,8 @@ export async function renderSession(written: Project, source: RenderSource, opts
   };
   // split over threads (two at least: one costs more than it saves), the song is kept as its
   // messages until it's whole, then given to every engine at once; else it goes straight to the one
-  const split = opts.split && opts.split.workers >= 2 ? opts.split : null;
+  // (and only where engines can share memory: without it, as if no split were asked for)
+  const split = opts.split && opts.split.workers >= 2 && typeof SharedArrayBuffer !== 'undefined' ? opts.split : null;
   const song: ToWorklet[] = [];
   const core = split ? null : engine();
   const send = (msg: ToWorklet) => {

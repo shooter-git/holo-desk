@@ -1,7 +1,8 @@
 // `pnpm ui:check`: the studio's layout, looked at in a real browser at a desktop's size, a tablet's
 // and a phone's (upright and on its side). It opens every main view, the two big dialogs and the
-// commands (the bar on a desktop, the agent's page elsewhere: with the agent off, and with it on and
-// a conversation to show), and Settings › Agent with the agent on, and fails when:
+// commands (the bar on a desktop, the agent's page elsewhere, and on a desktop with the agent on, where
+// it's a dock beside the studio: with the agent off, and with it on and a conversation to show), and
+// Settings › Agent with the agent on, and fails when:
 //
 //   - the page itself scrolls (something is wider or taller than the screen);
 //   - a control can't be reached: cut off by its pane with no scroll that would bring it in;
@@ -10,6 +11,8 @@
 //     height on every strip), or a fader has less than its least travel;
 //   - with the page open, the transport or the tabs are covered (no dialog excuses it), or the page
 //     lets the studio show through (it's solid: no blur, nothing see-through);
+//   - a desktop's dock, in a window wide enough for the studio to give it the room, is over the studio
+//     (or the studio hasn't taken the room back once it's closed);
 //   - a request's working line, its time and Stop don't fit beside each other;
 //   - a reply's view (or its dock) isn't laid out whole: a control runs past the view's edge (where
 //     nothing scrolls it in), two controls are over each other, or a control's words don't fit in it
@@ -350,6 +353,20 @@ function transportClear() {
   return out;
 }
 
+/**
+ * A desktop's dock is beside the studio where the window is wide enough for the studio to give it the
+ * room (styles/app.css: 1360 px), not over it: the studio ends where the dock begins.
+ */
+function dockBeside() {
+  const dock = document.querySelector('.talk-page')?.getBoundingClientRect();
+  const studio = document.querySelector('.app-body')?.getBoundingClientRect();
+  if (!dock || !studio) return ['the dock didn’t open'];
+  if (innerWidth < 1360) return [];
+  return Math.abs(studio.right - dock.left) > 1
+    ? [`the dock begins at ${Math.round(dock.left)} px and the studio ends at ${Math.round(studio.right)} px`]
+    : [];
+}
+
 /** The page (or the bar) is solid: nothing blurred behind it, and nothing of the studio shows through. */
 function solid() {
   const el = document.querySelector('.talk-page') ?? document.querySelector('.bar');
@@ -488,7 +505,7 @@ function tray() {
   return out;
 }
 
-/** No tray: put away, or not a phone (a tablet's sheet, or a desktop's bar, stays open beside the studio). */
+/** No tray: put away, or not a phone (a tablet's sheet, or a desktop's bar or dock, stays open beside the studio). */
 function noTray() {
   return document.querySelector('.tray') ? ['a tray shows'] : [];
 }
@@ -616,12 +633,25 @@ function threadRoom() {
   const done = head?.querySelector('.talk-done');
   if (head && done && getComputedStyle(head).display !== 'none') {
     const upright = document.documentElement.dataset.layout === 'phone-portrait';
+    // (a desktop's dock: its name, and a button that slides it in, as tall as the tracks' toolbar beside it)
+    const dock = document.documentElement.dataset.layout === 'desktop';
     const h = head.getBoundingClientRect().height;
     const d = done.getBoundingClientRect();
     if (upright && h > 30) out.push(`the header is ${Math.round(h)} px tall: it should be a grip`);
     if (upright && d.width > 2) out.push('Done shows on a phone held upright with no keyboard up');
-    if (!upright && d.width < 30) out.push('the sheet’s header has no Done');
-    if (head.textContent.trim() !== 'Done') out.push(`the header says more than Done ("${head.textContent.trim()}")`);
+    if (dock) {
+      if (d.width < 20 || done.getAttribute('aria-label') !== 'Close') out.push('the dock’s header has no Close');
+      if (head.textContent.trim() !== 'HO[LO]-agent') out.push(`the dock’s header says "${head.textContent.trim()}"`);
+      const tools = document.querySelector('.tracks-toolbar')?.getBoundingClientRect();
+      const foot = head.getBoundingClientRect().bottom;
+      if (tools && tools.height > 0 && Math.abs(tools.bottom - foot) > 1)
+        out.push(
+          `the dock’s header ends at ${Math.round(foot)} px, the tracks’ toolbar at ${Math.round(tools.bottom)} px`,
+        );
+    } else {
+      if (!upright && d.width < 30) out.push('the sheet’s header has no Done');
+      if (head.textContent.trim() !== 'Done') out.push(`the header says more than Done ("${head.textContent.trim()}")`);
+    }
   }
   return out;
 }
@@ -666,6 +696,7 @@ const CHECKS = {
   scanOver,
   scanOffered,
   transportClear,
+  dockBeside,
   solid,
   workingFits,
   windowClear,
@@ -1018,23 +1049,33 @@ const control = (page, text) =>
   page.locator(`button[title^="${text}"]:visible, button[aria-label^="${text}"]:visible`).first();
 
 /**
- * The commands: on a desktop the bar (Ctrl /), elsewhere the page (the slash button, Done to close).
- * Each says what's checked besides.
+ * The commands: on a desktop the bar (Ctrl /), elsewhere the page (the slash button, Done to close);
+ * `agentOn`, a desktop has the page too, as its dock (the slash button, its header's Close). Each says
+ * what's checked besides.
  */
-function commands(page, layout, press) {
-  const page_ = layout !== 'desktop';
+function commands(page, layout, press, agentOn = false) {
+  const dock = layout === 'desktop' && agentOn;
+  const page_ = layout !== 'desktop' || dock;
   const open = () => (page_ ? press(control(page, 'Commands')) : page.keyboard.press('Control+/'));
   // (a phone held upright has a grip for a header, and across a phone on its side, typing, the sheet has
-  // none: the Commands button, over or beside it, puts it away; a tablet's sheet has Done)
+  // none: the Commands button, over or beside it, puts it away; a tablet's sheet has Done, a dock Close)
   const shut = () =>
     !page_
       ? page.keyboard.press('Escape')
-      : layout === 'tablet'
-        ? press(page.locator('.talk-head button', { hasText: 'Done' }))
-        : press(control(page, 'Commands'));
+      : dock
+        ? press(page.locator('.talk-head button[aria-label="Close"]'))
+        : layout === 'tablet'
+          ? press(page.locator('.talk-head button', { hasText: 'Done' }))
+          : press(control(page, 'Commands'));
   const field = () => page.locator('.talk-page .field textarea, .bar .field input').first();
-  const name = layout === 'desktop' ? 'Commands' : layout === 'phone-portrait' ? 'Commands page' : 'Commands sheet';
-  const checks = page_ ? ['transportClear', 'solid'] : ['solid'];
+  const name = dock
+    ? 'Commands dock'
+    : layout === 'desktop'
+      ? 'Commands'
+      : layout === 'phone-portrait'
+        ? 'Commands page'
+        : 'Commands sheet';
+  const checks = dock ? ['transportClear', 'dockBeside', 'solid'] : page_ ? ['transportClear', 'solid'] : ['solid'];
   const typed = [
     `${name}, typed`,
     async () => {
@@ -1107,18 +1148,19 @@ function commands(page, layout, press) {
       ],
       windowed,
     ];
+  if (dock) return [[name, open, shut, checks], typed, windowed];
   if (layout === 'tablet') return [[name, open, shut, checks], windowed];
   return [[name, open, shut, checks]];
 }
 
 /**
- * With the agent on: the page (or the bar) with the song's conversation, or a request working; and the
+ * With the agent on: the page (a desktop's dock) with the song's conversation, or a request working; and the
  * newest reply's dock, once it has been read: on a phone the tray, put away with ×, and nowhere else.
  */
 function agentViews(page, layout, finger, running) {
   const press = (loc) => (finger ? loc.tap() : loc.click());
-  const [, open, shut, checks] = commands(page, layout, press)[0];
-  const where = layout === 'desktop' ? 'Bar' : 'Page';
+  const [, open, shut, checks] = commands(page, layout, press, true)[0];
+  const where = layout === 'desktop' ? 'Dock' : 'Page';
   // Settings › Agent, this device allowed: its harness, what it asks first, its notices, its devices
   const settings = [
     'Settings › Agent',
@@ -1148,12 +1190,14 @@ function agentViews(page, layout, finger, running) {
     : [
         settings,
         [`${where} with a thread`, open, shut, [...checks, 'viewFits', 'fitsOnce', 'threadRoom']],
+        // a desktop's dock, typed in (the commands it finds, over its field) and with a plugin's window opened
+        ...(layout === 'desktop' ? commands(page, layout, press, true).slice(1) : []),
         // an earlier turn opened: its view drawn
         [
           `${where} with a thread, a turn opened`,
           async () => {
             await open();
-            if (layout !== 'desktop') await press(page.locator('.talk-row').last());
+            await press(page.locator('.talk-row').last());
           },
           shut,
           [...checks, 'viewFits', 'threadRoom'],
@@ -1163,11 +1207,11 @@ function agentViews(page, layout, finger, running) {
       ];
 }
 
-/** The page (or the bar) with a reply of NEWEST's as its newest turn: its view laid out whole. */
+/** The page (a desktop's dock) with a reply of NEWEST's as its newest turn: its view laid out whole. */
 function replyViews(page, layout, finger, newest) {
   const press = (loc) => (finger ? loc.tap() : loc.click());
-  const [, open, shut, checks] = commands(page, layout, press)[0];
-  const where = layout === 'desktop' ? 'Bar' : 'Page';
+  const [, open, shut, checks] = commands(page, layout, press, true)[0];
+  const where = layout === 'desktop' ? 'Dock' : 'Page';
   return [
     [
       `${where}: ${NEWEST[newest].what}`,

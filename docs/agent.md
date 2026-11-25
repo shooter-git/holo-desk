@@ -6,9 +6,10 @@ the **agent** is turned on in Settings › Agent and this device is allowed to u
 requests in plain words, with files dropped or pasted on it. The agent carries them out on the open song
 through a harness installed on the host: Claude Code, Codex, Cursor or Antigravity.
 
-On a desktop the bar is a card that drops from the top and shows the song's last exchange. On a phone or
-a tablet the same openers bring up **the page** instead, with the song's whole conversation ("The page",
-below).
+On a desktop with the agent off the bar is a card that drops from the top: it only finds commands, so
+it's as small as what it finds. On a phone or a tablet, and on a desktop with the agent on for this
+device, the same openers bring up **the page** instead, with the song's whole conversation ("The page",
+below): a desktop's is a dock down the right side, which slides in and out beside the studio.
 
 This page is the contract between the studio, the server, the runner and the agent's tools.
 
@@ -761,16 +762,17 @@ checked again before it's drawn. A click does only what the user could do themse
 - `keep` replaces the song with the version, under its own id, as one undo step ("Keep “Lower”",
   "Keep the original").
 - A `go` or a `command` closes the bar, and the page where it covers the studio (a phone held upright),
-  so the studio shows; a sheet beside the studio stays open. The rest leave it open.
+  so the studio shows; a sheet or a desktop's dock beside the studio stays open. The rest leave it open.
 - A button that changes the song says how, in the studio's words: a `set` its setting and value, a
   `keep` its version, a `command` its own title, an `ask` its request.
 - `go` on `finish` runs once, on the device that asked, as the reply arrives (not after a reload).
 
-## The page (phones and tablets)
+## The page (phones, tablets, and a desktop's dock)
 
-On a phone or a tablet (`usesPage` in apps/web/src/app/page-layout.ts: every layout but a desktop's) the
-bar opens as the page (`apps/web/src/ui/TalkPage.tsx`). Every opener only sets `bar`, so Ctrl /, the
-slash button and the swipe down all bring it; a second press of the slash button puts it away.
+On a phone or a tablet, and on a desktop with the agent on for this device (`usesPage` in
+apps/web/src/app/page-layout.ts: every layout but a desktop's, and a desktop's too once `isOn`), the bar
+opens as the page (`apps/web/src/ui/TalkPage.tsx`). Every opener only sets `bar`, so Ctrl /, the slash
+button and the swipe down all bring it; a second press of the slash button puts it away.
 
 - **Where it goes.** On a phone held upright, a solid panel between the control bar and the transport,
   the whole width; the transport and the tabs stay in sight and in reach. On a phone on its side, a
@@ -778,12 +780,21 @@ slash button and the swipe down all bring it; a second press of the slash button
   widens across the content column, its header goes, the newest turn folds to a line, and the field
   shows three lines. On a tablet, a sheet a third of the width (340 to 420 px) under the control bar,
   beside the studio; it and the Library or Inspector overlay close each other. A window narrower than
-  1180 px is a tablet to the studio (app/layout.ts), so it gets the sheet. Where the control bar, the
+  1180 px is a tablet to the studio (app/layout.ts), so it gets the sheet. On a desktop with the agent
+  on, a dock 380 px wide down the right side, under the control bar (`pageDocks`). It slides in and out
+  over 0.2 s (not with reduced motion), kept drawn while it goes (`useDockLeaving` in ui/Bar.tsx). In a
+  window 1360 px wide or wider the studio gives it the room over the same time (`data-dock` on the
+  page's root, styles/app.css), so nothing is under it; narrower, it's over the studio's right edge, as
+  a sheet is. It stays out while the studio is worked in: the studio's keys go to the studio unless
+  they're typed in the dock, Ctrl / from the studio goes to its field, and Ctrl / from its field (or
+  Escape there, or its header's button) slides it in. A plugin's window opens in the middle of what
+  the dock leaves. With the agent off a desktop keeps the bar. Where the control bar, the
   transport and the column are is measured while it's open; it keeps to what shows above a keyboard
   that covers the page (iOS). On Android the keyboard makes the page shorter, so the field sits just
   above the transport.
 - **What it holds.** A header (a grip on a phone held upright, where the song's name and the Commands
-  button are in the control bar over it; Done on a sheet), then the song's conversation, oldest first
+  button are in the control bar over it; Done on a sheet; "HO[LO]-agent" and a button that slides it in on a
+  dock, as tall as the tracks' toolbar beside it), then the song's conversation, oldest first
   (`conversation()` in apps/web/src/app/agent.ts: every turn the host keeps, the jobs it told of
   standing for theirs, a request on its way and one turned down; its last is always what the bar would
   show). Earlier turns are a line each, the request then the start of the reply, opened with a tap; a

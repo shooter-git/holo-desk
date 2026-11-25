@@ -422,6 +422,16 @@ means. Nothing plays or moves until you click, unless you asked to see or hear s
 A request runs as long as the agent keeps working, up to 2 hours (3 for reading a scan); it ends if it
 goes quiet for 15 minutes, and Stop on the bar ends it at any time.
 
+**On a desktop**
+
+With the agent on, Ctrl / (or the slash button) slides a dock out down the right side of the studio,
+with the song's whole conversation and the field at its foot; the studio makes room for it, and stays in
+use beside it. Type there to ask or to find a command. From the studio, Ctrl / goes to the dock's field;
+from the field, Ctrl / or Escape slides the dock back in, and so does the button in its header. A
+button in a reply that shows you something leaves the dock where it is. In a window narrower than
+1360 px the dock is over the studio's right edge instead. With the agent off, Ctrl / is the small card
+under the control bar that finds commands.
+
 **On a phone or a tablet**
 
 The bar opens as a page with the song's whole conversation: on a phone held upright it fills the room
@@ -609,7 +619,8 @@ They follow Logic's (Ctrl in place of ⌘). Press <kbd>?</kbd> in the studio for
 
 Ctrl / opens the bar, where every command, track and marker is found by name (the slash button, /, in
 the control bar, or a swipe down on a phone's top bar); Escape, a tap outside it or, on a touch screen, a
-swipe up on it puts it away.
+swipe up on it puts it away. With the agent on, a desktop's bar is a dock at the right: Ctrl / from the
+studio goes to its field, and from its field slides it in.
 
 ## Development
 

@@ -4158,6 +4158,67 @@ html[data-layout="tablet"] .talk-room[data-covered] .talk-page {
   padding-bottom: 0;
 }
 
+/* a desktop with the agent on: a dock down the right side, under the control bar. It slides in and out
+   (ui/Bar.tsx keeps it drawn while it goes). Where the window is wide enough the studio gives it the
+   room over the same time, so the two edges move as one and nothing is under the dock; in a narrower
+   window it's over the studio's right edge, as a tablet's sheet is */
+:root {
+  --dock-width: 380px;
+  --dock-slide: 0.2s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+html[data-layout="desktop"] .talk-page {
+  width: var(--dock-width);
+  border-left: 1px solid var(--line);
+  box-shadow: var(--shadow);
+  animation: dock-in var(--dock-slide);
+}
+
+html[data-layout="desktop"] .talk-page[data-leaving] {
+  animation: dock-out var(--dock-slide) forwards;
+}
+
+@keyframes dock-in {
+  from {
+    transform: translateX(100%);
+  }
+}
+
+@keyframes dock-out {
+  to {
+    transform: translateX(100%);
+  }
+}
+
+@media (min-width: 1360px) {
+  html[data-layout="desktop"] .talk-page {
+    box-shadow: none;
+  }
+  html[data-layout="desktop"] .app-body {
+    transition: margin-right var(--dock-slide);
+  }
+  html[data-layout="desktop"][data-dock] .app-body {
+    margin-right: var(--dock-width);
+  }
+}
+
+/* its header is as tall as the tracks' toolbar beside it: its name, and the button that slides it in */
+html[data-layout="desktop"] .talk-head {
+  justify-content: space-between;
+  min-height: 30px;
+  padding: 0 2px 0 12px;
+  touch-action: auto;
+}
+
+html[data-layout="desktop"] .talk-head .title {
+  font-size: 12px;
+  font-weight: 600;
+}
+
+html[data-layout="desktop"] .talk-head .talk-done {
+  color: var(--text-2);
+}
+
 /* its header. A sheet's is Done, at its right. On a phone held upright it's a grip: the song's name is
    in the control bar over it, whose Commands button closes the page. Held still, it lets the studio
    show through; drawn down (upright) or across (a sheet), the page goes with it */
@@ -4432,6 +4493,19 @@ html[data-layout="phone-portrait"] .talk-head:has(.talk-done:focus-visible) {
 
 .talk-page .field textarea::placeholder {
   color: var(--text-3);
+}
+
+/* a dock's field is the bar's size: a mouse needs no 16 px words */
+html[data-layout="desktop"] .talk-page .field {
+  min-height: 44px;
+}
+
+html[data-layout="desktop"] .talk-page .field > svg {
+  margin-bottom: 14px;
+}
+
+html[data-layout="desktop"] .talk-page .field textarea {
+  font-size: 14px;
 }
 
 .talk-page[data-wide] .field textarea {
@@ -7476,6 +7550,8 @@ html[data-layout^="phone"] .view-item kbd {
   .menu,
   .bar,
   .talk-page,
+  html[data-layout="desktop"] .talk-page,
+  html[data-layout="desktop"] .talk-page[data-leaving],
   .talk-row .chev,
   .toast,
   .plugin-window.sheet,
@@ -7486,7 +7562,8 @@ html[data-layout^="phone"] .view-item kbd {
   .pad,
   .disclosure > summary::before,
   .remote-deck .remote-lcd,
-  .remote-deck .remote-transport {
+  .remote-deck .remote-transport,
+  html[data-layout="desktop"] .app-body {
     transition: none;
   }
   /* recording still shows its ring, held steady */

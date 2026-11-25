@@ -148,7 +148,7 @@ for (const tab of ['tracks', 'editor', 'play']) {
   await p.ctx.close();
 }
 
-// the agent: a request in the bar and its reply, then the same conversation on a phone
+// the agent: a request in the desktop's dock and its reply, then the same conversation on a phone
 if (pair) {
   const thread = async () =>
     (await fetch(`${web}/api/agent/threads/${song}`, { headers: { authorization: `Bearer ${pair.token}` } })).json();
@@ -182,7 +182,9 @@ if (pair) {
     }
     await a.page.waitForTimeout(3000);
   }
-  await a.page.locator('.bar .agent-view').waitFor();
+  await a.page.locator('.talk-page .agent-view').first().waitFor();
+  // (the caret out of the picture)
+  await a.page.evaluate(() => document.activeElement?.blur?.());
   await a.page.waitForTimeout(500);
   await shoot(a.page, 'agent');
   await a.ctx.close();

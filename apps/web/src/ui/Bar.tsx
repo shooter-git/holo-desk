@@ -13,15 +13,19 @@
  * leaves. Nothing else in the studio shows the agent.
  *
  * On a phone or a tablet the same opens as the page (ui/TalkPage.tsx), with the song's whole
- * conversation: every opener only sets `bar`, and which one shows is the layout's (app/page-layout.ts).
+ * conversation, and so it does on a desktop with the agent on for this device: there the page is a dock
+ * down the right side, which slides in and out. Every opener only sets `bar`, and which one shows is
+ * the layout's and the agent's (app/page-layout.ts).
  */
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { isOn, useAgent } from '../app/agent.ts';
 import { useLayout } from '../app/layout.ts';
 import { useSeenOnHost } from '../app/notify.ts';
-import { usesPage } from '../app/page-layout.ts';
+import { pageDocks, usesPage } from '../app/page-layout.ts';
 import { closeBar, openBar, useApp } from '../app/store.ts';
 import { useShownRoom, useSwipeUpToClose } from './bar-swipe.ts';
 import { CommandField, CommandList, useCommandField } from './command-field.tsx';
+import { reducedMotion } from './page-swipe.ts';
 import { TalkPage } from './TalkPage.tsx';
 import { Talk } from './talk.tsx';
 
@@ -105,10 +109,46 @@ function BarPanel() {
   );
 }
 
+/** How long a dock takes to slide in (styles/app.css: the studio takes the room back over the same time). */
+const DOCK_MS = 200;
+
+/**
+ * A desktop's dock, closed: it's kept on the page while it slides in, and is gone after. True for
+ * that long. The studio is told the dock is out (the page's data-dock) only while it's open, so it
+ * takes the room back as the dock goes.
+ */
+function useDockLeaving(open: boolean, docks: boolean): boolean {
+  const out = open && docks;
+  // (what's drawn: it follows `out` at once as the dock opens, and a slide behind as it closes)
+  const [shown, setShown] = useState(out);
+  if (out && !shown) setShown(true);
+  useEffect(() => {
+    if (!out) return;
+    document.documentElement.dataset.dock = '';
+    return () => {
+      delete document.documentElement.dataset.dock;
+    };
+  }, [out]);
+  useEffect(() => {
+    if (out || !shown) return;
+    if (!docks || reducedMotion()) {
+      setShown(false);
+      return;
+    }
+    const timer = window.setTimeout(() => setShown(false), DOCK_MS);
+    return () => window.clearTimeout(timer);
+  }, [out, shown, docks]);
+  return shown && !out && docks;
+}
+
 export function Bar() {
   const open = useApp((s) => s.bar);
-  const page = usesPage(useLayout());
+  const layout = useLayout();
+  const agentOn = useAgent(isOn);
+  const page = usesPage(layout, agentOn);
+  const docks = pageDocks(layout, agentOn);
+  const leaving = useDockLeaving(open, docks);
   useSwipeDown();
-  if (!open) return null;
-  return page ? <TalkPage /> : <BarPanel />;
+  if (!open && !leaving) return null;
+  return page ? <TalkPage docks={docks} leaving={leaving} /> : <BarPanel />;
 }

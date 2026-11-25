@@ -29,7 +29,7 @@ import {
 } from './actions.ts';
 import { spaceIsTransport } from './fields.ts';
 import { layoutNow } from './layout.ts';
-import { pageCovers, usesPage } from './page-layout.ts';
+import { agentOnNow, pageCovers, pageDocks, usesPage } from './page-layout.ts';
 import { closeBar, openBar, store } from './store.ts';
 
 export interface KeyCommand {
@@ -203,25 +203,34 @@ function selectedTrackId(): string | null {
 }
 
 /**
- * The bar from the keyboard: open (not over the start screen) or closed. The page (a phone's or a
- * tablet's) is under a dialog and Print, so it doesn't open while one is up; a desktop's bar opens over
- * them. The page opens over Scan, whose header carries the Commands button.
+ * The bar from the keyboard: open (not over the start screen) or closed. The page (a phone's, a
+ * tablet's, or a desktop's dock) is under a dialog and Print, so it doesn't open while one is up; a
+ * desktop's bar opens over them. The page opens over Scan, whose header carries the Commands button.
+ * A dock stays out while the studio is worked in, so from the studio the keys go to its field first:
+ * pressed again there, it slides in.
  */
 function toggleBar(): void {
   const s = store.get();
-  if (s.bar) closeBar();
-  else if (s.audioReady && !(usesPage(layoutNow()) && (s.dialog || s.printView))) openBar();
+  const layout = layoutNow();
+  const agentOn = agentOnNow();
+  if (s.bar) {
+    const field = pageDocks(layout, agentOn)
+      ? document.querySelector<HTMLElement>('.talk-room:not([inert]) .talk-page .field textarea')
+      : null;
+    if (field && !field.closest('.talk-page')?.contains(document.activeElement)) field.focus({ preventScroll: true });
+    else closeBar();
+  } else if (s.audioReady && !(usesPage(layout, agentOn) && (s.dialog || s.printView))) openBar();
 }
 
 /**
  * Whether the bar keeps the studio's keys: the bar always (it's over everything); the page while it
  * covers the studio (a phone held upright), is over Scan, or has the keyboard, unless something is over
  * it (a dialog, Print, or one of the studio's windows opened after it): that takes the keys first,
- * Escape closing it before the page. A sheet beside the studio leaves them to it otherwise.
+ * Escape closing it before the page. A sheet or a dock beside the studio leaves them to it otherwise.
  */
 function barHasKeys(target: EventTarget | null): boolean {
   const layout = layoutNow();
-  if (!usesPage(layout)) return true;
+  if (!usesPage(layout, agentOnNow())) return true;
   const s = store.get();
   const under = (s.plugin || s.synth || s.stage) && document.querySelector('.talk-room[data-below]');
   if (s.dialog || s.printView || under) return false;

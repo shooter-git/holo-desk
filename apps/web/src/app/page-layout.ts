@@ -1,16 +1,26 @@
 /**
- * Where the agent's conversation and the command search go, by the studio's layout (app/layout.ts). A
- * desktop has the bar, a card that drops from the top (Ctrl /). Everywhere else it's the page
- * (ui/TalkPage.tsx): on a phone held upright, a panel between the control bar and the transport; on a
- * phone on its side and on a tablet, a sheet down the right edge, with the studio live beside it.
- * A window the user opens (a plugin's, an instrument's) goes over it, beside the sheet where there's
- * room.
+ * Where the agent's conversation and the command search go, by the studio's layout (app/layout.ts) and
+ * by whether the agent is on for this device. A desktop without the agent has the bar, a card that
+ * drops from the top (Ctrl /): it only finds commands there, so it's as small as what it finds. With
+ * the agent on, a desktop has the page (ui/TalkPage.tsx) as a dock down its right side, under the
+ * control bar: it slides in and out, and the studio gives it the room where the window is wide enough
+ * (styles/app.css). Everywhere else it's the page too: on a phone held upright, a panel between the
+ * control bar and the transport; on a phone on its side and on a tablet, a sheet down the right edge,
+ * with the studio live beside it. A window the user opens (a plugin's, an instrument's) goes over it,
+ * beside the sheet or the dock where there's room.
  */
+import { agent, isOn } from './agent.ts';
 import { type Layout, layoutNow } from './layout.ts';
 import { type AppState, closeBar } from './store.ts';
 
-/** Whether the page stands in for the bar here (everything but a desktop). */
-export const usesPage = (layout: Layout): boolean => layout !== 'desktop';
+/** Whether the agent is on for this device, as it stands now (a component reads it with useAgent). */
+export const agentOnNow = (): boolean => isOn(agent.get());
+
+/** Whether the page stands in for the bar here: everywhere but a desktop, and on a desktop with the agent on (its dock). */
+export const usesPage = (layout: Layout, agentOn: boolean): boolean => layout !== 'desktop' || agentOn;
+
+/** Whether the page is a desktop's dock: it slides in beside the studio, which stays whole and in use. */
+export const pageDocks = (layout: Layout, agentOn: boolean): boolean => layout === 'desktop' && agentOn;
 
 /** Whether the page, open, covers the studio's panes: on a phone held upright (on a sheet it's beside them). */
 export const pageCovers = (layout: Layout): boolean => layout === 'phone-portrait';
@@ -24,13 +34,15 @@ export const paneCovered = (layout: Layout, open: boolean, peek: boolean): boole
 
 /**
  * Whether a go or a command from the conversation (a reply's button) closes it, so what it did shows:
- * the bar does, and the page where it covers the studio. A sheet stays, with the studio beside it.
+ * the bar does, and the page where it covers the studio. A sheet or a dock stays, with the studio
+ * beside it.
  */
-export const closesForStudio = (layout: Layout): boolean => layout === 'desktop' || pageCovers(layout);
+export const closesForStudio = (layout: Layout, agentOn: boolean): boolean =>
+  !usesPage(layout, agentOn) || pageCovers(layout);
 
 /** A reply's go or command ran: the bar, or the page where it covers the studio, closes so the studio shows. */
-export function closeForStudio(layout: Layout = layoutNow()): void {
-  if (closesForStudio(layout)) closeBar();
+export function closeForStudio(layout: Layout = layoutNow(), agentOn: boolean = agentOnNow()): void {
+  if (closesForStudio(layout, agentOn)) closeBar();
 }
 
 /** The studio's windows: a plugin's, an instrument's, a channel's stage. */
@@ -54,8 +66,9 @@ const WINDOW_MARGIN = 8;
 
 /**
  * Where a floating window `width` wide opens across a screen `screen` wide: in the middle, or, with
- * the page's sheet open from `sheet` (its left edge) and room for it beside, in the middle of what the
- * sheet leaves, so neither covers the other. Without the room it opens in the middle, over the sheet.
+ * the page's sheet (or a desktop's dock) open from `sheet` (its left edge) and room for it beside, in
+ * the middle of what the sheet leaves, so neither covers the other. Without the room it opens in the
+ * middle, over the sheet.
  */
 export function windowLeft(width: number, screen: number, sheet: number | null): number {
   if (sheet !== null && sheet >= width + 2 * WINDOW_MARGIN) return Math.round((sheet - width) / 2);

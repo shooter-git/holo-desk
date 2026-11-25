@@ -5,6 +5,7 @@ import {
   closeForStudio,
   closesForStudio,
   pageCovers,
+  pageDocks,
   paneCovered,
   usesPage,
   windowLeft,
@@ -15,8 +16,14 @@ import { closeBar, openBar, store } from '../src/app/store.ts';
 const ALL: Layout[] = ['desktop', 'tablet', 'phone-portrait', 'phone-landscape'];
 
 describe('where the commands and the conversation go', () => {
-  it('the bar on a desktop, the page everywhere else', () => {
-    expect(ALL.filter(usesPage)).toEqual(['tablet', 'phone-portrait', 'phone-landscape']);
+  it('the bar on a desktop without the agent, the page everywhere else: and on a desktop with it on', () => {
+    expect(ALL.filter((l) => usesPage(l, false))).toEqual(['tablet', 'phone-portrait', 'phone-landscape']);
+    expect(ALL.filter((l) => usesPage(l, true))).toEqual(ALL);
+  });
+
+  it('is a dock only on a desktop with the agent on', () => {
+    expect(ALL.filter((l) => pageDocks(l, true))).toEqual(['desktop']);
+    expect(ALL.filter((l) => pageDocks(l, false))).toEqual([]);
   });
 
   it('covers the studio only on a phone held upright: a sheet is beside it', () => {
@@ -32,17 +39,25 @@ describe('where the commands and the conversation go', () => {
   });
 
   it('closes for a reply’s go or command where it hides what that does: the bar, and the page held upright', () => {
-    expect(ALL.filter(closesForStudio)).toEqual(['desktop', 'phone-portrait']);
+    expect(ALL.filter((l) => closesForStudio(l, false))).toEqual(['desktop', 'phone-portrait']);
     openBar();
-    closeForStudio('tablet');
+    closeForStudio('tablet', false);
     expect(store.get().bar).toBe(true);
-    closeForStudio('phone-landscape');
+    closeForStudio('phone-landscape', false);
     expect(store.get().bar).toBe(true);
-    closeForStudio('phone-portrait');
+    closeForStudio('phone-portrait', false);
     expect(store.get().bar).toBe(false);
     openBar();
-    closeForStudio('desktop');
+    closeForStudio('desktop', false);
     expect(store.get().bar).toBe(false);
+  });
+
+  it('a desktop’s dock stays for a reply’s go or command: the studio is beside it', () => {
+    expect(ALL.filter((l) => closesForStudio(l, true))).toEqual(['phone-portrait']);
+    openBar();
+    closeForStudio('desktop', true);
+    expect(store.get().bar).toBe(true);
+    closeBar();
   });
 });
 

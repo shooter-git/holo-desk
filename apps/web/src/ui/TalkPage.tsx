@@ -10,7 +10,11 @@
  *  - a phone on its side: a sheet down the right edge, under the transport row, the studio live beside
  *    it; while typing with the keyboard up it widens across the column, over the keyboard, and the
  *    newest turn folds to a line;
- *  - a tablet: a sheet a third of the width, under the control bar, beside the studio.
+ *  - a tablet: a sheet a third of the width, under the control bar, beside the studio;
+ *  - a desktop with the agent on: a dock down the right side, under the control bar. It slides in and
+ *    out, and where the window is wide enough the studio gives it the room, so nothing is under it
+ *    (styles/app.css). It stays out while the studio is worked in: its field has the keys only while
+ *    they're in it (app/keys.ts).
  *
  * Earlier turns are a line each, opened with a tap; the newest is whole. A conversation shorter than
  * the page gives the room it leaves to its earlier turns, which show more lines of themselves
@@ -20,12 +24,13 @@
  *
  * Its header is a grip on a phone held upright (the song's name is in the control bar over it, and the
  * Commands button there closes it), with Done only while the keyboard is up, when the control bar may
- * be out of sight; a sheet's header is Done. A swipe closes it too: down, from the header or from
- * anywhere on a page that has nothing above to scroll to (held upright), or to the right (a sheet).
- * Held still, the header lets the studio show through (ui/page-swipe.ts). A tab closes it on a phone
- * held upright, and a reply's go or command does where it covers the studio. The song plays on.
+ * be out of sight; a sheet's header is Done; a dock's is its name and a button that slides it in. A
+ * swipe closes it too: down, from the header or from anywhere on a page that has nothing above to
+ * scroll to (held upright), or to the right (a sheet). Held still, the header lets the studio show
+ * through (ui/page-swipe.ts; not a dock's, which has nothing under it). A tab closes it on a phone held
+ * upright, and a reply's go or command does where it covers the studio. The song plays on.
  */
-import { ChevronRight } from 'lucide-react';
+import { ChevronRight, PanelRightClose } from 'lucide-react';
 import { type RefObject, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { conversation, type Exchange, loadThread, useAgent } from '../app/agent.ts';
 import { type Layout, useLayout } from '../app/layout.ts';
@@ -200,7 +205,8 @@ function Turn({
   );
 }
 
-export function TalkPage() {
+/** `docks`: it's a desktop's dock; `leaving`, that dock closed and sliding in (it takes nothing meanwhile). */
+export function TalkPage({ docks = false, leaving = false }: { docks?: boolean; leaving?: boolean }) {
   const layout = useLayout();
   const f = useCommandField({ mode: 'page' });
   const talk = conversation(
@@ -227,7 +233,7 @@ export function TalkPage() {
   useShownRoom(room);
   usePageRoom(room, layout, scanOpen);
   useSwipeToClose(page, page, covers ? 'down' : 'right');
-  useHoldToSeeThrough(head, page);
+  useHoldToSeeThrough(head, page, !docks);
   // the room a short conversation leaves goes to its earlier turns (not across a phone on its side,
   // typing: the newest turn is a line there to leave the room to the field)
   useTurnRoom(thread, !wide);
@@ -308,7 +314,7 @@ export function TalkPage() {
     });
 
   return (
-    <div ref={room} className="talk-room" inert={behind} data-below={below ? '' : undefined}>
+    <div ref={room} className="talk-room" inert={behind || leaving} data-below={below ? '' : undefined}>
       <section
         ref={page}
         className={`talk-page convo${f.dropping ? ' dropping' : ''}`}
@@ -316,6 +322,7 @@ export function TalkPage() {
         aria-modal={covers ? 'true' : undefined}
         aria-label="Commands"
         data-wide={wide ? '' : undefined}
+        data-leaving={leaving ? '' : undefined}
         onDragOver={f.onDragOver}
         onDragLeave={f.onDragLeave}
         onDrop={f.onDrop}
@@ -323,9 +330,24 @@ export function TalkPage() {
         <div ref={head} className="talk-head">
           {covers && <span className="talk-grip" aria-hidden="true" />}
           {/* (held upright it shows only with the keyboard up, or focused from a keyboard of keys: styles/app.css) */}
-          <button type="button" className="btn ghost talk-done" onClick={closeBar}>
-            Done
-          </button>
+          {docks ? (
+            <>
+              <span className="title">HO[LO]-agent</span>
+              <button
+                type="button"
+                className="btn icon ghost talk-done"
+                title="Close (Ctrl /)"
+                aria-label="Close"
+                onClick={closeBar}
+              >
+                <PanelRightClose />
+              </button>
+            </>
+          ) : (
+            <button type="button" className="btn ghost talk-done" onClick={closeBar}>
+              Done
+            </button>
+          )}
         </div>
         <div ref={thread} className="talk-thread">
           <div className="talk-body">

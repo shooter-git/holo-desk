@@ -220,6 +220,8 @@ Engine's, as Node threads):
   notes as the studio's audio thread does, and renders each block when the device asks for it, as
   before. Its DSP load and the threads' come back to the studio with its stats.
 - **Bounces and headless renders** are as before: one engine, one thread, byte for byte the same.
+  The host's bounce alone may be split over threads (A bounce on the host), and is still that file
+  to the byte.
 
 ### The numbers
 
@@ -274,6 +276,43 @@ the tail (`POST /api/projects/:id/bounces/host`), then asks how far it has got
 never holding it. The host renders as the studio's worker does, with the same options, its samples and
 recordings read from the data folder, so the file is the one that studio would have made (a test
 compares them to the byte).
+
+**On a host with cores to spare, the bounce is rendered on several of them**, and is the same
+file to the byte (`RenderOptions.split` in `packages/engine/src/render.ts`, `renderThreads` in the
+engine's `node.ts`; `packages/engine/test/render-split.test.ts` compares them on real threads).
+It uses the render-ahead pool (Rendering ahead), run as playing live never is: every engine has
+the whole song before the first block (the threads hold what they're sent until told to go), who
+plays which strip is laid out once and never again (a strip that changes hands starts afresh), no
+strip rests and nothing fades at the transport (a render's own settings), and the mixing thread
+waits for each block instead of playing silence. If a thread's engine reports an error, a thread
+stops, or no block comes for two minutes, the same process renders the song again on one engine:
+slower, never another file, never stuck.
+
+- **How many threads:** one fewer than the cores the server may use (`renderWorkersFor`), six at
+  most, never more than the song has strips; with fewer than three cores, one engine as before,
+  since one thread beside the mixer costs more than it saves. `HOLO_BOUNCE_THREADS` is a ceiling
+  for a host shared with other work (`1`: one engine).
+- **How the strips are shared out:** by what each cost the last time the song was bounced here
+  (its share of a block's time, averaged over the render), kept in `data/bounces/.render/`; a
+  song bounced for the first time goes by the pool's guesses, brought to this host's speed by its
+  last bounce of any song. The layout only decides how soon the file is made, never what's in it.
+- **What it gains:** the mixing, shared between the threads. Loading the samples and mastering
+  stay on one, so a song that is mostly loading gains little, and none loses. On 4 cores of a 2019
+  desktop CPU, three threads, seconds for the whole bounce (one engine, then the first bounce on
+  threads, then later ones):
+
+  | Song | One engine | First | Later |
+  |---|---|---|---|
+  | 4:07, 23 tracks, 4 buses (a Shimmer a third of the work by itself), mastered | 145 | 97 | 80 |
+  | 2:43, 29 Performance and Glass tracks, 13 buses, 5 halls, mastered | 122 | 67 | 69 |
+  | 2:02, 13 tracks, 6 halls | 43 | 26 | 26 |
+  | 2:48, 31 sampled tracks, one bus | 26 | 23 | 21 |
+  | 0:50, 8 tracks (mostly loading) | 20 | 17 | 17 |
+  | 3:19, 4 recordings | 6 | 6 | 6 |
+
+  It holds about a fifth more memory at its peak (each engine its own mixer; the samples are
+  shared). Given fewer cores than threads it is still no slower than one engine with two, and a
+  tenth slower with one (where it isn't used).
 
 One bounce at a time, each in a process of its own at the lowest priority, forked when its turn
 comes and gone when it ends: a long render never holds up the server, a small host is slow at it

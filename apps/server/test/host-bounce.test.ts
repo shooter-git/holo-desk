@@ -8,15 +8,15 @@ import {
   utimesSync,
   writeFileSync,
 } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { availableParallelism, tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { Readable } from 'node:stream';
 import { encodeWav, renderSession } from '@holo/engine';
-import { dataFolderSource } from '@holo/engine/node';
+import { dataFolderSource, renderWorkersFor } from '@holo/engine/node';
 import { newProject, newRegion, type Project, type Track } from '@holo/session';
 import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
 import { buildApp } from '../src/app.ts';
-import { BOUNCE_STOPPED, bounceFileName, HostBounces } from '../src/host-bounce.ts';
+import { BOUNCE_STOPPED, bounceFileName, HostBounces, threadsAllowed } from '../src/host-bounce.ts';
 import { BAR, FakeChild, takeWorld } from './measure-fakes.ts';
 
 const made: string[] = [];
@@ -410,10 +410,47 @@ describe('a bounce asked of the host', () => {
       expect(stretch.equals(await studio(edited, BAR, BAR * 3))).toBe(true);
       expect(stretch.equals(await studio(song, BAR, BAR * 3))).toBe(false);
       expect((await app.inject({ method: 'GET', url: '/api/health' })).json().busy).toBe(false);
+
+      // on a computer with cores to spare both were rendered on threads (the same files, as checked):
+      // what the song's strips cost is kept, away from its bounces, and the second went by it
+      const kept = join(dataDir, 'bounces', '.render');
+      if (renderWorkersFor(availableParallelism(), threadsAllowed()) >= 2) {
+        const costs = JSON.parse(readFileSync(join(kept, `${song.id}.json`), 'utf8'));
+        expect(Object.keys(costs.strips).length).toBeGreaterThan(0);
+        expect(costs.scale.tracks).toBeGreaterThan(0);
+        expect(JSON.parse(readFileSync(join(kept, 'host.json'), 'utf8'))).toEqual({ scale: costs.scale, strips: {} });
+      }
+      // told to stay on one engine, the host makes the same file and keeps nothing more
+      const before = existsSync(kept) ? readdirSync(kept).map((f) => readFileSync(join(kept, f), 'utf8')) : [];
+      process.env.HOLO_BOUNCE_THREADS = '1';
+      try {
+        const single = await bounced({ doc: song, from: 0, to: BAR * 4, tail: 3, name: 'On one' });
+        const one = readFileSync(join(dataDir, 'bounces', song.id, single?.file ?? ''));
+        expect(one.equals(await studio(song, 0, BAR * 4))).toBe(true);
+      } finally {
+        delete process.env.HOLO_BOUNCE_THREADS;
+      }
+      expect(existsSync(kept) ? readdirSync(kept).map((f) => readFileSync(join(kept, f), 'utf8')) : []).toEqual(before);
     } finally {
       await app.close();
     }
-  }, 120_000);
+  }, 180_000);
+});
+
+describe('how many threads the host may bounce on', () => {
+  it('is as many as its cores allow unless it’s told a number', () => {
+    expect(threadsAllowed({})).toBe(Number.POSITIVE_INFINITY);
+    expect(threadsAllowed({ HOLO_BOUNCE_THREADS: '' })).toBe(Number.POSITIVE_INFINITY);
+    expect(threadsAllowed({ HOLO_BOUNCE_THREADS: 'many' })).toBe(Number.POSITIVE_INFINITY);
+    expect(threadsAllowed({ HOLO_BOUNCE_THREADS: '-2' })).toBe(Number.POSITIVE_INFINITY);
+    expect(threadsAllowed({ HOLO_BOUNCE_THREADS: ' 3 ' })).toBe(3);
+    expect(threadsAllowed({ HOLO_BOUNCE_THREADS: '1' })).toBe(1);
+    expect(threadsAllowed({ HOLO_BOUNCE_THREADS: '0' })).toBe(0);
+    // (one, or none: one engine, as before there were threads)
+    expect(renderWorkersFor(8, threadsAllowed({ HOLO_BOUNCE_THREADS: '1' }))).toBe(0);
+    expect(renderWorkersFor(8, threadsAllowed({ HOLO_BOUNCE_THREADS: '4' }))).toBe(4);
+    expect(renderWorkersFor(8, threadsAllowed({}))).toBe(6);
+  });
 });
 
 describe('a song’s bounces, listed and deleted', () => {

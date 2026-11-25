@@ -187,6 +187,29 @@ export class AheadLink {
     for (let j = 0; j < workers; j++) if (this.done(j) <= k) return false;
     return true;
   }
+  /**
+   * Until block k may be ready (a worker still to finish it has finished another block, or the
+   * leader has opened it), or `ms` have passed: for whoever plays the workers' blocks with nothing
+   * else to do meanwhile (a render, which waits for each block instead of playing silence). The
+   * event loop goes on, so what the threads say arrives.
+   */
+  async untilReady(k: number, workers: number, ms: number): Promise<void> {
+    let index = C_LEADER;
+    let value = this.leader();
+    if (value > k) {
+      index = -1;
+      for (let j = 0; j < workers && index < 0; j++) {
+        value = this.done(j);
+        if (value <= k) index = C_DONE + j;
+      }
+      if (index < 0) return;
+    }
+    const waitAsync = (Atomics as unknown as { waitAsync?: WaitAsync }).waitAsync;
+    const waited = waitAsync?.(this.ctl, index, value, ms);
+    if (waited?.async) await waited.value;
+    // (nothing to wait with, or it had moved already: a turn of the event loop all the same)
+    else await new Promise<void>((done) => setTimeout(done, waited ? 0 : Math.min(ms, 2)));
+  }
   /** Blocks a strip's sound is out for. */
   progress(num: number): number {
     return aheadHasRoom(num) ? Atomics.load(this.ctl, C_PROGRESS + num) : 0;
@@ -570,7 +593,7 @@ export interface AheadThread {
 const CLEAN_STALLS = 20 / 750;
 
 /** What a strip's timing was taken with: the same strip, the same plugins in its chain, the same instrument. */
-function madeOf(s: GraphSpec['tracks'][number] | GraphSpec['buses'][number]): string {
+export function aheadMade(s: GraphSpec['tracks'][number] | GraphSpec['buses'][number]): string {
   const plugins = s.inserts.map((p) => (p.bypass ? '' : p.type)).join();
   if (!('instrument' in s)) return `${s.id}|${plugins}`;
   const i = s.instrument;
@@ -627,7 +650,7 @@ export class AheadPool {
   private guesses = new Map<number, number>();
   /** Each strip's heaviest timing since the song last started, or as kept from the last time it was open (remember). */
   private seen = new Map<number, number>();
-  /** What each strip was when it was timed (madeOf): another strip under its number, or other plugins, is timed afresh. */
+  /** What each strip was when it was timed (aheadMade): another strip under its number, or other plugins, is timed afresh. */
   private made = new Map<number, string>();
   /** The guesses brought to this computer's speed (AheadScale): learned as songs play, or handed in by whoever kept it. */
   private scale: AheadScale = { tracks: 1, buses: 1 };
@@ -815,7 +838,7 @@ export class AheadPool {
     const here = new Set<number>();
     for (const s of [...graph.tracks, ...graph.buses]) {
       here.add(s.num);
-      const made = madeOf(s);
+      const made = aheadMade(s);
       const was = this.made.get(s.num);
       if (was !== undefined && was !== made) {
         this.seen.delete(s.num);

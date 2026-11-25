@@ -17,6 +17,15 @@ import {
   type SampleMic,
 } from '@holo/session';
 import {
+  AheadPool,
+  type AheadTiming,
+  aheadGuess,
+  aheadMade,
+  aheadPartGuess,
+  aheadShared,
+  aheadTrackGuess,
+} from './ahead.ts';
+import {
   clipKey,
   compileClips,
   compileGraph,
@@ -37,7 +46,17 @@ import { songPatches } from './notes/plan.ts';
 import { isPlanned, type PerformanceManifest, partReach, partSamples, planTrack, wrapPlans } from './parts.ts';
 import { playedKeys, playedZones } from './played.ts';
 import { readPartials } from './prism-sources.ts';
-import { EV_OFF, EV_ON, EVENT_SIZE, type SampleFrames, type SamplerSpec, type SampleZone } from './protocol.ts';
+import {
+  type AheadSpec,
+  EV_OFF,
+  EV_ON,
+  EVENT_SIZE,
+  type GraphSpec,
+  type SampleFrames,
+  type SamplerSpec,
+  type SampleZone,
+  type ToWorklet,
+} from './protocol.ts';
 import { resample } from './resample.ts';
 import { type ImpulseSource, impulseFromAudio } from './space.ts';
 import { generateSpace } from './spaces.ts';
@@ -235,7 +254,55 @@ export interface RenderOptions {
    * (played.ts), which renders the same to the byte in less time and memory.
    */
   samples?: 'played' | 'all';
+  /**
+   * Engines side by side, on threads the caller starts (a host with cores to spare): the same
+   * render to the byte, sooner. Without it, one engine on this thread, as ever.
+   */
+  split?: RenderSplit;
   onProgress?: (text: string) => void;
+}
+
+/** A thread of a split render, as the render sees it, wherever it runs. */
+export interface RenderThread {
+  /** A message of the song's, in the order every engine gets them. The thread plays nothing until `go`. */
+  post(msg: ToWorklet): void;
+  /** The whole song has been posted: play it, block after block. */
+  go(): void;
+  /** Stop, and say what went wrong in its engine, if anything did (null: nothing). */
+  end(): Promise<string | null>;
+}
+
+/**
+ * How a render is split over threads: how many, and how one is started. A thread runs an engine
+ * that takes part in the pool (`spec`) with a render's own settings (every strip played through, no
+ * fades at the transport), holds what it's posted until it's told to go, and then plays as a
+ * render-ahead worker does (AheadWorker). `failed` is told when its engine reports an error or the
+ * thread stops by itself: the render then starts over on one engine.
+ */
+export interface RenderSplit {
+  workers: number;
+  start(spec: AheadSpec, sampleRate: number, failed: (why: string) => void): RenderThread;
+  /** How long the threads may go without a block before the render is made on one engine instead, ms (two minutes). */
+  patience?: number;
+  /**
+   * What an earlier split render found each strip to cost (`learned`), for whoever keeps it: the
+   * strips are shared out by it, more evenly than by guesses, so the render is sooner. It changes
+   * nothing of what's rendered.
+   */
+  costs?: RenderCosts | null;
+  /** Told, after a split render that went through, what its strips cost: to keep, and hand back as `costs`. */
+  learned?(costs: RenderCosts): void;
+}
+
+/**
+ * What a split render's strips cost on this computer: each one's share of a block's time, averaged
+ * over the render, with what the strip was then (a strip with other plugins or another instrument
+ * is guessed afresh), by the strip's id; and how far this computer's timings run from the guesses
+ * (ahead.ts, AheadScale), for strips, and songs, that haven't been timed.
+ */
+export interface RenderCosts {
+  scale: { tracks: number; buses: number };
+  strips: Record<string, AheadTiming>;
 }
 
 export interface Rendered {
@@ -359,6 +426,164 @@ export async function loadImpulse(source: RenderSource, from: ImpulseSource, rat
 /** A loop's tails must have died away before its last turn is kept: this long at least before it. */
 const LOOP_SETTLE = 45;
 
+/** How often a split render looks at its strips' timings, in blocks (about four times a second). */
+const TIMED_EVERY = 94;
+
+/**
+ * What a split render's strips cost, from their timings added up over `looks` looks: each strip's
+ * average share of a block, and how far the timed ones run from their guesses (tracks and buses
+ * apart; with too few timed to tell, as it was).
+ */
+function costsOf(
+  graph: GraphSpec,
+  parts: ReadonlyMap<number, number>,
+  timed: ReadonlyMap<number, number>,
+  looks: number,
+  was: RenderCosts['scale'] = { tracks: 1, buses: 1 },
+): RenderCosts {
+  const strips: RenderCosts['strips'] = {};
+  const sum = { tracks: [0, 0, 0], buses: [0, 0, 0] };
+  const tracks = new Set(graph.tracks.map((t) => t.num));
+  for (const s of [...graph.tracks, ...graph.buses]) {
+    const share = (timed.get(s.num) ?? 0) / looks;
+    if (!(share > 0)) continue;
+    strips[s.id] = { share, made: aheadMade(s) };
+    const guess = aheadGuess(s, parts.get(s.num));
+    // (an empty strip's guess says nothing)
+    if (guess <= 0.004) continue;
+    const of = tracks.has(s.num) ? sum.tracks : sum.buses;
+    of[0] = (of[0] as number) + share;
+    of[1] = (of[1] as number) + guess;
+    of[2] = (of[2] as number) + 1;
+  }
+  const scale = (before: number, of: number[], least: number) =>
+    (of[2] as number) >= least && (of[1] as number) > 0
+      ? Math.min(4, Math.max(0.02, (of[0] as number) / (of[1] as number)))
+      : before;
+  return { scale: { tracks: scale(was.tracks, sum.tracks, 3), buses: scale(was.buses, sum.buses, 1) }, strips };
+}
+
+/** A split render that hears nothing from its threads for this long is given up (and made on one engine). */
+const SPLIT_STUCK_MS = 120_000;
+
+interface Played {
+  late: number;
+  left: Float32Array<ArrayBuffer>;
+  right: Float32Array<ArrayBuffer>;
+}
+
+/**
+ * A render's blocks from engines side by side: the render-ahead pool (ahead.ts), run so that what
+ * comes out is one engine's render to the byte. That takes what playing live doesn't do:
+ *
+ * - every engine has the whole song before the first block (the threads hold it until told to go,
+ *   this thread's engine takes it in at once), so every message lands before block 0, as in one;
+ * - who plays which strip is laid out once, with the graph, and never again (a strip that changes
+ *   hands starts afresh where it lands: its notes and its plugins' tails are cut);
+ * - each block is waited for, as long as it takes (playing live, a late block is silence).
+ *
+ * Null when it can't be trusted or didn't finish: an engine reported an error (it hands silence on
+ * from there), a thread stopped, or no block came for too long. The caller renders again on one.
+ */
+async function playSplit(
+  split: RenderSplit,
+  sr: number,
+  song: readonly ToWorklet[],
+  graph: GraphSpec,
+  parts: ReadonlyMap<number, number>,
+  play: (from: EngineCore, before: (k: number) => Promise<void>, after: (k: number) => void) => Promise<Played>,
+): Promise<Played | null> {
+  let failure: string | null = null;
+  const threads: RenderThread[] = [];
+  // (never more threads than there are strips to share out; with one strip, one engine)
+  const workers = Math.min(Math.round(split.workers), graph.tracks.length + graph.buses.length);
+  if (!(workers >= 2)) return null;
+  const failed = (why: string) => {
+    failure ??= why;
+  };
+  const patience = split.patience ?? SPLIT_STUCK_MS;
+  let pool: AheadPool | null = null;
+  class GivenUp extends Error {}
+  try {
+    pool = new AheadPool(
+      workers,
+      (spec) => {
+        const thread = split.start(spec, sr, failed);
+        threads.push(thread);
+        // (the pool only posts and closes; a render's threads are ended below, each asked what went wrong)
+        return { post: (msg) => thread.post(msg), close: () => undefined };
+      },
+      sr,
+    );
+    const link = pool.link;
+    const mixer = new EngineCore(sr, (msg) => {
+      if (msg.type === 'error') failed(msg.message);
+    });
+    mixer.receive({ type: 'init', ring: null, meters: null, transport: null, ahead: pool.spec(-1) });
+    for (const [num, guess] of parts) pool.setPart(num, guess);
+    // shared out by what the strips cost the last time, where that's known, and by guesses elsewhere
+    const strips = [...graph.tracks, ...graph.buses];
+    const known = new Map<number, AheadTiming>();
+    if (split.costs) {
+      pool.setCalibration(split.costs.scale);
+      for (const s of strips) {
+        const timing = split.costs.strips[s.id];
+        if (timing && typeof timing.share === 'number' && typeof timing.made === 'string') known.set(s.num, timing);
+      }
+    }
+    const laid = pool.layout(graph, false, known);
+    for (const msg of song) {
+      pool.post(msg);
+      mixer.receive(msg);
+      if (msg.type !== 'graph') continue;
+      for (const own of laid) {
+        pool.post(own);
+        mixer.receive(own);
+      }
+    }
+    for (const t of threads) t.go();
+    let heard = Date.now();
+    const timed = new Map<number, number>();
+    let looks = 0;
+    const played = await play(
+      mixer,
+      async (k) => {
+        while (!link.ready(k, workers)) {
+          if (failure !== null) throw new GivenUp(failure);
+          if (Date.now() - heard > patience) throw new GivenUp('The render threads stopped answering');
+          await link.untilReady(k, workers, 50);
+        }
+        if (failure !== null) throw new GivenUp(failure);
+        heard = Date.now();
+        // (each strip's timing, a few times a second: averaged, what the next render lays out by)
+        if (k % TIMED_EVERY === 0 && k > 0) {
+          looks++;
+          for (const s of strips) timed.set(s.num, (timed.get(s.num) ?? 0) + link.cost(s.num));
+        }
+        mixer.aheadBlock(k);
+      },
+      (k) => link.setConsumed(k + 1),
+    );
+    // an engine that failed handed silence on from there: each thread is asked before its blocks are kept
+    const said = await Promise.all(threads.splice(0).map((t) => t.end()));
+    if (failure !== null || said.some((error) => error !== null)) return null;
+    if (split.learned && looks > 0) {
+      try {
+        split.learned(costsOf(graph, parts, timed, looks, split.costs?.scale));
+      } catch {
+        // (whoever keeps them couldn't: the render is what was asked for)
+      }
+    }
+    return played;
+  } catch (err) {
+    if (err instanceof GivenUp) return null;
+    throw err;
+  } finally {
+    await Promise.all(threads.map((t) => t.end().catch(() => null)));
+    pool?.close();
+  }
+}
+
 export async function renderSession(written: Project, source: RenderSource, opts: RenderOptions): Promise<Rendered> {
   const sr = opts.sampleRate;
   // the song as it's heard: its repeats and jumps played out (`from` and `to` are where they first play)
@@ -379,9 +604,27 @@ export async function renderSession(written: Project, source: RenderSource, opts
   const stop = Math.round(tickToFrame(segments, to));
   const turn = stop - start;
   const errors: string[] = [];
-  const core = new EngineCore(sr, (msg) => {
-    if (msg.type === 'error') errors.push(msg.message);
-  });
+  /** One engine, as a render has always had: it says what goes wrong in it. */
+  const engine = () => {
+    const made = new EngineCore(sr, (msg) => {
+      if (msg.type === 'error') errors.push(msg.message);
+    });
+    made.receive({ type: 'init', ring: null, meters: null, transport: null });
+    return made;
+  };
+  // split over threads (two at least: one costs more than it saves), the song is kept as its
+  // messages until it's whole, then given to every engine at once; else it goes straight to the one
+  const split = opts.split && opts.split.workers >= 2 ? opts.split : null;
+  const song: ToWorklet[] = [];
+  const core = split ? null : engine();
+  const send = (msg: ToWorklet) => {
+    if (core) core.receive(msg);
+    else song.push(aheadShared(msg));
+  };
+  /** Split: each instrument's share of the work, guessed from what it plays (by channel number). */
+  const parts = new Map<number, number>();
+  const mics = new Map<string, number>();
+  let graph: GraphSpec | null = null;
   const nums = new Map<string, number>();
   const numOf = (id: string) => {
     let n = nums.get(id);
@@ -392,8 +635,7 @@ export async function renderSession(written: Project, source: RenderSource, opts
     return n;
   };
 
-  core.receive({ type: 'init', ring: null, meters: null, transport: null });
-  core.receive({ type: 'tempo', segments, ppq: 960, ...meterTicks(project) });
+  send({ type: 'tempo', segments, ppq: 960, ...meterTicks(project) });
   // the samples first: the mixer builds each track's instrument from them (a planned part plays its
   // own voices, so its instrument's plain sampler, there for live playing, isn't needed here)
   const keys = new Set<string>();
@@ -413,7 +655,8 @@ export async function renderSession(written: Project, source: RenderSource, opts
     opts.onProgress?.(`Loading instruments (${++k}/${keys.size})`);
     const [pack = '', ...rest] = key.split('/');
     const spec = await buildSampler(source, pack, rest.join('/'), sr, played?.get(key) ?? null);
-    core.receive({ type: 'sampler', spec });
+    mics.set(key, Math.max(1, spec.mics?.length ?? 1));
+    send({ type: 'sampler', spec });
   }
   const clips = songClips(project);
   const recordings = new Map<string, Float32Array[]>();
@@ -422,7 +665,7 @@ export async function renderSession(written: Project, source: RenderSource, opts
     opts.onProgress?.(`Loading audio (${++c}/${clips.length})`);
     const channels = await loadClipAudio(source, clip, sr);
     recordings.set(clipKey(clip), channels);
-    core.receive({ type: 'audio', key: clipKey(clip), channels });
+    send({ type: 'audio', key: clipKey(clip), channels });
   }
   // note edits: each stretch they change, rendered from its recording (notes/plan.ts)
   const patches = songPatches(project, sr);
@@ -430,15 +673,18 @@ export async function renderSession(written: Project, source: RenderSource, opts
   for (const job of patches) {
     opts.onProgress?.(`Rendering note edits (${++edited}/${patches.length})`);
     const base = recordings.get(clipKey(job.base));
-    if (base) core.receive({ type: 'audio', key: job.key, channels: renderNotePatch(base, sr, job.spec) });
+    if (base) send({ type: 'audio', key: job.key, channels: renderNotePatch(base, sr, job.spec) });
   }
   const impulses = songImpulses(project, sr);
   let q = 0;
   for (const { key, source: from } of impulses) {
     opts.onProgress?.(`Preparing spaces (${++q}/${impulses.length})`);
-    core.receive({ type: 'impulse', key, data: prepareImpulse(await loadImpulse(source, from, sr)) });
+    send({ type: 'impulse', key, data: prepareImpulse(await loadImpulse(source, from, sr)) });
   }
-  core.receive({ type: 'graph', graph: compileGraph(project, numOf, segments) });
+  graph = compileGraph(project, numOf, segments);
+  send({ type: 'graph', graph });
+  /** The song's length in frames, for the guesses. */
+  const songFrames = Math.round(tickToFrame(segments, projectEnd(project)));
   // planned parts: planned whole, their samples loaded, handed over as voices to start
   let pp = 0;
   /** How far past the loop's start its voices sound (a voice can outlast a turn, and come around onto itself). */
@@ -469,9 +715,10 @@ export async function renderSession(written: Project, source: RenderSource, opts
         const left = conv(decoded.channels[0] as Float32Array);
         samples.push({ index, left, right: decoded.channels[1] ? conv(decoded.channels[1]) : left });
       }
-      core.receive({ type: 'performance', key: plans.key, samples });
+      send({ type: 'performance', key: plans.key, samples });
     }
-    core.receive({ type: 'plans', num: numOf(t.id), plans });
+    if (split) parts.set(numOf(t.id), aheadPartGuess(plans, songFrames));
+    send({ type: 'plans', num: numOf(t.id), plans });
   }
   for (const t of project.tracks) {
     // nothing starts after the end; what started before it rings out into the tail; a planned part's
@@ -485,36 +732,66 @@ export async function renderSession(written: Project, source: RenderSource, opts
       if (kind === EV_ON && (all[i] as number) >= stop) continue;
       for (let j = 0; j < EVENT_SIZE; j++) kept.push(all[i + j] as number);
     }
-    core.receive({
+    if (split && !notesPlanned) {
+      const inst = instrumentSpec(t.instrument);
+      const sounding = inst.kind === 'sampler' ? (mics.get(inst.key) ?? 1) : 1;
+      parts.set(numOf(t.id), aheadTrackGuess(all, inst, songFrames, sr, sounding));
+    }
+    send({
       type: 'sequence',
       num: numOf(t.id),
       events: loop ? wrapNotes(kept, start, stop) : new Float64Array(kept),
     });
-    if (t.kind === 'audio') core.receive({ type: 'clips', num: numOf(t.id), clips: compileClips(t, segments, sr) });
+    if (t.kind === 'audio') send({ type: 'clips', num: numOf(t.id), clips: compileClips(t, segments, sr) });
   }
   // a loop plays turn after turn until everything that rings past its end has come around (its longest
   // voice, and the halls after it), and keeps the last
   const turns = loop ? Math.ceil((reach + LOOP_SETTLE * sr) / Math.max(1, turn)) : 1;
   const length = loop ? turn * turns : Math.max(1, stop - start + Math.round((opts.tail ?? 4) * sr));
-  if (loop) core.receive({ type: 'cycle', on: true, start, end: stop, wrap: true });
-  core.receive({ type: 'play', frame: start, record: false, countIn: 0 });
+  if (loop) send({ type: 'cycle', on: true, start, end: stop, wrap: true });
+  send({ type: 'play', frame: start, record: false, countIn: 0 });
 
   // the mix's sound comes out behind the song by its plugins' look-ahead: render that much more, and
   // keep from where the song begins. Whole blocks only (the convolution works in them).
-  const late = core.measureLatency();
-  const blocks = Math.ceil((length + late) / BLOCK);
-  const left = new Float32Array(blocks * BLOCK);
-  const right = new Float32Array(blocks * BLOCK);
   const blockL = new Float32Array(BLOCK);
   const blockR = new Float32Array(BLOCK);
   const tenth = Math.max(BLOCK, Math.floor(length / 10));
-  for (let at = 0; at < blocks * BLOCK; at += BLOCK) {
-    core.process(blockL, blockR, undefined, at);
-    left.set(blockL, at);
-    right.set(blockR, at);
-    if (at % tenth < BLOCK && at > 0)
-      opts.onProgress?.(`Rendering… ${Math.min(100, Math.round((at / length) * 100))}%`);
+  /**
+   * Every block of the render out of an engine that has the whole song. `before` a block: split,
+   * the wait for the threads' share of it.
+   */
+  const play = async (
+    from: EngineCore,
+    before?: (k: number) => Promise<void>,
+    after?: (k: number) => void,
+  ): Promise<Played> => {
+    const late = from.measureLatency();
+    const blocks = Math.ceil((length + late) / BLOCK);
+    const left = new Float32Array(blocks * BLOCK);
+    const right = new Float32Array(blocks * BLOCK);
+    for (let at = 0, k = 0; at < blocks * BLOCK; at += BLOCK, k++) {
+      if (before) await before(k);
+      from.process(blockL, blockR, undefined, at);
+      after?.(k);
+      left.set(blockL, at);
+      right.set(blockR, at);
+      if (at % tenth < BLOCK && at > 0)
+        opts.onProgress?.(`Rendering… ${Math.min(100, Math.round((at / length) * 100))}%`);
+    }
+    return { late, left, right };
+  };
+  let mixed = core ? await play(core) : null;
+  if (!mixed && split && graph) {
+    mixed = await playSplit(split, sr, song, graph, parts, play);
+    if (!mixed) {
+      // a thread failed, or nothing came of them: the same song from its first block on one engine
+      const one = engine();
+      for (const msg of song) one.receive(msg);
+      mixed = await play(one);
+    }
   }
+  if (!mixed) throw new Error('Nothing was rendered');
+  const { late, left, right } = mixed;
   // a loop keeps its last turn
   const keep = loop ? late + turn * (turns - 1) : late;
   const keepLength = loop ? turn : length;

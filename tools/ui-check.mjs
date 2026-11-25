@@ -27,7 +27,8 @@
 //   - Settings › Agent's Tell me outside HO[LO] isn't whole: its three choices side by side, in the dialog;
 //   - with a reply that has a dock read and the page closed, a phone shows no tray, or one that isn't a
 //     row of its own (or × leaves it there); a tablet or a desktop shows one;
-//   - Songs' list of the open song's bounces isn't whole, with a delete asked too, or Keep doesn't bring the bounce back;
+//   - Songs' open song's bounces, folded under its row or opened with a delete asked, aren't whole, or Keep
+//     doesn't bring the bounce back;
 //   - Scan's list of a song's earlier scans, a delete asked, isn't whole, or Keep doesn't bring the scan back;
 //   - a scan's review (Scan, over the whole studio) isn't whole, or its header's Commands button can't
 //     be pressed; the commands opened from it don't come up over the review, under its header; Escape
@@ -1321,11 +1322,13 @@ function views(page, layout, finger) {
   const press = (loc) => (finger ? loc.tap() : loc.click());
   const dialogs = [
     ['Songs', () => press(control(page, 'Songs')), () => page.keyboard.press('Escape')],
-    // the open song's bounces, all of them, one's delete asked: the question whole, and Keep bringing it back
+    // the open song's bounces (under its row, folded until pressed), all of them, one's delete asked: the
+    // question whole, and Keep bringing it back
     [
       'Songs, a bounce’s delete asked',
       async () => {
         await press(control(page, 'Songs'));
+        await press(page.locator('.song-bounces .bounces-head'));
         await press(page.locator('.song-bounces .bounces-all'));
         await press(page.locator('.song-bounces button[title="Delete this bounce"]').first());
         await page.locator('.song-bounces .bounce-row.asking').waitFor();

@@ -1,6 +1,17 @@
 import { newProject } from '@holo/session';
 import { describe, expect, it } from 'vitest';
-import { keepBounce, keptBounce, startHostBounce, watchHostBounce } from '../src/app/host-bounce.ts';
+import { saveWay } from '../src/app/bounce-save.ts';
+import {
+  bounceTitle,
+  dropBounce,
+  findBounce,
+  type KeptBounce,
+  keepBounce,
+  keptBounce,
+  markBounced,
+  startHostBounce,
+  watchHostBounce,
+} from '../src/app/host-bounce.ts';
 import { bouncesOnHost } from '../src/audio/bounce-on.ts';
 
 describe('where a device’s bounces are made', () => {
@@ -34,11 +45,12 @@ describe('a bounce asked of the host', () => {
 
   it('sends the song as the page has it, the stretch and the name, and gets a job to follow', async () => {
     const sent: { url: string; init: RequestInit }[] = [];
-    const id = await startHostBounce(ask(), (async (url: string, init: RequestInit) => {
+    const job = await startHostBounce(ask(), (async (url: string, init: RequestInit) => {
       sent.push({ url, init });
-      return json({ id: 'bnc_abc' }, 202);
+      return json({ id: 'bnc_abc', started: 1_700_000_000_000 }, 202);
     }) as typeof fetch);
-    expect(id).toBe('bnc_abc');
+    // (its job, and when the host began it by the host's own clock)
+    expect(job).toEqual({ id: 'bnc_abc', started: 1_700_000_000_000 });
     expect(sent).toHaveLength(1);
     expect(sent[0]?.url).toBe('/api/projects/prj_one/bounces/host');
     expect(sent[0]?.init.method).toBe('POST');
@@ -154,7 +166,7 @@ describe('a bounce the host is making, followed', () => {
   });
 });
 
-describe('a bounce under way, kept through a reload', () => {
+describe('a bounce kept: under way through a reload, finished until it’s saved', () => {
   function shelf() {
     const kept = new Map<string, string>();
     return {
@@ -164,14 +176,60 @@ describe('a bounce under way, kept through a reload', () => {
       removeItem: (k: string) => void kept.delete(k),
     };
   }
+  const one: KeptBounce = {
+    id: 'bnc_a',
+    project: 'prj_one',
+    name: 'Song (cycle)',
+    download: true,
+    at: 1000,
+    started: 900,
+  };
 
   it('comes back as it was kept, and is gone once it’s let go', () => {
     const s = shelf();
-    expect(keptBounce(s)).toBeNull();
-    keepBounce({ id: 'bnc_a', name: 'Song (cycle)', download: true }, s);
-    expect(keptBounce(s)).toEqual({ id: 'bnc_a', name: 'Song (cycle)', download: true });
-    keepBounce(null, s);
-    expect(keptBounce(s)).toBeNull();
+    expect(keptBounce(s, 2000)).toBeNull();
+    keepBounce(one, s);
+    expect(keptBounce(s, 2000)).toEqual(one);
+    dropBounce('bnc_a', s);
+    expect(keptBounce(s, 2000)).toBeNull();
+  });
+
+  it('is marked done with where its file is, and waits there for a week and no longer', () => {
+    const s = shelf();
+    keepBounce(one, s);
+    const done = { url: '/api/projects/prj_one/bounces/a.wav', file: 'a.wav', seconds: 247 };
+    markBounced('bnc_a', done, s);
+    expect(keptBounce(s, 2000)).toEqual({ ...one, done });
+    const day = 24 * 3600 * 1000;
+    expect(keptBounce(s, 1000 + 6 * day)?.done).toEqual(done);
+    expect(keptBounce(s, 1000 + 8 * day)).toBeNull();
+    // (one whose length isn't known: found among the song's bounces after the host was started again)
+    markBounced('bnc_a', { url: '/x.wav', file: 'x.wav', seconds: null }, s);
+    expect(keptBounce(s, 2000)?.done).toEqual({ url: '/x.wav', file: 'x.wav', seconds: null });
+  });
+
+  it('is another tab’s to mark and let go only if it’s still the one kept', () => {
+    const s = shelf();
+    keepBounce(one, s);
+    // another bounce asked for since, from another tab
+    keepBounce({ ...one, id: 'bnc_b', name: 'Another' }, s);
+    markBounced('bnc_a', { url: '/a.wav', file: 'a.wav', seconds: 1 }, s);
+    dropBounce('bnc_a', s);
+    expect(keptBounce(s, 2000)).toMatchObject({ id: 'bnc_b', name: 'Another' });
+    expect(keptBounce(s, 2000)?.done).toBeUndefined();
+  });
+
+  it('reads one kept before this, with no song or times of its own', () => {
+    const s = shelf();
+    s.kept.set('holo:host-bounce', JSON.stringify({ id: 'bnc_old', name: 'Old', download: true }));
+    expect(keptBounce(s, 5000)).toEqual({
+      id: 'bnc_old',
+      project: '',
+      name: 'Old',
+      download: true,
+      at: 5000,
+      started: 5000,
+    });
   });
 
   it('is nothing when what’s there isn’t one, or there’s nowhere to keep it', () => {
@@ -187,9 +245,92 @@ describe('a bounce under way, kept through a reload', () => {
       setItem: () => {
         throw new Error('denied');
       },
-      removeItem: () => undefined,
+      removeItem: () => {
+        throw new Error('denied');
+      },
     };
-    expect(() => keepBounce({ id: 'bnc_a', name: 'Song', download: false }, none)).not.toThrow();
+    expect(() => keepBounce(one, none)).not.toThrow();
+    expect(() => dropBounce('bnc_a', none)).not.toThrow();
     expect(keptBounce(none)).toBeNull();
+  });
+});
+
+describe('a bounce the host forgot, found among the song’s bounces', () => {
+  it('names a bounce’s file as the host does', () => {
+    // (the host's own cases: apps/server/test/host-bounce.test.ts)
+    expect(bounceTitle('Lantern Sketch (cycle)')).toBe('Lantern Sketch (cycle)');
+    expect(bounceTitle('../../etc/passwd: "x"')).toBe('....etcpasswd x');
+    expect(bounceTitle('  ')).toBe('Bounce');
+    expect(bounceTitle('é'.repeat(4) + 'a'.repeat(120))).toHaveLength(80);
+  });
+
+  const listed = (...files: string[]) =>
+    (async () =>
+      json(files.map((file) => ({ file, bytes: 1, url: `/b/${encodeURIComponent(file)}` })))) as typeof fetch;
+  // the host began it at 03:04:05 (UTC) on 2 January 2026
+  const started = Date.UTC(2026, 0, 2, 3, 4, 5);
+
+  it('is the first file named exactly for it and finished since the host began it', async () => {
+    const found = await findBounce(
+      'prj_one',
+      'Song',
+      started,
+      listed(
+        '2026-01-02 03.20.00 Song.wav',
+        '2026-01-02 03.12.40 Song.wav',
+        // an earlier bounce of it, and others that only end as it does or begin as it does
+        '2026-01-02 03.04.04 Song.wav',
+        '2026-01-02 03.10.00 Another Song.wav',
+        '2026-01-02 03.11.00 Song (cycle).wav',
+      ),
+    );
+    expect(found).toEqual({
+      file: '2026-01-02 03.12.40 Song.wav',
+      url: '/b/2026-01-02%2003.12.40%20Song.wav',
+      path: 'bounces/prj_one/2026-01-02 03.12.40 Song.wav',
+    });
+  });
+
+  it('takes one finished in the very second it began, and a name the host had to clean', async () => {
+    expect((await findBounce('prj_one', 'Song', started, listed('2026-01-02 03.04.05 Song.wav')))?.file).toBe(
+      '2026-01-02 03.04.05 Song.wav',
+    );
+    expect((await findBounce('prj_one', 'A/B: mix?', started, listed('2026-01-02 03.09.00 AB mix.wav')))?.file).toBe(
+      '2026-01-02 03.09.00 AB mix.wav',
+    );
+  });
+
+  it('is nothing when the host has no such file, or can’t be asked', async () => {
+    expect(await findBounce('prj_one', 'Song', started, listed('2026-01-02 03.04.04 Song.wav'))).toBeNull();
+    expect(await findBounce('prj_one', 'Song', started, listed())).toBeNull();
+    expect(
+      await findBounce('prj_one', 'Song', started, (async () => json({ error: 'no' }, 500)) as typeof fetch),
+    ).toBeNull();
+    const down = (async () => {
+      throw new TypeError('Failed to fetch');
+    }) as typeof fetch;
+    expect(await findBounce('prj_one', 'Song', started, down)).toBeNull();
+  });
+});
+
+describe('how a device saves a bounce', () => {
+  const facts = { iosLike: false, standalone: false, touch: false, canShareFiles: false };
+
+  it('is by itself on a computer, installed or not, able to share or not', () => {
+    expect(saveWay(facts)).toBe('auto');
+    expect(saveWay({ ...facts, standalone: true, canShareFiles: true })).toBe('auto');
+  });
+
+  it('is through the share sheet in an installed iPhone or iPad app, whatever its pointer', () => {
+    expect(saveWay({ iosLike: true, standalone: true, touch: true, canShareFiles: true })).toBe('share');
+    // (an iPad with a trackpad: its pointer is fine, and it's still an app with no browser around it)
+    expect(saveWay({ iosLike: true, standalone: true, touch: false, canShareFiles: true })).toBe('share');
+  });
+
+  it('is from a tap on any other phone or tablet, and in an installed app that can’t share files', () => {
+    expect(saveWay({ iosLike: true, standalone: false, touch: true, canShareFiles: true })).toBe('tap');
+    expect(saveWay({ iosLike: true, standalone: false, touch: false, canShareFiles: true })).toBe('tap');
+    expect(saveWay({ iosLike: false, standalone: true, touch: true, canShareFiles: true })).toBe('tap');
+    expect(saveWay({ iosLike: true, standalone: true, touch: true, canShareFiles: false })).toBe('tap');
   });
 });

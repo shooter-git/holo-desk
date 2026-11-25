@@ -156,6 +156,12 @@ export interface AppState {
   toasts: Toast[];
   /** A bounce in progress: what it's doing now. */
   bouncing: string | null;
+  /**
+   * A bounce that's done and waits to be saved on this device (a phone or a tablet: a computer's
+   * downloads by itself): its length when it's known, where it is on the host (null: it never got
+   * there), and whether Save can be pressed yet (the file is fetched first where it's shared).
+   */
+  bounced: { name: string; seconds: number | null; url: string | null; ready: boolean } | null;
   /** Which parts of the studio show (View: the eye's menu, and Settings › View): everything, until you hide some. */
   show: Record<ShowKey, boolean>;
   /**
@@ -289,6 +295,7 @@ const initial: AppState = {
   connection: 'connecting',
   toasts: [],
   bouncing: null,
+  bounced: null,
   bar: false,
   barPeek: false,
   barTurn: null,

@@ -1010,7 +1010,8 @@ export async function buildApp(
     if (!span(tail) || tail > 60) return reply.code(400).send({ error: 'A tail of 0 to 60 seconds' });
     const job = bounces.start({ song, from, to, tail, name: typeof name === 'string' && name ? name : song.title });
     if (!job) return reply.code(503).send({ error: 'The host has bounces waiting already' });
-    return reply.code(202).send({ id: job.id });
+    // (`started`, by this host's clock: its bounces' files are stamped by it, should the job be forgotten)
+    return reply.code(202).send({ id: job.id, started: job.started });
   });
 
   app.get<{ Params: { id: string } }>('/api/bounce-jobs/:id', async (req, reply) => {

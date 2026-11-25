@@ -6447,6 +6447,14 @@ html[data-layout="phone-landscape"] .toasts {
   flex: none;
 }
 
+/* a finished bounce, waiting to be saved: its name gives way to its buttons on a narrow screen */
+.toast.bounced .bounced-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .toast.error {
   border-color: var(--danger-line);
   color: #ffd2d6;

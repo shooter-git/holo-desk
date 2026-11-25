@@ -1,7 +1,7 @@
 /** The studio's frame: the desktop layout, the tablet's, and the phone's (portrait and landscape). */
-import { Library as LibraryIcon, Music2, Piano, Rows3, Settings, SlidersVertical } from 'lucide-react';
+import { Library as LibraryIcon, Music2, Piano, Rows3, Settings, SlidersVertical, X } from 'lucide-react';
 import { lazy, type ReactNode, Suspense, useEffect, useRef, useState } from 'react';
-import { ensureAudio, resolveConflict } from '../app/actions.ts';
+import { bounceClock, ensureAudio, putBounceAway, resolveConflict, saveBounce } from '../app/actions.ts';
 import { clampEditorHeight, fitEditorHeight, isPhone, type Layout, layoutNow, useLayout } from '../app/layout.ts';
 import { otherStudioToDrive } from '../app/live.ts';
 import { pageCovers, paneCovered } from '../app/page-layout.ts';
@@ -298,15 +298,49 @@ function Toasts() {
   );
 }
 
+/**
+ * A bounce: how far it has got while it's made, and, on a phone or a tablet, that it's done, with
+ * Save (it stays until it's saved or put away: nothing downloads by itself there).
+ */
 function BounceStatus() {
   const text = useApp((s) => s.bouncing);
-  if (!text) return null;
+  const done = useApp((s) => s.bounced);
+  if (!text && !done) return null;
   return (
     <div className="toasts bounce" aria-live="polite">
-      <div className="toast">
-        <span className="status-dot busy" />
-        {text}
-      </div>
+      {text ? (
+        <div className="toast">
+          <span className="status-dot busy" />
+          {text}
+        </div>
+      ) : (
+        done && (
+          <div className="toast with-action bounced">
+            <span className="status-dot ok" />
+            <span className="bounced-text">
+              Bounced {done.seconds === null ? '' : `${bounceClock(done.seconds)} of `}“{done.name}”
+            </span>
+            <button
+              type="button"
+              className="btn"
+              disabled={!done.ready}
+              aria-label={`Save the bounce of ${done.name}`}
+              onClick={() => void saveBounce()}
+            >
+              {done.ready ? 'Save' : 'Getting the file…'}
+            </button>
+            <button
+              type="button"
+              className="btn ghost icon"
+              title="Put away"
+              aria-label="Put the bounce away: it stays with the song"
+              onClick={putBounceAway}
+            >
+              <X aria-hidden="true" />
+            </button>
+          </div>
+        )
+      )}
     </div>
   );
 }

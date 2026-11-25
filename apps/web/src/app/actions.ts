@@ -73,9 +73,19 @@ import { holdDuringDrags } from '../ui/gesture.ts';
 import { NOTE_EFFECTS, playsHits } from '../ui/pads.ts';
 import { AgentError, agent, awayChanges, isLive, jobLabels } from './agent.ts';
 import { ApiError, api } from './api.ts';
+import { bounceShelf, holdFile, letFileGo, type SaveWay, saveFile, thisSaveWay } from './bounce-save.ts';
 import { comparePlan, type Pass } from './compare.ts';
 import * as history from './history.ts';
-import { type KeptBounce, keepBounce, keptBounce, startHostBounce, watchHostBounce } from './host-bounce.ts';
+import {
+  dropBounce,
+  findBounce,
+  type KeptBounce,
+  keepBounce,
+  keptBounce,
+  markBounced,
+  startHostBounce,
+  watchHostBounce,
+} from './host-bounce.ts';
 import { browserShelf, type Keepable, Keeper, type Restored, sameSong, stepJobs } from './kept-history.ts';
 import { isTouch } from './layout.ts';
 // (live.ts imports this module too: neither uses the other while loading, so the cycle is harmless)
@@ -2523,35 +2533,54 @@ type Bounced = { file: string; url: string; path: string; seconds: number };
 const BOUNCE_TAIL = 3;
 /** A bounce is under way (the line that shows it is also a creation's render's, which comes and goes by itself). */
 let bounceUnderWay = false;
+/** The kept bounce whose line is showing (null: one that was never kept, a bounce made here that didn't reach the host). */
+let bouncedId: string | null = null;
 
-const bouncedToast = (seconds: number, name: string, kept: boolean) => {
-  const m = Math.floor(seconds / 60);
-  toast(
-    `Bounced ${m}:${String(Math.round(seconds % 60)).padStart(2, '0')} of “${name}” (24-bit WAV${kept ? ', kept with the song' : ''})`,
-  );
+/** A length as minutes and seconds: 4:07. */
+export const bounceClock = (seconds: number): string => {
+  const s = Math.max(0, Math.round(seconds));
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
 };
+
+const bouncedToast = (seconds: number | null, name: string, kept: boolean) =>
+  toast(
+    `Bounced ${seconds === null ? '' : `${bounceClock(seconds)} of `}“${name}” (24-bit WAV${kept ? ', kept with the song' : ''})`,
+  );
 
 /**
  * Render the song (or the cycle, when it's on) to a WAV file, keep a copy with the song on the host,
- * and download it on this device when asked. Made in this page, or by the host for a device that
- * asks it to (Settings › Audio: a phone or a tablet, unless told otherwise): the same file either
- * way. When the host can't take it, this page makes it.
+ * and save it on this device when asked. Made in this page, or by the host for a device that asks
+ * it to (Settings › Audio: a phone or a tablet, unless told otherwise): the same file either way.
+ * When the host can't take it, this page makes it.
+ *
+ * A computer downloads the file when it's done. A phone or a tablet is shown that it's done, and
+ * saves it from there (bounce-save.ts).
  */
 export async function bounceSong(download = true): Promise<Bounced | null> {
   const p = store.get().project;
-  if (!p || store.get().bouncing || bounceUnderWay) return null;
+  if (!p) return null;
+  if (store.get().bouncing || bounceUnderWay) {
+    // (asked for by hand while one is being made: said, where it used to do nothing)
+    if (download && bounceUnderWay) toast('A bounce is already under way');
+    return null;
+  }
   const range = bounceRange(p, projectEnd(p));
   const name = p.cycle.on ? `${p.title} (cycle)` : p.title;
+  const way = thisSaveWay();
   bounceUnderWay = true;
+  // (the last one's line goes: its file stays with the song)
+  if (download) putBounceAway();
   try {
     if (bouncesOnHost(store.get().bounceOn, isTouch())) {
       store.set({ bouncing: 'Asking the host…' });
-      const id = await startHostBounce({ project: p, from: range.from, to: range.to, tail: BOUNCE_TAIL, name });
-      const made = id ? await followHostBounce({ id, name, download }) : 'lost';
+      const job = await startHostBounce({ project: p, from: range.from, to: range.to, tail: BOUNCE_TAIL, name });
+      const made = job
+        ? await followHostBounce({ ...job, project: p.id, name, download, at: Date.now() }, way)
+        : 'lost';
       if (made !== 'lost') return made;
       toast('The host couldn’t take the bounce: this device is making it');
     }
-    return await bounceOnDevice(p, range, name, download);
+    return await bounceOnDevice(p, range, name, download, way);
   } finally {
     bounceUnderWay = false;
     store.set({ bouncing: null });
@@ -2559,45 +2588,110 @@ export async function bounceSong(download = true): Promise<Bounced | null> {
 }
 
 /**
- * A bounce the host is making, followed to its end: its progress shown, the file downloaded when
- * asked, and what came of it said. 'lost': the host gave it up untried (or was started again), and
- * this device may make it.
+ * A bounce the host is making, followed to its end: its progress shown, and what came of it said.
+ * Done, a computer downloads it; a phone or a tablet is shown its line, to save it from. 'lost':
+ * the host gave it up untried (or was started again and has no file of it), and this device may
+ * make it.
  */
-async function followHostBounce(kept: KeptBounce): Promise<Bounced | null | 'lost'> {
-  // (kept for this tab: a page reloaded while the host works picks it up again)
-  keepBounce(kept);
+async function followHostBounce(kept: KeptBounce, way: SaveWay): Promise<Bounced | null | 'lost'> {
+  const shelf = bounceShelf(way);
+  // (kept: a page reloaded, or an app closed and opened, while the host works picks it up again)
+  keepBounce(kept, shelf);
   const made = await watchHostBounce(kept.id, {
     onLine: (line) => store.set({ bouncing: `On the host: ${line}` }),
   });
-  keepBounce(null);
-  if (made.state === 'failed') {
-    if (made.lost) return 'lost';
-    toast(`The bounce failed on the host: ${made.error}`, 'error', 8000);
-    return null;
+  let done: { file: string; url: string; path: string; seconds: number | null } | null = null;
+  if (made.state === 'done') done = made;
+  // a host started again forgets its bounces, not their files: one it finished is among the song's
+  else if (made.lost && kept.download && kept.project) {
+    const found = await findBounce(kept.project, kept.name, kept.started);
+    if (found) done = { ...found, seconds: null };
   }
-  if (kept.download) {
-    const a = document.createElement('a');
+  if (!done) {
+    dropBounce(kept.id, shelf);
+    if (made.state === 'failed' && !made.lost) {
+      toast(`The bounce failed on the host: ${made.error}`, 'error', 8000);
+      return null;
+    }
+    return 'lost';
+  }
+  const result = { file: done.file, url: done.url, path: done.path, seconds: done.seconds ?? 0 };
+  if (!kept.download || way === 'auto') {
+    dropBounce(kept.id, shelf);
     // (straight from the host to the device's files: the page never holds it)
-    a.href = `${made.url}?as=${encodeURIComponent(kept.name)}`;
-    a.download = `${kept.name}.wav`;
-    a.click();
+    if (kept.download) void saveFile(kept.name, done.url);
+    bouncedToast(done.seconds, kept.name, true);
+    return result;
   }
-  bouncedToast(made.seconds, kept.name, true);
-  return { file: made.file, url: made.url, path: made.path, seconds: made.seconds };
+  markBounced(kept.id, { url: done.url, file: done.file, seconds: done.seconds }, shelf);
+  showBounced(kept.id, kept.name, done.seconds, done.url, way);
+  return result;
 }
 
 /**
- * A bounce the host was making when this page was reloaded (a phone lets a page go and brings it
- * back): followed again, and finished as it would have been. One the host lost meanwhile is said
- * to be, and asked for again by hand.
+ * A finished bounce's line: that it's done, with Save. Where saving is through the share sheet the
+ * file is fetched first (`source`: the one a bounce made here has already), and Save waits for it.
+ */
+function showBounced(
+  id: string | null,
+  name: string,
+  seconds: number | null,
+  url: string | null,
+  way: SaveWay,
+  source: Blob | string | null = url,
+): void {
+  bouncedId = id;
+  const share = way === 'share' && source !== null;
+  store.set({ bounced: { name, seconds, url, ready: !share } });
+  if (!share) return;
+  holdFile(name, source, () => {
+    const now = store.get().bounced;
+    if (now && now.name === name && now.url === url) store.set({ bounced: { ...now, ready: true } });
+  });
+}
+
+/** The finished bounce's line put away, and what was kept of it: its file stays with the song on the host. */
+export function putBounceAway(): void {
+  letFileGo();
+  if (bouncedId) dropBounce(bouncedId, bounceShelf(thisSaveWay()));
+  bouncedId = null;
+  if (store.get().bounced) store.set({ bounced: null });
+}
+
+/** Save the finished bounce on this device (its line's button). The share sheet closed with nothing done leaves the line. */
+export async function saveBounce(): Promise<void> {
+  const b = store.get().bounced;
+  if (!b?.ready) return;
+  if (await saveFile(b.name, b.url)) putBounceAway();
+}
+
+/**
+ * A bounce this device asked the host for before the page was reloaded or the app closed (a phone
+ * lets a page go and brings it back): one still being made is followed again and finished as it
+ * would have been; one that was done and not yet saved shows its line again. One the host lost
+ * meanwhile is said to be, and asked for again by hand.
  */
 export async function resumeHostBounce(): Promise<void> {
-  const kept = keptBounce();
-  if (!kept || bounceUnderWay) return;
+  const way = thisSaveWay();
+  const shelf = bounceShelf(way);
+  const kept = keptBounce(shelf);
+  if (!kept) return;
+  if (kept.done) {
+    // (its file gone from the host since, a song deleted: nothing to save)
+    const there = await fetch(kept.done.url, { method: 'HEAD' }).then(
+      (res) => res.status !== 404,
+      () => true,
+    );
+    if (!there) dropBounce(kept.id, shelf);
+    else if (!bounceUnderWay && !store.get().bounced)
+      showBounced(kept.id, kept.name, kept.done.seconds, kept.done.url, way);
+    return;
+  }
+  if (bounceUnderWay) return;
   bounceUnderWay = true;
   try {
     store.set({ bouncing: 'On the host: …' });
-    if ((await followHostBounce(kept)) === 'lost')
+    if ((await followHostBounce(kept, way)) === 'lost')
       toast(`The host didn’t finish bouncing “${kept.name}”: bounce it again`, 'error', 8000);
   } finally {
     bounceUnderWay = false;
@@ -2611,6 +2705,7 @@ async function bounceOnDevice(
   range: ReturnType<typeof bounceRange>,
   name: string,
   download: boolean,
+  way: SaveWay,
 ): Promise<Bounced | null> {
   store.set({ bouncing: 'Starting…' });
   try {
@@ -2626,6 +2721,19 @@ async function bounceOnDevice(
       body: wav,
     });
     const saved = res.ok ? ((await res.json()) as { file: string; url: string; path: string }) : null;
+    if (download && way !== 'auto') {
+      // a phone or a tablet: its line, to save it from (kept, where the host has it, through the app closing)
+      const id = saved ? `own_${Date.now().toString(36)}` : null;
+      if (saved && id) {
+        const at = Date.now();
+        keepBounce(
+          { id, project: p.id, name, download, at, started: at, done: { url: saved.url, file: saved.file, seconds } },
+          bounceShelf(way),
+        );
+      }
+      showBounced(id, name, seconds, saved?.url ?? null, way, wav);
+      return saved ? { ...saved, seconds } : null;
+    }
     if (download) {
       const a = document.createElement('a');
       a.href = URL.createObjectURL(wav);

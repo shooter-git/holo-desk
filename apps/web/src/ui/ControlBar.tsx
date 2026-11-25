@@ -721,7 +721,7 @@ export function ControlBar() {
         >
           <PanelLeft />
         </button>
-        <UndoRedo group="seg cb-undo" />
+        {show.barUndo && <UndoRedo group="seg cb-undo" />}
       </div>
       <div className="hstack cb-center">
         <TransportButtons minimal={!show.barNav} />

@@ -37,13 +37,14 @@ import {
   endGesture,
   gestureChange,
   hitsToMidi,
-  moveTrack,
+  moveShownTrack,
   selectTrack,
   setInstrument,
   updateChannel,
   updateTrack,
 } from '../app/actions.ts';
 import { isPhone, useLayout } from '../app/layout.ts';
+import { shownTracks } from '../app/shown-tracks.ts';
 import { store, useApp } from '../app/store.ts';
 import { engine } from '../audio/engine.ts';
 import { library, type PackSummary, samplerKnobDefs } from '../audio/samples.ts';
@@ -467,7 +468,7 @@ export const Strip = memo(function Strip({ id, kind, name, color, channel, track
         />
         <Meter id={id} height={Math.max(40, faderHeight - 8)} width={12} />
       </div>
-      <div className="strip-chips">
+      <div className={`strip-chips${show.stripButtons ? '' : ' off'}`}>
         {track && <PowerChip id={id} name={name} inactive={!!track.inactive} />}
         {kind !== 'master' && (
           <>
@@ -533,7 +534,7 @@ export const Strip = memo(function Strip({ id, kind, name, color, channel, track
               },
             },
             onLift: () => selectTrack(id),
-            onDrop: (index) => moveTrack(id, index),
+            onDrop: (index) => moveShownTrack(id, index),
           });
         }}
         // a finger's long press is the drag here, not the browser's menu
@@ -556,6 +557,7 @@ export function Mixer() {
   const buses = useApp((s) => s.project?.buses);
   const master = useApp((s) => s.project?.master);
   const selected = useApp((s) => s.selectedTrack);
+  const show = useApp((s) => s.show);
   const phone = isPhone(useLayout());
   // in the editor pane (not a phone's own tab) the mixer opens tall enough to use
   useEffect(() => {
@@ -563,9 +565,21 @@ export function Mixer() {
     store.set((s) => ({ editorHeight: Math.max(s.editorHeight, Math.min(MIXER_PANE, window.innerHeight - 180)) }));
   }, [phone]);
   if (!tracks || !buses || !master) return null;
+  // View leaves strips out: the inactive tracks' (with the tracks pane), the buses' and the master's
+  const shown = shownTracks(tracks, show);
+  // (with every strip the song has left out, the mixer says so, and brings them back)
+  if (!shown.length && !(show.mixerBuses && buses.length) && !show.mixerMaster)
+    return (
+      <div className="mixer-empty">
+        <p>The strips this song has are hidden in View.</p>
+        <button type="button" className="btn" onClick={showStrips}>
+          Show them
+        </button>
+      </div>
+    );
   return (
     <div className="mixer" ref={stripRows}>
-      {tracks.map((t) => (
+      {shown.map((t) => (
         <Strip
           key={t.id}
           id={t.id}
@@ -578,12 +592,16 @@ export function Mixer() {
           movable
         />
       ))}
-      {buses.map((b) => (
-        <Strip key={b.id} id={b.id} kind="bus" name={b.name} color={b.color} channel={b.channel} />
-      ))}
-      <Strip id="master" kind="master" name="Stereo Out" color="#e9d8b4" channel={master} />
+      {show.mixerBuses &&
+        buses.map((b) => <Strip key={b.id} id={b.id} kind="bus" name={b.name} color={b.color} channel={b.channel} />)}
+      {show.mixerMaster && <Strip id="master" kind="master" name="Stereo Out" color="#e9d8b4" channel={master} />}
     </div>
   );
+}
+
+/** Every strip View can leave out of the mixer, shown again. */
+function showStrips(): void {
+  store.set((s) => ({ show: { ...s.show, inactiveTracks: true, mixerBuses: true, mixerMaster: true } }));
 }
 
 // ---- plugin windows ----

@@ -7,6 +7,7 @@
 //   - the page itself scrolls (something is wider or taller than the screen);
 //   - a control can't be reached: cut off by its pane with no scroll that would bring it in;
 //   - a control is covered by something that isn't a menu, a dialog or a window;
+//   - undo and redo show more than once (the control bar's pair and an editor's own, side by side);
 //   - the mixer's strips don't line up (pan, level, fader, buttons and name start at the same
 //     height on every strip), or a fader has less than its least travel;
 //   - with the page open, the transport or the tabs are covered (no dialog excuses it), or the page
@@ -309,6 +310,10 @@ function problems() {
       say(`covered by ${name(top)}`);
     }
   }
+
+  // undo and redo: one pair on screen, the control bar's or (where that has none) the editor's own
+  const undos = [...document.querySelectorAll('button[aria-label="Undo"]')].filter(shown);
+  if (undos.length > 1) out.push(`undo and redo are on screen ${undos.length} times: ${undos.map(name).join(', ')}`);
 
   // the mixer: every strip's rows start at the same height, and a fader has its travel
   for (const mixer of document.querySelectorAll('.mixer')) {

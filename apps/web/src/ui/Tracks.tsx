@@ -23,6 +23,7 @@ import {
   AudioLines,
   Drum,
   Eraser,
+  EyeOff,
   Headphones,
   Mic,
   MousePointer2,
@@ -61,7 +62,7 @@ import {
   importAudio,
   liveTakes,
   locate,
-  moveTrack,
+  moveShownTrack,
   normalizeRegion,
   quantizeSelection,
   repeatRegions,
@@ -74,6 +75,7 @@ import {
   updateTrack,
 } from '../app/actions.ts';
 import { isPhone, isTouch, layoutNow, useLayout } from '../app/layout.ts';
+import { hiddenTracks, shownSong, shownTracks } from '../app/shown-tracks.ts';
 import { type AppState, store, useApp } from '../app/store.ts';
 import { engine } from '../audio/engine.ts';
 import { audioFiles } from '../audio/files.ts';
@@ -279,8 +281,16 @@ function pullOut(id: string, dx: number): void {
   if (what === 'drawer') setDrawer(true);
   else if (what === 'buttons' && !s.trackDrawer && s.trackPeek !== id) store.set({ trackPeek: id });
 }
-/** The track list with every track in it. */
+/** The room the note about the tracks View leaves out takes, under New track. */
+const HIDDEN_NOTE = 44;
+/** The track list with `tracks` rows in it. */
 const listHeight = (tracks: number, row: number) => tracks * row + LIST_TAIL;
+/**
+ * The track list for a song as it's shown here: a row for each track View doesn't leave out, the
+ * room under them, and the note's where some are left out.
+ */
+const shownListHeight = (song: Project, show: AppState['show'], row: number) =>
+  listHeight(shownTracks(song.tracks, show).length, row) + (hiddenTracks(song.tracks, show) ? HIDDEN_NOTE : 0);
 /** The track list on screen (there's one tracks area at a time), for spareTrackRoom. */
 let shownList: HTMLDivElement | null = null;
 
@@ -288,16 +298,20 @@ let shownList: HTMLDivElement | null = null;
 export function spareTrackRoom(): number {
   const s = store.get();
   if (!shownList || !s.project) return 0;
-  return shownList.clientHeight - listHeight(s.project.tracks.length, rowHeight(s.trackHeight));
+  return shownList.clientHeight - shownListHeight(s.project, s.show, rowHeight(s.trackHeight));
 }
 
-/** Move up and Move down, for a track's menu (the keyboard's way to reorder, and a finger's without dragging). */
+/**
+ * Move up and Move down, for a track's menu (the keyboard's way to reorder, and a finger's without
+ * dragging): a place up or down among the tracks shown, as a drag goes.
+ */
 function moveEntries(id: string): MenuEntry[] {
-  const tracks = store.get().project?.tracks ?? [];
+  const s = store.get();
+  const tracks = s.project ? shownTracks(s.project.tracks, s.show) : [];
   const i = tracks.findIndex((t) => t.id === id);
   return [
-    { label: 'Move up', disabled: i <= 0, onSelect: () => moveTrack(id, i - 1) },
-    { label: 'Move down', disabled: i < 0 || i >= tracks.length - 1, onSelect: () => moveTrack(id, i + 1) },
+    { label: 'Move up', disabled: i <= 0, onSelect: () => moveShownTrack(id, i - 1) },
+    { label: 'Move down', disabled: i < 0 || i >= tracks.length - 1, onSelect: () => moveShownTrack(id, i + 1) },
   ];
 }
 
@@ -362,7 +376,7 @@ const TrackRow = memo(function TrackRow({ track, top, height, selected, phone, f
       axis: 'y',
       box: row.closest<HTMLElement>('.track-list') ?? row,
       scroll: { get: () => tracksView.y, by: (d) => tracksView.scrollBy(0, d, maxScrollY) },
-      onDrop: (index) => moveTrack(track.id, index),
+      onDrop: (index) => moveShownTrack(track.id, index),
     };
     if (e.pointerType !== 'touch') {
       selectTrack(track.id);
@@ -1115,14 +1129,18 @@ type Edge = 'left' | 'right' | 'fadeIn' | 'fadeOut';
 export function TracksArea() {
   const layout = useLayout();
   const phone = isPhone(layout);
-  const project = useApp((s) => s.project);
+  const song = useApp((s) => s.project);
+  const show = useApp((s) => s.show);
+  // the rows are the tracks View shows (it may leave the inactive ones out): everything here that
+  // lays out, draws or finds what's under the pointer goes by this list, never by the song's own
+  const project = song && shownSong(song, show);
+  const hidden = song ? hiddenTracks(song.tracks, show) : 0;
   const selectedTrack = useApp((s) => s.selectedTrack);
   const selectedRegionsList = useApp((s) => s.selectedRegions);
   const trackHeight = useApp((s) => rowHeight(s.trackHeight));
   const tool = useApp((s) => s.tool);
   const automationView = useApp((s) => s.automationView);
   const autoParam = useApp((s) => s.autoParam);
-  const show = useApp((s) => s.show);
   const follow = useApp((s) => s.follow);
   // a phone folds the headers to a rail, pulled out as a drawer (and one track's buttons beside it)
   const drawer = useApp((s) => s.trackDrawer) && phone;
@@ -1231,7 +1249,16 @@ export function TracksArea() {
     }
   }, [project]);
 
-  const maxScrollY = (p: Project) => Math.max(0, listHeight(p.tracks.length, trackHeight) - size.h);
+  /** How far the list scrolls: read as it's asked, so a gesture under way goes by the song as it is now. */
+  const maxScrollY = () => {
+    const s = store.get();
+    return s.project ? Math.max(0, shownListHeight(s.project, s.show, trackHeight) - size.h) : 0;
+  };
+  // rows gone from under the view (tracks left out in View, or deleted): the list comes back up to its end
+  const listEnd = maxScrollY();
+  useLayoutEffect(() => {
+    if (size.h && tracksView.y > listEnd) tracksView.scrollBy(0, 0, listEnd);
+  }, [listEnd, size.h]);
 
   // the zoom is kept for the next launch, once the wheel or the fingers settle
   const persistZoom = (soon = false) => {
@@ -1245,8 +1272,8 @@ export function TracksArea() {
 
   useFrame(() => {
     const s = store.get();
-    const p = s.project;
-    if (!p) return;
+    if (!s.project) return;
+    const p = shownSong(s.project, s.show);
     const tick = engine.positionTick();
     const busy = !!gesture.current || pinch.current.active;
     if (follow && !busy) {
@@ -1261,7 +1288,7 @@ export function TracksArea() {
     if (g?.edgeScroll && timelineBox.current) {
       const { dx, dy } = edgeScroll(g.last, timelineBox.current.getBoundingClientRect(), g.edgeScroll);
       if (dx || dy) {
-        tracksView.scrollBy(dx, dy, maxScrollY(p));
+        tracksView.scrollBy(dx, dy, maxScrollY());
         g.replay();
       }
     }
@@ -1308,23 +1335,21 @@ export function TracksArea() {
   });
 
   const onWheel = (e: WheelEvent, dx: number, dy: number) => {
-    const p = store.get().project;
-    if (!p) return;
+    if (!store.get().project) return;
     const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
     if (e.ctrlKey || e.metaKey) {
       tracksView.zoomAt(Math.exp(-dy * WHEEL_ZOOM), e.clientX - rect.left, ...ZOOM.tracks);
       persistZoom(true);
-    } else if (e.shiftKey) tracksView.scrollBy(dy || dx, 0, maxScrollY(p));
-    else tracksView.scrollBy(dx, dy, maxScrollY(p));
+    } else if (e.shiftKey) tracksView.scrollBy(dy || dx, 0, maxScrollY());
+    else tracksView.scrollBy(dx, dy, maxScrollY());
   };
   useWheel(timelineBox, onWheel);
   useWheel(rulerBox, onWheel);
   useWheel(listBox, (_e, _dx, dy) => {
-    const p = store.get().project;
-    if (p) tracksView.scrollBy(0, dy, maxScrollY(p));
+    if (store.get().project) tracksView.scrollBy(0, dy, maxScrollY());
   });
 
-  if (!project) return <div className="tracks" />;
+  if (!project || !song) return <div className="tracks" />;
   const m = project.meter[0] ?? { tick: 0, num: 4, den: 4 };
   const bar = ticksPerBar(m);
   const snapTicks = () => (tracksView.pxPerTick * bar > 160 ? ticksPerBeat(m) : bar);
@@ -1628,7 +1653,7 @@ export function TracksArea() {
 
   /** A finger scrolling the timeline, as a phone scrolls a page (TouchPan): a flick carries on after it lifts. */
   const panDrag = (e: ReactPointerEvent, onTap?: () => void) => {
-    const pan = new TouchPan(tracksView, 'xy', () => maxScrollY(project), e);
+    const pan = new TouchPan(tracksView, 'xy', maxScrollY, e);
     start(e, {
       // over a region the finger may also rest for its menu: a wobble isn't a move (the gesture's own threshold)
       threshold: onTap ? undefined : 0,
@@ -1908,14 +1933,17 @@ export function TracksArea() {
     // the row between the fingers stays between them
     const y = ((tracksView.y + cy) * row) / old - cy;
     store.set({ trackHeight: row });
-    tracksView.scrollBy(0, y - tracksView.y, Math.max(0, listHeight(s.project.tracks.length, row) - size.h));
+    tracksView.scrollBy(0, y - tracksView.y, Math.max(0, shownListHeight(s.project, s.show, row) - size.h));
   };
 
   const headerWidth = phone ? RAIL : layout === 'tablet' ? 210 : 230;
-  const listMax = maxScrollY(project);
+  const listMax = maxScrollY();
   const peekIndex = peek ? project.tracks.findIndex((t) => t.id === peek) : -1;
   const peekTrack = project.tracks[peekIndex];
-  const docked = layout === 'phone-portrait' ? project.tracks.find((t) => t.id === selectedTrack) : undefined;
+  // (the selected track, whichever it is: one View leaves out of the rows can still be selected, from the Score say)
+  const docked = layout === 'phone-portrait' ? song.tracks.find((t) => t.id === selectedTrack) : undefined;
+  const showHidden = () => store.set((s) => ({ show: { ...s.show, inactiveTracks: true } }));
+  const hiddenNote = `${hidden} inactive ${hidden === 1 ? 'track' : 'tracks'} hidden`;
 
   return (
     <div
@@ -2039,6 +2067,19 @@ export function TracksArea() {
           >
             <Plus /> {fold !== 'rail' && 'New track'}
           </button>
+          {hidden > 0 && (
+            // the tracks View leaves out (Inactive tracks): said under the list, with the way to see them again
+            <button
+              type="button"
+              className={`btn ghost hidden-tracks${fold === 'rail' ? ' on-rail' : ''}`}
+              title={`${hiddenNote}: show ${hidden === 1 ? 'it' : 'them'} (View › Inactive tracks)`}
+              aria-label={fold === 'rail' ? `${hiddenNote}: show ${hidden === 1 ? 'it' : 'them'}` : undefined}
+              style={{ top: project.tracks.length * trackHeight + 8 }}
+              onClick={showHidden}
+            >
+              <EyeOff /> {fold !== 'rail' && hiddenNote}
+            </button>
+          )}
         </div>
       </div>
       <div

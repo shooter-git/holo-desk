@@ -463,6 +463,25 @@ function costsOf(
   return { scale: { tracks: scale(was.tracks, sum.tracks, 3), buses: scale(was.buses, sum.buses, 1) }, strips };
 }
 
+/**
+ * A render's threads ended, each asked what went wrong in its engine: the last one first, and each
+ * only once the one after it has stopped. A thread plays on what the threads before it hand over,
+ * and waits for it without listening to anything else; one whose earlier thread had been stopped
+ * under it would wait for good, never hear that it's to stop, and be taken for one that failed.
+ * What each said, in the threads' order (one that couldn't be asked: that).
+ */
+async function endThreads(threads: readonly RenderThread[]): Promise<(string | null)[]> {
+  const said = new Array<string | null>(threads.length).fill(null);
+  for (let n = threads.length - 1; n >= 0; n--) {
+    try {
+      said[n] = await (threads[n] as RenderThread).end();
+    } catch (err) {
+      said[n] = err instanceof Error ? err.message : String(err);
+    }
+  }
+  return said;
+}
+
 /** A split render that hears nothing from its threads for this long is given up (and made on one engine). */
 const SPLIT_STUCK_MS = 120_000;
 
@@ -567,7 +586,7 @@ async function playSplit(
       (k) => link.setConsumed(k + 1),
     );
     // an engine that failed handed silence on from there: each thread is asked before its blocks are kept
-    const said = await Promise.all(threads.splice(0).map((t) => t.end()));
+    const said = await endThreads(threads.splice(0));
     if (failure !== null || said.some((error) => error !== null)) return null;
     if (split.learned && looks > 0) {
       try {
@@ -583,7 +602,7 @@ async function playSplit(
     // render, and says what's wrong with the song if it was the song
     return null;
   } finally {
-    await Promise.all(threads.map((t) => t.end().catch(() => null)));
+    await endThreads(threads.splice(0));
     pool?.close();
   }
 }

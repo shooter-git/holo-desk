@@ -355,25 +355,45 @@ const sameBytes = (a: Float32Array, b: Float32Array) =>
   a.length === b.length &&
   Buffer.from(a.buffer, a.byteOffset, a.byteLength).equals(Buffer.from(b.buffer, b.byteOffset, b.byteLength));
 
-/** A song rendered split: checked to be `one`, its render on one engine, to the byte. */
+/**
+ * A song rendered split: checked to be `one`, its render on one engine, to the byte; and that it was
+ * the threads that made it (`through`: a split that goes through tells what its strips cost), or,
+ * where they couldn't, that it was made on one engine after all.
+ */
 async function matches(
   one: Rendered,
   song: Project,
   opts: Omit<RenderOptions, 'split'>,
   split: RenderSplit,
   from: RenderSource,
+  through = true,
 ) {
-  const many = await renderSession(song, from, { ...opts, split });
+  let told = 0;
+  const watched: RenderSplit = {
+    ...split,
+    learned(costs) {
+      told++;
+      split.learned?.(costs);
+    },
+  };
+  const many = await renderSession(song, from, { ...opts, split: watched });
   expect(many.errors).toEqual(one.errors);
   expect(many.channels.length).toBe(one.channels.length);
   for (const [c, channel] of one.channels.entries())
     expect(sameBytes(channel, many.channels[c] as Float32Array), `channel ${c}`).toBe(true);
+  expect(told, through ? 'the threads made it' : 'one engine made it').toBe(through ? 1 : 0);
 }
 
 /** One song rendered on one engine and split: the one engine's render, after checking the split one is it. */
-async function both(song: Project, opts: Omit<RenderOptions, 'split'>, split: RenderSplit, from: RenderSource) {
+async function both(
+  song: Project,
+  opts: Omit<RenderOptions, 'split'>,
+  split: RenderSplit,
+  from: RenderSource,
+  through = true,
+) {
   const one = await renderSession(song, from, opts);
-  await matches(one, song, opts, split, from);
+  await matches(one, song, opts, split, from, through);
   return one;
 }
 
@@ -466,6 +486,36 @@ describe('a render split over threads', () => {
     await matches(one, song, opts, failing, nothing);
   }, 120_000);
 
+  it('ends its threads last first, each once the one after it has stopped, and goes through every time', async () => {
+    // a thread waits on the threads before it without listening to anything else: stopped the other
+    // way round, or all at once, one is now and then left waiting for good and taken for failed
+    const song = small();
+    const one = await renderSession(song, nothing, opts);
+    for (let run = 0; run < 6; run++) {
+      const real = renderThreads(3);
+      const order: string[] = [];
+      let n = 0;
+      const split: RenderSplit = {
+        ...real,
+        start(spec, sampleRate, failed) {
+          const thread = real.start(spec, sampleRate, failed);
+          const self = n++;
+          return {
+            ...thread,
+            end: async () => {
+              order.push(`asked ${self}`);
+              const said = await thread.end();
+              order.push(`stopped ${self}`);
+              return said;
+            },
+          };
+        },
+      };
+      await matches(one, song, opts, split, nothing);
+      expect(order).toEqual(['asked 2', 'stopped 2', 'asked 1', 'stopped 1', 'asked 0', 'stopped 0']);
+    }
+  }, 120_000);
+
   it('stays on one engine with fewer than two threads, starting none', async () => {
     let started = 0;
     const none: RenderSplit = {
@@ -475,7 +525,7 @@ describe('a render split over threads', () => {
         throw new Error('no thread should start');
       },
     };
-    await both(small(), opts, none, nothing);
+    await both(small(), opts, none, nothing, false);
     expect(started).toBe(0);
   }, 60_000);
 });
@@ -487,7 +537,7 @@ describe('a split render whose thread goes wrong', () => {
   const again = async (split: RenderSplit) => {
     plain ??= renderSession(small(), nothing, opts);
     const one = await plain;
-    await matches(one, small(), opts, split, nothing);
+    await matches(one, small(), opts, split, nothing, false);
     return one;
   };
 

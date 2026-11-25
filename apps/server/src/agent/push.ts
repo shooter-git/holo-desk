@@ -243,6 +243,40 @@ export function notice(
   return { title: NOTICE_TITLE, body: `${songName(title)}: ${what}`, project: job.project, job: job.id };
 }
 
+/** What a bounce the host made tells the device that asked for it: the song, and that it's ready or failed. */
+export interface BounceNotice {
+  title: string;
+  body: string;
+  /** (Not `project` and `job`: a service worker from before bounces had notices would take it for the agent's.) */
+  kind: 'bounce';
+  song: string;
+}
+
+/** A bounce as its notice needs it (host-bounce.ts's job). */
+export interface BounceEnded {
+  project: string;
+  name: string;
+  state: string;
+  started: number;
+  finished: number | null;
+  seconds: number | null;
+}
+
+/**
+ * The notice a host bounce's ending gives, by the device's mode; null for none. Every reply: done or
+ * failed. Long runs: one that took more than a minute. It says which song and no more: why one
+ * failed is said in the studio (a notice carries nothing from the song).
+ */
+export function bounceNotice(job: BounceEnded, mode: PushMode): BounceNotice | null {
+  if (job.state !== 'done' && job.state !== 'failed') return null;
+  const took = (job.finished ?? Date.now()) - job.started;
+  if (mode === 'long' && !(took > LONG_MS)) return null;
+  const s = Math.max(0, Math.round(job.seconds ?? 0));
+  const length = s > 0 ? ` (${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')})` : '';
+  const what = job.state === 'done' ? `the bounce is ready${length}.` : 'the bounce failed.';
+  return { title: NOTICE_TITLE, body: `${songName(job.name)}: ${what}`, kind: 'bounce', song: job.project };
+}
+
 export interface NotifyOptions {
   agentStore: AgentStore;
   live: Live;
@@ -294,25 +328,48 @@ export class Notify {
       this.o.agentStore.addUnseen(job.id, job.device, job.project, job.finished ?? Date.now());
       const n = notice(job, sub.mode, this.o.title(job.project) ?? '');
       if (!n) return;
-      const going: Promise<void> = this.deliver(sub, n)
-        .catch((err: unknown) => this.warn(`A notice failed: ${err instanceof Error ? err.message : String(err)}`))
-        .finally(() => this.sending.delete(going));
-      this.sending.add(going);
+      this.go(sub, () => ({ ...n, unseen: this.o.agentStore.unseen(sub.device) }), topic(n.project));
     } catch (err) {
       this.warn(`A notice failed: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
 
-  private async deliver(sub: PushRow, n: Notice): Promise<void> {
+  /**
+   * A bounce the host made for a device has ended: its notice, if the device has notices on and its
+   * mode wants one. With the agent turned off there is none (its notices are the agent's setting).
+   * Nothing is kept as unseen: the badge counts the agent's replies. Never throws.
+   */
+  bounced(job: BounceEnded, device: string): void {
+    try {
+      if (!this.o.agentStore.settings().enabled) return;
+      const sub = this.o.agentStore.push(device);
+      if (!sub) return;
+      const n = bounceNotice(job, sub.mode);
+      // (a topic of its own: it doesn't take the place of the agent's notice for that song, waiting for a device that's off)
+      if (n) this.go(sub, () => n, topic(`bounce:${job.project}`));
+    } catch (err) {
+      this.warn(`A notice failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  /** A notice on its way (`idle` waits for it). */
+  private go(sub: PushRow, say: () => unknown, topicOf: string): void {
+    const going: Promise<void> = this.deliver(sub, say, topicOf)
+      .catch((err: unknown) => this.warn(`A notice failed: ${err instanceof Error ? err.message : String(err)}`))
+      .finally(() => this.sending.delete(going));
+    this.sending.add(going);
+  }
+
+  private async deliver(sub: PushRow, say: () => unknown, topicOf: string): Promise<void> {
     if (await this.inFront(sub.device)) return;
     // (turned off, or subscribed again, while it looked)
     const now = this.o.agentStore.push(sub.device);
     if (!now || now.endpoint !== sub.endpoint) return;
-    const payload = JSON.stringify({ ...n, unseen: this.o.agentStore.unseen(sub.device) });
+    const payload = JSON.stringify(say());
     const result = await send(now, payload, {
       key: this.o.key(),
       fetch: this.fetch,
-      topic: topic(n.project),
+      topic: topicOf,
       log: this.warn,
     });
     const who = this.o.deviceName(sub.device) ?? 'a device';

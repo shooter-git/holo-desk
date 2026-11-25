@@ -288,6 +288,10 @@ export async function buildApp(
       return `http://127.0.0.1:${address && typeof address === 'object' ? address.port : config.port}`;
     },
   });
+  // a bounce the host made for a device the agent knows: its notice outside HO[LO], as the agent's are sent
+  bounces.onEnd = (job, device) => {
+    if (device) agent.notify.bounced(job, device);
+  };
 
   // Scan's old AI buttons: reading a scan with AI is the agent's now, from the bar
   const moved = async (_req: unknown, reply: FastifyReply) =>
@@ -1008,7 +1012,12 @@ export async function buildApp(
     if (!span(from) || !span(to) || to <= from)
       return reply.code(400).send({ error: 'A bounce needs its start and end' });
     if (!span(tail) || tail > 60) return reply.code(400).send({ error: 'A tail of 0 to 60 seconds' });
-    const job = bounces.start({ song, from, to, tail, name: typeof name === 'string' && name ? name : song.title });
+    // (the device that asks, when it's one the agent knows: it's told when the bounce is done)
+    const device = agent.auth.device(req.headers.authorization)?.id ?? null;
+    const job = bounces.start(
+      { song, from, to, tail, name: typeof name === 'string' && name ? name : song.title },
+      device,
+    );
     if (!job) return reply.code(503).send({ error: 'The host has bounces waiting already' });
     // (`started`, by this host's clock: its bounces' files are stamped by it, should the job be forgotten)
     return reply.code(202).send({ id: job.id, started: job.started });

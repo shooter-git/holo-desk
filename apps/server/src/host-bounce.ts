@@ -99,6 +99,13 @@ export class HostBounces {
   private queue: { job: BounceJob; ask: BounceAsk }[] = [];
   private running: { job: BounceJob; child: ChildLike; limit: NodeJS.Timeout; part: string } | null = null;
   private closed = false;
+  /** The device that asked for each (the agent's id for it, when it has one): never part of the job a studio is shown. */
+  private readonly askedBy = new WeakMap<BounceJob, string>();
+  /**
+   * Told once when a bounce ends, done or failed, with the device that asked for it (null: none
+   * known): its notice outside HO[LO] goes from here. Not for one the server's closing ended.
+   */
+  onEnd: ((job: BounceJob, device: string | null) => void) | null = null;
   /** Stops the rendering process should this one go without closing (set only while one runs). */
   private readonly onExit = () => this.running?.child.kill();
 
@@ -109,8 +116,11 @@ export class HostBounces {
     this.room = options.waiting ?? 4;
   }
 
-  /** A bounce asked for: it runs when its turn comes. Null when too many wait already (or the host is closing). */
-  start(ask: BounceAsk): BounceJob | null {
+  /**
+   * A bounce asked for: it runs when its turn comes. Null when too many wait already (or the host is
+   * closing). `device`: who asked, to be told when it's done.
+   */
+  start(ask: BounceAsk, device: string | null = null): BounceJob | null {
     if (this.closed || this.queue.length >= this.room) return null;
     const job: BounceJob = {
       id: newId('bnc'),
@@ -128,6 +138,7 @@ export class HostBounces {
       seconds: null,
     };
     this.jobs.set(job.id, job);
+    if (device) this.askedBy.set(job, device);
     this.queue.push({ job, ask });
     this.forget();
     this.pump();
@@ -217,6 +228,7 @@ export class HostBounces {
         job.seconds = typeof msg.seconds === 'number' && Number.isFinite(msg.seconds) ? msg.seconds : 0;
         job.state = 'done';
         job.finished = Date.now();
+        this.ended(job);
       } catch (err) {
         this.end(job, `The bounce couldn't be kept (${err instanceof Error ? err.message : String(err)})`, false);
       }
@@ -254,6 +266,17 @@ export class HostBounces {
     job.error = error;
     job.lost = lost;
     job.finished = Date.now();
+    this.ended(job);
+  }
+
+  /** A bounce has ended: whoever listens is told, once (and nothing it does is the bounce's trouble). */
+  private ended(job: BounceJob): void {
+    if (this.closed) return;
+    try {
+      this.onEnd?.(job, this.askedBy.get(job) ?? null);
+    } catch {
+      // (the notice is its own affair)
+    }
   }
 
   /** The oldest finished bounces past the few kept are forgotten. */

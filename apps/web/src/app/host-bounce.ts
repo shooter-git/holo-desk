@@ -12,6 +12,8 @@ export interface HostBounceAsk {
   to: number;
   tail: number;
   name: string;
+  /** This device's token, when the agent knows it: the host then tells it when the bounce is done (its notices outside HO[LO]). */
+  token?: string;
 }
 
 /** A bounce the host took: its job, and when the host began it (by the host's clock, ms). */
@@ -36,7 +38,7 @@ export async function startHostBounce(ask: HostBounceAsk, fetcher: Fetch = fetch
   try {
     const res = await fetcher(`/api/projects/${ask.project.id}/bounces/host`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', ...(ask.token ? { authorization: `Bearer ${ask.token}` } : {}) },
       body: JSON.stringify({ doc: ask.project, from: ask.from, to: ask.to, tail: ask.tail, name: ask.name }),
     });
     if (res.status !== 202) return null;

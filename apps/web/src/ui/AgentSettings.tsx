@@ -754,7 +754,7 @@ function Notices() {
     supportHint(support) ??
     (mode === 'off'
       ? null
-      : 'On this device, while HO[LO] isn’t in front: when a reply is ready (Long runs: one that took over a minute) or the agent needs your OK.');
+      : 'On this device, while HO[LO] isn’t in front: when a reply is ready (Long runs: one that took over a minute) or the agent needs your OK, and when a bounce the host made for this device is done.');
   return (
     <div className="vstack agent-notices">
       <div className="seg">

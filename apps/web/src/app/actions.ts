@@ -71,7 +71,7 @@ import { songKeys } from '../audio/song-samples.ts';
 import { takes as keptTakes, type TakePlan, uploadTake } from '../audio/takes.ts';
 import { holdDuringDrags } from '../ui/gesture.ts';
 import { NOTE_EFFECTS, playsHits } from '../ui/pads.ts';
-import { AgentError, agent, awayChanges, isLive, jobLabels } from './agent.ts';
+import { AgentError, agent, awayChanges, helloFields, isLive, jobLabels } from './agent.ts';
 import { ApiError, api } from './api.ts';
 import { bounceShelf, holdFile, letFileGo, type SaveWay, saveFile, thisSaveWay } from './bounce-save.ts';
 import { comparePlan, type Pass } from './compare.ts';
@@ -2536,6 +2536,8 @@ let bounceUnderWay = false;
 /** The kept bounce whose line is showing (null: one that was never kept, a bounce made here that didn't reach the host). */
 let bouncedId: string | null = null;
 
+const tokenOf = (hello: { agentToken?: string }) => (hello.agentToken ? { token: hello.agentToken } : {});
+
 /** A length as minutes and seconds: 4:07. */
 export const bounceClock = (seconds: number): string => {
   const s = Math.max(0, Math.round(seconds));
@@ -2573,7 +2575,15 @@ export async function bounceSong(download = true): Promise<Bounced | null> {
   try {
     if (bouncesOnHost(store.get().bounceOn, isTouch())) {
       store.set({ bouncing: 'Asking the host…' });
-      const job = await startHostBounce({ project: p, from: range.from, to: range.to, tail: BOUNCE_TAIL, name });
+      const job = await startHostBounce({
+        project: p,
+        from: range.from,
+        to: range.to,
+        tail: BOUNCE_TAIL,
+        name,
+        // (a device the agent knows is told outside HO[LO] when it's done, as it has its notices set)
+        ...tokenOf(helloFields()),
+      });
       const made = job
         ? await followHostBounce({ ...job, project: p.id, name, download, at: Date.now() }, way)
         : 'lost';

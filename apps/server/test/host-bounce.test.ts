@@ -189,6 +189,52 @@ describe('the bounces the host makes', () => {
     expect(a?.error).toBe('HO[LO] is closing');
   });
 
+  it('tells whoever listens once when a bounce ends, with the device that asked, and never of one the server’s closing ended', async () => {
+    vi.useFakeTimers();
+    const { bounces, children, wrote } = fakes({ limitMs: 60_000 });
+    const told: [string, string, string | null][] = [];
+    bounces.onEnd = (job, device) => void told.push([job.name, job.state, device]);
+    const song = (title: string) => {
+      const p = newProject(title);
+      p.id = 'prj_one';
+      return { song: p, from: 0, to: BAR, tail: 3, name: title };
+    };
+    // done, for a device
+    const a = bounces.start(song('A'), 'dev_phone');
+    wrote(children[0] as FakeChild);
+    children[0]?.say({ type: 'done', id: a?.id, seconds: 1 });
+    // failed, for no device anyone knows
+    const b = bounces.start(song('B'));
+    children[1]?.say({ type: 'failed', id: b?.id, error: 'No instrument' });
+    // its process gone
+    bounces.start(song('C'), 'dev_phone');
+    children[2]?.emit('exit');
+    // too long
+    bounces.start(song('D'), 'dev_tablet');
+    vi.advanceTimersByTime(61_000);
+    expect(told).toEqual([
+      ['A', 'done', 'dev_phone'],
+      ['B', 'failed', null],
+      ['C', 'failed', 'dev_phone'],
+      ['D', 'failed', 'dev_tablet'],
+    ]);
+    // (the device is nothing a studio following the job is shown)
+    expect(JSON.stringify(a)).not.toContain('dev_phone');
+    // a listener that throws is nothing to the bounce
+    bounces.onEnd = () => {
+      throw new Error('no');
+    };
+    const e = bounces.start(song('E'), 'dev_phone');
+    children.at(-1)?.say({ type: 'failed', id: e?.id, error: 'no' });
+    expect(e?.state).toBe('failed');
+    // closing: one under way and one waiting end, and nobody is told
+    bounces.onEnd = (job, device) => void told.push([job.name, job.state, device]);
+    bounces.start(song('F'), 'dev_phone');
+    bounces.start(song('G'), 'dev_phone');
+    bounces.close();
+    expect(told).toHaveLength(4);
+  });
+
   it('forgets the oldest finished bounces past the few it keeps', () => {
     const { bounces, children, ask } = fakes();
     const first = ask('First');
@@ -268,16 +314,30 @@ describe('a bounce asked of the host', () => {
 
       // the tail is three seconds unless said, and the name the song's
       await ask({ doc: song, from: 0, to: BAR });
-      // more than may wait: the device is told to bounce it itself
-      for (let i = 0; i < 3; i++) expect((await ask(whole)).statusCode).toBe(202);
+      // asked with a token the agent doesn't know (or none): made all the same, for no device to be told
+      const told: (string | null)[] = [];
+      services.bounces.onEnd = (_job, device) => void told.push(device);
+      const unknown = await app.inject({
+        method: 'POST',
+        url: `/api/projects/${song.id}/bounces/host`,
+        headers: { authorization: `Bearer ${'0'.repeat(64)}` },
+        payload: whole,
+      });
+      expect(unknown.statusCode).toBe(202);
+      children[0]?.say({ type: 'failed', id, error: 'no' });
+      children[1]?.say({ type: 'failed', id: children[1]?.running, error: 'no' });
+      children[2]?.say({ type: 'failed', id: children[2]?.running, error: 'no' });
+      expect(told).toEqual([null, null, null]);
+      // more than may wait (one under way and four behind it): the device is told to bounce it itself
+      for (let i = 0; i < 5; i++) expect((await ask(whole)).statusCode).toBe(202);
       expect((await ask(whole)).statusCode).toBe(503);
-      expect(children).toHaveLength(1);
+      expect(children).toHaveLength(4);
       expect(services.bounces.busy()).toBe(true);
     } finally {
       await app.close();
     }
     // closed with the server
-    expect(children[0]?.killed).toBe(true);
+    expect(children[3]?.killed).toBe(true);
     expect(services.bounces.busy()).toBe(false);
   });
 

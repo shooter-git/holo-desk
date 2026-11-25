@@ -1,8 +1,11 @@
 /**
  * Undo and Redo, wherever they're shown: the control bar, the side rail of a phone on its side, and
- * the editors' own bars. There's one history for the song, so these take back the last change
- * whichever view it was made in; the tooltip names it. A right-click or a long press on either opens
- * the whole history, and a change picked there takes the song straight back, or forward, to it.
+ * the editors' own bars (`pane-undo`). One pair shows at a time: the control bar's where it has one,
+ * and an editor's stands in where it hasn't (a window 860 px wide or less, where the bar is too
+ * narrow for its own, or View's Undo and redo switched off): the styles put the editors' away while
+ * the control bar's is on screen. There's one history for the song, so these take back the last
+ * change whichever view it was made in; the tooltip names it. A right-click or a long press on either
+ * opens the whole history, and a change picked there takes the song straight back, or forward, to it.
  */
 import { Redo2, Undo2 } from 'lucide-react';
 import { type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, useRef } from 'react';

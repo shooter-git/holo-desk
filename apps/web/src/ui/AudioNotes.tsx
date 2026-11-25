@@ -2074,7 +2074,7 @@ export function AudioNotesBar() {
       <span className="grow" />
       {/* a phone has undo and redo in its control bar or side rail, and zooms with two fingers (across
           for time, up and down for pitch): its bar keeps its room for the tools */}
-      {!phone && <UndoRedo group="seg" />}
+      {!phone && <UndoRedo group="seg pane-undo" />}
       {!phone && (
         <button
           type="button"

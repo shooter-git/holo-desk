@@ -170,6 +170,7 @@ export interface AppState {
 
 /** The parts of the studio View shows or hides, all shown at first. */
 export const SHOW_DEFAULTS = {
+  barUndo: true,
   barNav: true,
   barTime: true,
   barSig: true,
@@ -187,6 +188,7 @@ export const SHOW_DEFAULTS = {
   regionContents: true,
   gridLines: true,
   markers: true,
+  inactiveTracks: true,
   stripInstrument: true,
   stripMidiFx: true,
   stripAudioFx: true,
@@ -194,6 +196,9 @@ export const SHOW_DEFAULTS = {
   stripStage: true,
   stripOutput: true,
   stripPan: true,
+  stripButtons: true,
+  mixerBuses: true,
+  mixerMaster: true,
 };
 export type ShowKey = keyof typeof SHOW_DEFAULTS;
 

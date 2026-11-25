@@ -15,7 +15,7 @@ import {
   repeatRegions,
   saveNow,
   selectAll,
-  selectTrack,
+  selectTrackBeside,
   splitAtPlayhead,
   stop,
   toggleCycle,
@@ -321,12 +321,7 @@ function onKeyDown(e: KeyboardEvent): void {
   } else if (key === 'ArrowUp' || key === 'ArrowDown') {
     const up = key === 'ArrowUp';
     if (s.selectedNotes.length) transposeSelection((up ? 1 : -1) * (e.shiftKey ? 12 : 1));
-    else if (s.project) {
-      const tracks = s.project.tracks;
-      const i = tracks.findIndex((t) => t.id === s.selectedTrack);
-      const next = tracks[Math.max(0, Math.min(tracks.length - 1, i + (up ? -1 : 1)))];
-      if (next) selectTrack(next.id);
-    }
+    else selectTrackBeside(up);
   } else handled = false;
   if (handled) e.preventDefault();
 }

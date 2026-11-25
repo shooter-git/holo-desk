@@ -79,6 +79,7 @@ import { isTouch } from './layout.ts';
 // (live.ts imports this module too: neither uses the other while loading, so the cycle is harmless)
 import { reconnectSoon, reportHistory } from './live.ts';
 import { mergeSongs } from './merge-songs.ts';
+import { nearestShown, type Sight, selectionInSight, songIndex, stepShown } from './shown-tracks.ts';
 import { type AppState, openBar, type Step, store, toast } from './store.ts';
 import { TakeSender } from './take-sender.ts';
 
@@ -1035,8 +1036,32 @@ export function exportMidi(): void {
   });
 }
 
+/**
+ * Keep what's selected in sight as tracks go out of it (View's Inactive tracks off, and a track made
+ * inactive here, by the agent or on another device): see selectionInSight.
+ */
+function keepSelectionInSight(): void {
+  const sight = (s: AppState): Sight => ({
+    song: s.project?.id ?? null,
+    tracks: s.project?.tracks ?? [],
+    show: s.show,
+  });
+  let was = sight(store.get());
+  store.subscribe(() => {
+    const s = store.get();
+    if (s.project?.tracks === was.tracks && s.show.inactiveTracks === was.show.inactiveTracks) return;
+    const now = sight(s);
+    const next = selectionInSight(was, now, s.selectedTrack, s.selectedRegions);
+    was = now;
+    if (!next) return;
+    if (next.selectedRegions) store.set({ selectedRegions: next.selectedRegions });
+    if (next.selectedTrack !== undefined) selectTrack(next.selectedTrack);
+  });
+}
+
 export async function startup(): Promise<void> {
   keepOnDevice();
+  keepSelectionInSight();
   void library.refresh();
   warmEngine();
   void api
@@ -1911,6 +1936,13 @@ export function selectTrack(id: string | null): void {
   refreshRouting();
 }
 
+/** The track above or below the selected one, as they're shown: one View leaves out is stepped over. */
+export function selectTrackBeside(up: boolean): void {
+  const s = store.get();
+  const next = s.project ? stepShown(s.project.tracks, s.show, s.selectedTrack, up) : null;
+  if (next) selectTrack(next.id);
+}
+
 export function addTrack(instrument: Instrument, name?: string): string | null {
   const s = store.get();
   const p = s.project;
@@ -2027,12 +2059,23 @@ export function moveTrack(id: string, index: number): void {
   if (to !== from) apply([{ op: 'moveTrack', track: id, index: to }], 'Move Track');
 }
 
+/**
+ * Move a track to the `index`th place among the tracks shown (a header or a strip dragged there):
+ * where View leaves inactive tracks out, that's the place in the song of the track shown there now.
+ */
+export function moveShownTrack(id: string, index: number): void {
+  const s = store.get();
+  if (s.project) moveTrack(id, songIndex(s.project.tracks, s.show, index));
+}
+
 export function deleteTrack(id: string): void {
   const p = store.get().project;
   if (!p) return;
   const index = p.tracks.findIndex((t) => t.id === id);
   apply([{ op: 'removeTrack', track: id }], 'Delete Track');
-  const next = store.get().project?.tracks[Math.max(0, index - 1)];
+  // the track above takes the selection (the nearest one that shows, where View leaves some out)
+  const s = store.get();
+  const next = s.project ? nearestShown(s.project.tracks, s.show, Math.max(0, index - 1) + 1, true) : null;
   selectTrack(next?.id ?? null);
 }
 

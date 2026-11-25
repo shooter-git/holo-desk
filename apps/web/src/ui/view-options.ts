@@ -1,6 +1,8 @@
 /**
  * What View shows or hides (the eye's menu, and Settings › View): the panes, then the parts of the
  * tracks, the mixer strips and the control bar. Kept out of React, so both show the same list.
+ * Most are parts of what's drawn; Inactive tracks, Buses and Master leave whole tracks or strips out
+ * (app/shown-tracks.ts), on this device only: the song is whole whatever is shown of it.
  */
 import { type AppState, type ShowKey, store } from '../app/store.ts';
 
@@ -24,11 +26,13 @@ export const GROUPS: [string, [ShowKey, string][]][] = [
     [
       ['trackIcons', 'Track icons'],
       ['trackSub', 'Instrument or input under the name'],
-      ['trackButtons', 'Mute, solo and record buttons'],
+      ['trackButtons', 'On/off, mute, solo and record buttons'],
       ['regionNames', 'Region names'],
       ['regionContents', 'Notes and waveforms in regions'],
       ['gridLines', 'Grid lines'],
       ['markers', 'Markers'],
+      // (one choice for both: a track switched off is left out of the tracks and of the Mixer)
+      ['inactiveTracks', 'Inactive tracks (in the Mixer too)'],
     ],
   ],
   [
@@ -41,11 +45,15 @@ export const GROUPS: [string, [ShowKey, string][]][] = [
       ['stripStage', 'Stage'],
       ['stripOutput', 'Output'],
       ['stripPan', 'Pan'],
+      ['stripButtons', 'On/off, mute, solo and record buttons'],
+      ['mixerBuses', 'Buses'],
+      ['mixerMaster', 'Master'],
     ],
   ],
   [
     CONTROL_BAR,
     [
+      ['barUndo', 'Undo and redo'],
       ['barNav', 'Back and forward buttons'],
       ['barTime', 'Time'],
       ['barSig', 'Time signature'],

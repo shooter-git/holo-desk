@@ -217,8 +217,8 @@ function EditorPane() {
           <>
             <span className="title">Mixer</span>
             <span className="grow" />
-            {/* as the editors have them: where the control bar is too narrow for its own, these are the only ones */}
-            <UndoRedo group="seg" />
+            {/* as the editors have them: where the control bar has none (too narrow for its own, or View hides them), these are the only ones */}
+            <UndoRedo group="seg pane-undo" />
           </>
         )}
         {/* how the notes (or the recording) are shown; the Piano Roll and the Mixer themselves are opened at the top right */}

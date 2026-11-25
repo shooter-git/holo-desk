@@ -1347,6 +1347,31 @@ a.btn {
   height: 18px;
 }
 
+/* the tracks View leaves out (Inactive tracks), said under New track: a quiet line, and a press on it
+   shows them again. On the rail it's an eye in the rail's width, as New track is a + */
+.track-list-inner > .hidden-tracks {
+  position: absolute;
+  left: 8px;
+  margin-top: calc(var(--control) + 6px);
+  color: var(--text-2);
+  font-size: 11.5px;
+  white-space: nowrap;
+}
+
+.track-list-inner > .hidden-tracks.on-rail {
+  left: 9px;
+  width: 34px;
+  min-width: 0;
+  height: 34px;
+  margin-top: 40px;
+  padding: 0;
+}
+
+.track-list-inner > .hidden-tracks.on-rail svg {
+  width: 18px;
+  height: 18px;
+}
+
 /* the drawer: the toolbar and the headers over the lanes, from the rail's edge across */
 .tracks.drawer-open > .tracks-toolbar,
 .tracks.drawer-open > .track-list {
@@ -1740,6 +1765,15 @@ a.btn {
   }
 }
 
+/* an editor's own undo and redo stand in for the control bar's: while that has its pair on screen
+   (wider than the 860 px where it gives it up, and not switched off in View) the editor's is put
+   away, so the studio shows one pair, never two and never none */
+@media (min-width: 861px) {
+  .app:not(.phone):has(> .control-bar .cb-undo) .pane-undo {
+    display: none;
+  }
+}
+
 /* A phone held upright (UprightBar): the track's chip, the tools, ⋯ at the end. The tools are never
    wider than what the chip's least and ⋯ leave them (they scroll past that); the chip has the rest,
    its name cut short where it's too long for it. */
@@ -2006,6 +2040,24 @@ a.btn {
   overflow-y: hidden;
   overscroll-behavior-x: contain;
   background: var(--bg-1);
+}
+
+/* every strip the song has is left out in View: the mixer says so, with the way back */
+.mixer-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  min-height: 0;
+  padding: 16px;
+  background: var(--bg-1);
+  color: var(--text-2);
+  text-align: center;
+}
+
+.mixer-empty p {
+  margin: 0;
 }
 
 .strip {
@@ -2314,7 +2366,8 @@ a.btn {
   justify-content: center;
 }
 
-.strip-pan.off {
+.strip-pan.off,
+.strip-chips.off {
   display: none;
 }
 

@@ -595,7 +595,7 @@ export function AudioEditorBar() {
       )}
       <span className="grow" />
       {/* a phone has them in its control bar or side rail, on the same screen */}
-      {!phone && <UndoRedo group="seg" />}
+      {!phone && <UndoRedo group="seg pane-undo" />}
       <button
         type="button"
         className="btn ghost icon"

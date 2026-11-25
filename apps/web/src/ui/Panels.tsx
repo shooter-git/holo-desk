@@ -27,6 +27,7 @@ import {
   setTrackActive,
   updateTrack,
 } from '../app/actions.ts';
+import { diskSize } from '../app/disk-size.ts';
 import { store, toast, useApp } from '../app/store.ts';
 import { type AvailablePack, installs, useInstalls } from '../audio/installs.ts';
 import { forgetPackFiles } from '../audio/pack-files.ts';
@@ -493,13 +494,6 @@ const LibraryItem = memo(function LibraryItem({
 export function licenseLabel(pack: { license: string; source?: { kind: string } }): string {
   if (pack.source?.kind === 'imported' || pack.source?.kind === 'local') return 'Your own license';
   return pack.license.length > 14 ? 'Free use' : pack.license;
-}
-
-/** A size on disk, as people read one. */
-function diskSize(bytes: number): string {
-  if (bytes >= 1e9) return `${(bytes / 1e9).toFixed(1)} GB`;
-  if (bytes >= 1e6) return `${Math.round(bytes / 1e6)} MB`;
-  return `${Math.max(1, Math.round(bytes / 1e3))} KB`;
 }
 
 /**

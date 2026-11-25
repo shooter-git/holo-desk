@@ -2,6 +2,7 @@ import { newProject } from '@holo/session';
 import { describe, expect, it } from 'vitest';
 import { saveWay } from '../src/app/bounce-save.ts';
 import {
+  bounceRow,
   bounceTitle,
   dropBounce,
   findBounce,
@@ -9,6 +10,8 @@ import {
   keepBounce,
   keptBounce,
   markBounced,
+  removeBounce,
+  songBounces,
   startHostBounce,
   watchHostBounce,
 } from '../src/app/host-bounce.ts';
@@ -347,5 +350,89 @@ describe('how a device saves a bounce', () => {
     expect(saveWay({ iosLike: true, standalone: false, touch: false, canShareFiles: true })).toBe('tap');
     expect(saveWay({ iosLike: false, standalone: true, touch: true, canShareFiles: true })).toBe('tap');
     expect(saveWay({ iosLike: true, standalone: true, touch: true, canShareFiles: false })).toBe('tap');
+  });
+});
+
+describe('a song’s bounces, as the host lists them', () => {
+  const url = (file: string) => `/api/projects/prj_one/bounces/${encodeURIComponent(file)}`;
+  const entry = (file: string, more: Record<string, unknown> = {}) => ({ file, url: url(file), bytes: 1000, ...more });
+
+  it('shows each under what it’s a bounce of, with when it was made, its length and its size', () => {
+    const made = Date.UTC(2026, 0, 2, 3, 4, 9);
+    expect(bounceRow(entry('2026-01-02 03.04.05 Song.wav', { made, seconds: 247.3, bytes: 71_000_000 }))).toEqual({
+      file: '2026-01-02 03.04.05 Song.wav',
+      url: url('2026-01-02 03.04.05 Song.wav'),
+      title: 'Song',
+      bytes: 71_000_000,
+      made,
+      seconds: 247.3,
+    });
+    // names as the host allows them: dots, brackets, an apostrophe, a stamp of its own inside
+    for (const title of [
+      'Song (cycle)',
+      'St. Elmo’s'.replace('’', "'"),
+      'v1.2 final.take',
+      '2026-01-02 03.04.05 Again',
+    ])
+      expect(bounceRow(entry(`2026-01-02 03.04.05 ${title}.wav`))?.title).toBe(title);
+  });
+
+  it('goes by the name’s own time where the host doesn’t say, and without a length it can’t read', () => {
+    const row = bounceRow(entry('2026-01-02 03.04.05 Song.wav'));
+    expect(row?.made).toBe(Date.UTC(2026, 0, 2, 3, 4, 5));
+    expect(row?.seconds).toBeNull();
+    expect(bounceRow(entry('2026-01-02 03.04.05 Song.wav', { made: 'soon', seconds: Number.NaN }))?.seconds).toBeNull();
+    expect(bounceRow(entry('2026-01-02 03.04.05 Song.wav', { seconds: 0 }))?.seconds).toBeNull();
+    expect(bounceRow({ file: '2026-01-02 03.04.05 Song.wav', url: url('x') })?.bytes).toBe(0);
+  });
+
+  it('lists a file named some other way under its own name', () => {
+    expect(bounceRow(entry('Mixdown.wav'))).toMatchObject({ title: 'Mixdown', made: 0 });
+    // (a stamp with nothing after it, or not quite one, isn't one)
+    expect(bounceRow(entry('2026-01-02 03.04.05 .wav'))?.title).toBe('2026-01-02 03.04.05 ');
+    expect(bounceRow(entry('2026-01-02 03:04:05 Song.wav'))?.title).toBe('2026-01-02 03:04:05 Song');
+    expect(bounceRow(entry('Mixdown.wav', { made: 5 }))?.made).toBe(5);
+  });
+
+  it('leaves out what isn’t a bounce', () => {
+    for (const not of [
+      null,
+      'x',
+      7,
+      {},
+      { file: 'a.wav' },
+      { url: '/x' },
+      { file: '', url: '/x' },
+      { file: 3, url: 4 },
+    ])
+      expect(bounceRow(not)).toBeNull();
+  });
+
+  it('asks the host for them, in its order, and says when it can’t be asked', async () => {
+    const asked: string[] = [];
+    const answer = (status: number, body: unknown) =>
+      (async (path: string) => {
+        asked.push(path);
+        return new Response(JSON.stringify(body), { status });
+      }) as unknown as typeof fetch;
+    const list = [entry('2026-01-03 03.04.05 Song.wav'), { odd: true }, entry('2026-01-02 03.04.05 Song (cycle).wav')];
+    expect((await songBounces('prj_one', answer(200, list))).map((b) => b.title)).toEqual(['Song', 'Song (cycle)']);
+    expect(asked).toEqual(['/api/projects/prj_one/bounces']);
+    expect(await songBounces('prj_one', answer(200, { not: 'a list' }))).toEqual([]);
+    await expect(songBounces('prj_one', answer(500, { error: 'no' }))).rejects.toThrow();
+  });
+
+  it('deletes one by its address, and takes one already gone as gone', async () => {
+    const asked: [string, string | undefined][] = [];
+    const answer = (status: number) =>
+      (async (path: string, init?: RequestInit) => {
+        asked.push([path, init?.method]);
+        return new Response('{}', { status });
+      }) as unknown as typeof fetch;
+    const b = { url: url('2026-01-02 03.04.05 Song.wav') };
+    expect(await removeBounce(b, answer(200))).toBe(true);
+    expect(asked).toEqual([[b.url, 'DELETE']]);
+    expect(await removeBounce(b, answer(404))).toBe(true);
+    expect(await removeBounce(b, answer(500))).toBe(false);
   });
 });

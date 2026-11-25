@@ -141,6 +141,60 @@ export async function findBounce(
   }
 }
 
+// ---- a song's bounces, as the host lists them ----
+
+/** A bounce among a song's: its file on the host, and what's shown of it. */
+export interface ListedBounce {
+  file: string;
+  url: string;
+  /** What it's a bounce of: its file's name without when it was made. */
+  title: string;
+  bytes: number;
+  /** When it was made, ms (0: the host didn't say and its name doesn't either). */
+  made: number;
+  /** Its length (null: the host couldn't read it). */
+  seconds: number | null;
+}
+
+/** A bounce's file name: "YYYY-MM-DD HH.MM.SS " (UTC) and then what it's of. */
+const STAMPED = /^(\d{4})-(\d\d)-(\d\d) (\d\d)\.(\d\d)\.(\d\d) (.+)\.wav$/i;
+
+/**
+ * One of the host's list of a song's bounces, as the studio shows it. Null for what isn't one. A
+ * file named some other way (put there by hand) is listed under its own name.
+ */
+export function bounceRow(entry: unknown): ListedBounce | null {
+  const e = entry as { file?: unknown; url?: unknown; bytes?: unknown; made?: unknown; seconds?: unknown } | null;
+  if (!e || typeof e.file !== 'string' || !e.file || typeof e.url !== 'string' || !e.url) return null;
+  const stamped = STAMPED.exec(e.file);
+  const num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) && v > 0 ? v : null);
+  // (when its name says it was made: for a host that doesn't say)
+  const [y = 0, mo = 1, d = 1, h = 0, mi = 0, sec = 0] = stamped ? stamped.slice(1, 7).map(Number) : [];
+  const named = stamped ? Date.UTC(y, mo - 1, d, h, mi, sec) : Number.NaN;
+  return {
+    file: e.file,
+    url: e.url,
+    title: stamped?.[7] ?? e.file.replace(/\.wav$/i, ''),
+    bytes: num(e.bytes) ?? 0,
+    made: num(e.made) ?? (Number.isFinite(named) ? named : 0),
+    seconds: num(e.seconds),
+  };
+}
+
+/** A song's bounces, the newest first (as the host lists them). Throws when the host can't be asked. */
+export async function songBounces(project: string, fetcher: Fetch = fetch): Promise<ListedBounce[]> {
+  const res = await fetcher(`/api/projects/${encodeURIComponent(project)}/bounces`);
+  if (!res.ok) throw new Error(String(res.status));
+  const list = (await res.json()) as unknown;
+  return Array.isArray(list) ? list.map(bounceRow).filter((b): b is ListedBounce => b !== null) : [];
+}
+
+/** Delete a bounce on the host for good. True when it's gone (one already gone is). */
+export async function removeBounce(bounce: Pick<ListedBounce, 'url'>, fetcher: Fetch = fetch): Promise<boolean> {
+  const res = await fetcher(bounce.url, { method: 'DELETE' });
+  return res.ok || res.status === 404;
+}
+
 // ---- a bounce kept: under way through a reload, and finished until it's saved ----
 
 /**

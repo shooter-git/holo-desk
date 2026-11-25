@@ -1,6 +1,16 @@
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  utimesSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
+import { Readable } from 'node:stream';
 import { encodeWav, renderSession } from '@holo/engine';
 import { dataFolderSource } from '@holo/engine/node';
 import { newProject, newRegion, type Project, type Track } from '@holo/session';
@@ -404,4 +414,151 @@ describe('a bounce asked of the host', () => {
       await app.close();
     }
   }, 120_000);
+});
+
+describe('a song’s bounces, listed and deleted', () => {
+  const config = (dataDir: string) => ({
+    port: 0,
+    host: '127.0.0.1',
+    dataDir,
+    creationsDir: null,
+    webDir: join(dataDir, 'no-web'),
+    repoDir: resolve(import.meta.dirname, '../../..'),
+    networkMidi: null,
+  });
+  /** Half a second of a tone, as a bounce is written: 24-bit, two channels. */
+  const tone = (seconds = 0.5) => {
+    const c = Float32Array.from({ length: Math.round(48000 * seconds) }, (_, i) => Math.sin(i / 20) / 2);
+    return Buffer.from(encodeWav([c, c], 48000, 'pcm24'));
+  };
+  type Listed = { file: string; bytes: number; url: string; made: number; seconds?: number };
+
+  async function studio() {
+    const dataDir = scratch();
+    const { app } = await buildApp(config(dataDir));
+    const song = (await app.inject({ method: 'POST', url: '/api/projects', payload: { title: 'Listed' } })).json();
+    const id = song.id as string;
+    const list = async (of = id) =>
+      (await app.inject({ method: 'GET', url: `/api/projects/${of}/bounces` })).json() as Listed[];
+    const upload = (name: string, body: Buffer | Readable = tone()) =>
+      app.inject({
+        method: 'POST',
+        url: `/api/projects/${id}/bounces?name=${encodeURIComponent(name)}`,
+        headers: { 'content-type': 'audio/wav' },
+        payload: body,
+      });
+    return { app, dataDir, id, list, upload, dir: join(dataDir, 'bounces', id) };
+  }
+
+  it('lists each with its size, when it was made and how long it is, the newest first', async () => {
+    const { app, id, list, upload, dir } = await studio();
+    try {
+      expect(await list()).toEqual([]);
+      const before = Date.now();
+      const first = (await upload('Listed')).json();
+      expect(first.path).toBe(`bounces/${id}/${first.file}`);
+      // an older one, and a file that isn't audio under a bounce's name
+      writeFileSync(join(dir, '2020-01-02 03.04.05 Listed (cycle).wav'), tone(2));
+      writeFileSync(join(dir, '2019-01-02 03.04.05 Odd.wav'), 'not a wave file');
+      writeFileSync(join(dir, 'notes.txt'), 'nothing to list');
+      const all = await list();
+      expect(all.map((b) => b.file)).toEqual([
+        first.file,
+        '2020-01-02 03.04.05 Listed (cycle).wav',
+        '2019-01-02 03.04.05 Odd.wav',
+      ]);
+      expect(all[0]?.bytes).toBe(tone().length);
+      expect(all[0]?.url).toBe(first.url);
+      expect(all[0]?.seconds).toBeCloseTo(0.5, 6);
+      expect(all[0]?.made).toBeGreaterThanOrEqual(before - 2000);
+      expect(all[0]?.made).toBeLessThanOrEqual(Date.now() + 2000);
+      expect(all[1]?.seconds).toBeCloseTo(2, 6);
+      // (a length that can't be read: listed without one)
+      expect(all[2]).not.toHaveProperty('seconds');
+      // a song with none, or that isn't one
+      expect(await list('prj_nobody')).toEqual([]);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('doesn’t list an upload until it is whole, and keeps nothing of one that breaks off', async () => {
+    const { app, list, upload, dir } = await studio();
+    try {
+      const wav = tone();
+      // half of it, then the rest
+      const slow = new Readable({ read() {} });
+      const sent = upload('Slow', slow);
+      slow.push(wav.subarray(0, 1000));
+      await vi.waitFor(() => expect(readdirSync(dir).some((f) => f.endsWith('.part'))).toBe(true), { timeout: 5000 });
+      expect(await list()).toEqual([]);
+      slow.push(wav.subarray(1000));
+      slow.push(null);
+      const done = (await sent).json();
+      expect(readdirSync(dir)).toEqual([done.file]);
+      expect(readFileSync(join(dir, done.file)).equals(wav)).toBe(true);
+      expect((await list()).map((b) => b.file)).toEqual([done.file]);
+
+      // one that breaks off
+      const broken = new Readable({ read() {} });
+      const lost = upload('Broken', broken).catch(() => null);
+      broken.push(wav.subarray(0, 1000));
+      await vi.waitFor(() => expect(readdirSync(dir).some((f) => f.endsWith('.part'))).toBe(true), { timeout: 5000 });
+      broken.destroy(new Error('the device went away'));
+      await lost;
+      await vi.waitFor(() => expect(readdirSync(dir)).toEqual([done.file]), { timeout: 5000 });
+
+      // what the host stopping left of one long ago is cleared by the next; a fresh one is another's, still coming
+      const old = join(dir, '.up_0123456789ab.part');
+      const fresh = join(dir, '.up_ba9876543210.part');
+      writeFileSync(old, 'half');
+      writeFileSync(fresh, 'half');
+      utimesSync(old, new Date(Date.now() - 2 * 3600_000), new Date(Date.now() - 2 * 3600_000));
+      await upload('Next');
+      expect(existsSync(old)).toBe(false);
+      expect(existsSync(fresh)).toBe(true);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('deletes one for good, and only what is a bounce of that song', async () => {
+    const { app, dataDir, id, list, upload, dir } = await studio();
+    try {
+      const kept = (await upload('Kept')).json();
+      writeFileSync(join(dir, '2020-01-02 03.04.05 Gone.wav'), tone());
+      const gone = `/api/projects/${id}/bounces/${encodeURIComponent('2020-01-02 03.04.05 Gone.wav')}`;
+      const first = await app.inject({ method: 'DELETE', url: gone });
+      expect(first.statusCode).toBe(200);
+      expect(first.json()).toEqual({ ok: true });
+      expect(readdirSync(dir)).toEqual([kept.file]);
+      expect((await list()).map((b) => b.file)).toEqual([kept.file]);
+      // gone is gone
+      expect((await app.inject({ method: 'DELETE', url: gone })).statusCode).toBe(404);
+      expect((await app.inject({ method: 'GET', url: gone })).statusCode).toBe(404);
+      // nothing but a bounce, and nothing outside the song's folder
+      writeFileSync(join(dir, 'notes.txt'), 'kept');
+      writeFileSync(join(dataDir, 'outside.wav'), tone());
+      for (const name of ['notes.txt', '../outside.wav', '..%2F..%2Foutside.wav', '.up_0123456789ab.part'])
+        expect(
+          (await app.inject({ method: 'DELETE', url: `/api/projects/${id}/bounces/${encodeURIComponent(name)}` }))
+            .statusCode,
+        ).toBe(404);
+      expect(existsSync(join(dir, 'notes.txt'))).toBe(true);
+      expect(existsSync(join(dataDir, 'outside.wav'))).toBe(true);
+      // another song's isn't this one's
+      const other = (await app.inject({ method: 'POST', url: '/api/projects', payload: { title: 'Other' } })).json();
+      expect(
+        (
+          await app.inject({
+            method: 'DELETE',
+            url: `/api/projects/${other.id}/bounces/${encodeURIComponent(kept.file)}`,
+          })
+        ).statusCode,
+      ).toBe(404);
+      expect(existsSync(join(dir, kept.file))).toBe(true);
+    } finally {
+      await app.close();
+    }
+  });
 });

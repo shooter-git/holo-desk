@@ -27,6 +27,7 @@
 //   - Settings › Agent's Tell me outside HO[LO] isn't whole: its three choices side by side, in the dialog;
 //   - with a reply that has a dock read and the page closed, a phone shows no tray, or one that isn't a
 //     row of its own (or × leaves it there); a tablet or a desktop shows one;
+//   - Songs' list of the open song's bounces isn't whole, with a delete asked too, or Keep doesn't bring the bounce back;
 //   - Scan's list of a song's earlier scans, a delete asked, isn't whole, or Keep doesn't bring the scan back;
 //   - a scan's review (Scan, over the whole studio) isn't whole, or its header's Commands button can't
 //     be pressed; the commands opened from it don't come up over the review, under its header; Escape
@@ -233,6 +234,39 @@ async function makeScan(project) {
     ...scan,
     pages: [{ n: 0, w: 1200, h: 800, type: 'png', systems: [system(0), system(1)] }],
   });
+}
+
+// ---- the song's bounces: four, so three show and the rest are asked for ----
+
+/** A quarter of a second of silence as a WAV (16-bit, two channels, 48 kHz). */
+function wav() {
+  const frames = 12000;
+  const b = Buffer.alloc(44 + frames * 4);
+  b.write('RIFF', 0, 'ascii');
+  b.writeUInt32LE(36 + frames * 4, 4);
+  b.write('WAVEfmt ', 8, 'ascii');
+  b.writeUInt32LE(16, 16);
+  b.writeUInt16LE(1, 20);
+  b.writeUInt16LE(2, 22);
+  b.writeUInt32LE(48000, 24);
+  b.writeUInt32LE(48000 * 4, 28);
+  b.writeUInt16LE(4, 32);
+  b.writeUInt16LE(16, 34);
+  b.write('data', 36, 'ascii');
+  b.writeUInt32LE(frames * 4, 40);
+  return b;
+}
+
+async function makeBounces(project) {
+  // (names of their own: bounces made in the same second under one name are one file)
+  for (const name of ['Layout check', 'Layout check (cycle)', 'Layout check with a longer name than most', 'Take 4']) {
+    const res = await fetch(`${base}/api/projects/${project}/bounces?name=${encodeURIComponent(name)}`, {
+      method: 'POST',
+      headers: { 'content-type': 'audio/wav' },
+      body: wav(),
+    });
+    if (!res.ok) throw new Error(`The bounce couldn’t be made: ${res.status} ${await res.text()}`);
+  }
 }
 
 // ---- what's wrong on the page as it stands (runs in the page) ----
@@ -1287,6 +1321,22 @@ function views(page, layout, finger) {
   const press = (loc) => (finger ? loc.tap() : loc.click());
   const dialogs = [
     ['Songs', () => press(control(page, 'Songs')), () => page.keyboard.press('Escape')],
+    // the open song's bounces, all of them, one's delete asked: the question whole, and Keep bringing it back
+    [
+      'Songs, a bounce’s delete asked',
+      async () => {
+        await press(control(page, 'Songs'));
+        await press(page.locator('.song-bounces .bounces-all'));
+        await press(page.locator('.song-bounces button[title="Delete this bounce"]').first());
+        await page.locator('.song-bounces .bounce-row.asking').waitFor();
+      },
+      async () => {
+        await press(page.locator('.song-bounces .bounce-row.asking').getByRole('button', { name: 'Keep' }));
+        if ((await page.locator('.song-bounces button[title="Delete this bounce"]').count()) !== 4)
+          throw new Error('Keep didn’t bring the bounce back');
+        await page.keyboard.press('Escape');
+      },
+    ],
     ['Settings', () => press(control(page, 'Settings')), () => page.keyboard.press('Escape')],
     // Settings › Audio: the rate, where bounces are made, the devices
     [
@@ -1349,6 +1399,7 @@ try {
   if (!made.ok) throw new Error(`The song couldn’t be made: ${made.status} ${await made.text()}`);
   const { id } = await made.json();
   await makeScan(id);
+  await makeBounces(id);
 
   browser = await chromium.launch({
     args: ['--autoplay-policy=no-user-gesture-required'],

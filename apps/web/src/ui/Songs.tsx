@@ -2,12 +2,32 @@
  * The songs, grouped: your own, then each album (or artist) you gave some, then each experience's,
  * with the engine each experience builds with; and a search across them all.
  */
-import { Disc3, FileMusic, FolderOpen, History, Pencil, Plus, Search, Trash2 } from 'lucide-react';
-import { type KeyboardEvent, useState } from 'react';
-import { openPiece, openProject, renameSong } from '../app/actions.ts';
+import {
+  AudioLines,
+  Disc3,
+  Download,
+  FileMusic,
+  FolderOpen,
+  History,
+  Pencil,
+  Plus,
+  Search,
+  Trash2,
+} from 'lucide-react';
+import { type KeyboardEvent, useEffect, useState } from 'react';
+import {
+  bounceClock,
+  deleteListedBounce,
+  openPiece,
+  openProject,
+  renameSong,
+  saveListedBounce,
+} from '../app/actions.ts';
 import { api, type Creation, type ProjectRow } from '../app/api.ts';
+import { diskSize } from '../app/disk-size.ts';
+import { type ListedBounce, songBounces } from '../app/host-bounce.ts';
 import { engineBadge, groupSongs, type SongGroup, searchSongs, songDetailNames } from '../app/songs.ts';
-import { toast } from '../app/store.ts';
+import { toast, useApp } from '../app/store.ts';
 
 /** Enter or Space on a row that isn't a button (it holds one of its own) acts as a click. */
 function pressable(open: () => void) {
@@ -371,5 +391,117 @@ export function SongGroups({
         );
       })}
     </>
+  );
+}
+
+/** How many of a song's bounces show before the rest are asked for. */
+const BOUNCES_SHOWN = 3;
+
+/**
+ * The open song's bounces, kept with it on the host: each to save on this device again, or to
+ * delete for good. Nothing is shown of a song with none.
+ */
+export function SongBounces({ id, title, when }: { id: string; title: string; when: (iso: string) => string }) {
+  const [rows, setRows] = useState<ListedBounce[]>([]);
+  const [all, setAll] = useState(false);
+  // the bounce whose delete is being asked about
+  const [deleting, setDeleting] = useState<string | null>(null);
+  // one being made, and the one whose line is showing (where saving goes through the share sheet, a row follows it)
+  const making = useApp((s) => s.bouncing !== null);
+  const shown = useApp((s) => s.bounced);
+  // (asked again when a bounce has just been made)
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `making` is why it's asked again
+  useEffect(() => {
+    let stale = false;
+    void songBounces(id).then(
+      (list) => {
+        if (!stale) setRows(list);
+      },
+      () => {
+        if (!stale) setRows([]);
+      },
+    );
+    return () => {
+      stale = true;
+    };
+  }, [id, making]);
+  if (!rows.length) return null;
+  const remove = async (b: ListedBounce) => {
+    setDeleting(null);
+    if (await deleteListedBounce(b)) setRows((list) => list.filter((r) => r.file !== b.file));
+  };
+  const visible = all ? rows : rows.slice(0, BOUNCES_SHOWN);
+  return (
+    <section className="song-group song-bounces" aria-label={`Bounces of ${title}`}>
+      <div className="song-group-head">
+        <span className="song-group-title">Bounces of “{title}”</span>
+        <span className="muted">
+          {rows.length === 1 ? '1 file' : `${rows.length} files`} ·{' '}
+          {diskSize(rows.reduce((sum, b) => sum + b.bytes, 0))} on the host
+        </span>
+      </div>
+      <div className="list boxed">
+        {visible.map((b) => {
+          const made = b.made ? when(new Date(b.made).toISOString()) : '';
+          // (its length and size stay together: on a narrow row they go under when it was made, whole)
+          const size = [b.seconds === null ? '' : bounceClock(b.seconds), diskSize(b.bytes)]
+            .filter(Boolean)
+            .join(' · ')
+            .replaceAll(' ', '\u00a0');
+          const details = [made, size].filter(Boolean).join(' · ');
+          const mine = shown?.url === b.url ? shown : null;
+          return deleting === b.file ? (
+            <div key={b.file} className="list-item still bounce-row asking">
+              <span className="muted grow">
+                Delete “{b.title}”{made ? ` of ${made}` : ''} for good?
+              </span>
+              <button type="button" className="btn danger" onClick={() => void remove(b)}>
+                Delete
+              </button>
+              <button type="button" className="btn ghost" onClick={() => setDeleting(null)}>
+                Keep
+              </button>
+            </div>
+          ) : (
+            <div key={b.file} className="list-item still song-row bounce-row">
+              <AudioLines size={16} className="muted" />
+              <span className="song-name">
+                <span className="strong">{b.title}</span>
+              </span>
+              <span className="meta">{details}</span>
+              <button
+                type="button"
+                className={`btn${mine?.ready ? ' primary' : ''}`}
+                disabled={mine !== null && !mine.ready}
+                aria-label={`Save the bounce “${b.title}”${made ? ` of ${made}` : ''} on this device`}
+                onClick={() => void saveListedBounce(b)}
+              >
+                {mine && !mine.ready ? (
+                  'Getting…'
+                ) : (
+                  <>
+                    <Download /> Save
+                  </>
+                )}
+              </button>
+              <button
+                type="button"
+                className="btn ghost icon"
+                title="Delete this bounce"
+                aria-label={`Delete the bounce “${b.title}”${made ? ` of ${made}` : ''}`}
+                onClick={() => setDeleting(b.file)}
+              >
+                <Trash2 />
+              </button>
+            </div>
+          );
+        })}
+      </div>
+      {!all && rows.length > BOUNCES_SHOWN && (
+        <button type="button" className="btn ghost bounces-all" onClick={() => setAll(true)}>
+          All {rows.length} bounces
+        </button>
+      )}
+    </section>
   );
 }

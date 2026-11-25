@@ -13,6 +13,7 @@ import { useSyncExternalStore } from 'react';
 import { IDLE_MS, patiently } from './api.ts';
 import type { Ready } from './attach.ts';
 import { type Command, selectionSpan } from './commands.ts';
+import { diskSize } from './disk-size.ts';
 import { type AppState, store as studio } from './store.ts';
 
 export type HarnessId = 'claude' | 'codex' | 'cursor' | 'antigravity';
@@ -530,13 +531,6 @@ const ALLOW: Record<PermissionKind, string> = {
   photo: 'Take a photo',
   microphone: 'Record',
 };
-
-/** A download's size, as the Library says it ("131 MB"). */
-function diskSize(bytes: number): string {
-  if (bytes >= 1e9) return `${(bytes / 1e9).toFixed(1)} GB`;
-  if (bytes >= 1e6) return `${Math.round(bytes / 1e6)} MB`;
-  return `${Math.max(1, Math.round(bytes / 1e3))} KB`;
-}
 
 /**
  * The permission's button: a pack's says what it downloads ("Install it (131 MB)"), or, when the

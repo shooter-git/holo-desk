@@ -782,10 +782,12 @@ button and the swipe down all bring it; a second press of the slash button puts 
   beside the studio; it and the Library or Inspector overlay close each other. A window narrower than
   1180 px is a tablet to the studio (app/layout.ts), so it gets the sheet. On a desktop with the agent
   on, a dock 380 px wide down the right side, under the control bar (`pageDocks`). It slides in and out
-  over 0.2 s (not with reduced motion), kept drawn while it goes (`useDockLeaving` in ui/Bar.tsx). In a
-  window 1360 px wide or wider the studio gives it the room over the same time (`data-dock` on the
-  page's root, styles/app.css), so nothing is under it; narrower, it's over the studio's right edge, as
-  a sheet is. It stays out while the studio is worked in: the studio's keys go to the studio unless
+  over the studio in 0.2 s (not with reduced motion), kept drawn while it goes (`useDockLeaving` in
+  ui/Bar.tsx). Only the dock moves: the studio is laid out again once each way, never for each frame
+  of the slide, which a big song or a busy machine couldn't keep up with. In a window 1360 px wide or
+  wider the studio gives it the room once it's out (`data-dock` on the page's root, styles/app.css)
+  and takes it back in the frame it starts to leave in, so nothing is under a dock at rest; narrower,
+  it stays over the studio's right edge, as a sheet is. It stays out while the studio is worked in: the studio's keys go to the studio unless
   they're typed in the dock, Ctrl / from the studio goes to its field, and Ctrl / from its field (or
   Escape there, or its header's button) slides it in. A plugin's window opens in the middle of what
   the dock leaves. With the agent off a desktop keeps the bar. Where the control bar, the

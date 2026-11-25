@@ -17,7 +17,7 @@
  * down the right side, which slides in and out. Every opener only sets `bar`, and which one shows is
  * the layout's and the agent's (app/page-layout.ts).
  */
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { isOn, useAgent } from '../app/agent.ts';
 import { useLayout } from '../app/layout.ts';
 import { useSeenOnHost } from '../app/notify.ts';
@@ -109,23 +109,58 @@ function BarPanel() {
   );
 }
 
-/** How long a dock takes to slide in (styles/app.css: the studio takes the room back over the same time). */
-const DOCK_MS = 200;
+/** The longest a slide is waited for before it's taken as over, when the page never says it ended. */
+const SLIDE_WAIT_MS = 600;
+
+/**
+ * Runs `then` once, when the dock's slide named `name` (styles/app.css) ends, or after a wait where
+ * that's never heard. What it returns calls it off.
+ */
+function afterSlide(name: string, then: () => void): () => void {
+  const off = () => {
+    window.clearTimeout(timer);
+    document.removeEventListener('animationend', ended);
+    document.removeEventListener('animationcancel', ended);
+  };
+  const done = () => {
+    off();
+    then();
+  };
+  function ended(e: AnimationEvent) {
+    if (e.animationName === name && (e.target as Element | null)?.classList?.contains('talk-page')) done();
+  }
+  const timer = window.setTimeout(done, SLIDE_WAIT_MS);
+  document.addEventListener('animationend', ended);
+  document.addEventListener('animationcancel', ended);
+  return off;
+}
 
 /**
  * A desktop's dock, closed: it's kept on the page while it slides in, and is gone after. True for
- * that long. The studio is told the dock is out (the page's data-dock) only while it's open, so it
- * takes the room back as the dock goes.
+ * that long.
+ *
+ * The studio is laid out again only once each way, never while the dock moves: a studio that gave the
+ * room a little at a time drew every pane again for each frame of the slide, and on a big song or a
+ * busy machine it fell behind the dock, which showed as a gap as the dock left. So the dock slides
+ * over the studio. Opening, the studio gives it the room once it's out (the page's data-dock, which
+ * the styles go by); closing, the studio takes the room back first, in the frame the slide starts
+ * from, and the dock leaves over a studio that's already whole.
  */
 function useDockLeaving(open: boolean, docks: boolean): boolean {
   const out = open && docks;
   // (what's drawn: it follows `out` at once as the dock opens, and a slide behind as it closes)
   const [shown, setShown] = useState(out);
   if (out && !shown) setShown(true);
-  useEffect(() => {
+  // (before the frame is painted: the room is taken back in the frame the dock starts to leave in)
+  useLayoutEffect(() => {
     if (!out) return;
-    document.documentElement.dataset.dock = '';
+    const settle = () => {
+      document.documentElement.dataset.dock = '';
+    };
+    const off = reducedMotion() ? undefined : afterSlide('dock-in', settle);
+    if (!off) settle();
     return () => {
+      off?.();
       delete document.documentElement.dataset.dock;
     };
   }, [out]);
@@ -135,8 +170,7 @@ function useDockLeaving(open: boolean, docks: boolean): boolean {
       setShown(false);
       return;
     }
-    const timer = window.setTimeout(() => setShown(false), DOCK_MS);
-    return () => window.clearTimeout(timer);
+    return afterSlide('dock-out', () => setShown(false));
   }, [out, shown, docks]);
   return shown && !out && docks;
 }

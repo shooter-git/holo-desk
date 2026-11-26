@@ -15,7 +15,7 @@ import { Dialogs } from './Dialogs.tsx';
 import { FramePause, keepAwake, wake } from './frame.ts';
 import { Mixer, PluginWindow, StageWindow, SynthWindow } from './Mixer.tsx';
 import { MenuHost } from './menu.tsx';
-import { Inspector, LibraryPanel } from './Panels.tsx';
+import { Inspector, LibraryPanel, MasterRail, useMasterRail } from './Panels.tsx';
 import { PianoRoll, PianoRollBar } from './PianoRoll.tsx';
 import { PlayPad } from './PlayPad.tsx';
 import { useScrollCue } from './scroll-cue.ts';
@@ -603,6 +603,7 @@ export function App() {
   const inert = useApp((s) => s.dialog !== null || s.printView !== null || s.scanView !== null);
   const workspace = useRef<HTMLDivElement>(null);
   const overlays = layout === 'tablet';
+  const masterRail = useMasterRail();
 
   useEffect(() => {
     document.documentElement.dataset.layout = layout;
@@ -664,6 +665,7 @@ export function App() {
           <div className="app-body">
             <Banners />
             <div className="workspace" ref={workspace}>
+              {masterRail ? <MasterRail /> : <div />}
               {inspector && !overlays ? <Inspector /> : <div />}
               <div className="center">
                 <TracksArea />

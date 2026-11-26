@@ -28,6 +28,7 @@ import {
   updateTrack,
 } from '../app/actions.ts';
 import { diskSize } from '../app/disk-size.ts';
+import { useLayout } from '../app/layout.ts';
 import { store, toast, useApp } from '../app/store.ts';
 import { type AvailablePack, installs, useInstalls } from '../audio/installs.ts';
 import { forgetPackFiles } from '../audio/pack-files.ts';
@@ -185,7 +186,31 @@ function useLoadStates() {
   return library.states;
 }
 
+/**
+ * Stereo Out's strip pinned at the studio's left edge, as tall as the studio (View › Stereo Out,
+ * pinned at the left): the song's output at hand whatever is open beside it. While it shows, the
+ * Inspector and the Mixer leave theirs out.
+ */
+export function MasterRail() {
+  const master = useApp((s) => s.project?.master);
+  if (!master) return <div />;
+  return (
+    <aside className="master-rail" aria-label="Stereo Out">
+      <div className="inspector-strips" ref={stripRows}>
+        <Strip id="master" kind="master" name="Stereo Out" color="#e9d8b4" channel={master} />
+      </div>
+    </aside>
+  );
+}
+
+/** Whether Stereo Out's strip is pinned at the left: View asks for it, and the window has the room (a desktop's). */
+export function useMasterRail(): boolean {
+  const layout = useLayout();
+  return useApp((s) => s.show.masterRail) && layout === 'desktop';
+}
+
 export function Inspector({ overlay = false }: { overlay?: boolean }) {
+  const pinned = useMasterRail();
   const project = useApp((s) => s.project);
   const trackId = useApp((s) => s.selectedTrack);
   const regionIds = useApp((s) => s.selectedRegions);
@@ -404,7 +429,8 @@ export function Inspector({ overlay = false }: { overlay?: boolean }) {
           {(() => {
             const bus = project?.buses.find((b) => b.id === track.channel.output);
             if (bus) return <Strip id={bus.id} kind="bus" name={bus.name} color={bus.color} channel={bus.channel} />;
-            return project ? (
+            // (Stereo Out pinned at the left is the strip it plays into: not shown twice)
+            return project && !pinned ? (
               <Strip id="master" kind="master" name="Stereo Out" color="#e9d8b4" channel={project.master} />
             ) : null;
           })()}

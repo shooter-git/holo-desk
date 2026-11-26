@@ -178,6 +178,17 @@ export const Strip = memo(function Strip({ id, kind, name, color, channel, track
   // in the mixer, a track strip's name is its handle: drag it (a finger holds it first) to move the track
   const nameBar = useRef<HTMLDivElement>(null);
   useNoScrollWhileDragging(nameBar);
+  // a track's or a bus's name, double-clicked, is typed over where it stands (Stereo Out keeps its own)
+  const [renaming, setRenaming] = useState(false);
+  const canceled = useRef(false);
+  const rename = (typed: string) => {
+    setRenaming(false);
+    const to = canceled.current ? '' : typed.trim();
+    canceled.current = false;
+    if (!to || to === name) return;
+    if (kind === 'track') updateTrack(id, { name: to }, 'Rename');
+    else if (kind === 'bus') apply([{ op: 'updateBus', bus: id, patch: { name: to } }], 'Rename Bus');
+  };
   return (
     <section
       className={`strip ${kind}${selected ? ' selected' : ''}${track?.inactive ? ' inactive' : ''}`}
@@ -516,8 +527,19 @@ export const Strip = memo(function Strip({ id, kind, name, color, channel, track
         ref={nameBar}
         className={`strip-name${movable ? ' movable' : ''}`}
         style={{ background: color }}
-        title={movable ? `${name}: drag to move the track` : name}
+        title={
+          movable
+            ? `${name}: drag to move the track, double-click to rename`
+            : kind === 'master'
+              ? name
+              : `${name}: double-click to rename`
+        }
+        onDoubleClick={() => {
+          if (kind !== 'master') setRenaming(true);
+        }}
         onPointerDown={(e) => {
+          // (the name being typed keeps its presses: they place the caret, and move nothing)
+          if (renaming) return;
           if (!movable || (e.pointerType !== 'touch' && (e.button !== 0 || isMenuPress(e)))) return;
           const strip = e.currentTarget.closest<HTMLElement>('.strip');
           const mixer = strip?.parentElement;
@@ -542,7 +564,28 @@ export const Strip = memo(function Strip({ id, kind, name, color, channel, track
           if (movable) e.preventDefault();
         }}
       >
-        {name}
+        {renaming ? (
+          <input
+            className="input strip-rename"
+            // biome-ignore lint/a11y/noAutofocus: shown because the name was double-clicked
+            autoFocus
+            defaultValue={name}
+            aria-label={`Rename ${name}`}
+            onFocus={(e) => e.currentTarget.select()}
+            onPointerDown={(e) => e.stopPropagation()}
+            onPointerUp={(e) => e.stopPropagation()}
+            onDoubleClick={(e) => e.stopPropagation()}
+            onKeyDown={(e) => {
+              e.stopPropagation();
+              // (Escape leaves the name as it was: leaving the field is what sets it)
+              if (e.key === 'Escape') canceled.current = true;
+              if (e.key === 'Enter' || e.key === 'Escape') e.currentTarget.blur();
+            }}
+            onBlur={(e) => rename(e.currentTarget.value)}
+          />
+        ) : (
+          name
+        )}
       </div>
     </section>
   );
@@ -558,7 +601,9 @@ export function Mixer() {
   const master = useApp((s) => s.project?.master);
   const selected = useApp((s) => s.selectedTrack);
   const show = useApp((s) => s.show);
-  const phone = isPhone(useLayout());
+  const layout = useLayout();
+  const phone = isPhone(layout);
+  const pinned = show.masterRail && layout === 'desktop';
   // in the editor pane (not a phone's own tab) the mixer opens tall enough to use
   useEffect(() => {
     if (phone) return;
@@ -568,7 +613,7 @@ export function Mixer() {
   // View leaves strips out: the inactive tracks' (with the tracks pane), the buses' and the master's
   const shown = shownTracks(tracks, show);
   // (with every strip the song has left out, the mixer says so, and brings them back)
-  if (!shown.length && !(show.mixerBuses && buses.length) && !show.mixerMaster)
+  if (!shown.length && !(show.mixerBuses && buses.length) && !(show.mixerMaster && !pinned))
     return (
       <div className="mixer-empty">
         <p>The strips this song has are hidden in View.</p>
@@ -594,7 +639,10 @@ export function Mixer() {
       ))}
       {show.mixerBuses &&
         buses.map((b) => <Strip key={b.id} id={b.id} kind="bus" name={b.name} color={b.color} channel={b.channel} />)}
-      {show.mixerMaster && <Strip id="master" kind="master" name="Stereo Out" color="#e9d8b4" channel={master} />}
+      {/* (pinned at the studio's left edge, Stereo Out isn't here as well) */}
+      {show.mixerMaster && !pinned && (
+        <Strip id="master" kind="master" name="Stereo Out" color="#e9d8b4" channel={master} />
+      )}
     </div>
   );
 }

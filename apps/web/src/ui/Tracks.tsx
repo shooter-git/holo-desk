@@ -90,7 +90,7 @@ import {
   pointAt,
   targetOf,
 } from './automation.ts';
-import { Fader, formatDb } from './controls.tsx';
+import { Fader, PanKnob } from './controls.tsx';
 import { alpha, movePlayhead, prepare, roundRect, useFrame, useSize } from './frame.ts';
 import {
   capture,
@@ -255,11 +255,10 @@ function LaneSelect({ track }: { track: Track }) {
 
 /** Room under the last track, for the New track button: the list scrolls this far past it, and a fitted top keeps it. */
 const LIST_TAIL = 60;
-/**
- * A track's height under a finger: its header stacks the name and what it plays (33 px), then its
- * buttons (4 + 32), with room above and below so a row's buttons don't meet the next track's name.
- */
-const TOUCH_ROW = 78;
+/** A track's height under a finger, at least: the header's two lines, as under a mouse. */
+const TOUCH_ROW = 56;
+/** A row shorter than this has its header on one line (a phone's rows can be pinched to 44). */
+const FLAT_ROW = 52;
 /** A rail cell this tall has room for its marks under the icon (shorter, they go beside it as dots). */
 const RAIL_CELL_TALL = 52;
 /** A track's height as drawn: rows are taller under a finger, and a phone's are the rail's (rail.ts). */
@@ -320,20 +319,20 @@ interface TrackRowProps {
   top: number;
   height: number;
   selected: boolean;
-  /** Phones leave no room for the icon beside the name and its buttons. */
-  phone: boolean;
   /** A phone's header as a cell of the rail, or a row of the drawer pulled out over the lanes. */
   fold: 'rail' | 'drawer' | null;
   /** How far the list can scroll (a finger dragging a header scrolls it). */
   maxScrollY: number;
+  /** Its place among the song's tracks, from 1 (View › Track numbers shows it before the name). */
+  number: number;
 }
 
-const TrackRow = memo(function TrackRow({ track, top, height, selected, phone, fold, maxScrollY }: TrackRowProps) {
+const TrackRow = memo(function TrackRow({ track, top, height, selected, fold, maxScrollY, number }: TrackRowProps) {
   const [renaming, setRenaming] = useState(false);
   const automationView = useApp((s) => s.automationView);
   const show = useApp((s) => s.show);
-  const touch = isTouch();
-  const compact = height < 44;
+  // (two lines need 44 px and a little air: shorter, the row is one line, without what the track plays)
+  const compact = height < FLAT_ROW;
   const menu = (x: number, y: number) =>
     openMenu(x, y, [
       { label: 'Rename', onSelect: () => setRenaming(true) },
@@ -461,77 +460,144 @@ const TrackRow = memo(function TrackRow({ track, top, height, selected, phone, f
       </button>
     );
   }
+  const icons = show.trackIcons;
+  const sub = `${track.kind === 'audio' ? inputLabel(track) : instrumentLabel(track.instrument)}${track.origin?.edited ? ' · edited' : ''}`;
+  const rowClass = `track-row${selected ? ' selected' : ''}${icons ? '' : ' no-icon'}${track.inactive ? ' inactive' : ''}`;
+  const nameField = (
+    <input
+      className="input"
+      // biome-ignore lint/a11y/noAutofocus: shown because the name was double-clicked
+      autoFocus
+      defaultValue={track.name}
+      style={{ height: 22, width: '100%' }}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter') e.currentTarget.blur();
+        if (e.key === 'Escape') setRenaming(false);
+        e.stopPropagation();
+      }}
+      onBlur={(e) => {
+        const name = e.currentTarget.value.trim();
+        if (name && name !== track.name) updateTrack(track.id, { name }, 'Rename');
+        setRenaming(false);
+      }}
+    />
+  );
+  // (a long name is cut short here: the whole of it is its tip)
+  const name = (
+    <div className="name" title={track.name}>
+      {show.trackNumbers && <span className="num">{number}</span>}
+      {track.name}
+    </div>
+  );
+  // The header, in two lines: the name's, then the controls' (the buttons, the volume with the
+  // track's level in its groove, the pan). The icon is the track's on/off, so that button leaves the
+  // row; with the icons hidden, it comes back. While automation shows, the lane's picker has the
+  // second line. A row too short for two lines (a phone's, pinched small) has them side by side.
+  const controls = automationView ? (
+    <LaneSelect track={track} />
+  ) : (
+    <>
+      {show.trackButtons && <TrackButtons track={track} power={!icons} />}
+      {show.trackMix && <TrackMix track={track} />}
+    </>
+  );
+  const lines = automationView || show.trackButtons || show.trackMix;
   return (
     <div
-      className={`track-row${selected ? ' selected' : ''}${show.trackIcons && !phone ? '' : ' no-icon'}${track.inactive ? ' inactive' : ''}`}
+      className={`${rowClass} two${lines ? '' : ' one'}${compact ? ' flat' : ''}`}
       style={{ top, height }}
       onPointerDown={onDown}
       onContextMenu={onContextMenu}
     >
       {swatch}
-      {show.trackIcons && !phone && (
-        <div className="ico" style={{ color: track.color }}>
-          {track.kind === 'audio' ? <Mic /> : instrumentIcon(track.instrument)}
-        </div>
-      )}
-      <div style={{ minWidth: 0 }} onDoubleClick={() => setRenaming(true)}>
+      {icons && <PowerIcon track={track} />}
+      <div className="title" onDoubleClick={() => setRenaming(true)}>
         {renaming ? (
-          <input
-            className="input"
-            // biome-ignore lint/a11y/noAutofocus: shown because the name was double-clicked
-            autoFocus
-            defaultValue={track.name}
-            style={{ height: 22, width: '100%' }}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') e.currentTarget.blur();
-              if (e.key === 'Escape') setRenaming(false);
-              e.stopPropagation();
-            }}
-            onBlur={(e) => {
-              const name = e.currentTarget.value.trim();
-              if (name && name !== track.name) updateTrack(track.id, { name }, 'Rename');
-              setRenaming(false);
-            }}
-          />
+          nameField
         ) : (
           <>
-            {/* (a long name is cut short here: the whole of it is its tip) */}
-            <div className="name" title={track.name}>
-              {track.name}
-            </div>
-            {!compact && !automationView && show.trackSub && (
-              <div className="sub">
-                {track.kind === 'audio' ? inputLabel(track) : instrumentLabel(track.instrument)}
-                {track.origin?.edited ? ' · edited' : ''}
-              </div>
-            )}
-            {automationView && !touch && <LaneSelect track={track} />}
+            {name}
+            {!compact && !automationView && show.trackSub && <div className="sub">{sub}</div>}
           </>
         )}
       </div>
-      {automationView && touch ? (
-        // on touch screens the lane's picker takes the buttons' row while automation shows
-        <div className="chips" style={{ minWidth: 0 }}>
-          <LaneSelect track={track} />
+      {lines && (
+        <div className="ctl" onPointerDown={(e) => e.stopPropagation()}>
+          {controls}
         </div>
-      ) : !show.trackButtons ? (
-        <span />
-      ) : (
-        <TrackButtons track={track} />
       )}
     </div>
   );
 });
 
 /**
- * A track's on/off, mute, solo and record buttons (and an audio track's monitoring). Switched off
- * (inactive), only the first does anything.
+ * A track's icon, which is its on/off (Make Inactive, as in other studios): what it plays while it's
+ * on, the on/off's own sign while it's off. Off, the track is kept as it is, but nothing plays, loads
+ * or records for it.
  */
-function TrackButtons({ track }: { track: Track }) {
+function PowerIcon({ track }: { track: Track }) {
+  return (
+    <button
+      type="button"
+      className={`ico power${track.inactive ? '' : ' on'}`}
+      style={track.inactive ? undefined : { color: track.color }}
+      title={track.inactive ? `${track.name} is inactive: turn it on` : 'Active: turn off to free its CPU and memory'}
+      aria-label={track.inactive ? `Make ${track.name} active` : `Make ${track.name} inactive`}
+      aria-pressed={!track.inactive}
+      onPointerDown={(e) => e.stopPropagation()}
+      onClick={() => setTrackActive(track.id, !!track.inactive)}
+    >
+      {track.inactive ? <Power /> : track.kind === 'audio' ? <Mic /> : instrumentIcon(track.instrument)}
+    </button>
+  );
+}
+
+/**
+ * A track's volume and pan in its header: a small fader on its side, as long as the line leaves it,
+ * with the track's level in its groove, and a small pan knob. The wheel over them still scrolls the
+ * list (a drag, the arrows or a double-click set them).
+ */
+function TrackMix({ track }: { track: Track }) {
+  const box = useRef<HTMLDivElement>(null);
+  const size = useSize(box);
+  const set = (patch: Partial<Track['channel']>) => gestureChange([{ op: 'updateChannel', target: track.id, patch }]);
+  return (
+    <>
+      <div className="track-vol" ref={box}>
+        {size.w >= 24 && (
+          <Fader
+            mini
+            meter={track.id}
+            length={Math.floor(size.w)}
+            db={track.channel.volume}
+            label={`${track.name} volume`}
+            onBegin={() => beginGesture('Volume')}
+            onEnd={endGesture}
+            onChange={(volume) => set({ volume })}
+          />
+        )}
+      </div>
+      <PanKnob
+        bare
+        size={20}
+        value={track.channel.pan}
+        onBegin={() => beginGesture('Pan')}
+        onEnd={endGesture}
+        onChange={(pan) => set({ pan })}
+      />
+    </>
+  );
+}
+
+/**
+ * A track's on/off, mute, solo and record buttons (and an audio track's monitoring). Switched off
+ * (inactive), only the first does anything. `power` leaves the on/off out, where the header's icon is it.
+ */
+function TrackButtons({ track, power = true }: { track: Track; power?: boolean }) {
   const off = !!track.inactive;
   return (
     <div className="chips" onPointerDown={(e) => e.stopPropagation()}>
-      <PowerChip id={track.id} name={track.name} inactive={off} />
+      {power && <PowerChip id={track.id} name={track.name} inactive={off} />}
       <button
         type="button"
         className={`chip mute${track.channel.mute ? ' on' : ''}`}
@@ -647,45 +713,37 @@ function RailPeek({ track, top, height }: { track: Track; top: number; height: n
       >
         <span className="name">{track.name}</span>
         <TrackButtons track={track} />
+        <TrackMix track={track} />
       </div>
     </>
   );
 }
 
 /**
- * The selected track under the lanes, on a phone held upright: its buttons and its volume, at hand
- * while the headers are folded to the rail (and as the track the keyboard plays, the one most used).
+ * The selected track under the lanes, on a phone held upright: its header, as wide as the phone, at
+ * hand while the headers are folded to the rail (and as the track the keyboard plays, the one most used).
  */
 function TrackDock({ track }: { track: Track }) {
-  const box = useRef<HTMLDivElement>(null);
-  const size = useSize(box);
+  const icons = useApp((s) => s.show.trackIcons);
   return (
     <section
-      className={`track-dock${track.inactive ? ' inactive' : ''}`}
+      className="track-dock"
       aria-label={`${track.name}, the selected track${track.inactive ? ' (inactive)' : ''}`}
     >
-      <div className="swatch" style={{ background: track.color }} />
-      <div className="dock-name">
-        <div className="name" title={track.name}>
-          {track.name}
+      <div className={`track-row two${icons ? '' : ' no-icon'}${track.inactive ? ' inactive' : ''}`}>
+        <div className="swatch" style={{ background: track.color }} />
+        {icons && <PowerIcon track={track} />}
+        <div className="title">
+          <div className="name" title={track.name}>
+            {track.name}
+          </div>
+          <div className="sub">{track.kind === 'audio' ? inputLabel(track) : instrumentLabel(track.instrument)}</div>
         </div>
-        <div className="sub">{track.kind === 'audio' ? inputLabel(track) : instrumentLabel(track.instrument)}</div>
+        <div className="ctl">
+          <TrackButtons track={track} power={!icons} />
+          <TrackMix track={track} />
+        </div>
       </div>
-      <TrackButtons track={track} />
-      <div className="dock-volume" ref={box}>
-        {size.w > 60 && (
-          <Fader
-            horizontal
-            length={size.w}
-            db={track.channel.volume}
-            label={`${track.name} volume`}
-            onBegin={() => beginGesture('Volume')}
-            onEnd={endGesture}
-            onChange={(volume) => gestureChange([{ op: 'updateChannel', target: track.id, patch: { volume } }])}
-          />
-        )}
-      </div>
-      <span className="db-readout">{formatDb(track.channel.volume)}</span>
     </section>
   );
 }
@@ -707,6 +765,8 @@ interface Draw {
   automation: { params: Record<string, string>; preview: LanePreview | null } | null;
   /** A phone's rail has no room for the names: each lane carries its own (drawLaneNames). */
   names: boolean;
+  /** With them, each track's place in the song where View › Track numbers is on. */
+  numbers: number[] | null;
 }
 
 interface RegionPreview {
@@ -847,7 +907,7 @@ function drawTimeline(ctx: CanvasRenderingContext2D, d: Draw): void {
     }
   });
 
-  if (d.names) drawLaneNames(ctx, project, trackHeight, w, h);
+  if (d.names) drawLaneNames(ctx, project, trackHeight, w, h, d.numbers);
 
   if (d.automation) drawLanes(ctx, project, v, trackHeight, w, h, d.automation.params, d.automation.preview);
 
@@ -873,7 +933,14 @@ const NAME_FONT = '600 11.5px Inter Variable, system-ui, sans-serif';
  * left edge, under the regions' name bands, where it stays as the song scrolls by (a region's own
  * name goes off the edge with the region's start). A muted or inactive track's lane is dimmed.
  */
-function drawLaneNames(ctx: CanvasRenderingContext2D, project: Project, trackHeight: number, w: number, h: number) {
+function drawLaneNames(
+  ctx: CanvasRenderingContext2D,
+  project: Project,
+  trackHeight: number,
+  w: number,
+  h: number,
+  numbers: number[] | null,
+) {
   const v = tracksView;
   const room = Math.min(220, w * 0.6);
   const band = 2 + Math.min(15, (trackHeight - 5) * 0.32) + 2;
@@ -887,7 +954,7 @@ function drawLaneNames(ctx: CanvasRenderingContext2D, project: Project, trackHei
       ctx.fillStyle = 'rgba(18, 20, 24, 0.62)';
       ctx.fillRect(0, y, w, trackHeight - 1);
     }
-    let name = t.name;
+    let name = numbers ? `${numbers[i]}  ${t.name}` : t.name;
     while (name.length > 1 && ctx.measureText(name).width > room) name = `${name.slice(0, -2)}…`;
     const top = y + band;
     ctx.fillStyle = 'rgba(11, 13, 16, 0.78)';
@@ -1315,6 +1382,8 @@ export function TracksArea() {
           drag: drag.current,
           automation: s.automationView ? { params: s.autoParam, preview: lanePreview.current } : null,
           names: phone,
+          // (each track's place in the whole song, whatever View leaves out of the list)
+          numbers: phone && s.show.trackNumbers ? p.tracks.map((t) => (s.project?.tracks.indexOf(t) ?? -1) + 1) : null,
         });
       const rctx = prepare(rulerCanvas.current, rulerSize.w, rulerSize.h, true);
       if (rctx) drawRuler(rctx, p, cycle, s.show.markers, rulerSize.w, rulerSize.h);
@@ -2052,9 +2121,10 @@ export function TracksArea() {
               top={i * trackHeight}
               height={trackHeight}
               selected={t.id === selectedTrack}
-              phone={phone}
               fold={fold}
               maxScrollY={listMax}
+              // (its place in the song, whatever View leaves out of the list)
+              number={(song?.tracks.indexOf(t) ?? i) + 1}
             />
           ))}
           <button

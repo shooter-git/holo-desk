@@ -202,7 +202,8 @@ kbd {
 .workspace {
   position: relative;
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
+  /* Stereo Out's strip where it's pinned, the Inspector, the tracks and the editor, the Library */
+  grid-template-columns: auto auto minmax(0, 1fr) auto;
   min-height: 0;
   border-top: 1px solid var(--line);
 }
@@ -502,10 +503,10 @@ a.btn {
 
 /* an inactive track, dimmed wherever it shows (its on/off stays at full strength, to turn it back on;
    its other buttons are disabled, and dim themselves) */
-.track-row.inactive > :not(.chips),
+.track-row.inactive > :not(.chips, .ctl, button.ico),
+.track-row.inactive > .ctl > :not(.chips),
 .track-row.rail-cell.inactive > *,
-.strip.inactive > :not(.strip-chips),
-.track-dock.inactive > :not(.chips) {
+.strip.inactive > :not(.strip-chips) {
   opacity: 0.45;
 }
 
@@ -1116,60 +1117,171 @@ a.btn {
   gap: 3px;
 }
 
-/* on phones the header is narrow: the buttons may wrap under the name */
-.app.phone .track-row .chips {
-  flex-wrap: wrap;
+/* A mouse's header, in two lines: the name (with what the track plays beside it), then its buttons,
+   its volume and its pan. The icon is the track's on/off. */
+.track-row.two {
+  grid-template-columns: 5px 28px minmax(0, 1fr);
+  grid-template-rows: auto auto;
+  row-gap: 5px;
+  align-content: center;
 }
 
-/* track headers on touch screens: the name on top, its buttons underneath */
+.track-row.two.no-icon {
+  grid-template-columns: 5px minmax(0, 1fr);
+}
+
+.track-row.two > .swatch,
+.track-row.two > .ico {
+  grid-row: 1 / span 2;
+}
+
+/* (with View leaving the buttons and the mix out, the name's line is the only one) */
+.track-row.two.one {
+  grid-template-rows: auto;
+}
+
+.track-row.two.one > .swatch,
+.track-row.two.one > .ico {
+  grid-row: 1;
+}
+
+.track-row button.ico {
+  padding: 0;
+  border: 1px solid var(--line);
+  cursor: pointer;
+}
+
+.track-row button.ico:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* (switched off, the icon is the on/off's own sign, raised like a button to press) */
+.track-row.inactive > button.ico {
+  background: var(--bg-3);
+  color: var(--text-3);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
+}
+
+.track-row .title {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+}
+
+/* (the name keeps its room: what the track plays is cut short first) */
+.track-row .title .name {
+  flex: 0 1 auto;
+  min-width: 24px;
+}
+
+.track-row .title .sub {
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+/* View › Track numbers: the track's place in the song, before its name */
+.track-row .name .num {
+  display: inline-block;
+  min-width: 9px;
+  margin-right: 6px;
+  color: var(--text-3);
+  font: 500 0.85em var(--mono);
+  text-align: right;
+}
+
+.track-row .ctl {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  min-height: 20px;
+}
+
+/* a row too short for two lines (a phone's, pinched small): the controls beside the name */
+.track-row.two.flat {
+  grid-template-columns: 5px 28px minmax(0, 1fr) auto;
+  grid-template-rows: auto;
+}
+
+.track-row.two.flat.no-icon {
+  grid-template-columns: 5px minmax(0, 1fr) auto;
+}
+
+.track-row.two.flat > .swatch,
+.track-row.two.flat > .ico {
+  grid-row: 1;
+}
+
+.track-row.two.flat .track-vol {
+  flex: none;
+  width: 64px;
+}
+
+.track-row.two.flat .ctl .lane-select {
+  flex: none;
+  width: 132px;
+}
+
+.track-row .ctl .chips {
+  flex: none;
+}
+
+.track-row .ctl .lane-select {
+  flex: 1 1 0;
+}
+
+/* the volume has the room the line leaves it */
+.track-vol {
+  flex: 1 1 0;
+  min-width: 0;
+  height: 18px;
+}
+
+.track-row .ctl .knob {
+  flex: none;
+}
+
+/* Under a finger the header is the same (a tablet's, and a phone's where its headers show: the
+   drawer, a track's buttons pulled out of the rail, the selected track's dock), its buttons the
+   mouse's size: each control answers a little past its edges, up and down, where the row has the room */
 @media (pointer: coarse) {
-  .track-row {
-    grid-template-columns: 5px 30px minmax(0, 1fr);
-    grid-template-rows: auto auto;
-    column-gap: 8px;
-    row-gap: 4px;
-    align-content: center;
+  .track-row.two .chip,
+  .rail-peek .chip {
+    position: relative;
+    height: 18px;
+    min-width: 20px;
+    font-size: 10.5px;
   }
-  .track-row .swatch {
-    grid-row: 1 / span 2;
+  .track-row.two .sub {
+    font-size: 11.5px;
   }
-  .track-row .ico {
-    grid-row: 1 / span 2;
+  .track-row.two .chip::after,
+  .track-row.two .fader::after,
+  .track-row.two .knob::after,
+  .rail-peek .chip::after,
+  .rail-peek .fader::after,
+  .rail-peek .knob::after {
+    content: "";
+    position: absolute;
+    inset: -8px -1px;
   }
-  .track-row .chips {
-    grid-column: 3;
+  .track-row.two .knob,
+  .rail-peek .knob {
+    position: relative;
   }
-  .track-row.no-icon {
-    grid-template-columns: 5px minmax(0, 1fr);
-  }
-  .track-row.no-icon .chips {
-    grid-column: 2;
-  }
+}
+
+@media (pointer: coarse) {
   .tracks-toolbar .tool-seg {
     display: none;
   }
 }
 
-/* a phone held sideways has the width and not the height: the buttons sit beside the name, on one line */
-.app.phone-landscape .track-row,
-.app.phone-landscape .track-row.no-icon {
-  grid-template-columns: 5px minmax(0, 1fr) auto;
-  grid-template-rows: auto;
-}
-
-.app.phone-landscape .track-row .swatch {
-  grid-row: auto;
-}
-
-.app.phone-landscape .track-row .chips,
-.app.phone-landscape .track-row.no-icon .chips {
-  grid-column: auto;
-  flex-wrap: nowrap;
-}
-
 /* An automation lane's picker in a track's header: the setting the lane shows, and Read or Off
-   beside it. In the buttons' row (touch screens) it takes that row's width and no more, so the
-   button stays in the header however long the setting's name is. */
+   beside it. It takes the controls' line and no more, so the button stays in the header however
+   long the setting's name is. */
 .lane-select {
   gap: 4px;
   min-width: 0;
@@ -1181,15 +1293,6 @@ a.btn {
   height: 22px;
   padding: 0 18px 0 4px;
   font-size: 10.5px;
-}
-
-.track-row .chips .lane-select {
-  flex: 1 1 0;
-}
-
-.app.phone-landscape .track-row .chips .lane-select {
-  flex: none;
-  width: 132px;
 }
 
 @media (pointer: coarse) {
@@ -1398,28 +1501,6 @@ a.btn {
   }
 }
 
-/* its headers have the width a phone on its side gives them: the buttons beside the name */
-.tracks.drawer-open .track-row,
-.tracks.drawer-open .track-row.no-icon {
-  grid-template-columns: 5px minmax(0, 1fr) auto;
-  grid-template-rows: auto;
-}
-
-.tracks.drawer-open .track-row .swatch {
-  grid-row: auto;
-}
-
-.tracks.drawer-open .track-row .chips,
-.tracks.drawer-open .track-row.no-icon .chips {
-  grid-column: auto;
-  flex-wrap: nowrap;
-}
-
-.tracks.drawer-open .track-row .chips .lane-select {
-  flex: none;
-  width: 132px;
-}
-
 .drawer-scrim {
   position: absolute;
   inset: 0;
@@ -1461,8 +1542,31 @@ a.btn {
   animation: peek-out 0.14s ease-out;
 }
 
+.rail-peek {
+  max-width: calc(100% - var(--headers) - 4px);
+}
+
+.rail-peek .chips {
+  display: flex;
+  flex: none;
+  gap: 3px;
+}
+
+/* (the volume gives way first where the phone is narrow, then the name) */
+.rail-peek .track-vol {
+  flex: 1 1 72px;
+  width: 72px;
+  min-width: 30px;
+}
+
+.rail-peek .knob {
+  flex: none;
+}
+
 .rail-peek .name {
-  max-width: 110px;
+  flex: 0 1 auto;
+  min-width: 28px;
+  max-width: 96px;
   overflow: hidden;
   font-weight: 600;
   text-overflow: ellipsis;
@@ -1476,7 +1580,7 @@ a.btn {
   }
 }
 
-/* the selected track's buttons and volume, under the lanes of a phone held upright */
+/* the selected track's header, under the lanes of a phone held upright */
 .tracks.docked {
   grid-template-rows: calc(var(--control) + 4px) minmax(0, 1fr) auto;
 }
@@ -1484,66 +1588,19 @@ a.btn {
 .track-dock {
   grid-row: 3;
   grid-column: 1 / -1;
-  display: flex;
-  align-items: center;
-  gap: 6px;
   height: 56px;
-  padding-right: 8px;
   border-top: 1px solid var(--line);
   background: linear-gradient(180deg, #23272e, #1c2026);
   box-shadow: inset 0 1px 0 var(--hi);
 }
 
-.track-dock .swatch {
-  flex: none;
-  align-self: stretch;
-  width: 5px;
-}
-
-/* (the name and buttons give up a little width, so the fader has the most travel it can) */
-.track-dock .dock-name {
-  flex: 0 1 72px;
-  min-width: 0;
-}
-
-.track-dock .name,
-.track-dock .sub {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.track-dock .name {
-  font-weight: 600;
-}
-
-.track-dock .sub {
-  color: var(--text-3);
-  font-size: 10.5px;
-}
-
-.track-dock .chips {
-  display: flex;
-  flex: none;
-  gap: 3px;
-}
-
-.track-dock .chip {
-  min-width: 32px;
-}
-
-/* (on the narrowest phones the name gives way before the fader does) */
-.track-dock .dock-volume {
-  display: flex;
-  flex: 1 1 0;
-  align-items: center;
-  min-width: 80px;
-}
-
-.track-dock .db-readout {
-  flex: none;
-  width: 42px;
-  text-align: center;
+/* (its header is a row's, laid out the same: here it stands still, on the dock's own ground) */
+.track-dock > .track-row {
+  position: static;
+  height: 100%;
+  border-bottom: 0;
+  background: none;
+  box-shadow: none;
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -2421,6 +2478,16 @@ a.btn {
   color: #0e1013;
 }
 
+/* the name being typed, in the name's own place (the strip keeps its height and its width) */
+.strip-name .strip-rename {
+  display: block;
+  width: 100%;
+  height: 16px;
+  padding: 0 2px;
+  font-size: 11px;
+  text-align: center;
+}
+
 /* a track strip's name is its handle for moving it along the mixer */
 .strip-name.movable {
   cursor: grab;
@@ -2567,6 +2634,42 @@ a.btn {
   left: 9px;
   width: 1px;
   height: auto;
+}
+
+/* a small one (a track's header): a short cap, end to end, and the track's level in its groove */
+.fader.horizontal.mini {
+  height: 18px;
+}
+
+.fader.horizontal.mini .fader-slot {
+  top: 6px;
+  right: 0;
+  left: 0;
+  height: 6px;
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.groove-level {
+  display: block;
+  margin: 1px;
+  border-radius: 2px;
+}
+
+.fader.horizontal.mini .fader-cap {
+  top: 1px;
+  width: 10px;
+  height: 16px;
+  border-radius: 3px;
+  box-shadow:
+    0 2px 4px rgba(0, 0, 0, 0.6),
+    inset 0 1px 0 rgba(255, 255, 255, 0.18);
+}
+
+.fader.horizontal.mini .fader-cap-line {
+  top: 2px;
+  bottom: 2px;
+  left: 3.5px;
 }
 
 .meter-canvas {
@@ -2817,6 +2920,20 @@ button.list-item {
   .inspector-strips {
     display: grid;
   }
+}
+
+/* Stereo Out pinned at the studio's left edge: its strip alone, as tall as the studio */
+.master-rail {
+  display: flex;
+  min-height: 0;
+  overflow-y: auto;
+  scrollbar-width: none;
+  border-right: 1px solid var(--line);
+  background: var(--bg-2);
+}
+
+.master-rail .inspector-strips {
+  padding: 8px 6px;
 }
 
 /* the Library */

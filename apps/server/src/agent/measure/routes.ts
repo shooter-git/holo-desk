@@ -15,7 +15,7 @@ import { NO_ANSWER } from '../../live.ts';
 import { ATTACHMENT_ID } from '../attachments.ts';
 import { bad, body, num, type Params } from '../check.ts';
 import type { JobRouteKit } from '../job-routes/index.ts';
-import { type AgentJob, awayIfGone, Refusal } from '../jobs.ts';
+import { type AgentJob, awayIfGone, BACKGROUND, METERS_AWAY, Refusal } from '../jobs.ts';
 import {
   answered,
   MEASURE_WHAT,
@@ -92,7 +92,12 @@ export default function measureRoutes(kit: JobRouteKit, options: MeasureRoutesOp
       if (what === 'meters') {
         const seconds = opt(b.seconds) ? METERS_S : num(b.seconds, 'seconds', 1, METERS_MAX_S);
         // a studio away a moment is waited for, as long as the call's 50 s leave after the meters' own time
-        const studio = await jobs.studioBack(job, METERS_CALL_MS - (seconds * 1000 + METERS_MS));
+        const studio = await jobs.studioBack(job, METERS_CALL_MS - (seconds * 1000 + METERS_MS)).catch((err) => {
+          // (away: the meters wait for the studio, and the levels are to be had without it)
+          if (err instanceof Refusal && err.reason === 'away' && err.message === BACKGROUND)
+            throw new Refusal(409, METERS_AWAY, 'away');
+          throw err;
+        });
         // the studio waits until it has watched that much play (playing started less than that ago)
         const answer = await live.request(studio, { type: 'agent-meters', seconds }, seconds * 1000 + METERS_MS, true);
         awayIfGone(answer);

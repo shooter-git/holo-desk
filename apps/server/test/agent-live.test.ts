@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { BACKGROUND } from '../src/agent/jobs.ts';
+import { BACKGROUND, METERS_AWAY } from '../src/agent/jobs.ts';
 import { agentApp, agentWorld, auth, type Msg, note, settle, until, waitFor } from './agent-fakes.ts';
 
 let close: (() => Promise<void>) | null = null;
@@ -611,12 +611,15 @@ describe('the studio that asked, away a moment', () => {
       tool(job, jobToken, 'GET', '/played?seconds=5'),
       tool(job, jobToken, 'POST', '/compare', { from: 1, to: 3 }),
       tool(job, jobToken, 'GET', '/commands'),
-      tool(job, jobToken, 'POST', '/measure', { what: 'meters' }),
     ]);
     for (const r of refusals) {
       expect(r.statusCode, r.body).toBe(409);
       expect(r.json()).toEqual({ reason: 'away', error: BACKGROUND });
     }
+    // the studio's meters too, and that says where levels are to be had without it
+    const meters = await tool(job, jobToken, 'POST', '/measure', { what: 'meters' });
+    expect([meters.statusCode, meters.json()]).toEqual([409, { reason: 'away', error: METERS_AWAY }]);
+    expect(METERS_AWAY).toContain('measure the mix or the tracks instead');
     // what it showed as it went, the song as saved, and a version of it, all still answer
     expect((await tool(job, jobToken, 'GET', '/state')).json()).toMatchObject({
       away: true,

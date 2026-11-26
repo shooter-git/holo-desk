@@ -278,7 +278,9 @@ one a song (below, "Several songs at once").
   `away` at once while it's away (`BACKGROUND` in jobs.ts): the user doesn't have the song in front of
   them (their studio's page is in the background or closed, or another song is open in it), so
   nothing can be played, heard or read in it until they're back; changes still land; what there is to
-  hear or see goes in the reply's view. `…/state` answers what the studio showed as it went, with
+  hear or see goes in the reply's view. `…/measure` with `meters` says instead that levels don't need
+  the studio (`METERS_AWAY`): the mix and the tracks are rendered and measured on the host, as every
+  other measurement is, away or not. `…/state` answers what the studio showed as it went, with
   `away: true`, nothing playing, and the song's tempo and cycle as saved. `…/song`, `…/describe` and
   `…/version` read the song as saved here, which has the job's changes.
 - **Picked up.** The studio picks the run up (`pickUpAgent` in apps/web/src/app/actions.ts) when it

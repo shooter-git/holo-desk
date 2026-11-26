@@ -648,7 +648,8 @@ export function App() {
     const down = (e: PointerEvent) => {
       const s = store.get();
       if (!s.inspector && !s.library) return;
-      if ((e.target as Element | null)?.closest?.('.overlay-panel')) return;
+      // (Stereo Out pinned beside them is there to be used whatever is open: a press on it closes nothing)
+      if ((e.target as Element | null)?.closest?.('.overlay-panel, .master-rail')) return;
       store.set({ ...(s.inspector ? { inspector: false } : {}), ...(s.library ? { library: false } : {}) });
     };
     el.addEventListener('pointerdown', down, true);
@@ -664,7 +665,7 @@ export function App() {
           <ControlBar />
           <div className="app-body">
             <Banners />
-            <div className="workspace" ref={workspace}>
+            <div className={`workspace${masterRail ? ' with-rail' : ''}`} ref={workspace}>
               {masterRail ? <MasterRail /> : <div />}
               {inspector && !overlays ? <Inspector /> : <div />}
               <div className="center">

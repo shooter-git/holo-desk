@@ -150,6 +150,10 @@ interface StripProps {
   selected?: boolean;
   /** In the mixer, a track's strip can be dragged by its name to move the track. */
   movable?: boolean;
+  /** A track's place in the song, shown before its name where View › Track numbers is on. */
+  number?: number;
+  /** A phone's Stereo Out, kept at the mixer's left edge while the other strips scroll by. */
+  pinned?: boolean;
 }
 
 const NO_BUSES: Bus[] = [];
@@ -158,7 +162,18 @@ const NO_BUSES: Bus[] = [];
  * One channel strip. Memoized: a song's edits leave the other strips' channel and track
  * objects as they were, so only the strip that changed is drawn again.
  */
-export const Strip = memo(function Strip({ id, kind, name, color, channel, track, selected, movable }: StripProps) {
+export const Strip = memo(function Strip({
+  id,
+  kind,
+  name,
+  color,
+  channel,
+  track,
+  selected,
+  movable,
+  number,
+  pinned,
+}: StripProps) {
   const buses = useApp((s) => s.project?.buses ?? NO_BUSES);
   const show = useApp((s) => s.show);
   // (a kit's knobs show once the library knows it)
@@ -191,7 +206,7 @@ export const Strip = memo(function Strip({ id, kind, name, color, channel, track
   };
   return (
     <section
-      className={`strip ${kind}${selected ? ' selected' : ''}${track?.inactive ? ' inactive' : ''}`}
+      className={`strip ${kind}${selected ? ' selected' : ''}${track?.inactive ? ' inactive' : ''}${pinned ? ' pinned' : ''}`}
       onPointerDown={(e) => {
         press.current = e.button === 0 ? { x: e.clientX, y: e.clientY } : null;
       }}
@@ -584,7 +599,10 @@ export const Strip = memo(function Strip({ id, kind, name, color, channel, track
             onBlur={(e) => rename(e.currentTarget.value)}
           />
         ) : (
-          name
+          <>
+            {number !== undefined && <span className="num">{number}</span>}
+            {name}
+          </>
         )}
       </div>
     </section>
@@ -603,7 +621,10 @@ export function Mixer() {
   const show = useApp((s) => s.show);
   const layout = useLayout();
   const phone = isPhone(layout);
-  const pinned = show.masterRail && layout === 'desktop';
+  // Stereo Out pinned (View): beside the studio it stands on its own, so it isn't here as well; a
+  // phone has no room for that, and keeps it here, at the left edge, while the other strips scroll by
+  const pinned = show.masterRail && !phone;
+  const pinnedHere = show.masterRail && phone;
   // in the editor pane (not a phone's own tab) the mixer opens tall enough to use
   useEffect(() => {
     if (phone) return;
@@ -613,7 +634,7 @@ export function Mixer() {
   // View leaves strips out: the inactive tracks' (with the tracks pane), the buses' and the master's
   const shown = shownTracks(tracks, show);
   // (with every strip the song has left out, the mixer says so, and brings them back)
-  if (!shown.length && !(show.mixerBuses && buses.length) && !(show.mixerMaster && !pinned))
+  if (!shown.length && !(show.mixerBuses && buses.length) && !(show.mixerMaster && !pinned) && !pinnedHere)
     return (
       <div className="mixer-empty">
         <p>The strips this song has are hidden in View.</p>
@@ -624,6 +645,7 @@ export function Mixer() {
     );
   return (
     <div className="mixer" ref={stripRows}>
+      {pinnedHere && <Strip id="master" kind="master" name="Stereo Out" color="#e9d8b4" channel={master} pinned />}
       {shown.map((t) => (
         <Strip
           key={t.id}
@@ -635,12 +657,13 @@ export function Mixer() {
           track={t}
           selected={t.id === selected}
           movable
+          // (its place in the song, whatever View leaves out of the mixer)
+          number={show.trackNumbers ? tracks.indexOf(t) + 1 : undefined}
         />
       ))}
       {show.mixerBuses &&
         buses.map((b) => <Strip key={b.id} id={b.id} kind="bus" name={b.name} color={b.color} channel={b.channel} />)}
-      {/* (pinned at the studio's left edge, Stereo Out isn't here as well) */}
-      {show.mixerMaster && !pinned && (
+      {show.mixerMaster && !pinned && !pinnedHere && (
         <Strip id="master" kind="master" name="Stereo Out" color="#e9d8b4" channel={master} />
       )}
     </div>

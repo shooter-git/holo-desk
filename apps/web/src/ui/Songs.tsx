@@ -25,7 +25,7 @@ import {
   renameSong,
   saveListedBounce,
 } from '../app/actions.ts';
-import { songSigns, useAgent } from '../app/agent.ts';
+import { agent, songSigns, useAgent } from '../app/agent.ts';
 import { api, type Creation, type ProjectRow } from '../app/api.ts';
 import { diskSize } from '../app/disk-size.ts';
 import { type ListedBounce, songBounces } from '../app/host-bounce.ts';
@@ -335,7 +335,11 @@ export function SongGroups({
                           className="btn danger"
                           onClick={() => {
                             setBinning(null);
-                            void api.remove(r.id).then(reload);
+                            // (a reply waiting on it has nowhere to be read: its dot goes with the song)
+                            void api.remove(r.id).then(() => {
+                              agent.dispatch({ type: 'seen', project: r.id });
+                              reload();
+                            });
                           }}
                         >
                           Move

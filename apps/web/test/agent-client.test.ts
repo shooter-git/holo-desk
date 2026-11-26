@@ -846,6 +846,15 @@ describe('this device’s requests, followed across a reload', () => {
     expect(list).toEqual([]);
     list = step(list, { type: 'status', job: { ...asked, device: 'dev_other', state: 'running' }, barOpen: false });
     expect(list).toEqual([]);
+    // two at work on two songs keep their places at each one's word (nothing to keep again)
+    const second = job({ id: 'agj_00000000f002', project: 'prj_b', started: 2000, state: 'running' });
+    list = step(list, { type: 'sent', job: { ...asked, state: 'running' } });
+    list = step(list, { type: 'sent', job: second });
+    for (const line of ['Bar 1', 'Bar 2']) {
+      list = step(list, { type: 'status', job: { ...asked, state: 'running', line }, barOpen: false });
+      list = step(list, { type: 'status', job: { ...second, line }, barOpen: false });
+      expect(list.map((f) => f.id)).toEqual([asked.id, second.id]);
+    }
   });
 
   it('come back after a reload: the button turns while one works, and says a reply waits once it has', async () => {

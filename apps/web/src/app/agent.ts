@@ -867,7 +867,11 @@ export function followed(list: readonly Followed[], a: AgentState, e: AgentEvent
       if (e.job.device !== a.me) return [...list];
       // (`a` is as it is now: a reply that came while the bar wasn't open on its song has left it unseen)
       const seen = !isLive(e.job.state) && (e.barOpen || !a.unseen.includes(e.job.project));
-      return seen ? without(e.job.id) : [...without(e.job.id), of(e.job)].slice(-FOLLOW_MOST);
+      if (seen) return without(e.job.id);
+      // (one followed already keeps its place: two at work don't change places at each one's word)
+      return list.some((f) => f.id === e.job.id)
+        ? list.map((f) => (f.id === e.job.id ? of(e.job) : f))
+        : [...list, of(e.job)].slice(-FOLLOW_MOST);
     }
     case 'seen':
       // (those of the song seen go; one working, or replied to on a song not seen yet, stays)
@@ -1167,8 +1171,10 @@ export async function loadThread(project: string, barOpen = true): Promise<void>
     );
     heardClock(r.now);
     agent.dispatch({ type: 'thread', project, turns: r.thread?.turns ?? [] });
-    // the song's job that's working, or waiting for a click (after a reload, its button comes back)
-    if (r.job && barOpen) agent.dispatch({ type: 'status', job: r.job, barOpen: true });
+    // the song's job that's working, or waiting for a click (after a reload, its button comes back);
+    // seen only if the song is still the open one (another may have opened before the answer came)
+    const open = studio.get().project?.id;
+    if (r.job && barOpen) agent.dispatch({ type: 'status', job: r.job, barOpen: !open || open === project });
   } catch {
     // the bar shows what it has
   }

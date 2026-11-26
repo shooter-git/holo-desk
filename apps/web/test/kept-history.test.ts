@@ -121,6 +121,17 @@ describe('which history is kept', () => {
     for (const saveState of ['dirty', 'saving', 'offline', 'conflict', 'error'] as const)
       expect(toKeep({ ...state, saveState }, '')).toBeNull();
     expect(toKeep({ ...state, undo: [], redo: [] }, '')).toBeNull();
+    // with a request of the agent's at work on it, the song is kept as saved even with no history:
+    // what the agent saves on the host while it isn't open here comes back as its step on top of it
+    expect(toKeep({ ...state, undo: [], redo: [], agent: true }, 'abc', 42)).toMatchObject({
+      project: state.project?.id,
+      revision: state.serverRevision,
+      undo: [],
+      redo: [],
+      song: state.project,
+    });
+    // (never one that isn't saved as it is)
+    expect(toKeep({ ...state, undo: [], redo: [], agent: true, saveState: 'dirty' }, '')).toBeNull();
     expect(toKeep({ ...state, project: null }, '')).toBeNull();
   });
 

@@ -157,6 +157,8 @@ export interface AgentJob {
   calls: number;
   /** Its runner holds it until another has finished: it isn't quiet, and its ceiling hasn't begun. */
   queued: boolean;
+  /** What the line under the bar said while it was held (it goes as the job starts). */
+  queuedLine?: string;
   /** Its ceiling (ms), counted from when it starts. */
   ceiling: number;
   /** Its turn is over: the studio is saving, and the song is being read. */
@@ -305,8 +307,12 @@ export const WENT =
  */
 export const BACKGROUND =
   'The user doesn’t have this song in front of them now (their studio’s page is in the background or closed, or they have another song open in it), so nothing can be played, heard or read in it until they’re back. Changes to the song still land: carry on, and put what there is to hear or see in your reply’s view, for when they’re back';
-/** What the line under the bar says of a job its runner holds until another has finished. */
+/**
+ * What the line under the bar says of a job its runner holds: until another has finished, or (`why:
+ * 'harness'`) until its harness has signed in or updated.
+ */
 export const QUEUED = 'Waiting for another request to finish';
+export const queuedFor = (harness: string) => `Waiting for ${harness} to be ready`;
 /** What a studio answers a change with when the job's song isn't the one it has open (it just opened another). */
 export const NOT_OPEN = 'not-open';
 
@@ -818,7 +824,7 @@ export class Jobs implements AgentHooks {
     const hidden = isHidden(studio);
     const answer = await this.o.live.request(
       studio,
-      { type: 'agent-flush' },
+      { type: 'agent-flush', project },
       hidden ? Math.min(this.limits.flushMs, this.limits.hiddenMs) : this.limits.flushMs,
     );
     if (hidden && answer.error === NO_ANSWER) this.unanswered(studio);
@@ -1099,7 +1105,7 @@ export class Jobs implements AgentHooks {
     // only from the runner it was handed to, and only while it runs
     if (!job || this.assigned.get(job) !== client || !isLive(job) || job.ending) return;
     if (msg.type === 'agent-queued') {
-      this.held(job);
+      this.held(job, msg.why === 'harness' ? queuedFor(HARNESS_NAMES[job.harness]) : QUEUED);
       return;
     }
     // (anything else from its runner about it: it has started)
@@ -1145,13 +1151,14 @@ export class Jobs implements AgentHooks {
    * conversation): it waits as long as that takes, with no quiet and no ceiling of its own (those
    * ahead of it have theirs), and the line under the bar says so. Stop still stops it.
    */
-  private held(job: AgentJob): void {
+  private held(job: AgentJob, line: string): void {
     if (job.queued || job.view.state !== 'waiting') return;
     job.queued = true;
+    job.queuedLine = line;
     if (job.clock) clearTimeout(job.clock);
     job.clock = null;
     this.heard(job);
-    job.view.line = QUEUED;
+    job.view.line = line;
     this.tell(job);
   }
 
@@ -1159,7 +1166,7 @@ export class Jobs implements AgentHooks {
   private started(job: AgentJob): void {
     job.queued = false;
     this.startClock(job);
-    if (job.view.line === QUEUED) {
+    if (job.view.line === job.queuedLine) {
       delete job.view.line;
       this.tell(job);
     }
@@ -1699,10 +1706,11 @@ export class Jobs implements AgentHooks {
     if (studio) {
       const hidden = isHidden(studio);
       const wait = hidden ? Math.min(this.limits.flushMs, this.limits.hiddenMs) : this.limits.flushMs;
-      const answer = await this.o.live.request(studio, { type: 'agent-flush' }, wait, true);
-      // (a hidden page that doesn't answer was frozen by its browser: the song as saved here it is)
+      const answer = await this.o.live.request(studio, { type: 'agent-flush', project: job.view.project }, wait, true);
+      // (a hidden page that doesn't answer was frozen by its browser: the song as saved here it is;
+      // so it is when the studio has just opened another song)
       if (hidden && answer.error === NO_ANSWER) this.unanswered(studio);
-      else {
+      else if (!(!answer.ok && answer.reason === NOT_OPEN)) {
         awayIfGone(answer);
         if (!answer.ok)
           throw new Refusal(

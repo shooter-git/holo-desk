@@ -409,7 +409,8 @@ export function startAgentRunner(o: AgentRunnerOptions): AgentRunner {
           if (waiting.includes(run)) {
             held.add(run.job);
             log(`[agent ${run.job}] waits for another to finish`);
-            o.send({ type: 'agent-queued', job: run.job });
+            // (`why: 'harness'`: not for a free slot, but for its harness, signing in or updating)
+            o.send({ type: 'agent-queued', job: run.job, ...(relaying.has(run.harness) ? { why: 'harness' } : {}) });
           }
           return true;
         }

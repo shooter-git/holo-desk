@@ -488,6 +488,15 @@ describe('ending early', () => {
     expect(res.json()).toEqual({ ok: true, revision: before + 1 });
     expect(desk.got('agent-ops')).toHaveLength(1);
     expect(services.store.get(s.id)).toMatchObject({ title: 'Saved here', revision: before + 1 });
+    // so is a version asked for then: the studio is told which song to save, says it's another's, and
+    // the song as saved here is kept
+    desk.answer = (msg) =>
+      msg.type === 'agent-flush'
+        ? { ok: false, error: 'That song is not open in the studio', reason: 'not-open' }
+        : { ok: true, revision: before + 1 };
+    const kept = await tool(job, jobToken, 'POST', '/version', { name: 'As it is' });
+    expect(kept.json()).toEqual({ ok: true, revision: before + 1 });
+    expect(desk.got('agent-flush').at(-1)).toMatchObject({ type: 'agent-flush', project: s.id });
     // any other refusal of the studio's is the agent's to hear
     desk.say({ type: 'state', state: { project: s.id, revision: before + 1 } });
     desk.answer = () => ({ ok: false, error: 'The changes did not apply' });
@@ -610,6 +619,13 @@ describe('the clock', () => {
     expect(status(desk, held.job)).toMatchObject({ state: 'running' });
     vi.advanceTimersByTime(1);
     expect(status(desk, held.job)).toMatchObject({ state: 'failed', error: 'It took longer than 2 hours' });
+
+    // held for its harness (signing in, updating), the line says that
+    const waits = await start({ project: other.id, text: 'Drums again' });
+    run.say({ type: 'agent-queued', job: waits.job, why: 'harness' });
+    expect(status(desk, waits.job)).toMatchObject({ state: 'waiting', line: 'Waiting for Claude Code to be ready' });
+    run.say({ type: 'agent-started', job: waits.job });
+    expect(status(desk, waits.job)?.line).toBeUndefined();
 
     // one that's held can be stopped; and a runner that says nothing of a job it holds is given 15 minutes, as before
     const again = await start({ project: s.id, text: 'A bass line' });

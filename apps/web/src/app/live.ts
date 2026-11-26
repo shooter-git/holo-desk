@@ -259,12 +259,18 @@ async function onMessage(msg: Record<string, unknown>): Promise<void> {
       }
       // (a reload or a closed tab after this brings them back, and saves them: they're never lost unsaid)
       await keepNow();
-      ack(true, { revision: store.get().serverRevision });
+      // (another song opened meanwhile: the revision here is no longer this song's)
+      ack(true, elsewhere() ? {} : { revision: store.get().serverRevision });
       return;
     }
     case 'agent-flush': {
       // the agent's turn is over: the host reads the song once it's saved (a save already going
       // on is waited for, and the song as it is now saved after it)
+      if (typeof msg.project === 'string' && store.get().project?.id !== msg.project) {
+        // (another song is open: that one is as the host has it, or kept here till it opens again)
+        ack(false, { error: 'That song is not open in the studio', reason: 'not-open' });
+        return;
+      }
       const revision = await saveSoon(0);
       if (revision === null) ack(false, { error: 'The studio could not save the song' });
       else ack(true, { revision });

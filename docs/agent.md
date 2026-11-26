@@ -416,16 +416,21 @@ several songs: it asks on a song, opens another, asks there, and goes back and f
 that's open is in the studio; the others' requests work on the host, as above, so a device carries no
 more than its one song.
 - **Leaving a song.** Before another song opens while this device's request is at work on the open
-  one, the studio saves the open song first (`saveBeforeLeaving` in actions.ts, 4 s at most), so the
-  agent's changes, saved on the host from then on, land on the song with everything done in the studio
-  so far. What isn't saved in time stays on the device and is put together with the agent's when the
-  song opens there again, as when a page goes. The studio then tells the server which song it has open
-  at once. A batch on its way to the studio as it leaves is answered `{ok:false, reason:'not-open'}`
-  (it never went in there), and the server saves it itself. `…/state` answers what the studio showed
-  on that song as it left it.
+  one (or on its way to the host), the studio saves the open song first (`openSong` and
+  `saveBeforeLeaving` in actions.ts, 4 s at most), so the agent's changes, saved on the host from then
+  on, land on the song with everything done in the studio so far. The agent's batches are held
+  meanwhile (they'd make the song unsaved again as fast as it's saved). What isn't saved in time stays
+  on the device and is put together with the agent's when the song opens there again, as when a page
+  goes. The studio then tells the server which song it has open at once. A batch held, or on its way
+  to the studio as it leaves, is answered `{ok:false, reason:'not-open'}` (it never went in there),
+  and the server saves it itself; `agent-flush` names its song, and is answered the same way. `…/state`
+  answers what the studio showed on that song as it left it. Of two songs asked for one after the
+  other while the first waits on the save, the last asked for opens.
 - **Coming back.** The song opens as the host has it, with the history this device kept of it and
   the agent's changes since as their job's step (`behind`, above): one Undo takes the song back to
-  before the request, whether the changes came while it was open or not.
+  before the request, whether the changes came while it was open or not. While a request is at work
+  on a song, the device keeps the song as saved even when it has no history yet (`Keepable.agent` in
+  kept-history.ts), so a song left before the agent's first change still gets its step.
 - **How many at once.** The runner runs two jobs at a time. One more waits its turn there
   (`agent-queued`): "Waiting for another request to finish" under its request, for as long as that
   takes, and its limits count from when it starts.
@@ -453,10 +458,11 @@ agent's other traffic uses the existing `state`, `played`, `ack`, `transport`, `
 - `harnesses {list:[HarnessInfo], from?:'run'}`. Allowed devices hear the result as `agent-settings`.
   `from:'run'`: said again because a run said what an alias stood for (Claude Code's), the rest as its
   last look found it; it doesn't count as a look (`…/harnesses/look`).
-- `agent-queued {job}`: the runner holds the job until another has finished (it runs two at once,
-  and one a conversation; or the job's harness is signing in or updating). The server lets it wait as
-  long as that takes: no quiet and no ceiling count for it, and its line under the bar says "Waiting
-  for another request to finish". Stop still stops it.
+- `agent-queued {job, why?:'harness'}`: the runner holds the job until another has finished (it runs
+  two at once, and one a conversation), or, with `why: 'harness'`, until the job's harness has signed
+  in or updated. The server lets it wait as long as that takes: no quiet and no ceiling count for it,
+  and its line under the bar says "Waiting for another request to finish" ("Waiting for Claude Code to
+  be ready" for its harness). Stop still stops it.
 - `agent-started {job}`: a job it held starts. Its ceiling and its quiet count from now (any other
   message of the runner's about the job starts them too). A job that starts at once is said neither.
 - `agent-progress {job, line}`
@@ -516,7 +522,8 @@ taken only from the runner it was handed to, while it runs.
   device (`keepNow`, docs/architecture.md: a reload or a closed tab after it brings the change back and
   saves it), or `{ok:false, error}`. A page that goes before then never acks, and the tool hears 409
   `away` (above).
-- `agent-flush {id}`: save now; ack `{revision}`.
+- `agent-flush {id, project}`: save now; ack `{revision}`, or `{ok:false, reason:'not-open'}` when
+  another song is open (the song is then as the host has it).
 - `agent-played {id, seconds}`: ack `{notes:[PlayedNote]}` from the last minute of what was played here.
 - `agent-compare {id, job, from, to}`: ack once it has started playing.
 - `agent-commands {id}`: ack `{commands:[{id, title}]}`, the bar's commands (by their fixed ids, not a

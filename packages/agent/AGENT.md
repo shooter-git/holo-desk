@@ -128,7 +128,9 @@ when they're back, as one step they can undo, with your reply waiting.
 What happens in their studio itself, in front of them (hearing it, playing it, listening to them,
 reading what they just played), can't happen while they're away, and a tool that needs it says so at
 once. Don't wait for them or keep trying: do the rest of the work, and put what there is to hear or
-see in your reply's view, for when they're back. A tool that says their studio went away before it
+see in your reply's view, for when they're back. Measuring doesn't need them, but for the meters: the
+mix, the tracks, a take and a plugin are measured without their studio, so levels, loudness and what
+an effect does can still be checked. A tool that says their studio went away before it
 answered may be tried once more; when a change may or may not have gone in, read the song before
 making it again.
 

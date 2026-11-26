@@ -308,6 +308,12 @@ export const WENT =
 export const BACKGROUND =
   'The user doesn’t have this song in front of them now (their studio’s page is in the background or closed, or they have another song open in it), so nothing can be played, heard or read in it until they’re back. Changes to the song still land: carry on, and put what there is to hear or see in your reply’s view, for when they’re back';
 /**
+ * What asking for the studio's meters hears while that studio is away from the song: they can't be
+ * read, and levels don't need them (the mix and the tracks are rendered and measured on the host).
+ */
+export const METERS_AWAY =
+  'The user doesn’t have this song in front of them now (their studio’s page is in the background or closed, or they have another song open in it), so its meters can’t be read until they’re back. Checking levels doesn’t need them: measure the mix or the tracks instead (what: "mix" or "tracks"), which are rendered here without the studio, with loudness, peaks and bands';
+/**
  * What the line under the bar says of a job its runner holds: until another has finished, or (`why:
  * 'harness'`) until its harness has signed in or updated.
  */

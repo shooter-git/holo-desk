@@ -93,14 +93,19 @@ function useBurst(onBegin?: () => void, onEnd?: () => void, idle = 300) {
 /**
  * The wheel over a control, in steps: a mouse's notch, or as much of a trackpad's swipe (see
  * WheelSteps). React's onWheel is passive, so the page would scroll under the control: listen
- * ourselves. A wheel turned sideways is left alone, to scroll what the control sits in.
+ * ourselves. A wheel turned sideways is left alone, to scroll what the control sits in; so is every
+ * turn of it when `off` (a control in a list the wheel scrolls: a track's header).
  */
-function useWheel(ref: RefObject<HTMLElement | null>, onSteps: (steps: number, e: WheelEvent) => void): void {
+function useWheel(
+  ref: RefObject<HTMLElement | null>,
+  onSteps: (steps: number, e: WheelEvent) => void,
+  off = false,
+): void {
   const latest = useRef(onSteps);
   latest.current = onSteps;
   useEffect(() => {
     const el = ref.current;
-    if (!el) return;
+    if (!el || off) return;
     const count = new WheelSteps();
     const on = (e: WheelEvent) => {
       if (sideways(e)) return;
@@ -110,7 +115,7 @@ function useWheel(ref: RefObject<HTMLElement | null>, onSteps: (steps: number, e
     };
     el.addEventListener('wheel', on, { passive: false });
     return () => el.removeEventListener('wheel', on);
-  }, [ref]);
+  }, [ref, off]);
 }
 
 /** The keys a slider answers: the arrows step (Shift ten steps, Alt a tenth where it's continuous), Home and End go to the ends. */
@@ -140,6 +145,8 @@ interface KnobProps {
   compact?: boolean;
   /** Snap a drag to the default while it is within this much of it (a pan's center). */
   detent?: number;
+  /** The wheel is left to what the knob sits in (a list it scrolls). */
+  noWheel?: boolean;
 }
 
 export function Knob({
@@ -153,6 +160,7 @@ export function Knob({
   label,
   compact,
   detent,
+  noWheel,
 }: KnobProps) {
   const root = useRef<HTMLDivElement>(null);
   const unit = useRef(toUnit(def, value));
@@ -163,8 +171,16 @@ export function Knob({
   const u = toUnit(def, value);
   const a0 = -135;
   const a = a0 + u * 270;
-  const r = size / 2 - 4;
+  // a small knob (a track header's) keeps its arc thin and its cap wide: drawn as the others are,
+  // there would be nothing of it left to see
+  const small = size < 28;
+  const r = size / 2 - (small ? 2 : 4);
   const c = size / 2;
+  const arcWidth = small ? 2.25 : 3.5;
+  const cap = small ? r - 2.75 : r - 5;
+  // (the pointer: from near the cap's middle to its rim)
+  const from = small ? cap * 0.25 : (r - 12) * 0.3;
+  const to = small ? cap - 1 : r - 7;
   const rad = (deg: number) => ((deg - 90) * Math.PI) / 180;
   const arc = (from: number, to: number) => {
     const large = to - from > 180 ? 1 : 0;
@@ -192,10 +208,14 @@ export function Knob({
   const continuous = !def.step || def.scale === 'log';
   const stepUnit = continuous ? 0.01 : (def.step as number) / (def.max - def.min);
   const nudge = (steps: number) => onChange(fromUnit(def, clamp01(u + steps * stepUnit)));
-  useWheel(root, (steps, e) => {
-    const fine = e.shiftKey && continuous ? 0.25 : 1;
-    burst.tick(() => nudge(-steps * (continuous ? 2 : 1) * fine));
-  });
+  useWheel(
+    root,
+    (steps, e) => {
+      const fine = e.shiftKey && continuous ? 0.25 : 1;
+      burst.tick(() => nudge(-steps * (continuous ? 2 : 1) * fine));
+    },
+    noWheel,
+  );
   const lit = Math.abs(a - zero) > 0.5 ? (a > zero ? arc(zero, a) : arc(a, zero)) : null;
   return (
     <div
@@ -261,22 +281,24 @@ export function Knob({
             <stop offset="100%" stopColor="#1c1f24" />
           </radialGradient>
         </defs>
-        <path d={arc(a0, a0 + 270)} stroke="#0b0d10" strokeWidth="3.5" fill="none" strokeLinecap="round" />
+        <path d={arc(a0, a0 + 270)} stroke="#0b0d10" strokeWidth={arcWidth} fill="none" strokeLinecap="round" />
         {lit && (
           <>
             {/* a wider, fainter stroke under the arc is its glow: a filter would be repainted on every move */}
-            <path d={lit} strokeWidth="7" fill="none" strokeLinecap="round" style={{ stroke: color, opacity: 0.3 }} />
-            <path d={lit} strokeWidth="3.5" fill="none" strokeLinecap="round" style={{ stroke: color }} />
+            {!small && (
+              <path d={lit} strokeWidth="7" fill="none" strokeLinecap="round" style={{ stroke: color, opacity: 0.3 }} />
+            )}
+            <path d={lit} strokeWidth={arcWidth} fill="none" strokeLinecap="round" style={{ stroke: color }} />
           </>
         )}
-        <circle cx={c} cy={c} r={r - 5} fill={`url(#${capId})`} stroke="#000" strokeWidth="1" />
+        <circle cx={c} cy={c} r={cap} fill={`url(#${capId})`} stroke="#000" strokeWidth="1" />
         <line
-          x1={c + (r - 12) * Math.cos(rad(a)) * 0.3}
-          y1={c + (r - 12) * Math.sin(rad(a)) * 0.3}
-          x2={c + (r - 7) * Math.cos(rad(a))}
-          y2={c + (r - 7) * Math.sin(rad(a))}
+          x1={c + from * Math.cos(rad(a))}
+          y1={c + from * Math.sin(rad(a))}
+          x2={c + to * Math.cos(rad(a))}
+          y2={c + to * Math.sin(rad(a))}
           stroke="#e8edf3"
-          strokeWidth="2"
+          strokeWidth={small ? 1.6 : 2}
           strokeLinecap="round"
         />
       </svg>
@@ -329,26 +351,36 @@ export function PanKnob({
   onChange,
   onBegin,
   onEnd,
+  size = 34,
+  bare = false,
 }: {
   value: number;
   onChange: (v: number) => void;
   onBegin?: () => void;
   onEnd?: () => void;
+  size?: number;
+  /** The knob alone (a track's header): its tip says where it is, and the wheel is the list's. */
+  bare?: boolean;
 }) {
   const steps = Math.round(value * 64);
+  const knob = (
+    <Knob
+      def={PAN}
+      value={steps}
+      onChange={(v) => onChange(Math.max(-1, Math.min(1, v / 64)))}
+      onBegin={onBegin}
+      onEnd={onEnd}
+      size={size}
+      compact
+      detent={2}
+      label="Pan"
+      noWheel={bare}
+    />
+  );
+  if (bare) return knob;
   return (
     <div className="pan-knob">
-      <Knob
-        def={PAN}
-        value={steps}
-        onChange={(v) => onChange(Math.max(-1, Math.min(1, v / 64)))}
-        onBegin={onBegin}
-        onEnd={onEnd}
-        size={34}
-        compact
-        detent={2}
-        label="Pan"
-      />
+      {knob}
       <span className="knob-value mono pan-readout">
         {steps === 0 ? 'C' : `${steps < 0 ? 'L' : 'R'}${Math.abs(steps)}`}
       </span>
@@ -474,22 +506,91 @@ interface FaderProps {
   label?: string;
   /** On its side, louder to the right: a row has the width a strip has the height for. */
   horizontal?: boolean;
+  /**
+   * A small one on its side, for a track's header: a short cap, no scale, and the wheel left to the
+   * list. With `meter` (what it sets the level of), that level shows in its groove.
+   */
+  mini?: boolean;
+  meter?: string;
 }
 
 const SCALE = [6, 0, -6, -12, -24, -48];
+/** A small fader's cap, along its travel, and its groove's height inside its edges. */
+const MINI_CAP = 10;
+const GROOVE = 4;
 
-export function Fader({ db, onChange, onBegin, onEnd, length, label = 'Volume', horizontal = false }: FaderProps) {
+/**
+ * A level as a line in a small fader's groove (a track header's): the louder side of it, growing to
+ * the right in the meters' colors. Drawn as Meter is: thirty times a second at most, not at all out
+ * of sight, and only when the line would change.
+ */
+function GrooveLevel({ id, width }: { id: string; width: number }) {
+  const canvas = useRef<HTMLCanvasElement>(null);
+  const drawn = useRef({ w: 0, dpr: 0, p: -1 });
+  const seen = useRef(true);
+  const last = useRef(0);
+  useEffect(() => {
+    const el = canvas.current;
+    if (!el || typeof IntersectionObserver === 'undefined') return;
+    const watch = new IntersectionObserver((entries) => {
+      for (const e of entries) seen.current = e.isIntersecting;
+    });
+    watch.observe(el);
+    return () => watch.disconnect();
+  }, []);
+  useFrame((now) => {
+    if (!seen.current || now - last.current < METER_EVERY) return;
+    last.current = now;
+    const [l, r] = engine.meter(id);
+    const p = Math.round(meterPos(Math.max(l, r)) * width * 2) / 2;
+    const lit = p > 0;
+    const d = drawn.current;
+    const dpr = window.devicePixelRatio || 1;
+    if (d.w === width && d.dpr === dpr && d.p === p) return lit;
+    const ctx = prepare(canvas.current, width, GROOVE);
+    if (!ctx) return lit;
+    drawn.current = { w: width, dpr, p };
+    ctx.clearRect(0, 0, width, GROOVE);
+    if (p > 0) {
+      const fill = ctx.createLinearGradient(0, 0, width, 0);
+      fill.addColorStop(0, '#1f9d5b');
+      fill.addColorStop(0.62, '#3ddc84');
+      fill.addColorStop(0.8, '#e2d54a');
+      fill.addColorStop(0.9, '#f59a3d');
+      fill.addColorStop(0.95, '#ff4f5e');
+      ctx.fillStyle = fill;
+      ctx.fillRect(0, 0, p, GROOVE);
+    }
+    return lit;
+  });
+  return <canvas ref={canvas} className="groove-level" style={{ width, height: GROOVE }} />;
+}
+
+export function Fader({
+  db,
+  onChange,
+  onBegin,
+  onEnd,
+  length,
+  label = 'Volume',
+  horizontal: side = false,
+  mini = false,
+  meter,
+}: FaderProps) {
   const root = useRef<HTMLDivElement>(null);
+  const horizontal = side || mini;
   const pos = dbToFader(db);
-  const travel = length - 26;
+  // the cap's travel: its own length and the room at each end taken off (a small one runs end to end)
+  const inset = mini ? 0 : 3;
+  const travel = Math.max(1, length - (mini ? MINI_CAP : 20) - inset * 2);
   const p = useRef(pos);
   const burst = useBurst(onBegin, onEnd);
   const step = (by: number) => onChange(Math.max(-144, Math.min(6, Math.round((db + by) * 10) / 10)));
-  useWheel(root, (steps, e) => burst.tick(() => step(-steps * (e.shiftKey ? 0.1 : 1))));
+  useWheel(root, (steps, e) => burst.tick(() => step(-steps * (e.shiftKey ? 0.1 : 1))), mini);
   return (
     <div
       ref={root}
-      className={`fader${horizontal ? ' horizontal' : ''}`}
+      className={`fader${horizontal ? ' horizontal' : ''}${mini ? ' mini' : ''}`}
       role="slider"
       tabIndex={0}
       aria-label={label}
@@ -537,21 +638,24 @@ export function Fader({ db, onChange, onBegin, onEnd, length, label = 'Volume', 
         });
       }}
     >
-      <div className="fader-slot" />
-      {SCALE.map((d) => (
-        <div
-          key={d}
-          className={`fader-tick${d === 0 ? ' zero' : ''}`}
-          style={
-            horizontal ? { left: 13 + dbToFader(d) * travel - 0.5 } : { top: 13 + (1 - dbToFader(d)) * travel - 0.5 }
-          }
-        />
-      ))}
+      <div className="fader-slot">{mini && meter && <GrooveLevel id={meter} width={length - 2} />}</div>
+      {!mini &&
+        SCALE.map((d) => (
+          <div
+            key={d}
+            className={`fader-tick${d === 0 ? ' zero' : ''}`}
+            style={
+              horizontal ? { left: 13 + dbToFader(d) * travel - 0.5 } : { top: 13 + (1 - dbToFader(d)) * travel - 0.5 }
+            }
+          />
+        ))}
       {/* (moved by a transform: a fader dragged lays nothing out) */}
       <div
         className="fader-cap"
         style={{
-          transform: horizontal ? `translateX(${pos * travel + 3}px)` : `translateY(${(1 - pos) * travel + 3}px)`,
+          transform: horizontal
+            ? `translateX(${pos * travel + inset}px)`
+            : `translateY(${(1 - pos) * travel + inset}px)`,
         }}
       >
         <div className="fader-cap-line" />

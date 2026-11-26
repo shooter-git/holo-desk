@@ -27,12 +27,16 @@ export const GROUPS: [string, [ShowKey, string][]][] = [
       ['trackIcons', 'Track icons'],
       ['trackSub', 'Instrument or input under the name'],
       ['trackButtons', 'On/off, mute, solo and record buttons'],
+      ['trackMix', 'Volume and pan'],
+      ['trackNumbers', 'Track numbers'],
       ['regionNames', 'Region names'],
       ['regionContents', 'Notes and waveforms in regions'],
       ['gridLines', 'Grid lines'],
       ['markers', 'Markers'],
       // (one choice for both: a track switched off is left out of the tracks and of the Mixer)
       ['inactiveTracks', 'Inactive tracks (in the Mixer too)'],
+      // (a strip of its own, as tall as the studio, whether the Inspector is open or not)
+      ['masterRail', 'Stereo Out, pinned at the left'],
     ],
   ],
   [

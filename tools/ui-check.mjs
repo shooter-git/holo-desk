@@ -340,6 +340,9 @@ function problems() {
       // a plugin's or an instrument's window is over the agent's page on purpose too)
       if (top.closest('label')?.contains(el) || (top.closest(over) && !el.closest(over))) continue;
       if (top.closest('.plugin-window, .sheet-scrim') && el.closest('.talk-page')) continue;
+      // (the splitter under the tracks answers a little past its edge, so the foot of the row that
+      // meets it is under that: the tracks scroll it clear, with room to spare past the last of them)
+      if (top.closest('.splitter') && el.closest('.track-list')) continue;
       // (and the commands are over a scan's review on purpose, opened from its header)
       if (top.closest('.bar-scrim, .talk-room') && el.closest('.scan-window')) continue;
       say(`covered by ${name(top)}`);

@@ -28,7 +28,7 @@ import {
   updateTrack,
 } from '../app/actions.ts';
 import { diskSize } from '../app/disk-size.ts';
-import { useLayout } from '../app/layout.ts';
+import { isPhone, useLayout } from '../app/layout.ts';
 import { store, toast, useApp } from '../app/store.ts';
 import { type AvailablePack, installs, useInstalls } from '../audio/installs.ts';
 import { forgetPackFiles } from '../audio/pack-files.ts';
@@ -203,14 +203,18 @@ export function MasterRail() {
   );
 }
 
-/** Whether Stereo Out's strip is pinned at the left: View asks for it, and the window has the room (a desktop's). */
+/**
+ * Whether Stereo Out's strip is pinned at the studio's left edge: View asks for it, and the screen
+ * has the room (a desktop's or a tablet's: a phone keeps it at the left of its Mixer instead).
+ */
 export function useMasterRail(): boolean {
   const layout = useLayout();
-  return useApp((s) => s.show.masterRail) && layout === 'desktop';
+  return useApp((s) => s.show.masterRail) && !isPhone(layout);
 }
 
 export function Inspector({ overlay = false }: { overlay?: boolean }) {
   const pinned = useMasterRail();
+  const trackNumbers = useApp((s) => s.show.trackNumbers);
   const project = useApp((s) => s.project);
   const trackId = useApp((s) => s.selectedTrack);
   const regionIds = useApp((s) => s.selectedRegions);
@@ -425,6 +429,7 @@ export function Inspector({ overlay = false }: { overlay?: boolean }) {
             color={track.color}
             channel={track.channel}
             track={track}
+            number={trackNumbers && project ? project.tracks.indexOf(track) + 1 : undefined}
           />
           {(() => {
             const bus = project?.buses.find((b) => b.id === track.channel.output);

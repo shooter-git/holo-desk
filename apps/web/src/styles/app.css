@@ -48,6 +48,8 @@
   --mono: "JetBrains Mono Variable", "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
   --control: 26px;
   --fs: 12px;
+  /* a channel strip's width (wider under a finger) */
+  --strip: 88px;
   --safe-top: env(safe-area-inset-top, 0px);
   --safe-bottom: env(safe-area-inset-bottom, 0px);
   --safe-left: env(safe-area-inset-left, 0px);
@@ -73,6 +75,7 @@
   :root {
     --control: 38px;
     --fs: 14px;
+    --strip: 104px;
   }
 }
 
@@ -2122,7 +2125,7 @@ a.btn {
   flex-direction: column;
   gap: 4px;
   flex: none;
-  width: 88px;
+  width: var(--strip);
   padding: 6px 5px 6px;
   border-right: 1px solid var(--line);
   background: linear-gradient(180deg, #1e2227, #191c21);
@@ -2130,11 +2133,18 @@ a.btn {
 }
 
 /* (under a finger a strip is wide enough for its slots' names beside their finger-sized buttons,
-   and for the longest of its headings) */
-@media (pointer: coarse) {
-  .strip {
-    width: 104px;
-  }
+   and for the longest of its headings: --strip) */
+
+/* A phone's Stereo Out, pinned (View): the Mixer's first strip, which stays at its left edge while
+   the others scroll by under it */
+.strip.pinned {
+  position: sticky;
+  left: 0;
+  z-index: 2;
+  border-right-color: var(--line-3);
+  box-shadow:
+    inset 1px 0 0 var(--hi),
+    8px 0 16px rgba(0, 0, 0, 0.45);
 }
 
 .strip.selected {
@@ -2478,6 +2488,13 @@ a.btn {
   color: #0e1013;
 }
 
+/* View › Track numbers: the track's place in the song, before its name */
+.strip-name .num {
+  margin-right: 4px;
+  font: 600 0.9em var(--mono);
+  opacity: 0.62;
+}
+
 /* the name being typed, in the name's own place (the strip keeps its height and its width) */
 .strip-name .strip-rename {
   display: block;
@@ -2722,6 +2739,11 @@ a.btn {
 
 .overlay-panel.inspector {
   left: 0;
+}
+
+/* (beside Stereo Out where it's pinned, not over it: the strip's width, its room each side and its line) */
+.workspace.with-rail > .overlay-panel.inspector {
+  left: calc(var(--strip) + 13px);
 }
 
 .overlay-panel.library {

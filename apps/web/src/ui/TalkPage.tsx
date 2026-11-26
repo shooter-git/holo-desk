@@ -32,7 +32,7 @@
  */
 import { ChevronRight, PanelRightClose } from 'lucide-react';
 import { type RefObject, useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { conversation, type Exchange, loadThread, useAgent } from '../app/agent.ts';
+import { conversation, type Exchange, useAgent } from '../app/agent.ts';
 import { type Layout, useLayout } from '../app/layout.ts';
 import { useSeenOnHost } from '../app/notify.ts';
 import { pageCovers, windowOpened } from '../app/page-layout.ts';
@@ -251,13 +251,13 @@ export function TalkPage({ docks = false, leaving = false }: { docks?: boolean; 
     if (docked) markSeen(docked);
   }, [docked]);
 
-  // the song changed while it's open (from the Songs dialog over it): its conversation is read
+  // the song changed while it's open (from the Songs dialog over it): its conversation is read (by
+  // the field, command-field.tsx), and no turn of the other's stays open
   const firstSong = useRef(project);
   useEffect(() => {
     if (project && project !== firstSong.current) {
       firstSong.current = project;
       setOpened(new Set());
-      void loadThread(project);
     }
   }, [project]);
 

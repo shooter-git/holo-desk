@@ -5,8 +5,10 @@
  * pairing code.
  *
  * The server's messages and the runner's answers are in docs/agent.md ("Live channel"). One job runs
- * per thread at a time, and at most two at once; looking for harnesses never holds up the socket.
- * Neither a job's token nor its prompt is ever printed.
+ * per thread at a time, and at most two at once: one held until another has finished is said to the
+ * server (`agent-queued`), so it isn't taken as one that never started, and again as it starts
+ * (`agent-started`). Looking for harnesses never holds up the socket. Neither a job's token nor its
+ * prompt is ever printed.
  */
 import { existsSync, readFileSync } from 'node:fs';
 import { hostname } from 'node:os';
@@ -159,6 +161,8 @@ export function startAgentRunner(o: AgentRunnerOptions): AgentRunner {
   }
   const running = new Map<string, Running>();
   const waiting: AgentRun[] = [];
+  /** Jobs the server was told are held: it hears as each starts. */
+  const held = new Set<string>();
   /** Harnesses signing in, updating or installing: no job starts on them meanwhile, and they take no second one. */
   const relaying = new Set<HarnessId>();
   let known: HarnessInfo[] | null = null;
@@ -194,7 +198,10 @@ export function startAgentRunner(o: AgentRunnerOptions): AgentRunner {
       );
       if (i < 0) return;
       const [next] = waiting.splice(i, 1);
-      if (next) void runJob(next);
+      if (!next) continue;
+      // (one the server was told is held: its limits there count from now)
+      if (held.delete(next.job)) o.send({ type: 'agent-started', job: next.job });
+      void runJob(next);
     }
   }
 
@@ -397,12 +404,20 @@ export function startAgentRunner(o: AgentRunnerOptions): AgentRunner {
           if (running.has(run.job) || waiting.some((w) => w.job === run.job)) return true;
           waiting.push(run);
           startNext();
+          // held until another has finished (two run at once, one per conversation; or its harness is
+          // signing in or updating): the server hears, and lets it wait as long as that takes
+          if (waiting.includes(run)) {
+            held.add(run.job);
+            log(`[agent ${run.job}] waits for another to finish`);
+            o.send({ type: 'agent-queued', job: run.job });
+          }
           return true;
         }
         case 'agent-cancel': {
           const id = String(msg.job ?? '');
           const i = waiting.findIndex((w) => w.job === id);
           if (i >= 0) waiting.splice(i, 1);
+          held.delete(id);
           const r = running.get(id);
           if (r) {
             log(`[agent ${id}] stopped`);
@@ -453,6 +468,7 @@ export function startAgentRunner(o: AgentRunnerOptions): AgentRunner {
 
     stop() {
       waiting.length = 0;
+      held.clear();
       for (const r of running.values()) r.cancel();
     },
 

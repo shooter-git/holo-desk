@@ -2870,6 +2870,26 @@ button.list-item {
 .song-row > svg {
   flex-shrink: 0;
 }
+/* a song this device's request to the agent works on (a ring in place of its icon), or has replied on
+   and not been read (a dot on it): the bar's button's two signs, by song */
+.song-sign {
+  position: relative;
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+}
+.song-sign .song-dot {
+  position: absolute;
+  top: -2px;
+  right: -3px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+}
 .song-name {
   display: flex;
   align-items: center;

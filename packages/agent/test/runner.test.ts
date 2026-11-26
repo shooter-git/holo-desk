@@ -253,9 +253,12 @@ describe('the agent runner', () => {
     expect(parseRun(run(4))).not.toHaveProperty('limitMs');
   });
 
-  it('runs at most two jobs at once, one per thread; the rest wait their turn', async () => {
+  it('runs at most two jobs at once, one per thread; the rest wait their turn, and the server hears so', async () => {
     s = sandbox();
-    const { r, claude, codex } = runner();
+    const { r, sent, claude, codex } = runner();
+    /** What the server was told of jobs held and started, in order. */
+    const turns = () =>
+      sent.filter((m) => m.type === 'agent-queued' || m.type === 'agent-started').map((m) => [m.type, m.job]);
     r.handle(run(1));
     r.handle(run(2, { thread: 'agt_000000000001', workspace: 'agt_000000000001' }));
     r.handle(run(3, { harness: 'codex' }));
@@ -265,12 +268,24 @@ describe('the agent runner', () => {
     // job 2 waits for its thread even when a slot frees
     expect(claude.runs.map((x) => x.job.id)).toEqual(['agj_000000000001']);
     expect(codex.runs.map((x) => x.job.id)).toEqual(['agj_000000000003']);
+    // the two that are held are said at once (the server lets them wait); those that started aren't
+    expect(turns()).toEqual([
+      ['agent-queued', 'agj_000000000002'],
+      ['agent-queued', 'agj_000000000004'],
+    ]);
     codex.runs[0]?.finish();
     await until(() => claude.runs.length === 2);
     expect(claude.runs.map((x) => x.job.id)).toEqual(['agj_000000000001', 'agj_000000000004']);
+    expect(turns().at(-1)).toEqual(['agent-started', 'agj_000000000004']);
     claude.runs[0]?.finish();
     await until(() => claude.runs.length === 3);
     expect(claude.runs[2]?.job.id).toBe('agj_000000000002');
+    expect(turns()).toEqual([
+      ['agent-queued', 'agj_000000000002'],
+      ['agent-queued', 'agj_000000000004'],
+      ['agent-started', 'agj_000000000004'],
+      ['agent-started', 'agj_000000000002'],
+    ]);
   });
 
   it('stops a job when the server cancels it, and drops one still waiting, without a word back', async () => {
@@ -286,6 +301,9 @@ describe('the agent runner', () => {
     expect(claude.runs[0]?.cancelled).toBe(true);
     expect(r.busy()).toEqual({ running: 1, waiting: 0 });
     expect(sent.filter((m) => m.type === 'agent-failed')).toEqual([]);
+    // (the one dropped while it was held is never said to have started)
+    expect(sent.filter((m) => m.type === 'agent-queued').map((m) => m.job)).toEqual(['agj_000000000003']);
+    expect(sent.filter((m) => m.type === 'agent-started')).toEqual([]);
   });
 
   it('relays a sign-in and its pasted code; refuses one while the harness works', async () => {

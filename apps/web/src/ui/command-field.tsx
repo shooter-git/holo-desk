@@ -19,7 +19,7 @@ import {
   useRef,
   useState,
 } from 'react';
-import { playheadTick } from '../app/actions.ts';
+import { openTurn, playheadTick } from '../app/actions.ts';
 import {
   agent,
   agentCommands,
@@ -33,6 +33,7 @@ import {
   loadThread,
   newConversation,
   requestContext,
+  songRequests,
   useAgent,
 } from '../app/agent.ts';
 import { type AttachmentKind, classify, MAX_FILES, type Ready, ready } from '../app/attach.ts';
@@ -152,10 +153,13 @@ export function useCommandField({ mode }: { mode: FieldMode }): CommandFieldStat
       project,
       scan: app.scanView?.id ?? null,
       busy,
+      // this device's requests on other songs: each a row that opens its song at it
+      elsewhere: songRequests(a, project),
     },
     {
       scan: (task, scan) => project && void askScan(task, scan, project, context()),
       reset: () => project && void newConversation(project).catch(() => undefined),
+      open: (r) => openTurn(r.project, r.job),
     },
   );
   const extra: Extra =
@@ -253,8 +257,8 @@ export function useCommandField({ mode }: { mode: FieldMode }): CommandFieldStat
     const read = now.thread?.project === song;
     const toRead = isOn(now) && (!read || conversation(now, song).length > 0);
     if (mode === 'bar' || !isTouch() || !toRead) field.current?.focus({ preventScroll: true });
-    // the reply that came while it was closed has been seen; the song's conversation is read afresh
-    agent.dispatch({ type: 'seen' });
+    // the song's reply that came while it was closed has been seen; its conversation is read afresh
+    agent.dispatch({ type: 'seen', project: song });
     if (song) void loadThread(song);
     return () => {
       if (was instanceof HTMLElement && was.isConnected) was.focus({ preventScroll: true });
@@ -262,6 +266,16 @@ export function useCommandField({ mode }: { mode: FieldMode }): CommandFieldStat
       if (!store.get().bar) draft = { query: '', chips: [] };
     };
   }, [mode]);
+
+  // another song opened under it (from the Songs dialog, or a row of the bar's): that song's reply is
+  // seen now, and its conversation read
+  const shown = useRef(project);
+  useEffect(() => {
+    if (project === shown.current) return;
+    shown.current = project;
+    agent.dispatch({ type: 'seen', project });
+    if (project) void loadThread(project);
+  }, [project]);
 
   useEffect(() => {
     draft = { query, chips };

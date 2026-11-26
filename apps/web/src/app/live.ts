@@ -237,9 +237,10 @@ async function onMessage(msg: Record<string, unknown>): Promise<void> {
     case 'agent-ops': {
       // the in-app agent's changes: one undo step per request, answered once they're in the song and kept
       // on this device (a page that goes before then never answers, and the agent hears it went)
-      const s = store.get();
-      if (!s.project || s.project.id !== msg.project) {
-        ack(false, { error: 'That song is not open in the studio' });
+      // (another song is open: the host hasn't heard yet, and saves the changes itself once it's told)
+      const elsewhere = () => store.get().project?.id !== msg.project;
+      if (elsewhere()) {
+        ack(false, { error: 'That song is not open in the studio', reason: 'not-open' });
         return;
       }
       const job = typeof msg.job === 'string' ? msg.job : '';
@@ -252,7 +253,8 @@ async function onMessage(msg: Record<string, unknown>): Promise<void> {
       const ops = Array.isArray(msg.ops) ? (msg.ops as Op[]) : [];
       const r = await applyJob(ops, job, batch, String(msg.label ?? 'Changes'));
       if (!r.ok) {
-        ack(false, { error: r.error ?? 'The changes did not apply' });
+        // (another song opened while they waited their turn: they never went in here)
+        ack(false, { error: r.error ?? 'The changes did not apply', ...(elsewhere() ? { reason: 'not-open' } : {}) });
         return;
       }
       // (a reload or a closed tab after this brings them back, and saves them: they're never lost unsaid)
@@ -734,6 +736,16 @@ export function connectLive(): void {
   };
   if (!stateTimer) stateTimer = window.setInterval(report, 250);
 }
+
+// another song opened: the host hears at once, not at the next report (a request of the agent's at
+// work on the one that was left saves its changes on the host from then on)
+let reportedSong: string | null = null;
+store.subscribe(() => {
+  const now = store.get().project?.id ?? null;
+  if (now === reportedSong) return;
+  reportedSong = now;
+  report();
+});
 
 /** The last minute of what was played here, every port: the agent may ask for it after the fact. */
 const memory = new PlayedMemory();

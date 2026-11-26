@@ -125,7 +125,22 @@ export function apply(ops: Op[], label: string, own = true): Project | null {
  */
 function userStep(label: string): void {
   const s = store.get();
-  if (s.agentReport && Object.values(s.agentJobs).some(Boolean)) reportHistory('step', label);
+  if (s.agentReport && agentAtWork(s)) reportHistory('step', label);
+}
+
+/**
+ * A request of this device's is at work on the open song (as the studio knows: from its first batch,
+ * or from the host's word). One at work on another song isn't this song's.
+ */
+function agentAtWork(s: AppState): boolean {
+  const open = s.project?.id;
+  if (!open) return false;
+  const a = agent.get();
+  const here = (job: string) => (a.jobs[job]?.project ?? open) === open;
+  return (
+    Object.entries(s.agentJobs).some(([job, running]) => running && here(job)) ||
+    Object.values(a.jobs).some((j) => j.device === a.me && j.project === open && isLive(j.state))
+  );
 }
 
 function changed(project: Project): void {
@@ -941,6 +956,42 @@ async function saveLeft(left: AppState): Promise<void> {
   }
 }
 
+/** The longest another song waits to open while the one being left is saved for its agent. */
+const LEAVE_MS = 4000;
+
+/**
+ * Before another song opens while this device's request is at work on the open one: the open song is
+ * saved first, for at most `LEAVE_MS`. The agent's changes are saved on the host from the moment the
+ * song is left, so they land on the song with everything done here so far (its own earlier changes
+ * among them), and the song it reads next is whole. What isn't saved in time (the host out of reach)
+ * stays on this device and is put together with the agent's when the song opens here again, as when a
+ * page goes. With no request at work on it, nothing waits: the song is saved in the background.
+ */
+async function saveBeforeLeaving(): Promise<void> {
+  const leaving = store.get().project?.id;
+  const end = Date.now() + LEAVE_MS;
+  for (;;) {
+    const s = store.get();
+    if (!leaving || s.project?.id !== leaving || !LEFT_TO_SAVE.has(s.saveState) || !agentAtWork(s)) return;
+    const left = end - Date.now();
+    if (left <= 0) return;
+    let timer = 0;
+    const late = new Promise<null>((done) => {
+      timer = window.setTimeout(() => done(null), left);
+    });
+    const saved = await Promise.race([saveSoon(0), late]);
+    window.clearTimeout(timer);
+    // (not saved: the host away, or changed somewhere else; it's kept on the device)
+    if (saved === null) return;
+  }
+}
+
+/** A song about to open in place of the open one: once the one being left is saved for its agent (`saveBeforeLeaving`). */
+async function leavingFor(next: Project): Promise<Project> {
+  if (next.id !== store.get().project?.id) await saveBeforeLeaving();
+  return next;
+}
+
 /**
  * Open a song as the host has it (`discard`: this device's changes to it that the host doesn't have
  * go, the other version chosen).
@@ -981,7 +1032,7 @@ export function load(project: Project, { discard = false }: { discard?: boolean 
 
 export async function openProject(id: string): Promise<void> {
   try {
-    load(await api.project(id));
+    load(await leavingFor(await api.project(id)));
     store.set({ dialog: null });
   } catch (err) {
     toast(err instanceof Error ? err.message : String(err), 'error');
@@ -1013,7 +1064,7 @@ export async function renameSong(id: string, title: string): Promise<boolean> {
 }
 
 export async function createProject(title = 'Untitled'): Promise<void> {
-  load(await api.create(title));
+  load(await leavingFor(await api.create(title)));
   store.set({ dialog: null });
 }
 
@@ -1021,7 +1072,7 @@ export async function importMidiFile(file: File): Promise<void> {
   try {
     // a score (MusicXML, .mxl) or a MIDI file, by its name
     const score = /\.(musicxml|xml|mxl)$/i.test(file.name);
-    load(await (score ? api.importScore(file) : api.importMidi(file)));
+    load(await leavingFor(await (score ? api.importScore(file) : api.importMidi(file))));
     if (score) store.set({ editor: 'piano', noteView: 'score', scoreAll: true });
     store.set({ dialog: null });
     toast(`Imported ${file.name}`);
@@ -1168,40 +1219,19 @@ function openAtTurn(project: string, turn: string | null): void {
   waitingToOpen = off;
 }
 
-/** A scan's request carries on when its studio opens another song (the host's rule): any other stops. */
-const CARRIES_ON = new Set(['Read this scan', 'Check this scan', 'Fix what was flagged']);
-
 /**
- * A notice was tapped (the service worker posts `open-turn` to a studio already open): HO[LO] on that
- * song, with the page open at that reply. Going to another song stops this device's request at work on
- * the open one, so that asks first.
+ * A notice was tapped (the service worker posts `open-turn` to a studio already open), or a row of the
+ * bar's for a request on another song: HO[LO] on that song, with the page open at that reply. A
+ * request at work on the song that's left carries on there.
  */
 export function openTurn(project: string, turn: string | null): void {
   if (!/^[\w-]{1,64}$/.test(project)) return;
   const at = turn !== null && JOB_ID.test(turn) ? turn : null;
-  const s = store.get();
-  if (s.project?.id === project) {
+  if (store.get().project?.id === project) {
     openAtTurn(project, at);
     return;
   }
-  const go = () => void openProject(project).then(() => openAtTurn(project, at));
-  const a = agent.get();
-  const working = Object.values(a.jobs).some(
-    (j) => j.device === a.me && j.project === s.project?.id && isLive(j.state) && !CARRIES_ON.has(j.request),
-  );
-  if (!working) {
-    go();
-    return;
-  }
-  toast(
-    `The agent is still at work on “${s.project?.title ?? 'this song'}”: going to the other song stops it.`,
-    'info',
-    15000,
-    {
-      label: 'Go anyway',
-      run: go,
-    },
-  );
+  void openProject(project).then(() => openAtTurn(project, at));
 }
 
 /** Where a link asked the views to start (read once by the tracks area). */
@@ -2521,7 +2551,7 @@ export async function sendToCreation(quiet = false): Promise<{ ok: boolean; text
 
 export async function openPiece(creation: string, piece: string): Promise<void> {
   try {
-    load(await api.openPiece(creation, piece));
+    load(await leavingFor(await api.openPiece(creation, piece)));
     store.set({ dialog: null });
   } catch (err) {
     toast(err instanceof Error ? err.message : String(err), 'error', 8000);

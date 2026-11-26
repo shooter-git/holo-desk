@@ -1,20 +1,23 @@
 /**
  * The agent's jobs: a request from a device's studio, carried out by a harness the runner starts on
- * this computer. One job runs per song. Each has a token for its tools (valid only while it runs) and
- * belongs to the runner it was handed to: only that runner may say how it goes. Its changes reach only
- * the studio that asked, as one undo step; when its turn is done the studio saves, and the song as
- * saved is what the agent saw, for "since your last reply" next time.
+ * this computer. One job runs per song, and a device may have jobs on several songs at once. Each has a
+ * token for its tools (valid only while it runs) and belongs to the runner it was handed to: only that
+ * runner may say how it goes. Its changes reach only the studio that asked, as one undo step; when its
+ * turn is done the studio saves, and the song as saved is what the agent saw, for "since your last
+ * reply" next time.
  *
- * The user may leave while it works (a phone switched to another app, the tab closed). Its changes
- * still land: while the studio that asked is away, they're saved here as revisions by "Agent", and
- * that studio picks them up as the job's undo step when it's back (`awayFor`). What needs the studio
- * itself (playing, listening, its meters) is refused meanwhile, saying so (`BACKGROUND`).
+ * The user may leave while it works (a phone switched to another app, the tab closed, another song
+ * opened). Its changes still land: while the studio that asked is away from the song, they're saved
+ * here as revisions by "Agent", and that studio picks them up as the job's undo step when it's back
+ * on it (`awayFor`). What needs the studio itself (playing, listening, its meters) is refused
+ * meanwhile, saying so (`BACKGROUND`).
  *
- * A job is `waiting` until the runner or its tools are first heard from, then `running`. It ends
- * `done`, `awaiting` (it asked for a permission: the user's click starts the follow-up), `failed`
- * (the harness failed, the runner dropped, it went quiet for 15 minutes or ran past its ceiling) or
- * `cancelled` (Stop, the requester opened another song or undid the job's change, the device was
- * removed, the agent turned off).
+ * A job is `waiting` until the runner or its tools are first heard from, then `running`. One its
+ * runner holds until another has finished (`agent-queued`) waits without a limit of its own: its
+ * quiet and its ceiling start as it starts. It ends `done`, `awaiting` (it asked for a permission: the
+ * user's click starts the follow-up), `failed` (the harness failed, the runner dropped, it went quiet
+ * for 15 minutes or ran past its ceiling) or `cancelled` (Stop, the requester undid the job's change,
+ * the device was removed, the agent turned off).
  */
 import { randomBytes } from 'node:crypto';
 import {
@@ -91,6 +94,8 @@ export interface JobView {
   error?: string;
   started: number;
   finished?: number;
+  /** The song's title as the request was made: a studio with another song open names it by this. */
+  title?: string;
 }
 
 /** A harness on the runner's computer, as the runner reports it. */
@@ -150,6 +155,10 @@ export interface AgentJob {
    */
   quiet: NodeJS.Timeout | null;
   calls: number;
+  /** Its runner holds it until another has finished: it isn't quiet, and its ceiling hasn't begun. */
+  queued: boolean;
+  /** Its ceiling (ms), counted from when it starts. */
+  ceiling: number;
   /** Its turn is over: the studio is saving, and the song is being read. */
   ending: boolean;
   /** The attachments its request carried (its tools may read these, and earlier ones on its thread). */
@@ -238,11 +247,15 @@ export interface AwayChanges {
   song: Project;
 }
 
-/** A device's studio that left a song: when, whether its page was hidden then, and what it showed. */
+/**
+ * A device's studio that left a song: when, whether its page was hidden then, and what it showed.
+ * `elsewhere`: it opened another song (it isn't waited for, as one that reloads is).
+ */
 interface Left {
   at: number;
   hidden: boolean;
   state: EditorState;
+  elsewhere?: boolean;
 }
 
 /** What one part of a listen gives back. */
@@ -286,11 +299,16 @@ export const AWAY =
 export const WENT =
   'The studio that asked went away before saying whether this change went in: read the song again, and make the change again only if it isn’t there';
 /**
- * What a tool that needs the requester's studio itself hears while that studio is away (its page in
- * the background or closed): changes still land, and what's to hear or see waits for the reply's view.
+ * What a tool that needs the requester's studio itself hears while that studio is away from the song
+ * (its page in the background or closed, or another song open in it): changes still land, and what's
+ * to hear or see waits for the reply's view.
  */
 export const BACKGROUND =
-  'The user’s studio isn’t in front of them now (its page is in the background or closed), so nothing can be played, heard or read in it until they’re back. Changes to the song still land: carry on, and put what there is to hear or see in your reply’s view, for when they’re back';
+  'The user doesn’t have this song in front of them now (their studio’s page is in the background or closed, or they have another song open in it), so nothing can be played, heard or read in it until they’re back. Changes to the song still land: carry on, and put what there is to hear or see in your reply’s view, for when they’re back';
+/** What the line under the bar says of a job its runner holds until another has finished. */
+export const QUEUED = 'Waiting for another request to finish';
+/** What a studio answers a change with when the job's song isn't the one it has open (it just opened another). */
+export const NOT_OPEN = 'not-open';
 
 export interface Limits {
   /**
@@ -712,6 +730,7 @@ export class Jobs implements AgentHooks {
           state: 'waiting',
           request,
           started: Date.now(),
+          title: now.title,
         },
         thread: thread.id,
         harness: thread.harness,
@@ -724,6 +743,8 @@ export class Jobs implements AgentHooks {
         dropped: null,
         quiet: null,
         calls: 0,
+        queued: false,
+        ceiling,
         ending: false,
         attachments: [...attachments],
         listen: null,
@@ -775,8 +796,7 @@ export class Jobs implements AgentHooks {
       extra: turnExtra(job),
     });
     // it runs while it's heard from, up to its ceiling
-    job.clock = setTimeout(() => this.end(job, 'failed', `It took longer than ${inWords(ceiling)}`, true), ceiling);
-    job.clock.unref?.();
+    this.startClock(job);
     this.heard(job);
     // a permission still waiting on this song is passed over by the new request
     for (const other of this.jobs.values()) {
@@ -993,6 +1013,14 @@ export class Jobs implements AgentHooks {
     });
   }
 
+  /** The job's ceiling counts from now: as it's handed to its runner, and again as a held one starts. */
+  private startClock(job: AgentJob): void {
+    if (job.clock) clearTimeout(job.clock);
+    const ceiling = job.ceiling;
+    job.clock = setTimeout(() => this.end(job, 'failed', `It took longer than ${inWords(ceiling)}`, true), ceiling);
+    job.clock.unref?.();
+  }
+
   private clearTimers(job: AgentJob): void {
     if (job.clock) clearTimeout(job.clock);
     if (job.dropped) clearTimeout(job.dropped);
@@ -1005,14 +1033,16 @@ export class Jobs implements AgentHooks {
   /**
    * The job was heard from (a tool call, a line under the bar, a message from its runner): its quiet
    * starts again, unless a tool call is under way, which keeps it from being quiet until it answers.
+   * One its runner holds isn't quiet either: it hasn't started.
    */
   private heard(job: AgentJob): void {
     if (job.quiet) clearTimeout(job.quiet);
     job.quiet = null;
-    if (!isLive(job) || job.ending || job.calls > 0) return;
+    if (!isLive(job) || job.ending || job.calls > 0 || job.queued) return;
     const idle = inWords(this.limits.idleMs);
     job.quiet = setTimeout(() => {
-      // (one never heard from at all hasn't started: the runner may be busy with other songs' jobs)
+      // (one never heard from at all hasn't started: a runner that doesn't say it holds a job, busy
+      // with other songs' jobs)
       const started = job.view.state !== 'waiting';
       this.end(job, 'failed', started ? `It went quiet for ${idle}` : `It didn’t start in ${idle}`, true);
     }, this.limits.idleMs);
@@ -1068,6 +1098,12 @@ export class Jobs implements AgentHooks {
     const job = typeof msg.job === 'string' ? this.jobs.get(msg.job) : undefined;
     // only from the runner it was handed to, and only while it runs
     if (!job || this.assigned.get(job) !== client || !isLive(job) || job.ending) return;
+    if (msg.type === 'agent-queued') {
+      this.held(job);
+      return;
+    }
+    // (anything else from its runner about it: it has started)
+    if (job.queued) this.started(job);
     this.heard(job);
     switch (msg.type) {
       case 'agent-progress':
@@ -1105,6 +1141,31 @@ export class Jobs implements AgentHooks {
   }
 
   /**
+   * Its runner holds the job until another has finished (it runs two at once, and one per
+   * conversation): it waits as long as that takes, with no quiet and no ceiling of its own (those
+   * ahead of it have theirs), and the line under the bar says so. Stop still stops it.
+   */
+  private held(job: AgentJob): void {
+    if (job.queued || job.view.state !== 'waiting') return;
+    job.queued = true;
+    if (job.clock) clearTimeout(job.clock);
+    job.clock = null;
+    this.heard(job);
+    job.view.line = QUEUED;
+    this.tell(job);
+  }
+
+  /** A job its runner held starts: its ceiling and its quiet count from now. */
+  private started(job: AgentJob): void {
+    job.queued = false;
+    this.startClock(job);
+    if (job.view.line === QUEUED) {
+      delete job.view.line;
+      this.tell(job);
+    }
+  }
+
+  /**
    * A studio undid, redid or made a step: the agent hears of it before its next reply. Undoing a step
    * of the device's own running job stops that job.
    */
@@ -1130,8 +1191,9 @@ export class Jobs implements AgentHooks {
       this.end(ours, 'cancelled', 'You undid its change', true);
   }
 
-  state(client: LiveClient, was: string | null): void {
+  state(client: LiveClient, before: EditorState | null): void {
     const device = client.device;
+    const was = before?.project ?? null;
     const now = client.state?.project ?? null;
     if (device && now) {
       const key = backKey(device, now);
@@ -1143,12 +1205,23 @@ export class Jobs implements AgentHooks {
       for (const back of [...(this.comingBack.get(key) ?? [])]) back();
       this.keepPickedUp(device, now, client.state?.revision);
     }
-    if (!device || !was || was === now) return;
-    for (const job of this.jobs.values()) {
-      // a scan preset carries on without the studio (its changes are saved here, with a restore point)
-      if (job.view.device !== device || job.view.project !== was || !isLive(job) || job.preset) continue;
-      if (!this.o.live.studioFor(device, was)) this.end(job, 'cancelled', 'You opened another song', true);
-    }
+    if (!device || !before || !was || was === now) return;
+    // the studio opened another song: a job of its on the one it left carries on, its changes saved
+    // here from now on (as when its page goes), for it to pick up when it has that song open again.
+    // What it showed there is kept for the agent to read; it isn't waited for, as a reload is
+    if (!this.o.live.studioFor(device, was)) this.leave(device, { ...before, project: was }, true, true);
+  }
+
+  /** A device's studio left a song: remembered for a day (what it showed, whether it's waited for). */
+  private leave(device: string, shown: EditorState, hidden: boolean, elsewhere: boolean): void {
+    const now = Date.now();
+    for (const [key, l] of this.left) if (now - l.at > LEFT_LIFE) this.left.delete(key);
+    this.left.set(backKey(device, shown.project as string), {
+      at: now,
+      hidden,
+      state: shown,
+      ...(elsewhere ? { elsewhere } : {}),
+    });
   }
 
   /**
@@ -1175,11 +1248,8 @@ export class Jobs implements AgentHooks {
     // a studio leaving a song: whether its page was hidden (in the background, closed) or in view (a
     // reload, its network), and what it last showed
     const shown = client.state;
-    if (client.role === 'editor' && client.device && shown?.project) {
-      const now = Date.now();
-      for (const [key, l] of this.left) if (now - l.at > LEFT_LIFE) this.left.delete(key);
-      this.left.set(backKey(client.device, shown.project), { at: now, hidden: isHidden(client), state: shown });
-    }
+    if (client.role === 'editor' && client.device && shown?.project)
+      this.leave(client.device, shown, isHidden(client), false);
     if (client.role !== 'runner') return;
     // its sign-ins and updates under way, and its harnesses, went with it
     for (const [harness, r] of this.relays) if (r.runner === client) this.relays.delete(harness);
@@ -1308,7 +1378,8 @@ export class Jobs implements AgentHooks {
    * The requester's studio with the job's song open: at once, or once it's back within `awayMs` of
    * leaving (and `budgetMs`): a reload, or its network back after dropping. Meanwhile the line under
    * the bar says so, for the other devices that have the song open. A studio whose page was hidden as
-   * it went (in the background, closed), or that's been gone longer, isn't waited for. Refused 409
+   * it went (in the background, closed), that opened another song, or that's been gone longer, isn't
+   * waited for. Refused 409
    * `away` (`BACKGROUND`) when it isn't there. A scan preset carries on without its studio, so it isn't
    * waited for: 403 at once, as ever.
    */
@@ -1319,7 +1390,8 @@ export class Jobs implements AgentHooks {
     const key = backKey(job.view.device, job.view.project);
     const left = this.left.get(key);
     // (gone with its page in view: a reload, or its network, may bring it back in a moment)
-    const wait = left && !left.hidden ? Math.min(left.at + this.limits.awayMs - Date.now(), budgetMs) : 0;
+    const wait =
+      left && !left.hidden && !left.elsewhere ? Math.min(left.at + this.limits.awayMs - Date.now(), budgetMs) : 0;
     if (wait > 0 && isLive(job) && !job.ending) {
       const before = job.view.line;
       const waiting = 'Waiting for the studio that asked to come back';
@@ -1432,13 +1504,16 @@ export class Jobs implements AgentHooks {
         true,
       );
       if (answer.error === GONE) throw new Refusal(409, WENT, 'away');
-      if (!hidden || answer.error !== NO_ANSWER) {
+      // (it has just opened another song, and hasn't said so here yet: nothing went in there, and
+      // the batch is saved here, as the rest will be)
+      const elsewhere = !answer.ok && answer.reason === NOT_OPEN;
+      if (!elsewhere && (!hidden || answer.error !== NO_ANSWER)) {
         if (!answer.ok)
           throw new Refusal(answer.error === NO_ANSWER ? 504 : 400, answer.error ?? 'The studio refused the change');
         return typeof answer.revision === 'number' ? { ok: true, revision: answer.revision } : { ok: true };
       }
       // (should it wake and apply the batch after all, its id has it go in there once)
-      this.unanswered(studio);
+      if (!elsewhere) this.unanswered(studio);
     }
     return this.saveHere(job, ops, label, batch);
   }

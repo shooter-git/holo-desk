@@ -25,6 +25,7 @@ import {
   renameSong,
   saveListedBounce,
 } from '../app/actions.ts';
+import { songSigns, useAgent } from '../app/agent.ts';
 import { api, type Creation, type ProjectRow } from '../app/api.ts';
 import { diskSize } from '../app/disk-size.ts';
 import { type ListedBounce, songBounces } from '../app/host-bounce.ts';
@@ -38,6 +39,27 @@ function pressable(open: () => void) {
     e.preventDefault();
     open();
   };
+}
+
+/**
+ * A song's icon in the list. With the agent on: a ring in its place while a request of this device's
+ * works on the song, and a dot on it while that request's reply hasn't been read.
+ */
+function SongIcon({ sign }: { sign: 'busy' | 'done' | undefined }) {
+  if (!sign) return <FileMusic size={16} className="muted" />;
+  const says = sign === 'busy' ? 'The agent is at work on this song' : 'A reply is waiting on this song';
+  return (
+    <span className="song-sign" role="img" aria-label={says} title={says}>
+      {sign === 'busy' ? (
+        <span className="ring" />
+      ) : (
+        <>
+          <FileMusic size={16} className="muted" />
+          <span className="song-dot" />
+        </>
+      )}
+    </span>
+  );
 }
 
 export function SongGroups({
@@ -67,6 +89,8 @@ export function SongGroups({
   const [describing, setDescribing] = useState<string | null>(null);
   const [artist, setArtist] = useState('');
   const [album, setAlbum] = useState('');
+  // this device's requests to the agent, by song: at work, or replied to and not read
+  const signs = songSigns(useAgent((a) => a));
   if (rows === null) return <div className="list-item muted">Loading…</div>;
   const groups = searchSongs(groupSongs(rows, creations), query);
   const names = songDetailNames(rows);
@@ -295,7 +319,7 @@ export function SongGroups({
                     onClick={() => void openProject(r.id)}
                     onKeyDown={pressable(() => void openProject(r.id))}
                   >
-                    <FileMusic size={16} className="muted" />
+                    <SongIcon sign={signs.get(r.id)} />
                     <span className="song-name">
                       <span className="strong">{r.title}</span>
                       {r.piece && <span className="muted">{r.piece}</span>}

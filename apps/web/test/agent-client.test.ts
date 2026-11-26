@@ -133,7 +133,7 @@ describe('a job, as the host tells it', () => {
     expect(ex).toMatchObject({ working: false, reply: 'Added a bass line in bars 5–8.', permission: null });
     expect(A.barSign(a, 'prj_a')).toBeNull();
     // (the bar was open: nothing waits to be seen)
-    expect(a.unseen).toBe(false);
+    expect(a.unseen).toEqual([]);
   });
 
   it('marks the bar’s button when one of this device’s ends while the bar is closed', () => {
@@ -150,14 +150,110 @@ describe('a job, as the host tells it', () => {
     expect(A.barSign(theirs, 'prj_a')).toBeNull();
     expect(
       A.reduce(theirs, { type: 'status', job: job({ device: 'dev_other', state: 'done' }), barOpen: false }).unseen,
-    ).toBe(false);
+    ).toEqual([]);
 
     a = A.reduce(a, { type: 'status', job: job({ state: 'done', reply: 'Done.' }), barOpen: false });
     expect(A.barSign(a, 'prj_a')).toBe('done');
     // told again (the same end), still once; opening the bar clears it
     a = A.reduce(a, { type: 'status', job: job({ state: 'done', reply: 'Done.' }), barOpen: false });
-    a = A.reduce(a, { type: 'seen' });
+    expect(a.unseen).toEqual(['prj_a']);
+    a = A.reduce(a, { type: 'seen', project: 'prj_a' });
     expect(A.barSign(a, 'prj_a')).toBeNull();
+  });
+
+  it('keeps a reply on another song waiting until that song’s is seen', () => {
+    const other = (patch: Partial<JobView> = {}) =>
+      job({ id: 'agj_000000000002', project: 'prj_b', title: 'Second song', started: 2000, ...patch });
+    let a = on();
+    a = A.reduce(a, { type: 'status', job: job({ state: 'running', title: 'First song' }), barOpen: false });
+    a = A.reduce(a, { type: 'status', job: other({ state: 'running', line: 'Writing the bridge' }), barOpen: false });
+    // each song's button turns for its own request only
+    expect(A.barSign(a, 'prj_a')).toBe('busy');
+    expect(A.barSign(a, 'prj_b')).toBe('busy');
+    expect(A.barSign(a, 'prj_c')).toBeNull();
+    // with one song open, the other's request is the bar's to offer; with neither, both, oldest first
+    expect(A.songRequests(a, 'prj_a')).toEqual([
+      {
+        project: 'prj_b',
+        job: 'agj_000000000002',
+        title: 'Second song',
+        working: true,
+        line: 'Writing the bridge',
+        started: 2000,
+      },
+    ]);
+    expect(A.songRequests(a, 'prj_c').map((r) => r.project)).toEqual(['prj_a', 'prj_b']);
+    expect([...A.songSigns(a)]).toEqual([
+      ['prj_a', 'busy'],
+      ['prj_b', 'busy'],
+    ]);
+
+    // the first song's ends while the bar is open on the second (`barOpen` false: not on its song)
+    a = A.reduce(a, {
+      type: 'status',
+      job: job({ state: 'done', reply: 'Done.', title: 'First song' }),
+      barOpen: false,
+    });
+    expect(a.unseen).toEqual(['prj_a']);
+    // the second song is still worked on: its ring, and the dot for the first's reply
+    expect(A.barSign(a, 'prj_b')).toBe('busy done');
+    expect(A.barSign(a, 'prj_c')).toBe('done');
+    expect(A.songRequests(a, 'prj_b')).toMatchObject([{ project: 'prj_a', working: false, line: null }]);
+    // (those at work come first)
+    expect(A.songRequests(a, null).map((r) => [r.project, r.working])).toEqual([
+      ['prj_b', true],
+      ['prj_a', false],
+    ]);
+    expect([...A.songSigns(a)]).toEqual([
+      ['prj_b', 'busy'],
+      ['prj_a', 'done'],
+    ]);
+    // seeing the second song's conversation doesn't take the first's reply as seen
+    a = A.reduce(a, { type: 'seen', project: 'prj_b' });
+    expect(a.unseen).toEqual(['prj_a']);
+    a = A.reduce(a, { type: 'seen', project: 'prj_a' });
+    expect(a.unseen).toEqual([]);
+    expect(A.barSign(a, 'prj_a')).toBeNull();
+    expect(A.songRequests(a, null).map((r) => r.project)).toEqual(['prj_b']);
+    // another device's request on a song is never this device's to go to
+    const theirs = A.reduce(on(), {
+      type: 'status',
+      job: other({ device: 'dev_other', state: 'running' }),
+      barOpen: false,
+    });
+    expect(A.songRequests(theirs, 'prj_a')).toEqual([]);
+    // a new conversation on a song lets its waiting reply go
+    let b = A.reduce(on(), { type: 'status', job: job({ state: 'done' }), barOpen: false });
+    expect(b.unseen).toEqual(['prj_a']);
+    b = A.reduce(b, { type: 'reset', project: 'prj_a' });
+    expect(b.unseen).toEqual([]);
+  });
+
+  it('offers this device’s requests on other songs as rows of the bar', () => {
+    const opened: string[] = [];
+    const run = { scan: () => undefined, reset: () => undefined, open: (r: { job: string }) => opened.push(r.job) };
+    const elsewhere = [
+      { project: 'prj_b', job: 'agj_000000000002', title: 'Second song', working: true, line: null, started: 2 },
+      { project: 'prj_c', job: 'agj_000000000003', title: null, working: false, line: null, started: 3 },
+    ];
+    const rows = A.agentCommands({ on: true, project: 'prj_a', scan: null, busy: true, elsewhere }, run);
+    // a reply that waits is offered with nothing typed, even while this song's request works; a song
+    // still at work is found by name
+    expect(rows.suggest.map((r) => [r.id, r.title, r.group])).toEqual([
+      ['agent-song-prj_c', 'Another song: a reply is waiting', 'Agent'],
+    ]);
+    expect(rows.commands.map((r) => [r.id, r.title])).toEqual([
+      ['agent-new', 'Start a new conversation with the agent'],
+      ['agent-song-prj_b', '“Second song”: the agent is at work'],
+      ['agent-song-prj_c', 'Another song: a reply is waiting'],
+    ]);
+    rows.suggest[0]?.run();
+    expect(opened).toEqual(['agj_000000000003']);
+    // none on other songs: nothing more than before
+    expect(A.agentCommands({ on: true, project: 'prj_a', scan: null, busy: false }, run).suggest).toEqual([]);
+    expect(A.agentCommands({ on: false, project: 'prj_a', scan: null, busy: false, elsewhere }, run).suggest).toEqual(
+      [],
+    );
   });
 
   it('tells the studio whether its job runs, and the step’s final name', () => {
@@ -739,7 +835,10 @@ describe('this device’s requests, followed across a reload', () => {
     expect(list).toEqual([
       { id: asked.id, project: 'prj_a', device: 'dev_me', request: 'Brighter chorus', started: 1000 },
     ]);
-    list = step(list, { type: 'seen' });
+    // (the bar opened on another song: this one's reply still waits)
+    list = step(list, { type: 'seen', project: 'prj_b' });
+    expect(list).toHaveLength(1);
+    list = step(list, { type: 'seen', project: 'prj_a' });
     expect(list).toEqual([]);
     // one that ends with the bar open was seen as it came; another device's isn't this one's to follow
     list = step(list, { type: 'status', job: { ...asked, state: 'running' }, barOpen: true });
@@ -747,6 +846,15 @@ describe('this device’s requests, followed across a reload', () => {
     expect(list).toEqual([]);
     list = step(list, { type: 'status', job: { ...asked, device: 'dev_other', state: 'running' }, barOpen: false });
     expect(list).toEqual([]);
+    // two at work on two songs keep their places at each one's word (nothing to keep again)
+    const second = job({ id: 'agj_00000000f002', project: 'prj_b', started: 2000, state: 'running' });
+    list = step(list, { type: 'sent', job: { ...asked, state: 'running' } });
+    list = step(list, { type: 'sent', job: second });
+    for (const line of ['Bar 1', 'Bar 2']) {
+      list = step(list, { type: 'status', job: { ...asked, state: 'running', line }, barOpen: false });
+      list = step(list, { type: 'status', job: { ...second, line }, barOpen: false });
+      expect(list.map((f) => f.id)).toEqual([asked.id, second.id]);
+    }
   });
 
   it('come back after a reload: the button turns while one works, and says a reply waits once it has', async () => {
@@ -807,7 +915,7 @@ describe('this device’s requests, followed across a reload', () => {
     B.store.set({ bar: false });
     await B.agent.catchUp();
     expect(B.agent.barSign(B.agent.agent.get(), 'prj_a')).toBe('done');
-    B.agent.agent.dispatch({ type: 'seen' });
+    B.agent.agent.dispatch({ type: 'seen', project: 'prj_a' });
     a = B.agent.agent.get();
     expect(B.agent.barSign(a, 'prj_a')).toBeNull();
     expect(JSON.parse(storage.getItem('holo:agent-follow') ?? '')).toEqual([]);

@@ -2,12 +2,14 @@ import { describeChanges, type Project } from '@holo/session';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   type AgentJob,
+  BACKGROUND,
   briefWarnings,
   chooseText,
   type Jobs,
   LOOK_EVERY_MS,
   parseHarnessEvent,
   parseHarnesses,
+  QUEUED,
 } from '../src/agent/jobs.ts';
 import { agentApp, agentWorld, auth, CLAUDE, type Msg, settle, until, waitFor } from './agent-fakes.ts';
 
@@ -392,16 +394,114 @@ describe('one job per song', () => {
 });
 
 describe('ending early', () => {
-  it('cancels the job when the requester opens another song (in every tab that had it)', async () => {
-    const { start, tool, s, token, studio, desk, run, status } = await setup();
+  it('carries on when the requester opens another song: its changes are saved here until that song is open there again', async () => {
+    const { start, tool, s, song, token, studio, desk, run, status, services, app } = await setup();
+    const other = await song('Other');
     const tab = studio(token, s.id, 'second tab');
     const { job, token: jobToken } = await start({ project: s.id, text: 'A bass line' });
-    tab.say({ type: 'state', state: { project: 'prj_other', revision: 0 } });
-    expect(status(desk, job)).toMatchObject({ state: 'waiting' });
-    desk.say({ type: 'state', state: { project: 'prj_other', revision: 0 } });
-    expect(status(desk, job)).toMatchObject({ state: 'cancelled', error: 'You opened another song' });
-    expect(run.got('agent-cancel')).toEqual([{ type: 'agent-cancel', job }]);
-    expect((await tool(job, jobToken, 'GET', '/song')).statusCode).toBe(403);
+    // (the studios are told its song's title: one with another song open names it by that)
+    expect(status(desk, job)).toMatchObject({ state: 'waiting', title: 'Song' });
+    const before = (services.store.get(s.id) as Project).revision;
+    const showing = (project: string, revision: number, tick = 0, regions: string[] = []) => ({
+      type: 'state',
+      state: { project, revision, tick, selection: { track: null, regions, notes: 0 } },
+    });
+    const title = (t: string) => [{ op: 'setProject', patch: { title: t } }];
+    const change = (id: string, key: string, t: string, batch: string) =>
+      tool(id, key, 'POST', '/ops', { ops: title(t), label: 'Title', batch });
+    /** The changes sent to this device's studios (either tab), by batch. */
+    const sent = () =>
+      [desk, tab]
+        .flatMap((ws) => ws.got('agent-ops'))
+        .map((m) => m.batch)
+        .sort();
+    desk.say(showing(s.id, before, 960, ['rgn_a']));
+
+    // one tab opens another song: the other still has it, and takes its changes
+    tab.say(showing(other.id, 0));
+    expect((await change(job, jobToken, 'One', 'b1')).json()).toEqual({ ok: true, revision: before });
+    expect(desk.got('agent-ops').map((m) => m.batch)).toEqual(['b1']);
+
+    // the last studio that had it opens another song: the job carries on, nothing is stopped
+    desk.say(showing(other.id, 0));
+    expect(status(desk, job)).toMatchObject({ state: 'running' });
+    expect(run.got('agent-cancel')).toEqual([]);
+    // its changes are saved here from now on, at once (a studio that chose to leave isn't waited for)
+    expect((await change(job, jobToken, 'Two', 'b2')).json()).toEqual({ ok: true, revision: before + 1 });
+    expect(sent()).toEqual(['b1']);
+    expect(services.store.get(s.id)).toMatchObject({ title: 'Two', revision: before + 1 });
+    expect(services.store.history(s.id)[0]).toMatchObject({ author: 'Agent' });
+    // what needs the studio itself says the song isn't in front of the user, and that changes still land
+    const play = await tool(job, jobToken, 'POST', '/transport', { action: 'play' });
+    expect([play.statusCode, play.json()]).toEqual([409, { reason: 'away', error: BACKGROUND }]);
+    expect(desk.got('transport')).toEqual([]);
+    // what the studio showed on that song as it left it still answers
+    expect((await tool(job, jobToken, 'GET', '/state')).json()).toMatchObject({
+      away: true,
+      playhead: 960,
+      playing: false,
+      selection: { regions: ['rgn_a'] },
+    });
+    expect((await tool(job, jobToken, 'GET', '/song')).json()).toMatchObject({ title: 'Two' });
+
+    // a request on the song now open works beside it: its changes go to the studio, as ever
+    const second = await start({ project: other.id, text: 'Drums' });
+    expect(status(desk, second.job)).toMatchObject({ state: 'waiting', title: 'Other' });
+    await change(second.job, second.token, 'Other, with drums', 'c1');
+    expect(sent()).toEqual(['b1', 'c1']);
+    expect(services.store.get(s.id)?.title).toBe('Two');
+
+    // back on the first song: what was saved here meanwhile is the studio's to pick up, as the job's step
+    const away = (
+      await app.inject({ method: 'GET', url: `/api/agent/away/${s.id}?from=${before}`, headers: auth(token) })
+    ).json().away;
+    expect(away).toMatchObject({ job, running: true, base: before, head: before + 1, batches: [{ batch: 'b2' }] });
+    tab.say(showing(s.id, before + 1));
+    desk.say(showing(s.id, before + 1));
+    // caught up: the first's next change goes to the studio again, and the second's is saved here now
+    await change(job, jobToken, 'Three', 'b3');
+    expect(sent()).toEqual(['b1', 'b3', 'c1']);
+    const there = (services.store.get(other.id) as Project).revision;
+    expect((await change(second.job, second.token, 'Other, louder', 'c2')).json()).toEqual({
+      ok: true,
+      revision: there + 1,
+    });
+    expect(run.got('agent-cancel')).toEqual([]);
+
+    // each ends on its own: the one on the song that isn't open is told to the studio that asked too
+    run.say({ type: 'agent-done', job: second.job, reply: 'Drums are in.' });
+    await waitFor(() => status(desk, second.job)?.state === 'done');
+    expect(status(desk, job)).toMatchObject({ state: 'running' });
+  });
+
+  it('saves a change here when the studio answers that it has just opened another song', async () => {
+    const { start, tool, s, desk, services } = await setup();
+    const { job, token: jobToken } = await start({ project: s.id, text: 'A bass line' });
+    const before = (services.store.get(s.id) as Project).revision;
+    // (the studio's word that it has another song open hasn't got here yet: the change is sent to it)
+    desk.answer = (msg) =>
+      msg.type === 'agent-ops'
+        ? { ok: false, error: 'That song is not open in the studio', reason: 'not-open' }
+        : { ok: true, revision: before };
+    const ops = [{ op: 'setProject', patch: { title: 'Saved here' } }];
+    const res = await tool(job, jobToken, 'POST', '/ops', { ops, label: 'Title', batch: 'b1' });
+    expect(res.json()).toEqual({ ok: true, revision: before + 1 });
+    expect(desk.got('agent-ops')).toHaveLength(1);
+    expect(services.store.get(s.id)).toMatchObject({ title: 'Saved here', revision: before + 1 });
+    // so is a version asked for then: the studio is told which song to save, says it's another's, and
+    // the song as saved here is kept
+    desk.answer = (msg) =>
+      msg.type === 'agent-flush'
+        ? { ok: false, error: 'That song is not open in the studio', reason: 'not-open' }
+        : { ok: true, revision: before + 1 };
+    const kept = await tool(job, jobToken, 'POST', '/version', { name: 'As it is' });
+    expect(kept.json()).toEqual({ ok: true, revision: before + 1 });
+    expect(desk.got('agent-flush').at(-1)).toMatchObject({ type: 'agent-flush', project: s.id });
+    // any other refusal of the studio's is the agent's to hear
+    desk.say({ type: 'state', state: { project: s.id, revision: before + 1 } });
+    desk.answer = () => ({ ok: false, error: 'The changes did not apply' });
+    const refused = await tool(job, jobToken, 'POST', '/ops', { ops, label: 'Title', batch: 'b2' });
+    expect([refused.statusCode, refused.json()]).toEqual([400, { error: 'The changes did not apply' }]);
   });
 
   it('cancels it when the requester undoes one of its steps while it runs', async () => {
@@ -482,6 +582,70 @@ describe('the clock', () => {
     vi.advanceTimersByTime(1);
     expect(status(desk, second.job)).toMatchObject({ state: 'failed', error: 'It went quiet for 15 minutes' });
     expect(run.got('agent-cancel').at(-1)).toEqual({ type: 'agent-cancel', job: second.job });
+  });
+
+  it('lets a job its runner holds wait as long as that takes: its quiet and its ceiling count from when it starts', async () => {
+    const { start, s, song, studio, token, desk, run, status, app } = await setup();
+    const other = await song('Other');
+    studio(token, other.id, 'other tab');
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const first = await start({ project: s.id, text: 'Re-orchestrate the song' });
+    run.say({ type: 'agent-progress', job: first.job, line: 'Reading the song' });
+    // the runner has its hands full: it says it holds the second, and the line under the bar says so
+    const held = await start({ project: other.id, text: 'Drums' });
+    run.say({ type: 'agent-queued', job: held.job });
+    expect(status(desk, held.job)).toMatchObject({ state: 'waiting', line: QUEUED });
+    // far past the quiet, and past its ceiling: still waiting its turn
+    for (let at = 0; at < 150; at += 10) {
+      vi.advanceTimersByTime(10 * MINUTE);
+      if (at < 110) run.say({ type: 'agent-progress', job: first.job, line: `Still at it, ${at} minutes in` });
+    }
+    expect(status(desk, first.job)).toMatchObject({ state: 'failed', error: 'It took longer than 2 hours' });
+    expect(status(desk, held.job)).toMatchObject({ state: 'waiting', line: QUEUED });
+
+    // it starts: the line goes, and its quiet counts from now
+    run.say({ type: 'agent-started', job: held.job });
+    expect(status(desk, held.job)).toMatchObject({ state: 'waiting' });
+    expect(status(desk, held.job)?.line).toBeUndefined();
+    vi.advanceTimersByTime(14 * MINUTE);
+    run.say({ type: 'agent-progress', job: held.job, line: 'Writing the kick' });
+    expect(status(desk, held.job)).toMatchObject({ state: 'running', line: 'Writing the kick' });
+    // and so does its ceiling: 2 hours from its start, a line every 10 minutes
+    for (let at = 20; at < 120; at += 10) {
+      vi.advanceTimersByTime(10 * MINUTE);
+      run.say({ type: 'agent-progress', job: held.job, line: `Still at it, ${at} minutes in` });
+    }
+    vi.advanceTimersByTime(6 * MINUTE - 1);
+    expect(status(desk, held.job)).toMatchObject({ state: 'running' });
+    vi.advanceTimersByTime(1);
+    expect(status(desk, held.job)).toMatchObject({ state: 'failed', error: 'It took longer than 2 hours' });
+
+    // held for its harness (signing in, updating), the line says that
+    const waits = await start({ project: other.id, text: 'Drums again' });
+    run.say({ type: 'agent-queued', job: waits.job, why: 'harness' });
+    expect(status(desk, waits.job)).toMatchObject({ state: 'waiting', line: 'Waiting for Claude Code to be ready' });
+    run.say({ type: 'agent-started', job: waits.job });
+    expect(status(desk, waits.job)?.line).toBeUndefined();
+
+    // one that's held can be stopped; and a runner that says nothing of a job it holds is given 15 minutes, as before
+    const again = await start({ project: s.id, text: 'A bass line' });
+    run.say({ type: 'agent-queued', job: again.job });
+    vi.advanceTimersByTime(HOUR);
+    const stopped = await app.inject({
+      method: 'POST',
+      url: `/api/agent/jobs/${again.job}/cancel`,
+      headers: auth(token),
+    });
+    expect(stopped.json()).toEqual({ ok: true });
+    expect(status(desk, again.job)).toMatchObject({ state: 'cancelled', error: 'Stopped' });
+    // (a first word of its own from the runner, with no `agent-started`, starts it too)
+    const quiet = await start({ project: s.id, text: 'A bass line' });
+    run.say({ type: 'agent-queued', job: quiet.job });
+    vi.advanceTimersByTime(HOUR);
+    run.say({ type: 'agent-session', job: quiet.job, session: 'sess-9' });
+    expect(status(desk, quiet.job)).toMatchObject({ state: 'running' });
+    vi.advanceTimersByTime(15 * MINUTE);
+    expect(status(desk, quiet.job)).toMatchObject({ state: 'failed', error: 'It went quiet for 15 minutes' });
   });
 
   it('isn’t quiet while a tool call is under way: the quiet starts again when it answers', async () => {

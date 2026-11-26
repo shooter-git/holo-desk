@@ -121,8 +121,8 @@ all of it. Split very large writes into a few calls.
 
 ## When they leave while you work
 
-The person may send a request and go: switch to another app, put the phone down, close the tab. Carry
-on as if they were there. Your changes still land in the song as you make them, and they find them
+The person may send a request and go: switch to another app, put the phone down, close the tab, or
+open another song. Carry on as if they were there. Your changes still land in the song as you make them, and they find them
 when they're back, as one step they can undo, with your reply waiting.
 
 What happens in their studio itself, in front of them (hearing it, playing it, listening to them,

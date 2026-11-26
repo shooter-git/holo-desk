@@ -590,29 +590,34 @@ function DspMeter() {
 
 /**
  * The bar's button: every command, track and marker, found by name. The agent's only sign outside the
- * bar is on it: a ring while a request of this device's works, a dot once it has replied.
+ * bar is on it: a ring while a request of this device's works on the open song, a dot while a reply
+ * waits (on this song or another: the bar says which).
  */
 export function BarButton() {
   const project = useApp((s) => s.project?.id ?? null);
   const sign = useAgent((a) => barSign(a, project));
+  const busy = sign === 'busy' || sign === 'busy done';
+  const done = sign === 'done' || sign === 'busy done';
   return (
     <button
       type="button"
       className={`btn icon ghost cb-bar${sign ? ` ${sign}` : ''}`}
       title="Commands (Ctrl /)"
       aria-label={
-        sign === 'busy'
-          ? 'Commands (Ctrl /): working on your request'
-          : sign === 'done'
-            ? 'Commands (Ctrl /): a reply is waiting'
-            : 'Commands (Ctrl /)'
+        busy && done
+          ? 'Commands (Ctrl /): working on your request, and a reply is waiting'
+          : busy
+            ? 'Commands (Ctrl /): working on your request'
+            : done
+              ? 'Commands (Ctrl /): a reply is waiting'
+              : 'Commands (Ctrl /)'
       }
       aria-haspopup="dialog"
       // (the page leaves it in reach, beside or above it: a second press puts it away)
       onClick={() => (store.get().bar ? closeBar() : openBar())}
     >
-      {sign === 'busy' ? <span className="ring" aria-hidden="true" /> : <Slash />}
-      {sign === 'done' && <span className="cb-dot" aria-hidden="true" />}
+      {busy ? <span className="ring" aria-hidden="true" /> : <Slash />}
+      {done && <span className="cb-dot" aria-hidden="true" />}
     </button>
   );
 }

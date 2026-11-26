@@ -97,18 +97,25 @@ export interface Keepable {
   redo: Step[];
   /** The song as the host has it at `serverRevision`, when the studio knows it. */
   saved?: Project | null;
+  /**
+   * A request of this device's to the agent is at work on the song: the song is kept as saved even
+   * with no history, so what the agent saves on the host while the song isn't open here comes back as
+   * its job's step when it opens again (`behind`).
+   */
+  agent?: boolean;
 }
 
 /** The save states in which the song has changes the host doesn't have. */
 const UNSAVED_STATES: ReadonlySet<SaveState> = new Set(['dirty', 'saving', 'offline', 'conflict', 'error']);
 
 /**
- * The history to keep, or null: there's none, or the song isn't saved as it is (its history would lead
- * to a song the host doesn't have).
+ * The history to keep, or null: there's none (and no request of the agent's at work on the song, whose
+ * changes would need the song as it is now to be undone to), or the song isn't saved as it is (its
+ * history would lead to a song the host doesn't have).
  */
 export function toKeep(s: Keepable, made: string, now = Date.now()): Kept | null {
   if (!s.project || s.saveState !== 'saved') return null;
-  if (!s.undo.length && !s.redo.length) return null;
+  if (!s.undo.length && !s.redo.length && !s.agent) return null;
   return {
     project: s.project.id,
     revision: s.serverRevision,

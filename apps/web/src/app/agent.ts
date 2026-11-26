@@ -129,6 +129,8 @@ export interface JobView {
   error?: string;
   started: number;
   finished?: number;
+  /** Its song's title as it was asked: how the bar names it while another song is open. */
+  title?: string;
 }
 
 /** A request and its reply, as the song's conversation keeps them (with what it asked, its brief, why it stopped). */
@@ -182,8 +184,11 @@ export interface AgentState {
   refused: { project: string; request: string; error: string; at: number } | null;
   /** The job listening to what's played, until the user says Done. */
   listening: string | null;
-  /** One of this device's jobs ended while the bar was closed: a dot on the bar's button until it opens. */
-  unseen: boolean;
+  /**
+   * The songs one of this device's jobs ended on while the bar wasn't open on that song: a dot on the
+   * bar's button until it is (the bar opened on the song, or the song opened under an open bar).
+   */
+  unseen: readonly string[];
   /**
    * How far the host's clock is ahead of this device's (ms), from the `now` its answers carry: a job's
    * times are the host's, so the time a request has been working is counted on the host's clock.
@@ -202,7 +207,7 @@ export const EMPTY: AgentState = {
   sending: null,
   refused: null,
   listening: null,
-  unseen: false,
+  unseen: [],
   skew: 0,
 };
 
@@ -230,7 +235,7 @@ export type AgentEvent =
   | { type: 'sent'; job: JobView }
   | { type: 'refused'; project: string; request: string; error: string; at: number }
   | { type: 'reset'; project: string }
-  | { type: 'seen' }
+  | { type: 'seen'; project: string | null }
   | { type: 'removed' }
   | { type: 'clock'; skew: number };
 
@@ -265,15 +270,17 @@ export function reduce(a: AgentState, e: AgentEvent): AgentState {
     case 'status': {
       const was = a.jobs[e.job.id];
       const mine = e.job.device === a.me;
-      // one of this device's ends while the bar is closed: the button says so until it's opened
+      // one of this device's ends while the bar isn't open on its song (`barOpen`: closed, or open on
+      // another): the button says so until it is
       const ended = !isLive(e.job.state) && (!was || isLive(was.state));
+      const unseen = mine && ended && !e.barOpen && !a.unseen.includes(e.job.project);
       const sending = a.sending?.project === e.job.project && a.sending.request === e.job.request ? null : a.sending;
       return {
         ...a,
         jobs: { ...a.jobs, [e.job.id]: e.job },
         sending,
         listening: a.listening === e.job.id && !isLive(e.job.state) ? null : a.listening,
-        unseen: a.unseen || (mine && ended && !e.barOpen),
+        unseen: unseen ? [...a.unseen, e.job.project] : a.unseen,
       };
     }
     case 'listen':
@@ -303,10 +310,13 @@ export function reduce(a: AgentState, e: AgentEvent): AgentState {
         jobs,
         thread: a.thread?.project === e.project ? { project: e.project, turns: [] } : a.thread,
         refused: a.refused?.project === e.project ? null : a.refused,
+        unseen: a.unseen.includes(e.project) ? a.unseen.filter((p) => p !== e.project) : a.unseen,
       };
     }
     case 'seen':
-      return a.unseen ? { ...a, unseen: false } : a;
+      return e.project !== null && a.unseen.includes(e.project)
+        ? { ...a, unseen: a.unseen.filter((p) => p !== e.project) }
+        : a;
     case 'removed':
       return { ...EMPTY, info: a.info ? { ...a.info, allowed: false } : null, skew: a.skew };
     case 'clock':
@@ -511,14 +521,63 @@ export function conversation(a: AgentState, project: string | null): Exchange[] 
     .map(({ seen }) => seen.make());
 }
 
-/** What the bar's button shows: a turning ring while a job of this device's works on the open song, a dot after. */
-export function barSign(a: AgentState, project: string | null): 'busy' | 'done' | null {
+/**
+ * What the bar's button shows: a turning ring while a job of this device's works on the open song, and
+ * a dot while a reply of this device's hasn't been seen, on the open song or on another (the bar then
+ * says which: `elsewhere`). Both, when a reply waits on another song while the open one's is worked on.
+ */
+export function barSign(a: AgentState, project: string | null): 'busy' | 'done' | 'busy done' | null {
   if (!isOn(a)) return null;
   const working =
     (a.sending !== null && a.sending.project === project) ||
     Object.values(a.jobs).some((j) => j.project === project && j.device === a.me && isLive(j.state));
-  if (working) return 'busy';
-  return a.unseen ? 'done' : null;
+  const waiting = a.unseen.length > 0;
+  if (working) return waiting ? 'busy done' : 'busy';
+  return waiting ? 'done' : null;
+}
+
+/** A request of this device's on a song: at work there, or its reply not seen yet. */
+export interface SongRequest {
+  project: string;
+  /** Its job (the reply the song opens at). */
+  job: string;
+  /** The song's title as the request was made (null: asked before titles were told). */
+  title: string | null;
+  working: boolean;
+  /** The line it's on, while it works. */
+  line: string | null;
+  started: number;
+}
+
+/**
+ * This device's requests the user may want to go to, one a song (its latest): those at work, then
+ * those whose reply hasn't been seen, each oldest first. `open` (the open song) is left out: the bar
+ * shows its own.
+ */
+export function songRequests(a: AgentState, open: string | null = null): SongRequest[] {
+  if (!isOn(a)) return [];
+  const bySong = new Map<string, JobView>();
+  for (const j of Object.values(a.jobs)) {
+    if (j.device !== a.me || j.project === open) continue;
+    if (!isLive(j.state) && !a.unseen.includes(j.project)) continue;
+    const had = bySong.get(j.project);
+    if (!had || j.started > had.started) bySong.set(j.project, j);
+  }
+  return [...bySong.values()]
+    .map((j) => ({
+      project: j.project,
+      job: j.id,
+      title: j.title ?? null,
+      working: isLive(j.state),
+      line: isLive(j.state) ? (j.line ?? null) : null,
+      started: j.started,
+    }))
+    .sort((x, y) => Number(y.working) - Number(x.working) || x.started - y.started);
+}
+
+/** By song, for the list of songs: `busy` while this device's request works on it, `done` while its reply waits. */
+export function songSigns(a: AgentState): Map<string, 'busy' | 'done'> {
+  return new Map(songRequests(a).map((r) => [r.project, r.working ? 'busy' : 'done']));
 }
 
 /** What a permission's one button says. */
@@ -611,14 +670,24 @@ export type ScanTask = 'read' | 'check' | 'fix';
 
 /**
  * What the bar offers of the agent's besides asking (only while it's on for this device): with a scan
- * open, its three tasks (read it in, check what was written, fix what was flagged); and starting a new
- * conversation on the song when nothing runs on it.
+ * open, its three tasks (read it in, check what was written, fix what was flagged); starting a new
+ * conversation on the song when nothing runs on it; and this device's requests on other songs
+ * (`elsewhere`), each a row that opens its song at it. One that has replied and hasn't been read is
+ * offered with nothing typed (it's what the button's dot is for); one still at work is found by name,
+ * so a song at work elsewhere adds nothing to the bar.
  */
 export function agentCommands(
-  o: { on: boolean; project: string | null; scan: string | null; busy: boolean },
-  run: { scan: (task: ScanTask, scan: string) => void; reset: () => void },
+  o: { on: boolean; project: string | null; scan: string | null; busy: boolean; elsewhere?: readonly SongRequest[] },
+  run: { scan: (task: ScanTask, scan: string) => void; reset: () => void; open?: (r: SongRequest) => void },
 ): { suggest: Command[]; commands: Command[] } {
   if (!o.on || !o.project) return { suggest: [], commands: [] };
+  const others: Command[] = (o.elsewhere ?? []).map((r) => ({
+    id: `agent-song-${r.project}`,
+    title: elsewhereTitle(r),
+    group: 'Agent',
+    also: 'agent request reply song working waiting',
+    run: () => run.open?.(r),
+  }));
   const { scan } = o;
   const scanRows: Command[] = scan
     ? (
@@ -645,7 +714,14 @@ export function agentCommands(
     available: () => !o.busy,
     run: run.reset,
   };
-  return { suggest: o.busy ? [] : scanRows, commands: [...scanRows, reset] };
+  const replied = others.filter((_, i) => !o.elsewhere?.[i]?.working);
+  return { suggest: [...(o.busy ? [] : scanRows), ...replied], commands: [...scanRows, reset, ...others] };
+}
+
+/** How the bar names a request on another song: its song, and whether it's at work or has replied. */
+export function elsewhereTitle(r: Pick<SongRequest, 'title' | 'working'>): string {
+  const song = r.title ? `“${r.title}”` : 'Another song';
+  return r.working ? `${song}: the agent is at work` : `${song}: a reply is waiting`;
 }
 
 // ---- the token: this device's, kept in its own key ----
@@ -739,6 +815,8 @@ export interface Followed {
   device: string;
   request: string;
   started: number;
+  /** Its song's title, when the host told it. */
+  title?: string;
 }
 
 /** The requests kept as followed, checked (what isn't one is left out). */
@@ -756,7 +834,8 @@ export function readFollowed(s: TokenStorage | null = storage()): Followed[] {
           typeof f.project === 'string' &&
           typeof f.device === 'string' &&
           typeof f.request === 'string' &&
-          typeof f.started === 'number',
+          typeof f.started === 'number' &&
+          (f.title === undefined || typeof f.title === 'string'),
       )
       .slice(-FOLLOW_MOST);
   } catch {
@@ -766,9 +845,10 @@ export function readFollowed(s: TokenStorage | null = storage()): Followed[] {
 
 /**
  * Which of this device's requests are followed once the host has said how one goes: one that's
- * working, or that ended while the bar was closed (its reply not seen yet), stays or comes in; one
- * seen (the bar open as it ended, or opened since) goes. A page the browser let go (a phone in another
- * app) comes back to them: the bar's button turns while they work, and shows a reply is waiting after.
+ * working, or that ended while the bar wasn't open on its song (its reply not seen yet), stays or
+ * comes in; one seen (the bar open on its song as it ended, or since) goes. A page the browser let go
+ * (a phone in another app) comes back to them: the bar's button turns while they work, and shows a
+ * reply is waiting after.
  */
 export function followed(list: readonly Followed[], a: AgentState, e: AgentEvent): Followed[] {
   const of = (j: JobView): Followed => ({
@@ -777,6 +857,7 @@ export function followed(list: readonly Followed[], a: AgentState, e: AgentEvent
     device: j.device,
     request: j.request,
     started: j.started,
+    ...(j.title ? { title: j.title } : {}),
   });
   const without = (id: string) => list.filter((f) => f.id !== id);
   switch (e.type) {
@@ -784,12 +865,17 @@ export function followed(list: readonly Followed[], a: AgentState, e: AgentEvent
       return [...without(e.job.id), of(e.job)].slice(-FOLLOW_MOST);
     case 'status': {
       if (e.job.device !== a.me) return [...list];
-      // (`a` is as it is now: a reply that came while the bar was closed has left it unseen)
-      const seen = !isLive(e.job.state) && (e.barOpen || !a.unseen);
-      return seen ? without(e.job.id) : [...without(e.job.id), of(e.job)].slice(-FOLLOW_MOST);
+      // (`a` is as it is now: a reply that came while the bar wasn't open on its song has left it unseen)
+      const seen = !isLive(e.job.state) && (e.barOpen || !a.unseen.includes(e.job.project));
+      if (seen) return without(e.job.id);
+      // (one followed already keeps its place: two at work don't change places at each one's word)
+      return list.some((f) => f.id === e.job.id)
+        ? list.map((f) => (f.id === e.job.id ? of(e.job) : f))
+        : [...list, of(e.job)].slice(-FOLLOW_MOST);
     }
     case 'seen':
-      return list.filter((f) => a.jobs[f.id] && isLive(a.jobs[f.id]?.state ?? ''));
+      // (those of the song seen go; one working, or replied to on a song not seen yet, stays)
+      return list.filter((f) => isLive(a.jobs[f.id]?.state ?? '') || a.unseen.includes(f.project));
     case 'reset':
       return list.filter((f) => f.project !== e.project || isLive(a.jobs[f.id]?.state ?? ''));
     case 'removed':
@@ -1085,8 +1171,10 @@ export async function loadThread(project: string, barOpen = true): Promise<void>
     );
     heardClock(r.now);
     agent.dispatch({ type: 'thread', project, turns: r.thread?.turns ?? [] });
-    // the song's job that's working, or waiting for a click (after a reload, its button comes back)
-    if (r.job && barOpen) agent.dispatch({ type: 'status', job: r.job, barOpen: true });
+    // the song's job that's working, or waiting for a click (after a reload, its button comes back);
+    // seen only if the song is still the open one (another may have opened before the answer came)
+    const open = studio.get().project?.id;
+    if (r.job && barOpen) agent.dispatch({ type: 'status', job: r.job, barOpen: !open || open === project });
   } catch {
     // the bar shows what it has
   }
@@ -1301,8 +1389,10 @@ export function agentMessage(msg: Record<string, unknown>): { handled: boolean; 
       if (!job || typeof job.id !== 'string' || !isOn(state)) return { handled: true };
       heardClock(msg.now);
       const was = state.jobs[job.id];
-      agent.dispatch({ type: 'status', job, barOpen: studio.get().bar });
+      agent.dispatch({ type: 'status', job, barOpen: barShows(job.project) });
       const fx = statusEffects(state, job, was);
+      // (where a reply goes is a place in its own song: not the one open now, if that's another)
+      if (fx?.go && job.project !== studio.get().project?.id) delete fx.go;
       return { handled: true, ...(fx ? { effects: { job: job.id, ...fx } } : {}) };
     }
     case 'agent-listen':
@@ -1334,6 +1424,12 @@ export function agentMessage(msg: Record<string, unknown>): { handled: boolean; 
       return { handled: true };
   }
   return { handled: false };
+}
+
+/** The bar (or the page) is open on a song: a reply that ends there is seen as it comes. */
+function barShows(project: string): boolean {
+  const s = studio.get();
+  return s.bar && s.project?.id === project;
 }
 
 /** What the studio does about one of its jobs: whether it runs, its step's final name, where it goes. */
@@ -1378,7 +1474,7 @@ export async function catchUp(): Promise<JobEffect[]> {
       const turn = r.thread?.turns.find((t) => t.job === j.id);
       const now = r.job?.id === j.id ? r.job : asEnded(j, turn);
       if (!now) continue;
-      agent.dispatch({ type: 'status', job: now, barOpen: studio.get().bar });
+      agent.dispatch({ type: 'status', job: now, barOpen: barShows(now.project) });
       const fx = statusEffects(state, now);
       if (fx) effects.push({ job: now.id, ...fx });
     }

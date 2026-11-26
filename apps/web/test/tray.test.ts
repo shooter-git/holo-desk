@@ -228,12 +228,12 @@ describe('the tray after a reload: the song’s conversation read quietly as it 
     reloaded();
     browser.setItem('holo:agent-tray', JSON.stringify({ seen: [TAKES], gone: [] }));
     const followed = A.readFollowed().map((f) => f.id);
-    expect(A.agent.get().unseen).toBe(true);
+    expect(A.agent.get().unseen).toEqual(['prj_b']);
     const asked = host([turn({ job: 'agj_00000000000a', at: 1000, view: undefined }), turn()], null);
     expect(T.trayWantsThread(A.agent.get(), SONG, T.readKept())).toBe(true);
     await A.loadThread(SONG, false);
     expect(asked).toEqual([`/api/agent/threads/${SONG}`]);
-    expect(A.agent.get().unseen).toBe(true);
+    expect(A.agent.get().unseen).toEqual(['prj_b']);
     expect(A.readFollowed().map((f) => f.id)).toEqual(followed);
     expect(T.trayFor(A.agent.get(), SONG, T.readKept(), 'phone-portrait', false)?.job).toBe(TAKES);
     // read once: not again for that song
@@ -267,7 +267,7 @@ describe('the tray after a reload: the song’s conversation read quietly as it 
       await A.loadThread(SONG, false);
       // read quietly: the job isn't told of from here, the dot stays, and it's still followed
       expect(A.agent.get().jobs[id]?.state, state).toBe('waiting');
-      expect(A.agent.get().unseen, state).toBe(true);
+      expect(A.agent.get().unseen, state).toEqual(['prj_b']);
       expect(
         A.readFollowed().map((f) => f.id),
         state,

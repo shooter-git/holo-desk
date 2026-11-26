@@ -243,9 +243,11 @@ These are for the agent's tools, with the job token. Without a token of the righ
 moves the job from `waiting` to `running`.
 
 **The studio that asked, away.** The user may send a request and leave: switch the phone to another
-app, put it down, close the tab. A reload doesn't end the job (only opening another song does), and
-neither does the studio going: the job runs on, its changes land, and its reply waits.
-- **Away, or a moment away.** The requester's studio is away when its connection has closed, or when
+app, put it down, close the tab, or open another song. None of these ends the job: it runs on, its
+changes land, and its reply waits. A device may so have requests at work on several songs at once,
+one a song (below, "Several songs at once").
+- **Away, or a moment away.** The requester's studio is away when its connection has closed, when it
+  has another song open (no studio of that device has the job's), or when
   its page is hidden (the studio reports `hidden`) and doesn't answer within 8 s (`hiddenMs`): the
   browser froze it, as a phone's does in the background, though its connection may close only later.
   It's back once it reports the song open from a page in view (one that says so just before what it
@@ -254,7 +256,8 @@ neither does the studio going: the job runs on, its changes land, and its reply 
   from when it went, for that device's studio to report the song open again, then go on there.
   Meanwhile the job's line under the bar says "Waiting for the studio that asked to come back" (the
   other devices with the song open see it), and the line it had comes back after. One that went with
-  its page hidden, or went longer ago, isn't waited for. The wait comes out of the call's own time: a
+  its page hidden, that opened another song, or that went longer ago, isn't waited for. The wait
+  comes out of the call's own time: a
   listen's part is that much shorter, `…/ops` has that much less of its minute, and `meters` waits
   only as long as its 45 s leave.
 - **Changes land.** While it's away, `…/ops` applies each batch on the server and saves it as a
@@ -272,7 +275,8 @@ neither does the studio going: the job runs on, its changes land, and its reply 
   the song before making it again.
 - **What needs the studio itself** (routes marked **studio**: playing, auditioning, listening, what was
   just played, A/B, the meters, the studio's commands, an import the studio converts) answers 409
-  `away` at once while it's away (`BACKGROUND` in jobs.ts): the user's studio isn't in front of them, so
+  `away` at once while it's away (`BACKGROUND` in jobs.ts): the user doesn't have the song in front of
+  them (their studio's page is in the background or closed, or another song is open in it), so
   nothing can be played, heard or read in it until they're back; changes still land; what there is to
   hear or see goes in the reply's view. `…/state` answers what the studio showed as it went, with
   `away: true`, nothing playing, and the song's tempo and cycle as saved. `…/song`, `…/describe` and
@@ -407,10 +411,44 @@ of its attack's loudest, and voiced: a soft attack or a scoop counts from its be
 an unvoiced consonant before it doesn't), out of the note before where the pitch moves; loudness by BS.1770-4 and EBU Tech 3341/3342 with the finish's own
 K-weighting and true-peak interpolator, bands through the engine's FFT.
 
+**Several songs at once.** One job runs per song, and a device may have one at work on each of
+several songs: it asks on a song, opens another, asks there, and goes back and forth. Only the song
+that's open is in the studio; the others' requests work on the host, as above, so a device carries no
+more than its one song.
+- **Leaving a song.** Before another song opens while this device's request is at work on the open
+  one (or on its way to the host), the studio saves the open song first (`openSong` and
+  `saveBeforeLeaving` in actions.ts, 4 s at most), so the agent's changes, saved on the host from then
+  on, land on the song with everything done in the studio so far. The agent's batches are held
+  meanwhile (they'd make the song unsaved again as fast as it's saved). What isn't saved in time stays
+  on the device and is put together with the agent's when the song opens there again, as when a page
+  goes. The studio then tells the server which song it has open at once. A batch held, or on its way
+  to the studio as it leaves, is answered `{ok:false, reason:'not-open'}` (it never went in there),
+  and the server saves it itself; `agent-flush` names its song, and is answered the same way. `…/state`
+  answers what the studio showed on that song as it left it. Of two songs asked for one after the
+  other while the first waits on the save, the last asked for opens.
+- **Coming back.** The song opens as the host has it, with the history this device kept of it and
+  the agent's changes since as their job's step (`behind`, above): one Undo takes the song back to
+  before the request, whether the changes came while it was open or not. While a request is at work
+  on a song, the device keeps the song as saved even when it has no history yet (`Keepable.agent` in
+  kept-history.ts), so a song left before the agent's first change still gets its step.
+- **How many at once.** The runner runs two jobs at a time. One more waits its turn there
+  (`agent-queued`): "Waiting for another request to finish" under its request, for as long as that
+  takes, and its limits count from when it starts.
+- **What the studio shows.** The bar's button turns for the open song's request only; its dot says a
+  reply of this device's hasn't been read, on the open song or on another (both show when a reply
+  waits elsewhere while the open song's request works). A reply is read once the bar or the page is
+  open on its song (`unseen` in agent.ts, by song). With a reply waiting on another song, the bar
+  offers a row for it under the field, "“Song”: a reply is waiting", which opens that song at the
+  reply; a song still at work is found by typing ("“Song”: the agent is at work") and adds nothing to
+  the bar otherwise. In the Songs dialog, a song this device's request works on has a ring in place of
+  its icon, and one whose reply waits has a dot on it. Where a reply asks the studio to go (`go`) is a
+  place in its own song: it isn't gone to while another song is open.
+
 ## Live channel (`/api/live`)
 
-The server hands the agent only `harnesses`, `agent-progress`, `agent-session`, `agent-done`,
-`agent-failed`, `agent-harness` and `history` (`AGENT_MESSAGES` in `apps/server/src/live.ts`). The
+The server hands the agent only `harnesses`, `agent-queued`, `agent-started`, `agent-progress`,
+`agent-session`, `agent-done`, `agent-failed`, `agent-harness` and `history` (`AGENT_MESSAGES` in
+`apps/server/src/live.ts`). The
 agent's other traffic uses the existing `state`, `played`, `ack`, `transport`, `play-notes` and `saved`.
 
 **Runner → server**
@@ -420,6 +458,13 @@ agent's other traffic uses the existing `state`, `played`, `ack`, `transport`, `
 - `harnesses {list:[HarnessInfo], from?:'run'}`. Allowed devices hear the result as `agent-settings`.
   `from:'run'`: said again because a run said what an alias stood for (Claude Code's), the rest as its
   last look found it; it doesn't count as a look (`…/harnesses/look`).
+- `agent-queued {job, why?:'harness'}`: the runner holds the job until another has finished (it runs
+  two at once, and one a conversation), or, with `why: 'harness'`, until the job's harness has signed
+  in or updated. The server lets it wait as long as that takes: no quiet and no ceiling count for it,
+  and its line under the bar says "Waiting for another request to finish" ("Waiting for Claude Code to
+  be ready" for its harness). Stop still stops it.
+- `agent-started {job}`: a job it held starts. Its ceiling and its quiet count from now (any other
+  message of the runner's about the job starts them too). A job that starts at once is said neither.
 - `agent-progress {job, line}`
 - `agent-session {job, session}`
 - `agent-done {job, reply?}`. `reply`, the harness's last chat message, stands as the reply only when
@@ -462,7 +507,9 @@ taken only from the runner it was handed to, while it runs.
   without the agent.
 - `state {state}`, as before, now also with `view` and `scan`; `hidden` when the page is hidden, and
   `revision`, the song's revision it carries on from (how the server knows it has picked up a job's
-  changes saved there). Opening another song is how the server sees the requester leave a job's song.
+  changes saved there). Opening another song is how the server sees the requester leave a job's song:
+  the studio says so at once, not at its next report, and the job's changes are saved on the server
+  from then on.
 - `played {events}`: what's played here, sent while a job of this device's listens (or the `holo`
   command's listen does).
 - `history {action:'undo'|'redo'|'step', label, job?}`, sent only while the agent is on and this device
@@ -475,7 +522,8 @@ taken only from the runner it was handed to, while it runs.
   device (`keepNow`, docs/architecture.md: a reload or a closed tab after it brings the change back and
   saves it), or `{ok:false, error}`. A page that goes before then never acks, and the tool hears 409
   `away` (above).
-- `agent-flush {id}`: save now; ack `{revision}`.
+- `agent-flush {id, project}`: save now; ack `{revision}`, or `{ok:false, reason:'not-open'}` when
+  another song is open (the song is then as the host has it).
 - `agent-played {id, seconds}`: ack `{notes:[PlayedNote]}` from the last minute of what was played here.
 - `agent-compare {id, job, from, to}`: ack once it has started playing.
 - `agent-commands {id}`: ack `{commands:[{id, title}]}`, the bar's commands (by their fixed ids, not a
@@ -492,8 +540,9 @@ taken only from the runner it was handed to, while it runs.
 
 **Server → studio**, told:
 - `play-notes {events, track, port:'Agent'}`, the existing message.
-- `agent-status {job:JobView, now}`, to allowed devices' studios: those of the requesting device, and those
-  with the job's song open. `now` is the host's time (ms): a job's times are the host's, so the studio
+- `agent-status {job:JobView, now}`, to allowed devices' studios: those of the requesting device
+  (whichever song they have open), and those with the job's song open. `JobView.title` is the song's
+  title as the request was made: a studio with another song open names the job's song by it. `now` is the host's time (ms): a job's times are the host's, so the studio
   keeps how far its own clock is from it (`skew`, changed only by a second or more) and counts how long
   a request has worked on the host's clock (`serverNow`, `elapsedMs`). Its own requests are stamped
   with it too, so the page orders the conversation by one clock.
@@ -594,15 +643,16 @@ of the stretch `played` asked for); `length` is ms (null while still held).
    hears so next time.
 6. **Ending early.** The job ends `cancelled` or `failed`, and its token is revoked, when:
    - someone presses Stop on the bar, at any time, whatever the limits below;
-   - the requester opens another song (not for a scan preset, which carries on);
    - the requester undoes a step of the running job;
    - the requester's device is removed, or the agent is turned off;
    - it goes quiet for 15 minutes (`idleMs`): no tool call, no line under the bar, no message from its
      runner about it. A tool call under way (a render, a measurement) counts until it answers, so a
      long one never makes a job quiet. "It went quiet for 15 minutes"; "It didn’t start in 15 minutes"
-     for one never heard from (the runner may be busy with other songs' jobs);
+     for one never heard from. A job its runner says it holds (`agent-queued`) isn't quiet: it waits
+     its turn however long, and its quiet starts as it does;
    - it reaches its ceiling, however busy it is, against a run that never ends: 2 hours (`clockMs`), 3
-     for a scan preset (`scanClockMs`). "It took longer than 2 hours";
+     for a scan preset (`scanClockMs`), counted from when it starts (not while its runner holds it).
+     "It took longer than 2 hours";
    - the runner drops for 15 s, or the harness fails.
 
    The runner is sent `agent-cancel`, except when the harness failed or the runner dropped. The agent
@@ -912,9 +962,8 @@ iPhone or iPad HO[LO] opened from the Home Screen, or the notices it has blocked
   `{type:'open-turn', project, job}`; with none, `/?project=…&turn=…` opens.
 - **Opening at the reply.** main.tsx passes `open-turn` to `openTurn` (actions.ts); `startup()` reads
   `?turn=` (and takes it out of the address). The page opens at that turn once the studio has started
-  (`audioReady`: on a phone, past Start the studio). If the notice is another song's and this
-  device's request is at work on the open one (opening another song stops it, a scan's aside), a
-  toast asks first.
+  (`audioReady`: on a phone, past Start the studio). If the notice is another song's, that song
+  opens: a request at work on the one that's left carries on there.
 - **Seen.** The page, and the bar on a desktop, post `/api/agent/seen` as they open and as a reply ends
   while they're open, and set the badge to the answer. The bar's own dot is unchanged.
 - **Keeping them going** (`syncPush`). When HO[LO] opens, and as it comes back in front, the studio

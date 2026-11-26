@@ -105,8 +105,8 @@ export interface AgentHooks {
   device(token: string): string | null;
   /** A message for the agent: from a runner (`harnesses`, `agent-*`) or a studio (`history`). */
   message(client: LiveClient, msg: Record<string, unknown>): void;
-  /** A studio on an allowed device reported its state; `was` is the song it had open before. */
-  state(client: LiveClient, was: string | null): void;
+  /** A studio on an allowed device reported its state; `before` is what it last reported (the song it had open then). */
+  state(client: LiveClient, before: EditorState | null): void;
   /** A runner with the key, able to run the agent's jobs, said hello. */
   runner(client: LiveClient): void;
   /** A connection closed. */
@@ -116,6 +116,8 @@ export interface AgentHooks {
 /** The messages of the agent's that the live channel hands to it. */
 const AGENT_MESSAGES = new Set([
   'harnesses',
+  'agent-queued',
+  'agent-started',
   'agent-progress',
   'agent-session',
   'agent-done',
@@ -239,9 +241,9 @@ export class Live {
         break;
       case 'state':
         if (client.role === 'editor') {
-          const was = client.state?.project ?? null;
+          const before = client.state;
           client.state = { ...(msg.state as EditorState), updated: Date.now() };
-          if (client.device) this.agent?.state(client, was);
+          if (client.device) this.agent?.state(client, before);
           this.toRemotes({ type: 'studio', name: client.name, state: client.state });
           const project = client.state.project;
           if (project && client.caughtUp !== project) {

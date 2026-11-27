@@ -98,9 +98,10 @@ import { browserShelf, type Keepable, Keeper, type Restored, sameSong, stepJobs 
 import { isTouch } from './layout.ts';
 import { reconnectSoon, reportHistory } from './live.ts';
 import { mergeSongs } from './merge-songs.ts';
-import { nearestShown, type Sight, selectionInSight, songIndex, stepShown } from './shown-tracks.ts';
+import { nearestShown, type Show, type Sight, selectionInSight, songIndex, stepShown } from './shown-tracks.ts';
 import { type AppState, openBar, type Step, store, toast } from './store.ts';
 import { TakeSender } from './take-sender.ts';
+import { foldsKept, foldsOf, isStackRowId, keepFolds, planDrop } from './track-rows.ts';
 
 // ---- editing ----
 
@@ -1150,12 +1151,30 @@ function keepSelectionInSight(): void {
   const sight = (s: AppState): Sight => ({
     song: s.project?.id ?? null,
     tracks: s.project?.tracks ?? [],
-    show: s.show,
+    show: showNow(s),
   });
   let was = sight(store.get());
+  let stacks = store.get().project?.stacks;
   store.subscribe(() => {
-    const s = store.get();
-    if (s.project?.tracks === was.tracks && s.show.inactiveTracks === was.show.inactiveTracks) return;
+    let s = store.get();
+    const song = s.project?.id ?? null;
+    // a song opened: the stacks this device had closed in it are closed again; a stack that's gone
+    // from the song is forgotten
+    if (song !== was.song || s.project?.stacks !== stacks) {
+      stacks = s.project?.stacks;
+      const folded =
+        song !== was.song ? foldsKept(s.project, song ? foldsOf(song) : []) : foldsKept(s.project, s.foldedStacks);
+      if (folded.length !== s.foldedStacks.length || folded.some((id, i) => id !== s.foldedStacks[i])) {
+        store.set({ foldedStacks: folded });
+        s = store.get();
+      }
+    }
+    if (
+      s.project?.tracks === was.tracks &&
+      s.show.inactiveTracks === was.show.inactiveTracks &&
+      s.foldedStacks === was.show.folded
+    )
+      return;
     const now = sight(s);
     const next = selectionInSight(was, now, s.selectedTrack, s.selectedRegions);
     was = now;
@@ -2084,7 +2103,7 @@ export function selectTrack(id: string | null): void {
 /** The track above or below the selected one, as they're shown: one View leaves out is stepped over. */
 export function selectTrackBeside(up: boolean): void {
   const s = store.get();
-  const next = s.project ? stepShown(s.project.tracks, s.show, s.selectedTrack, up) : null;
+  const next = s.project ? stepShown(s.project.tracks, showNow(s), s.selectedTrack, up) : null;
   if (next) selectTrack(next.id);
 }
 
@@ -2211,6 +2230,52 @@ export function moveTrack(id: string, index: number): void {
 export function moveShownTrack(id: string, index: number): void {
   const s = store.get();
   if (s.project) moveTrack(id, songIndex(s.project.tracks, s.show, index));
+}
+
+/** What this device shows of the song's tracks: View's Inactive tracks, and the stacks closed here. */
+export const showNow = (s: AppState = store.get()): Show => ({
+  inactiveTracks: s.show.inactiveTracks,
+  folded: s.foldedStacks,
+});
+
+/** Open or close a stack on this device (its tracks fold away under its header): kept for the song, never an undo step. */
+export function foldStack(stack: string, closed: boolean): void {
+  const s = store.get();
+  if (!s.project || s.foldedStacks.includes(stack) === closed) return;
+  const folded = closed ? [...s.foldedStacks, stack] : s.foldedStacks.filter((id) => id !== stack);
+  store.set({ foldedStacks: folded });
+  keepFolds(s.project.id, folded);
+}
+
+/**
+ * A row of the tracks pane dragged to the `index`th place among its rows (track-rows.ts): a track
+ * moved, into a stack or out of one where it lands so, or a stack moved whole. One undo step. A
+ * track that joins a stack with a bus plays through that bus, and one that leaves it goes back to
+ * Stereo Out, in the same step: said, as it changes what's heard only by the bus's own fader and effects.
+ */
+export function dropRow(id: string, index: number): void {
+  const s = store.get();
+  const p = s.project;
+  if (!p) return;
+  const op = planDrop(p, showNow(s), id, index);
+  if (!op) return;
+  if (op.op !== 'moveTrack' || op.stack === undefined) {
+    apply([op], isStackRowId(id) ? 'Move Stack' : 'Move Track');
+    return;
+  }
+  const track = p.tracks.find((t) => t.id === op.track);
+  const was = p.stacks?.find((x) => x.id === track?.stack);
+  const into = op.stack === null ? undefined : p.stacks?.find((x) => x.id === op.stack);
+  const ops: Op[] = [op];
+  let said = '';
+  if (track && into?.bus && track.channel.output !== into.bus) {
+    ops.push({ op: 'updateChannel', target: track.id, patch: { output: into.bus } });
+    said = `${track.name} now plays through ${p.buses.find((b) => b.id === into.bus)?.name ?? 'the stack’s bus'}`;
+  } else if (track && !into && was?.bus && track.channel.output === was.bus) {
+    ops.push({ op: 'updateChannel', target: track.id, patch: { output: 'master' } });
+    said = `${track.name} now plays to Stereo Out`;
+  }
+  if (apply(ops, into ? `Into the stack “${into.name}”` : `Out of the stack “${was?.name ?? ''}”`) && said) toast(said);
 }
 
 export function deleteTrack(id: string): void {

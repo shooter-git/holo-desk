@@ -32,6 +32,7 @@ import { spaceIsTransport } from './fields.ts';
 import { layoutNow } from './layout.ts';
 import { shownNoteView } from './note-view.ts';
 import { agentOnNow, pageCovers, pageDocks, usesPage } from './page-layout.ts';
+import { stackSelected } from './stack-actions.ts';
 import { closeBar, openBar, store } from './store.ts';
 
 export interface KeyCommand {
@@ -84,6 +85,7 @@ export const KEY_COMMANDS: KeyCommand[] = [
   { keys: '↑ / ↓', what: 'Transpose notes (Shift: an octave) or select a track', group: 'Edit' },
   { keys: 'M / S', what: 'Mute or solo the track', group: 'Tracks' },
   { keys: 'Alt Ctrl N', what: 'New track', group: 'Tracks' },
+  { keys: 'Ctrl Shift D', what: 'A new stack with the selected track', group: 'Tracks' },
   { keys: 'Ctrl S', what: 'Save now', group: 'Project' },
   { keys: 'Ctrl B', what: 'Bounce to a WAV file (the cycle, when it’s on)', group: 'Project' },
   { keys: 'A S D F… / W E T…', what: 'Musical Typing: white and black keys', group: 'Musical Typing' },
@@ -283,6 +285,7 @@ function onKeyDown(e: KeyboardEvent): void {
   let handled = true;
   if (ctrl && e.altKey && key === 'n') addTrack({ type: 'synth', preset: 'Soft Keys' });
   else if (ctrl && e.shiftKey && key === 'f') toggleFullscreen();
+  else if (ctrl && e.shiftKey && key === 'd') stackSelected();
   else if (ctrl && key === 'z') e.shiftKey ? redo() : undo();
   else if (ctrl && key === 'y') redo();
   else if (ctrl && key === 's') void saveNow();

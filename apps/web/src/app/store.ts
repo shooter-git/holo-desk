@@ -54,6 +54,8 @@ export interface AppState {
   agentReport: boolean;
 
   selectedTrack: string | null;
+  /** The stacks closed on this device in the open song: their tracks are folded away under their headers (track-rows.ts). */
+  foldedStacks: readonly string[];
   selectedRegions: string[];
   selectedNotes: Note[];
   /**
@@ -247,6 +249,7 @@ const initial: AppState = {
   agentJobs: {},
   agentReport: false,
   selectedTrack: null,
+  foldedStacks: [],
   selectedRegions: [],
   selectedNotes: [],
   selectedAudioNotes: null,

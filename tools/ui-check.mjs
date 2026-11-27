@@ -117,6 +117,21 @@ function song() {
     }
     return t;
   });
+  // two track stacks: a folder (the bass and the drums), and one mixed through a bus of its own (the
+  // bells and the strings), so every view is looked at with stacks' headers among the tracks
+  const group = newBus('Bells and strings');
+  p.buses.push(group);
+  p.stacks = [
+    { id: 'stk_rhythm', name: 'Rhythm' },
+    { id: 'stk_bells', name: 'Bells and strings, a stack with a long name', bus: group.id },
+  ];
+  for (const t of p.tracks) {
+    if (t.name === 'Bass' || t.name === 'Drums') t.stack = 'stk_rhythm';
+    if (t.name === 'Bells' || t.name === 'Strings') {
+      t.stack = 'stk_bells';
+      t.channel.output = group.id;
+    }
+  }
   p.tracks[0].armed = true;
   p.tracks[0].channel.automation = [
     {

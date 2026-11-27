@@ -76,6 +76,9 @@ export interface Actions {
   /** Switch a track on or off (Make Inactive): one undo step. */
   setActive(track: string, active: boolean): void;
   newTrack(): void;
+  /** The selected track in a new stack of its own, or taken out of the stack it's in. */
+  stackTrack(): void;
+  unstackTrack(): void;
   save(): void;
   bounce(): void;
   /** Open Export stems (the dialog shows what the host would make before it's asked). */
@@ -496,6 +499,23 @@ export function commandTable(s: BarState, act: Actions): Command[] {
       also: 'add',
       available: song,
       run: act.newTrack,
+    },
+    {
+      id: 'stack-track',
+      title: 'New stack with the selected track',
+      group: 'Tracks',
+      keys: 'Ctrl Shift D',
+      also: 'folder group tracks together summing bus',
+      available: (x) => selected(x) !== null && !selected(x)?.stack,
+      run: act.stackTrack,
+    },
+    {
+      id: 'unstack-track',
+      title: 'Take the track out of its stack',
+      group: 'Tracks',
+      also: 'folder group',
+      available: (x) => !!selected(x)?.stack,
+      run: act.unstackTrack,
     },
 
     // the song

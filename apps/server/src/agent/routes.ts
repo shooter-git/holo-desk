@@ -489,7 +489,7 @@ export function agentRoutes(
   const askPermission = async (req: FastifyRequest, job: AgentJob) => {
     const b = body(req);
     if (!PERMISSION_KINDS.includes(b.kind as PermissionKind))
-      throw bad('kind is install-pack, send-creation, bounce, render, screen, photo or microphone');
+      throw bad(`kind is one of ${PERMISSION_KINDS.join(', ')}`);
     const kind = b.kind as PermissionKind;
     const detail = line(b.detail, 'detail', 300);
     // only a creation can render its own song

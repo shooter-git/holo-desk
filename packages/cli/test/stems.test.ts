@@ -93,6 +93,26 @@ describe('holo stems', () => {
     expect(b.asked[0]?.body).toMatchObject({ from: 0, to: BAR * 4, name: 'Terminal (stems)' });
   });
 
+  it('asks for a file a stack when told, and says which stems those are', async () => {
+    const p = song();
+    p.stacks = [{ id: 'stk_a', name: 'Band' }];
+    for (const t of p.tracks) t.stack = 'stk_a';
+    const { asked, call } = host([done]);
+    const said: string[] = [];
+    await hostStems({
+      base: '',
+      call,
+      project: p,
+      whole: true,
+      by: 'stacks',
+      log: (t) => said.push(t),
+      progress: () => {},
+      every: 0,
+    });
+    expect(asked[0]?.body?.stems).toBe('stacks');
+    expect(said[0]).toBe('1 stem of "Terminal": 01 Band.wav');
+  });
+
   it('says why when the host couldn’t make them, and asks for none of a song with nothing to hear', async () => {
     const quiet = { log: () => {}, progress: () => {}, every: 0, base: '', whole: false };
     const failed = host([{ state: 'failed', line: '', error: 'The host ran out of memory', file: null }]);

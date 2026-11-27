@@ -5,7 +5,7 @@
  */
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import { type Stem, stemSongs, stemWarnings } from '@holo/agent/edits';
+import { type Stem, type StemsBy, stemSongs, stemWarnings } from '@holo/agent/edits';
 import { type Project, projectEnd } from '@holo/session';
 
 type Call = <T>(path: string, init?: RequestInit) => Promise<T>;
@@ -20,13 +20,13 @@ interface Job {
 }
 
 /** The stems a song has, or why it has none, and what to know about them, said before any is made. */
-export function announce(project: Project, log: (text: string) => void): Stem[] {
-  const stems = stemSongs(project);
+export function announce(project: Project, log: (text: string) => void, by: StemsBy = 'tracks'): Stem[] {
+  const stems = stemSongs(project, by);
   if (!stems.length) throw new Error('Nothing in the song would be heard: no track has anything to play');
   log(
     `${stems.length === 1 ? '1 stem' : `${stems.length} stems`} of "${project.title}": ${stems.map((s) => s.file).join(', ')}`,
   );
-  for (const w of stemWarnings(project)) log(`Note: ${w}`);
+  for (const w of stemWarnings(project, by)) log(`Note: ${w}`);
   return stems;
 }
 
@@ -36,6 +36,8 @@ export interface HostStems {
   project: Project;
   /** The whole song, even while its cycle is on. */
   whole: boolean;
+  /** A file for each stack (its tracks together) and each track in none, instead of one a track. */
+  by?: StemsBy;
   /** Where to save the ZIP here as well (it's kept on the host either way). */
   out?: string;
   log: (text: string) => void;
@@ -47,7 +49,7 @@ export interface HostStems {
 /** `holo stems`: the host makes the ZIP and keeps it with the song's bounces. */
 export async function hostStems(o: HostStems): Promise<{ path: string; url: string }> {
   const p = o.project;
-  announce(p, o.log);
+  announce(p, o.log, o.by);
   const cycle = !o.whole && p.cycle.on && p.cycle.end > p.cycle.start;
   const started = await o.call<{ id: string }>(`/api/projects/${p.id}/bounces/host`, {
     method: 'POST',
@@ -56,7 +58,7 @@ export async function hostStems(o: HostStems): Promise<{ path: string; url: stri
       from: cycle ? p.cycle.start : 0,
       to: cycle ? p.cycle.end : projectEnd(p),
       tail: 3,
-      stems: true,
+      stems: o.by === 'stacks' ? 'stacks' : true,
       name: `${p.title}${cycle ? ' (cycle)' : ''} (stems)`,
     }),
   });
@@ -87,6 +89,7 @@ export interface RenderedStems {
   project: Project;
   /** A folder (made if it isn't there) or a file ending .zip. */
   out: string;
+  by?: StemsBy;
   /** The stretch to render, in ticks, where it was said (else the whole song). */
   from?: number;
   to?: number;
@@ -97,7 +100,7 @@ export interface RenderedStems {
 
 /** `holo render-audio --stems`: each stem rendered here, into a folder or a ZIP. */
 export async function renderStems(o: RenderedStems): Promise<string[]> {
-  const stems = announce(o.project, o.log);
+  const stems = announce(o.project, o.log, o.by);
   // every stem covers the same stretch, the whole song's unless told: left to itself a render ends
   // with what it plays, and a part that stops early would be a shorter file than the others
   const stretch = { from: o.from ?? 0, to: o.to ?? projectEnd(o.project) };

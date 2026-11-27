@@ -151,6 +151,7 @@ export type PermissionKind =
   | 'send-creation'
   | 'bounce'
   | 'stems'
+  | 'stems-stacks'
   | 'render'
   | 'screen'
   | 'photo'

@@ -143,7 +143,7 @@ You think in seconds; music happens in milliseconds. So:
   song on the host; the command prints where.
 - **Stems**: `holo stems` has the host make a 24-bit WAV for each track the mix is made of, in one ZIP
   kept with the song's bounces (the cycle when it's on, unless `--whole`; `--out FILE.zip` saves it here
-  too; no studio need be open). It says first which files there will be, and what would stop them adding
+  too; `--by stacks` makes a file for each track stack and each track in none; no studio need be open). It says first which files there will be, and what would stop them adding
   up to the mix (the song's finish, a limiter or compressor several tracks share): pass that on.
   `holo render-audio --stems --out DIR|FILE.zip` renders the same files here, headless.
 - **Audio**: `holo audio FILE.wav --at 9 [--track "Vocal"]` puts a recording or a stem on an audio track

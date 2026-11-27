@@ -10,8 +10,12 @@
  */
 import { type Channel, type Plugin, type Project, pluginDef, type Track } from '@holo/session';
 
+/** What a stem is of: each track alone, or each stack's tracks together (and each loose track alone). */
+export type StemsBy = 'tracks' | 'stacks';
+export const isStemsBy = (v: unknown): v is StemsBy => v === 'tracks' || v === 'stacks';
+
 export interface Stem {
-  /** What it's a stem of: the track's name. */
+  /** What it's a stem of: the track's name, or the stack's. */
   name: string;
   /** Its file in the archive: numbered in the song's order, so they sort as the tracks do. */
   file: string;
@@ -47,28 +51,57 @@ const fileName = (name: string): string =>
     .trim()
     .slice(0, 60) || 'Track';
 
-/** The song's stems, one for each track the mix is made of, in the song's order. */
-export function stemSongs(project: Project): Stem[] {
+/** The tracks of the mix in the groups their stems are made of: each alone, or a stack's together. */
+function stemGroups(project: Project, by: StemsBy): { name: string; tracks: Track[] }[] {
   const heard = stemTracks(project);
-  const width = Math.max(2, String(heard.length).length);
+  if (by === 'tracks') return heard.map((t) => ({ name: t.name, tracks: [t] }));
+  const stacks = new Map((project.stacks ?? []).map((s) => [s.id, s]));
+  const out: { name: string; tracks: Track[] }[] = [];
+  const made = new Map<string, { name: string; tracks: Track[] }>();
+  for (const t of heard) {
+    const stack = t.stack ? stacks.get(t.stack) : undefined;
+    if (!stack) {
+      out.push({ name: t.name, tracks: [t] });
+      continue;
+    }
+    // (a stack's stem sits where the first of its tracks that's heard does)
+    let group = made.get(stack.id);
+    if (!group) {
+      group = { name: stack.name, tracks: [] };
+      made.set(stack.id, group);
+      out.push(group);
+    }
+    group.tracks.push(t);
+  }
+  return out;
+}
+
+/**
+ * The song's stems, in the song's order: one for each track the mix is made of, or (`by` stacks)
+ * one for each stack, its tracks together, and one for each track in no stack.
+ */
+export function stemSongs(project: Project, by: StemsBy = 'tracks'): Stem[] {
+  const groups = stemGroups(project, by);
+  const width = Math.max(2, String(groups.length).length);
   const taken = new Set<string>();
-  return heard.map((track, i) => {
-    let file = `${String(i + 1).padStart(width, '0')} ${fileName(track.name)}.wav`;
-    // (two tracks of one name: the number tells them apart already, but never two files of one name)
+  return groups.map((group, i) => {
+    let file = `${String(i + 1).padStart(width, '0')} ${fileName(group.name)}.wav`;
+    // (two of one name: the number tells them apart already, but never two files of one name)
     for (let n = 2; taken.has(file.toLowerCase()); n++)
-      file = `${String(i + 1).padStart(width, '0')} ${fileName(track.name)} ${n}.wav`;
+      file = `${String(i + 1).padStart(width, '0')} ${fileName(group.name)} ${n}.wav`;
     taken.add(file.toLowerCase());
+    const mine = new Set(group.tracks.map((t) => t.id));
     const { finish: _finish, ...rest } = project;
     const song: Project = {
       ...rest,
       // every other track is switched off: not played, and nothing of it loaded
       tracks: project.tracks.map((t) =>
-        t.id === track.id
+        mine.has(t.id)
           ? { ...t, channel: { ...t.channel, mute: false, solo: false } }
           : { ...t, inactive: true, channel: { ...t.channel, solo: false } },
       ),
     };
-    return { name: track.name, file, tracks: [track.id], song };
+    return { name: group.name, file, tracks: group.tracks.map((t) => t.id), song };
   });
 }
 
@@ -95,9 +128,9 @@ const reacts = (p: Plugin): boolean => !p.bypass && pluginDef(p.type)?.category 
  * finish, and anything on the master, or on a bus more than one stem reaches, that reacts to level.
  * Empty when they add up to the mix.
  */
-export function stemWarnings(project: Project): string[] {
+export function stemWarnings(project: Project, by: StemsBy = 'tracks'): string[] {
   const out: string[] = [];
-  const heard = stemTracks(project);
+  const groups = stemGroups(project, by);
   if (project.finish)
     out.push(
       'The song’s finish (its mastering) isn’t on the stems: they’re the mix before it, so together they’re quieter than the bounce.',
@@ -112,10 +145,11 @@ export function stemWarnings(project: Project): string[] {
   for (const bus of project.buses) {
     const fx = bus.channel.inserts.filter(reacts).map((p) => pluginDef(p.type)?.name ?? p.type);
     if (!fx.length) continue;
-    const reaching = heard.filter((t) => reached(project, t).has(bus.id));
+    // (the stems that get there: a stack's tracks, exported together, go through it together as in the mix)
+    const reaching = groups.filter((g) => g.tracks.some((t) => reached(project, t).has(bus.id)));
     if (reaching.length < 2) continue;
     out.push(
-      `${plural(fx)} on ${bus.name} ${fx.length > 1 ? 'react' : 'reacts'} to ${plural(reaching.map((t) => t.name))} together. In the stems each goes through alone, so they won’t add up to the mix exactly.`,
+      `${plural(fx)} on ${bus.name} ${fx.length > 1 ? 'react' : 'reacts'} to ${plural(reaching.map((g) => g.name))} together. In the stems each goes through alone, so they won’t add up to the mix exactly.`,
     );
   }
   return out;

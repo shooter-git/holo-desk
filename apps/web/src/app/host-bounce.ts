@@ -14,8 +14,8 @@ export interface HostBounceAsk {
   name: string;
   /** This device's token, when the agent knows it: the host then tells it when the bounce is done (its notices outside HO[LO]). */
   token?: string;
-  /** The song's stems (a WAV for each track, in one ZIP) instead of its mix. */
-  stems?: boolean;
+  /** The song's stems (a WAV for each track, in one ZIP) instead of its mix; `"stacks"`: a WAV for each stack and each track in none. */
+  stems?: boolean | 'stacks';
 }
 
 /** Whether a bounce's file (its name, or the link to it) is a song's stems: a ZIP, where a bounce is a WAV. */
@@ -62,7 +62,7 @@ export async function askHostBounce(
         to: ask.to,
         tail: ask.tail,
         name: ask.name,
-        ...(ask.stems ? { stems: true } : {}),
+        ...(ask.stems ? { stems: ask.stems } : {}),
       }),
     });
     if (res.status !== 202) {

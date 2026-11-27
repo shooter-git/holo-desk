@@ -12,6 +12,8 @@ import {
   tickToSeconds,
 } from '@holo/session';
 import {
+  ChevronDown,
+  ChevronRight,
   Circle,
   CircleDashed,
   FastForward,
@@ -48,12 +50,14 @@ import {
   levels,
   optimistic,
   remote,
+  remoteRows,
   STALE_MS,
   type StudioState,
   type StudioTrack,
   sendMidi,
   useRemote,
 } from '../app/remote.ts';
+import { foldsOf, keepFolds } from '../app/track-rows.ts';
 import { dbToFader, Fader, faderToDb, formatDb, Wordmark } from './controls.tsx';
 import { keepAwake, useFrame, wake } from './frame.ts';
 import { PlayPad } from './PlayPad.tsx';
@@ -661,8 +665,27 @@ function TrackControls({ track }: { track: StudioTrack }) {
   );
 }
 
+/**
+ * Which of the studio's stacks are closed on this remote, for the song it has open: this device's
+ * own, kept as the studio keeps its own (so a phone that's both has one answer).
+ */
+function useFolds(song: string | null): [readonly string[], (stack: string) => void] {
+  const [folded, setFolded] = useState<{ song: string | null; ids: readonly string[] }>(() => ({
+    song,
+    ids: song ? foldsOf(song) : [],
+  }));
+  const ids = folded.song === song ? folded.ids : song ? foldsOf(song) : [];
+  const toggle = (stack: string) => {
+    const next = ids.includes(stack) ? ids.filter((id) => id !== stack) : [...ids, stack];
+    setFolded({ song, ids: next });
+    if (song) keepFolds(song, next);
+  };
+  return [ids, toggle];
+}
+
 function TracksTab() {
   const s = useRemote((r) => activeStudio(r)?.state);
+  const [folded, toggle] = useFolds(s?.project ?? null);
   if (!s) return null;
   if (!s.tracks.length) return <div className="remote-empty">This song has no tracks yet.</div>;
   return (
@@ -671,13 +694,33 @@ function TracksTab() {
         Tap a track to play it from here and from your keyboard (when nothing is armed, live MIDI goes to the selected
         track). <b>R</b> arms tracks to record.
       </p>
-      {s.tracks.map((t) => {
+      {remoteRows(s.tracks, s.stacks, folded).map((row) => {
+        if (row.kind === 'stack')
+          return (
+            <button
+              key={`stack:${row.stack.id}`}
+              type="button"
+              className={`remote-stack${row.open ? ' open' : ''}`}
+              style={{ ['--c' as string]: row.stack.color }}
+              aria-expanded={row.open}
+              aria-label={`${row.stack.name}, a stack of ${row.count === 1 ? '1 track' : `${row.count} tracks`}: ${row.open ? 'close' : 'open'} it`}
+              onClick={() => toggle(row.stack.id)}
+            >
+              {row.open ? <ChevronDown aria-hidden="true" /> : <ChevronRight aria-hidden="true" />}
+              <span className="name">{row.stack.name}</span>
+              <span className="sub">
+                {row.count === 1 ? '1 track' : `${row.count} tracks`}
+                {row.stack.bus ? ' · through its bus' : ''}
+              </span>
+            </button>
+          );
+        const t = row.track;
         const selected = t.id === s.selection.track;
         return (
           <div
             key={t.id}
-            className={`remote-track${selected ? ' selected' : ''}`}
-            style={{ ['--c' as string]: t.color }}
+            className={`remote-track${selected ? ' selected' : ''}${row.stack ? ' in-stack' : ''}`}
+            style={{ ['--c' as string]: t.color, ...(row.stack ? { ['--stack' as string]: row.stack.color } : {}) }}
           >
             <div
               className="row"
@@ -704,6 +747,7 @@ function TracksTab() {
 
 function MixerTab() {
   const s = useRemote((r) => activeStudio(r)?.state);
+  const [folded, toggle] = useFolds(s?.project ?? null);
   const box = useRef<HTMLDivElement>(null);
   const [height, setHeight] = useState(240);
   useEffect(() => {
@@ -716,9 +760,30 @@ function MixerTab() {
   if (!s) return null;
   return (
     <div className="remote-mixer" ref={box}>
-      {s.tracks.map((t) => (
-        <MiniStrip key={t.id} track={t} height={height} selected={t.id === s.selection.track} />
-      ))}
+      {remoteRows(s.tracks, s.stacks, folded).map((row) =>
+        row.kind === 'stack' ? (
+          <button
+            key={`stack:${row.stack.id}`}
+            type="button"
+            className={`mini-stack${row.open ? ' open' : ''}`}
+            style={{ ['--c' as string]: row.stack.color }}
+            aria-expanded={row.open}
+            aria-label={`${row.stack.name}, a stack of ${row.count === 1 ? '1 track' : `${row.count} tracks`}: ${row.open ? 'close' : 'open'} it`}
+            onClick={() => toggle(row.stack.id)}
+          >
+            {row.open ? <ChevronDown aria-hidden="true" /> : <ChevronRight aria-hidden="true" />}
+            <span className="name">{row.stack.name}</span>
+            <span className="count">{row.count}</span>
+          </button>
+        ) : (
+          <MiniStrip
+            key={row.track.id}
+            track={row.track}
+            height={height}
+            selected={row.track.id === s.selection.track}
+          />
+        ),
+      )}
       {s.master && (
         <div className="mini-strip master">
           <span className="name">Stereo Out</span>

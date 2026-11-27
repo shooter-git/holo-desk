@@ -65,6 +65,21 @@ describe('the plan of a song’s stems', () => {
   });
 });
 
+describe('the plan of a song’s stems, by stack', () => {
+  it('offers stacks where the song has them, and counts the files and the tracks left out by them', () => {
+    const p = song();
+    expect(stemsPlan(p, 'song', 3).stacks).toBe(false);
+    p.stacks = [{ id: 'stk_a', name: 'Band' }];
+    for (const t of p.tracks.slice(0, 2)) t.stack = 'stk_a';
+    const plan = stemsPlan(p, 'song', 3, 'stacks');
+    expect(plan.stacks).toBe(true);
+    expect(plan.stems.map((s) => s.file)).toEqual(['01 Band.wav']);
+    // (Keys and Bass are in it; the muted and the empty track are in none)
+    expect(plan.left).toBe(2);
+    expect(stemsPlan(p, 'song', 3).stems).toHaveLength(2);
+  });
+});
+
 describe('what a song has kept on the host, counted', () => {
   it('tells bounces from sets of stems', () => {
     const b = { stems: false };

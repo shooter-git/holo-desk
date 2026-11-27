@@ -51,6 +51,7 @@ export type PermissionKind =
   | 'send-creation'
   | 'bounce'
   | 'stems'
+  | 'stems-stacks'
   | 'render'
   | 'screen'
   | 'photo'
@@ -241,6 +242,7 @@ const PERMISSION_WORDS: Record<PermissionKind, string> = {
   'send-creation': 'send the song to its creation',
   bounce: 'bounce the song',
   stems: 'export the song’s stems',
+  'stems-stacks': 'export the song’s stems, a file for each stack',
   render: 'hear the song as its creation renders it',
   screen: 'see their screen',
   photo: 'see a photo',

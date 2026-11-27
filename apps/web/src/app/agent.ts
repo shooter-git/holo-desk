@@ -105,6 +105,7 @@ export type PermissionKind =
   | 'send-creation'
   | 'bounce'
   | 'stems'
+  | 'stems-stacks'
   | 'render'
   | 'screen'
   | 'photo'
@@ -595,6 +596,7 @@ const ALLOW: Record<PermissionKind, string> = {
   'send-creation': 'Send it',
   bounce: 'Bounce the song',
   stems: 'Export the stems',
+  'stems-stacks': 'Export the stems, by stack',
   render: 'Hear it as the creation plays it',
   screen: 'Share the screen',
   photo: 'Take a photo',

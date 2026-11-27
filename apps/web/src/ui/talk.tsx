@@ -116,12 +116,17 @@ export function PermissionButton({
         if (!r) throw new Error('The bounce didn’t finish: try again');
         await permit(job, true, `Bounced ${clock(r.seconds * 1000)} of the song, kept with it as ${r.path}`);
       });
-    if (kind === 'stems')
+    if (kind === 'stems' || kind === 'stems-stacks')
       return attempt('Exporting the stems…', async () => {
-        // a WAV for each track, in a ZIP the host makes and keeps with the song's bounces
-        const r = await exportStems(undefined, false);
+        // a WAV for each track (or each stack), in a ZIP the host makes and keeps with the song's bounces
+        const stacks = kind === 'stems-stacks';
+        const r = await exportStems(undefined, false, stacks ? 'stacks' : 'tracks');
         if (!r) throw new Error('The stems weren’t made: try again');
-        await permit(job, true, `Exported the song’s stems (a 24-bit WAV for each track), kept with it as ${r.path}`);
+        await permit(
+          job,
+          true,
+          `Exported the song’s stems (a 24-bit WAV for each ${stacks ? 'stack, and each track in none' : 'track'}), kept with it as ${r.path}`,
+        );
       });
     if (kind === 'render')
       return attempt('Rendering…', async () => {

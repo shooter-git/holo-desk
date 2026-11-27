@@ -138,3 +138,71 @@ describe('why stems might not add up to the mix', () => {
     expect(said[2]).toMatch(/^Compressor on Band reacts to Piano and Bass together/);
   });
 });
+
+describe('stems by stack', () => {
+  /** Piano; Violins and Cellos stacked as "Strings" through a bus with a compressor; Flute stacked alone; Bass. */
+  function stacked(): Project {
+    const p = newProject('Stacked');
+    p.master.inserts = [];
+    const sum = { ...newBus('Strings'), id: 'bus_strings' };
+    sum.channel.inserts = [newPlugin('compressor')];
+    p.buses = [sum];
+    const violins = { ...track('Violins', 'trk_v'), stack: 'stk_s' };
+    const cellos = { ...track('Cellos', 'trk_c'), stack: 'stk_s' };
+    violins.channel.output = 'bus_strings';
+    cellos.channel.output = 'bus_strings';
+    p.tracks = [
+      track('Piano', 'trk_p'),
+      violins,
+      cellos,
+      { ...track('Flute', 'trk_f'), stack: 'stk_w' },
+      track('Bass', 'trk_b'),
+    ];
+    p.stacks = [
+      { id: 'stk_s', name: 'Strings', bus: 'bus_strings' },
+      { id: 'stk_w', name: 'Winds' },
+    ];
+    return p;
+  }
+
+  it('is a stem for each stack, its tracks together, and one for each track in none, in the song’s order', () => {
+    const stems = stemSongs(stacked(), 'stacks');
+    expect(stems.map((s) => [s.file, s.name, s.tracks])).toEqual([
+      ['01 Piano.wav', 'Piano', ['trk_p']],
+      ['02 Strings.wav', 'Strings', ['trk_v', 'trk_c']],
+      ['03 Winds.wav', 'Winds', ['trk_f']],
+      ['04 Bass.wav', 'Bass', ['trk_b']],
+    ]);
+    // the stack's stem plays its tracks and no others
+    expect(stems[1]?.song.tracks.filter((t) => !t.inactive).map((t) => t.name)).toEqual(['Violins', 'Cellos']);
+    // by track, as ever
+    expect(stemSongs(stacked()).map((s) => s.name)).toEqual(['Piano', 'Violins', 'Cellos', 'Flute', 'Bass']);
+    expect(stemSongs(stacked(), 'tracks')).toHaveLength(5);
+  });
+
+  it('leaves out a stack’s tracks that aren’t heard, and a stack with none that are', () => {
+    const p = stacked();
+    (p.tracks[2] as Track).channel.mute = true;
+    (p.tracks[3] as Track).inactive = true;
+    expect(stemSongs(p, 'stacks').map((s) => [s.name, s.tracks])).toEqual([
+      ['Piano', ['trk_p']],
+      ['Strings', ['trk_v']],
+      ['Bass', ['trk_b']],
+    ]);
+  });
+
+  it('is a song with no stacks by track either way', () => {
+    expect(stemSongs(song(), 'stacks').map((s) => s.name)).toEqual(['Piano', 'Bass', 'Pad']);
+  });
+
+  it('warns of a bus that reacts to level only when stems of more than one group reach it', () => {
+    const p = stacked();
+    // by track: the violins and the cellos go through the compressor apart
+    expect(stemWarnings(p).join(' ')).toMatch(/Compressor on Strings reacts to Violins and Cellos together/);
+    // by stack: they go through it together, as in the mix
+    expect(stemWarnings(p, 'stacks')).toEqual([]);
+    // (another stem sent there too: then it's said, by the stems' names)
+    (p.tracks[0] as Track).channel.sends = [{ bus: 'bus_strings', level: -6, pre: false }];
+    expect(stemWarnings(p, 'stacks').join(' ')).toMatch(/reacts to Piano and Strings together/);
+  });
+});

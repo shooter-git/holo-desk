@@ -796,6 +796,10 @@ export function agentRoutes(
     }, true),
   );
   app.post(
+    `${J}/capture`,
+    forJob(async (_req, _reply, job) => theJobs.capture(job), true),
+  );
+  app.post(
     `${J}/compare`,
     forJob(async (req, _reply, job) => {
       const b = body(req);

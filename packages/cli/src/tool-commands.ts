@@ -75,6 +75,7 @@ const COMMAND_FOR: Record<string, string> = {
   timeline: 'holo timeline',
   measure: 'holo measure',
   played: 'holo played',
+  capture: 'holo capture',
   listen: 'holo listen',
   audition: 'holo audition',
 };
@@ -408,6 +409,13 @@ export async function toolCommand(ctx: ToolCommandContext): Promise<void> {
       }
       const a = api.measured;
       console.log(a && !a.done ? stillText(r.text) : r.text);
+      return;
+    }
+
+    case 'capture': {
+      for (const k of flags.keys())
+        if (!GENERAL.has(k)) throw new Error(`holo capture has no --${k}: it takes nothing`);
+      say(await runTool(env, 'capture', {}, { command: 'holo capture' }));
       return;
     }
 

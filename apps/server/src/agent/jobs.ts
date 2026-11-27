@@ -32,7 +32,7 @@ import {
   viewVersions,
 } from '@holo/agent/view';
 import { SCAN_ID, type Scan } from '@holo/score';
-import { applyOps, barToTick, type MiddleC, type Op, type Project, parseProject } from '@holo/session';
+import { applyOps, barToTick, type MiddleC, type Op, type Project, parseProject, type Region } from '@holo/session';
 import type { Store } from '../db.ts';
 import {
   type AgentHooks,
@@ -1924,6 +1924,21 @@ export class Jobs implements AgentHooks {
     return { notes: parsePlayed(answer.notes) };
   }
 
+  /**
+   * What the requester's studio would keep of what was just played (Capture), as operations for the
+   * job to apply: its tool sends them back through `ops`, so they're in the job's undo step.
+   */
+  async capture(job: AgentJob): Promise<Captured> {
+    const studio = await this.studioBack(job);
+    const answer = await this.o.live.request(studio, { type: 'agent-capture' }, this.limits.playedMs, true);
+    awayIfGone(answer);
+    if (!answer.ok) {
+      if (answer.error === NO_ANSWER) throw new Refusal(504, 'The studio didn’t say in time what was just played');
+      throw new Refusal(409, answer.error ?? 'The studio can’t keep what was just played');
+    }
+    return parseCaptured(answer);
+  }
+
   /** A/B: the requester's studio plays bars `from` to `to` (not played) from before the job, then as they are now. */
   async compare(job: AgentJob, from: number, to: number): Promise<{ ok: true }> {
     const studio = await this.studioBack(job);
@@ -1995,6 +2010,36 @@ function turnExtra(job: AgentJob): string {
     ...(job.attachments.length ? { attachments: job.attachments } : {}),
   };
   return JSON.stringify(extra);
+}
+
+/** What Capture would keep (the agent package's `Captured`): the operations and what to say of them, or why there are none. */
+export type Captured = { ops: Op[]; notes: number; tracks: string[]; regions: string[] } | { nothing: string };
+
+/**
+ * What a studio says Capture would keep, checked (also for the command line's `POST /api/live/capture`):
+ * only regions added to tracks, and no more of them than a phrase could make.
+ */
+export function parseCaptured(answer: Record<string, unknown>): Captured {
+  if (typeof answer.nothing === 'string') return { nothing: oneLine(answer.nothing, 200) };
+  const ops: Op[] = [];
+  for (const raw of Array.isArray(answer.ops) ? answer.ops.slice(0, 256) : []) {
+    if (typeof raw !== 'object' || raw === null) continue;
+    const op = raw as Record<string, unknown>;
+    if (op.op !== 'addRegion' || typeof op.track !== 'string' || typeof op.region !== 'object' || op.region === null)
+      continue;
+    ops.push({ op: 'addRegion', track: op.track, region: op.region as Region });
+  }
+  if (!ops.length) return { nothing: 'Nothing was played to keep' };
+  const names = (v: unknown) =>
+    Array.isArray(v)
+      ? v
+          .filter((x): x is string => typeof x === 'string')
+          .map((x) => oneLine(x, 80))
+          .slice(0, 256)
+      : [];
+  const notes =
+    typeof answer.notes === 'number' && Number.isFinite(answer.notes) ? Math.max(0, Math.round(answer.notes)) : 0;
+  return { ops, notes, tracks: names(answer.tracks), regions: names(answer.regions) };
 }
 
 /** Notes the studio says were played, checked (also for the command line's `GET /api/live/played`). */

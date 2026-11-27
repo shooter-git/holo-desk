@@ -63,6 +63,7 @@ function studio(patch: Partial<BarState> = {}): BarState {
     bouncing: null,
     rollKey: true,
     rollSnap: false,
+    captureReady: false,
     playhead: 0,
     phone: false,
     ...patch,

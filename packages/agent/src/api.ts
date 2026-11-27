@@ -51,6 +51,9 @@ export interface StudioCommand {
   title: string;
 }
 
+/** What Capture would keep: the operations, how many notes play, the tracks and regions by name; or why there's nothing. */
+export type Captured = { ops: Op[]; notes: number; tracks: string[]; regions: string[] } | { nothing: string };
+
 /** A note the user played on a MIDI device (or sang, through pitch tracking). */
 export interface PlayedNote {
   /** Song tick when played (null when the song wasn't playing). */
@@ -432,6 +435,11 @@ export interface JobApi {
   listen(body: { maxMs: number; quietMs: number; last?: boolean }): Promise<ListenPart>;
   /** GET …/played?seconds=: what was just played (at most 60 s back). */
   played(seconds: number): Promise<{ notes: PlayedNote[] }>;
+  /**
+   * POST …/capture: what was just played as the operations that would keep it (regions on the tracks
+   * that sounded it), not applied: the caller applies them. The studio forgets the phrase as it answers.
+   */
+  capture(): Promise<Captured>;
   /** POST …/compare: the song before the job, then as it is now, over bars `from` to `to` (bar numbers, `to` not played). */
   compare(body: { from: number; to: number }): Promise<{ ok: boolean }>;
   /** GET …/packs */
@@ -557,6 +565,7 @@ export function httpJobApi(base: string, job: string, tokenFile: string): JobApi
     audition: (body) => json('POST', '/audition', body),
     listen: (body) => json('POST', '/listen', body, Math.min(LISTEN_MAX_MS, body.maxMs) + 10_000),
     played: (seconds) => json('GET', `/played?seconds=${seconds}`),
+    capture: () => json('POST', '/capture', {}),
     compare: (body) => json('POST', '/compare', body),
     packs: () => json('GET', '/packs'),
     packsAvailable: () => json('GET', '/packs/available'),
@@ -606,6 +615,8 @@ export interface FakeJobApiOptions {
   scans?: Record<string, Scan>;
   strips?: Record<string, Image>;
   played?: PlayedNote[];
+  /** What Capture gives (nothing played, when left out). */
+  captured?: Captured;
   /** What listening hears: each part, in turn (the last given again once they run out). */
   heard?: PlayedNote[] | ListenPart[];
   attachments?: Record<string, Attachment>;
@@ -706,6 +717,10 @@ export function fakeJobApi(project: Project, options: FakeJobApiOptions = {}): F
     async played(seconds) {
       log('played', seconds);
       return { notes: options.played ?? [] };
+    },
+    async capture() {
+      log('capture');
+      return options.captured ?? { nothing: 'Nothing was played to keep' };
     },
     async compare(body) {
       log('compare', body);

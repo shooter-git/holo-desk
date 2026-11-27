@@ -157,6 +157,7 @@ describe('the tool list', () => {
       'listen',
       'played',
       'analyze_played',
+      'capture',
       'compare',
       'scan_show',
       'scan_status',
@@ -751,6 +752,29 @@ describe('playing and listening', () => {
       [500, 0x90, 64, 90],
       [995, 0x80, 64, 0],
     ]);
+  });
+
+  it('keeps what was just played, as part of its own change', async () => {
+    const region = { ...newRegion(0, BAR, 'Captured'), id: 'rgn_cap', notes: [{ t: 0, d: 480, p: 60, v: 90 }] };
+    // (the fake reads what Capture gives as it's asked: set once the song's own track is known)
+    const options: Parameters<typeof setup>[0] = {};
+    const api = setup(options);
+    const first = api.project.tracks[0];
+    if (!first) throw new Error('the test song has a track');
+    options.captured = {
+      ops: [{ op: 'addRegion', track: first.id, region }],
+      notes: 1,
+      tracks: [first.name],
+      regions: ['Captured'],
+    };
+    const said = await call(api, 'capture');
+    expect(said.text).toBe(`Kept 1 note on ${first.name}.`);
+    expect(api.project.tracks[0]?.regions.some((r) => r.id === 'rgn_cap')).toBe(true);
+    expect(api.batches.at(-1)?.label).toContain(`Captured 1 note onto ${first.name}`);
+    // nothing played: said, and nothing changed
+    const none = setup();
+    expect((await call(none, 'capture')).text).toBe('Nothing was played to keep.');
+    expect(none.batches.length).toBe(0);
   });
 
   it("says what was played in the studio's names, where it fell in the song", async () => {

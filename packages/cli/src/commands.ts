@@ -59,6 +59,7 @@ export const COMMANDS = [
   'timeline',
   'measure',
   'played',
+  'capture',
   'details',
   'import',
   'packs',
@@ -105,6 +106,8 @@ ${noteActions('        ')}
         [--against key|none|TRACK] [--grid 1/16] [--through effects] [--source bounce] [--seconds 8]
         [--file REC.wav] [--json] [--wait SECONDS]
         a take's pitch and timing, the mix's loudness, each track, a plugin, the studio's meters, a file
+  holo capture                                keep what was just played in the studio as regions, on the tracks
+                                              that sounded it (the studio's Capture, Shift R)
   holo played [--seconds 20] [--analyze]      what was just played in the studio; --analyze: tempo, meter,
                                               key and grid, and the notes as score text (holo listen --analyze too)
   holo details [--title T] [--artist A] [--album B]   who the song is by and its album ("none" clears one)

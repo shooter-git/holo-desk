@@ -14,14 +14,17 @@ import {
   applyJob,
   beginGesture,
   bounceSong,
+  captureRecent,
   compareJob,
   endGesture,
   ensureAudio,
+  forgetPlayed,
   gestureChange,
   keepNow,
   locate,
   moveBars,
   openProject,
+  planCaptured,
   play,
   redo,
   relabelJob,
@@ -51,6 +54,7 @@ import {
 } from './agent.ts';
 import { answerAgentRequest } from './agent-studio.ts';
 import { goTo } from './agent-view.ts';
+import { captured, heardBy } from './capture.ts';
 import { PlayedMemory } from './played.ts';
 import { store, toast } from './store.ts';
 
@@ -388,6 +392,17 @@ async function onMessage(msg: Record<string, unknown>): Promise<void> {
       seenScans.add(id);
       return;
     }
+    case 'agent-capture': {
+      // what was just played as the operations that would keep it: whoever asked applies them (the
+      // agent in its request's undo step, the command line through the song's ops), so it's theirs to undo
+      const made = planCaptured();
+      if ('nothing' in made) ack(true, { nothing: made.nothing });
+      else {
+        forgetPlayed();
+        ack(true, { ops: made.plan.ops, notes: made.plan.notes, tracks: made.plan.tracks, regions: made.plan.regions });
+      }
+      return;
+    }
     case 'agent-played': {
       // what was just played here, for the agent: the last `seconds` (a minute at most)
       const seconds = Math.max(0, Math.min(60, Number(msg.seconds) || 0));
@@ -489,6 +504,9 @@ async function command(msg: Record<string, unknown>): Promise<void> {
       return;
     case 'record':
       await toggleRecord();
+      return;
+    case 'capture':
+      captureRecent();
       return;
     case 'toStart':
       if (s.playing) stop();
@@ -750,7 +768,18 @@ store.subscribe(() => {
   const now = store.get().project?.id ?? null;
   if (now === reportedSong) return;
   reportedSong = now;
+  // (what was played over the song that was open isn't this one's to capture)
+  forgetPlayed();
   report();
+});
+
+// the transport starting or stopping ends a phrase (Capture keeps the last one played in one go)
+let wasPlaying = false;
+store.subscribe(() => {
+  const playing = store.get().playing;
+  if (playing === wasPlaying) return;
+  wasPlaying = playing;
+  captured.mark(playing ? 'play' : 'stop', performance.now());
 });
 
 /** The last minute of what was played here, every port: the agent may ask for it after the fact. */
@@ -758,8 +787,24 @@ const memory = new PlayedMemory();
 
 // what's played goes to the host while the command line listens, or the agent's job does (only then)
 midi.onEvent((e) => {
-  const tick = store.get().playing ? Math.round(engine.heardTick(e.time, e.frame) ?? 0) : null;
+  const s = store.get();
+  const tick = s.playing ? Math.round(engine.heardTick(e.time, e.frame) ?? 0) : null;
   memory.add({ at: e.time, status: e.status, d1: e.d1, d2: e.d2, port: e.port, tick });
+  // for Capture: the same message with the tracks that sounded it and where the song was as played
+  // (while it records, the recorder has it)
+  if (!s.recording) {
+    captured.add({
+      at: e.time,
+      ...(e.frame !== undefined && e.frame >= 0 ? { fine: (e.frame / engine.sampleRate) * 1000 } : {}),
+      status: e.status,
+      d1: e.d1,
+      d2: e.d2,
+      port: e.port,
+      tracks: heardBy(s.project, s.selectedTrack, e.port, (e.status & 0x0f) + 1),
+      tick: s.playing ? engine.heardPlayedTick(e.time, e.frame) : null,
+    });
+    if (captured.ready !== s.captureReady) store.set({ captureReady: captured.ready });
+  }
   const agentListens = agent.get().listening !== null;
   if (Date.now() > listening && !agentListens) return;
   // notes from other devices: for the command line, the host counts those it relayed itself; the agent

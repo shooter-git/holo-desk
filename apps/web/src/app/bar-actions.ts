@@ -6,6 +6,7 @@
 import {
   addTrack,
   bounceSong,
+  captureRecent,
   deleteSelection,
   locate,
   moveBars,
@@ -39,6 +40,7 @@ export const ACTIONS: Actions = {
   set: (patch) => store.set(patch),
   togglePlay: () => void togglePlay(),
   toggleRecord: () => void toggleRecord(),
+  captureRecent,
   toggleCycle,
   toggleMetronome,
   stop,

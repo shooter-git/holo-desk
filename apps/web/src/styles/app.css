@@ -925,8 +925,10 @@ a.btn {
     grid-template-columns: auto auto auto;
     justify-content: space-between;
   }
+  /* (Capture's own button goes too: Shift R, the bar and a finger held on Record still capture) */
   .app:not(.phone) .control-bar .cb-midi,
-  .app:not(.phone) .control-bar .cb-remote {
+  .app:not(.phone) .control-bar .cb-remote,
+  .app:not(.phone) .control-bar .transport .capture {
     display: none;
   }
 }
@@ -966,7 +968,8 @@ a.btn {
 }
 @media (max-width: 1440px) and (pointer: coarse) {
   .app:not(.phone) .control-bar .cb-midi,
-  .app:not(.phone) .control-bar .cb-remote {
+  .app:not(.phone) .control-bar .cb-remote,
+  .app:not(.phone) .control-bar .transport .capture {
     display: none;
   }
 }
@@ -7563,6 +7566,29 @@ html[data-layout^="phone"] .view-item kbd {
   width: 20px;
   min-width: 20px;
   padding: 0;
+}
+
+/* Capture, beside Record: dim until something has been played that it can keep, then lit */
+.transport .btn.capture {
+  color: var(--text-3);
+}
+
+.transport .btn.capture.ready {
+  color: var(--cycle);
+}
+
+/* the same on the Play tab, where it shows only while there's something to keep */
+.capture-chip {
+  flex: none;
+  gap: 5px;
+  color: var(--cycle);
+}
+
+/* (in the bar it's the sign alone on a phone; beside the octave it has the room for its word) */
+@media (max-width: 430px) {
+  .pane-bar .capture-chip .words {
+    display: none;
+  }
 }
 
 /* the song's key in the Piano Roll's bar: lit while it's shown, underlined while notes snap to it */

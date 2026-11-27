@@ -38,6 +38,7 @@ export type BarState = Pick<
   | 'bouncing'
   | 'rollKey'
   | 'rollSnap'
+  | 'captureReady'
 > & { playhead: number; phone: boolean };
 
 /** What the commands do: the studio's own actions (actions.ts, and the store's toggles as keys.ts sets them). */
@@ -45,6 +46,7 @@ export interface Actions {
   set(patch: Partial<AppState>): void;
   togglePlay(): void;
   toggleRecord(): void;
+  captureRecent(): void;
   toggleCycle(): void;
   toggleMetronome(): void;
   stop(): void;
@@ -224,6 +226,15 @@ export function commandTable(s: BarState, act: Actions): Command[] {
       keys: 'R',
       available: song,
       run: act.toggleRecord,
+    },
+    {
+      id: 'capture',
+      title: 'Capture what was just played',
+      group: 'Transport',
+      keys: 'Shift R',
+      also: 'keep retrospective record flashback',
+      available: (x) => x.project !== null && !x.recording,
+      run: act.captureRecent,
     },
     {
       id: 'cycle',

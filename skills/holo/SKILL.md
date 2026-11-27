@@ -180,6 +180,7 @@ holo measure plugin --track Vocal --plugin compressor   # what a plugin does (an
 holo measure meters --seconds 8                    # the studio's meters while it plays (start playback first)
 holo measure file take.wav                         # a recording here (or the newest bounce)
 holo played [--seconds 20]                         # what the user just played in the studio
+holo capture                                       # keep it: the last phrase played becomes regions (Capture)
 holo played --analyze                              # its tempo, meter, key, pickup and grid, as score text
 holo listen --seconds 8 --analyze                  # the same for what they play next
 holo import theme.mid --at 17 [--track Strings] [--parts 1,3] [--tempo adopt]   # MIDI or MusicXML into the

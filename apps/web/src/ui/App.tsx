@@ -559,7 +559,7 @@ function PhoneLayout({ layout, inert }: { layout: Layout; inert: boolean }) {
           {/* on its side, the phone has the room for the back and forward buttons and the key (held
               upright it hasn't: the position display's drag moves a bar at a time there) */}
           <div className="phone-transport top">
-            <TransportButtons minimal={!nav} />
+            <TransportButtons minimal={!nav} capture />
             <Lcd compact keyCell />
             <SongTitle />
             {/* the bar; View is in Settings, as on a phone held upright */}

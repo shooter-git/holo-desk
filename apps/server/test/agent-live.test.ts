@@ -452,6 +452,42 @@ describe('what was just played', () => {
     await until(() => silent.done);
     expect((silent.value as Awaited<ReturnType<typeof tool>>).statusCode).toBe(504);
   });
+
+  it('asks the requester’s studio what Capture would keep, and passes on only regions', async () => {
+    const { start, tool, s, token, desk, admit, studio } = await setup();
+    const phone = await admit(token);
+    const phoneStudio = studio(phone.token, s.id, 'phone');
+    const { job, token: jobToken } = await start({ project: s.id, text: 'Keep that' });
+    const region = { id: 'rgn_c', name: 'Captured', start: 0, length: 3840, muted: false, notes: [], cc: {} };
+    desk.answer = (msg) =>
+      msg.type === 'agent-capture'
+        ? {
+            ok: true,
+            ops: [{ op: 'addRegion', track: 'trk_a', region }, { op: 'removeTrack', track: 'trk_a' }, 'nonsense'],
+            notes: 3,
+            tracks: ['Keys', 7],
+            regions: ['Captured'],
+          }
+        : { ok: true };
+    const res = await tool(job, jobToken, 'POST', '/capture', {});
+    expect(res.json()).toEqual({
+      ops: [{ op: 'addRegion', track: 'trk_a', region }],
+      notes: 3,
+      tracks: ['Keys'],
+      regions: ['Captured'],
+    });
+    expect(desk.got('agent-capture')).toEqual([{ type: 'agent-capture', id: expect.any(String) }]);
+    expect(phoneStudio.got('agent-capture')).toEqual([]);
+    // nothing played, and a studio that can't
+    desk.answer = (msg) =>
+      msg.type === 'agent-capture' ? { ok: true, nothing: 'Nothing was played to keep' } : { ok: true };
+    expect((await tool(job, jobToken, 'POST', '/capture', {})).json()).toEqual({
+      nothing: 'Nothing was played to keep',
+    });
+    desk.answer = (msg) => (msg.type === 'agent-capture' ? { ok: false, error: 'No memory' } : { ok: true });
+    const none = await tool(job, jobToken, 'POST', '/capture', {});
+    expect([none.statusCode, none.json()]).toEqual([409, { error: 'No memory' }]);
+  });
 });
 
 describe('A/B', () => {

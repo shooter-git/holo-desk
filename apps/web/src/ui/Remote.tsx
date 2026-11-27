@@ -13,6 +13,7 @@ import {
 } from '@holo/session';
 import {
   Circle,
+  CircleDashed,
   FastForward,
   Flag,
   Headphones,
@@ -132,11 +133,12 @@ export function Remote() {
   useEffect(() => remote.subscribe(wake), []);
   useEffect(() => {
     document.title = 'HO[LO] Remote';
-    // a keyboard on the remote: Space plays and stops, R records
+    // a keyboard on the remote: Space plays and stops, R records, Shift R captures
     const key = (e: KeyboardEvent) => {
       if ((e.target as HTMLElement).closest('input, select, textarea') || e.ctrlKey || e.metaKey) return;
       const playing = activeStudio()?.state.playing;
       if (e.code === 'Space') command(playing ? 'stop' : 'play');
+      else if (e.key === 'R' && e.shiftKey) command('capture');
       else if (e.key === 'r') command('record');
       else return;
       e.preventDefault();
@@ -363,6 +365,15 @@ function RemoteTransport() {
         onClick={() => command('record')}
       >
         <Circle fill="currentColor" />
+      </button>
+      <button
+        type="button"
+        className="btn capture"
+        title="Capture: keep what was just played in the studio"
+        aria-label="Capture"
+        onClick={() => command('capture')}
+      >
+        <CircleDashed />
       </button>
       <button
         type="button"

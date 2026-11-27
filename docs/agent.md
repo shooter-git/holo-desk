@@ -27,7 +27,7 @@ doesn't change:
   user's harness configuration.
 
 The commands that do what the agent's tools do (`holo regions`, `notes`, `timeline`, `measure`,
-`played`, `details`, `import`, `packs`, `holo listen --analyze`, and `holo tool NAME` for any tool by name;
+`played`, `capture`, `details`, `import`, `packs`, `holo listen --analyze`, and `holo tool NAME` for any tool by name;
 `packages/cli/src/tool-commands.ts`) run the agent's own tools, through a `JobApi` over the CLI's routes
 (`packages/cli/src/terminal-api.ts`): the song as saved, changes through `/api/projects/:id/ops` (one
 undo step, "AI: …"), the studio's playhead and selection from `/api/live/state`, what was just played
@@ -317,6 +317,7 @@ they answer any job. The command line's own requests to a studio are as they wer
 | `POST …/audition` **studio** | `{track?, events:[[delayMs, status, d1, d2]]}` (1 to 1024; status 0x80 to 0xEF) | `{ok}`. Sent as `play-notes`: heard, not recorded. |
 | `POST …/listen` **studio** | `{maxMs, quietMs, last?}` (maxMs ≤ 45000, quietMs ≤ 10000) | `{notes:[PlayedNote], done, part, pending}`: one part of a listen (below). 409 while a part is under way. |
 | `GET …/played` **studio** | `?seconds=` (1 to 60) | `{notes:[PlayedNote]}` from the studio's memory of what was just played (`agent-played`). 504 if it doesn't answer within 3 s; 409 with its reason if it can't say. |
+| `POST …/capture` **studio** | none | `{ops, notes, tracks, regions}`: what the studio's Capture would keep of what was just played, as `addRegion` operations for the tool to send back through `…/ops` (so they're in the job's undo step), with how many notes play and the tracks' and regions' names; or `{nothing}` with why there's none. The studio forgets the phrase as it answers (`agent-capture`). 504 if it doesn't answer within 3 s; 409 with its reason. |
 | `POST …/compare` **studio** | `{from, to}` (bar numbers; `to` isn't played) | `{ok}`, once the studio has started playing those bars from before the job, then as they are now (`agent-compare`, up to 50 s). |
 | `POST …/version` | `{name}` (a few words, not `before` or `after`) | `{ok, revision}`: the studio saves (`agent-flush`), and the song as saved is kept in its history (`snapshotNow`, author "Agent: <name>") as a version the reply's view can play or keep. While the studio is away, the song as saved here (it has the job's changes). 409 for a name used already this turn, or past 8. |
 | `GET …/commands` **studio** | | `{commands:[{id, title}]}`: the bar's commands the requester's studio can run now (`agent-commands`), for a view's `command` buttons. |
@@ -388,7 +389,8 @@ first; a measurement the terminal asked for runs to its end. Refusals say what t
 **What was just played, for the terminal**: `GET /api/live/played?seconds=&project=` (1 to 60 s, 20
 by default) asks the studio with `project` open (or the most recently active one) for its memory of
 what was played, as `…/played` does (`agent-played`): `{notes:[PlayedNote]}`; 409 without a studio,
-504 when it doesn't answer within 3 s.
+504 when it doesn't answer within 3 s. `POST /api/live/capture?project=` asks the same studio what its Capture would keep, as `…/capture`
+does: `holo capture` applies the operations through the song's ops.
 
 `agent-meters {id, seconds}` (server → studio, asked): the studio reads every channel's meter twenty
 times a second while the song plays (`apps/web/src/app/agent-meters.ts`, keeping the last 30 s) and
@@ -527,6 +529,8 @@ taken only from the runner it was handed to, while it runs.
 - `agent-flush {id, project}`: save now; ack `{revision}`, or `{ok:false, reason:'not-open'}` when
   another song is open (the song is then as the host has it).
 - `agent-played {id, seconds}`: ack `{notes:[PlayedNote]}` from the last minute of what was played here.
+- `agent-capture {id}`: ack `{ops, notes, tracks, regions}`, what Capture would keep of the last phrase
+  played here (not applied here: whoever asked applies it), or `{nothing}`; the phrase is forgotten.
 - `agent-compare {id, job, from, to}`: ack once it has started playing.
 - `agent-commands {id}`: ack `{commands:[{id, title}]}`, the bar's commands (by their fixed ids, not a
   marker's or a track's) this studio can run now.
@@ -1050,6 +1054,7 @@ change may also post a line under the bar (`…/progress`).
 | `listen` | play | Listen to what the user plays, in parts, until quiet, Done or `max` (≤ 600 s). |
 | `played` | play | What the user just played (up to 60 s back). |
 | `analyze_played` | see | Tempo, meter, key, pickup and grid of a performance, and its notes as score text. |
+| `capture` | change | Keep what the user just played as regions, as the studio's Capture does: on the tracks that sounded it, where it was played (or from the playhead's bar while stopped), pedal and bends included. |
 | `compare` | play | A/B at once: some bars as they were before the request, then as they are now (only when the user asked to hear it now; a view's play buttons let them compare at their own pace). |
 | `scan_show` | see | A scan's pages and systems; or one system as images: its strip, then the strip enlarged in parts with guides (below). |
 | `scan_status` | change | Mark how far a scanned system's reading got. |

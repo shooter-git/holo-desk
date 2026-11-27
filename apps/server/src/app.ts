@@ -50,7 +50,7 @@ import {
   writeMidi,
 } from '@holo/session';
 import Fastify, { type FastifyInstance, type FastifyReply } from 'fastify';
-import { type Jobs, parsePlayed } from './agent/jobs.ts';
+import { type Jobs, parseCaptured, parsePlayed } from './agent/jobs.ts';
 import { runnerKey } from './agent/keys.ts';
 import type { Notify } from './agent/push.ts';
 import { agentRoutes } from './agent/routes.ts';
@@ -1143,6 +1143,21 @@ export async function buildApp(
       return reply.code(409).send({ error: answer.error ?? 'The studio can’t say what was just played' });
     }
     return { notes: parsePlayed(answer.notes) };
+  });
+
+  // what a studio would keep of what was just played (Capture), as the operations that keep it: the
+  // command line applies them through the song's ops, as the agent's `capture` does through its job's
+  app.post<{ Querystring: { project?: string } }>('/api/live/capture', async (req, reply) => {
+    const project = req.query.project || undefined;
+    const editor = live.editor(project);
+    if (!editor) return reply.code(409).send({ error: project ? 'No studio has this song open' : 'No studio is open' });
+    const answer = await live.request(editor, { type: 'agent-capture' }, 3000, true);
+    if (!answer.ok) {
+      if (answer.error === NO_ANSWER)
+        return reply.code(504).send({ error: 'The studio didn’t say in time what was just played' });
+      return reply.code(409).send({ error: answer.error ?? 'The studio can’t keep what was just played' });
+    }
+    return parseCaptured(answer);
   });
 
   // ---- the studio itself (and, through its sendFile, the files sent from disk above) ----

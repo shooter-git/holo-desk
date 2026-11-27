@@ -2,6 +2,7 @@
 import { formatBarBeat, KEYS, type MeterPoint, type Project, performed, tickToSeconds } from '@holo/session';
 import {
   Circle,
+  CircleDashed,
   FastForward,
   Keyboard,
   Library,
@@ -25,6 +26,7 @@ import {
   apply,
   beginGesture,
   cancelGesture,
+  captureRecent,
   endGesture,
   gestureChange,
   locate,
@@ -44,6 +46,7 @@ import { useSoundsComing } from '../audio/loading.ts';
 import { midi } from '../audio/midi.ts';
 import { startDrag, TAP, Wordmark } from './controls.tsx';
 import { useFrame, useMedia, wake } from './frame.ts';
+import { LONG_PRESS_MS } from './gesture.ts';
 import { keyShort } from './key-short.ts';
 import { MetronomeButton } from './Metronome.tsx';
 import { openMenuAt } from './menu.tsx';
@@ -374,11 +377,21 @@ export function Lcd({ compact = false, keyCell = !compact }: { compact?: boolean
   );
 }
 
-export function TransportButtons({ minimal = false }: { minimal?: boolean }) {
+/**
+ * `capture`: Capture has a button of its own beside Record (where there's room for a fifth: not a
+ * phone held upright, where holding Record does it).
+ */
+export function TransportButtons({ minimal = false, capture = false }: { minimal?: boolean; capture?: boolean }) {
   const playing = useApp((s) => s.playing);
   const recording = useApp((s) => s.recording);
   const waiting = useApp((s) => s.playWaiting);
   const cycle = useApp((s) => s.project?.cycle.on ?? false);
+  const kept = useApp((s) => s.captureReady);
+  // a finger held on Record keeps what was just played (Capture), wherever there's no button for it
+  const held = useRef<{ timer: number; fired: boolean } | null>(null);
+  const letGo = () => {
+    if (held.current) clearTimeout(held.current.timer);
+  };
   return (
     <div className="transport">
       {!minimal && (
@@ -445,10 +458,48 @@ export function TransportButtons({ minimal = false }: { minimal?: boolean }) {
         }
         aria-label="Record (R)"
         aria-pressed={recording}
-        onClick={() => void toggleRecord()}
+        onClick={() => {
+          // a finger held on it captured: lifting it isn't a press of Record as well
+          if (held.current?.fired) {
+            held.current = null;
+            return;
+          }
+          void toggleRecord();
+        }}
+        onContextMenu={(e) => e.preventDefault()}
+        onPointerDown={(e) => {
+          if (e.pointerType !== 'touch' || recording || waiting) return;
+          letGo();
+          const press = {
+            fired: false,
+            timer: window.setTimeout(() => {
+              press.fired = true;
+              captureRecent();
+            }, LONG_PRESS_MS),
+          };
+          held.current = press;
+        }}
+        onPointerUp={letGo}
+        onPointerCancel={letGo}
+        onPointerLeave={letGo}
       >
         <Circle fill="currentColor" />
       </button>
+      {capture && (
+        <button
+          type="button"
+          className={`btn capture${kept ? ' ready' : ''}`}
+          title={
+            kept
+              ? 'Capture: keep what you just played (Shift R)'
+              : 'Capture (Shift R): keeps what you play without recording. Nothing has been played yet'
+          }
+          aria-label="Capture (Shift R)"
+          onClick={captureRecent}
+        >
+          <CircleDashed />
+        </button>
+      )}
       <button
         type="button"
         className={`btn cycle${cycle ? ' on' : ''}`}
@@ -729,7 +780,7 @@ export function ControlBar() {
         {show.barUndo && <UndoRedo group="seg cb-undo" />}
       </div>
       <div className="hstack cb-center">
-        <TransportButtons minimal={!show.barNav} />
+        <TransportButtons minimal={!show.barNav} capture={show.barCapture} />
         <Lcd compact={narrow} />
         {show.barMetronome && <MetronomeButton className="btn icon cb-metro" title="Metronome (K)" />}
       </div>

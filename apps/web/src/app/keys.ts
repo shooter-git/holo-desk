@@ -6,6 +6,7 @@ import { midi } from '../audio/midi.ts';
 import {
   addTrack,
   bounceSong,
+  captureRecent,
   deleteSelection,
   ensureAudio,
   locate,
@@ -41,6 +42,7 @@ export interface KeyCommand {
 export const KEY_COMMANDS: KeyCommand[] = [
   { keys: 'Space', what: 'Play or stop', group: 'Transport' },
   { keys: 'R', what: 'Record', group: 'Transport' },
+  { keys: 'Shift R', what: 'Capture: keep what was just played', group: 'Transport' },
   { keys: 'C', what: 'Cycle on or off', group: 'Transport' },
   { keys: 'K', what: 'Metronome', group: 'Transport' },
   { keys: 'Return', what: 'Go to the beginning', group: 'Transport' },
@@ -290,6 +292,7 @@ function onKeyDown(e: KeyboardEvent): void {
   else if (ctrl && key === 'k') toggleTyping();
   else if (ctrl) handled = false;
   else if (e.code === 'Space') void togglePlay();
+  else if (key === 'r' && e.shiftKey) captureRecent();
   else if (key === 'r') void toggleRecord();
   else if (key === 'c') toggleCycle();
   else if (key === 'k') toggleMetronome();

@@ -9,6 +9,7 @@ import { type MiddleC, noteName, PPQ, type Project, parseNotation, tickToBarBeat
 import type { PlayedNote } from '../api.ts';
 import {
   barTick,
+  change,
   getAttachment,
   need,
   num,
@@ -360,4 +361,24 @@ export const compare: Tool = {
   },
 };
 
-export const playTools: Tool[] = [transport, audition, listen, played, analyzePlayed, compare];
+export const capture: Tool = {
+  name: 'capture',
+  kind: 'change',
+  summary:
+    'Keep what the user just played as regions, as the studio\'s Capture does: the last stretch they played in one go (since the transport last started or stopped; while stopped, since their last pause of ten seconds), with its pedal and bends, on the tracks that sounded it. Played along to the song, the notes go where they were played (around a cycle the last time through plays and the earlier ones are kept muted); played while stopped, they start at the playhead\'s bar, as played, at the song\'s tempo. Use it for "keep that", "I wasn\'t recording"; to write it down as notation instead, analyze_played. It takes nothing.',
+  args: [],
+  async run(ctx) {
+    const got = await ctx.api.capture();
+    if ('nothing' in got) return { text: `${got.nothing}.` };
+    const project = await ctx.api.song();
+    const where = got.tracks.join(', ') || 'the song';
+    await change(ctx, project, got.ops, `Captured ${plural(got.notes, 'note')} onto ${where}`);
+    const muted = got.regions.filter((n) => n !== 'Captured').length;
+    return {
+      text: `Kept ${plural(got.notes, 'note')} on ${where}${muted ? `; ${plural(muted, 'earlier time')} around the cycle kept beside them, muted` : ''}.`,
+      progress: `Captured ${plural(got.notes, 'note')}`,
+    };
+  },
+};
+
+export const playTools: Tool[] = [transport, audition, listen, played, analyzePlayed, capture, compare];

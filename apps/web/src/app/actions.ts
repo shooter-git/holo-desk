@@ -76,6 +76,8 @@ import { NOTE_EFFECTS, playsHits } from '../ui/pads.ts';
 import { AgentError, agent, awayChanges, helloFields, isLive, jobLabels } from './agent.ts';
 import { ApiError, api } from './api.ts';
 import { bounceShelf, holdFile, letFileGo, type SaveWay, saveFile, thisSaveWay } from './bounce-save.ts';
+// (live.ts imports this module too: neither uses the other while loading, so the cycle is harmless)
+import { type CapturePlan, captured, planCapture, takeRegions } from './capture.ts';
 import { comparePlan, type Pass } from './compare.ts';
 import * as history from './history.ts';
 import {
@@ -92,7 +94,6 @@ import {
 } from './host-bounce.ts';
 import { browserShelf, type Keepable, Keeper, type Restored, sameSong, stepJobs } from './kept-history.ts';
 import { isTouch } from './layout.ts';
-// (live.ts imports this module too: neither uses the other while loading, so the cycle is harmless)
 import { reconnectSoon, reportHistory } from './live.ts';
 import { mergeSongs } from './merge-songs.ts';
 import { nearestShown, type Sight, selectionInSight, songIndex, stepShown } from './shown-tracks.ts';
@@ -1630,6 +1631,8 @@ export async function toggleRecord(): Promise<void> {
 }
 
 export function locate(tick: number): void {
+  // (the song moved under what's being played: a phrase doesn't go across it)
+  if (store.get().playing) captured.mark('locate', performance.now());
   engine.locate(Math.max(0, Math.round(tick)));
   store.set({}); // let the position display catch up
 }
@@ -1780,44 +1783,64 @@ function finishRecording(): void {
   for (const take of takes.values()) {
     for (const n of take.held.values()) n.d = Math.max(1, Math.round(end) - n.t);
     if (!take.notes.length && !take.cc.size) continue;
-    const ticks = [...take.notes.map((n) => n.t), ...[...take.cc.values()].flatMap((l) => l.map((x) => x[0]))];
-    const last = Math.max(...take.notes.map((n) => n.t + n.d), ...ticks) + 1;
     // each time through the music it was played over, a region where that music is written; where a
     // later pass goes over the same bars, it plays and the earlier ones are kept, muted (as takes are)
-    const regions: Region[] = [];
-    for (const span of writtenSpans(map, Math.min(...ticks), last)) {
-      const len = span.to - span.from;
-      const inside = (t: number) => t >= span.at && t < span.at + len;
-      const notes = take.notes
-        .filter((n) => inside(n.t))
-        .map((n) => ({ ...n, t: n.t - span.at + span.from, d: Math.min(n.d, span.at + len - n.t) }));
-      const cc = [...take.cc]
-        .map(([k, pts]): [string, [number, number][]] => [
-          k,
-          pts.filter(([t]) => inside(t)).map(([t, v]): [number, number] => [t - span.at + span.from, v]),
-        ])
-        .filter(([, pts]) => pts.length);
-      if (!notes.length && !cc.length) continue;
-      const at = [...notes.map((n) => n.t), ...cc.flatMap(([, pts]) => pts.map((x) => x[0]))];
-      const ends = [...notes.map((n) => n.t + n.d), ...at];
-      const m = meterAt(p.meter, Math.min(...at));
-      const bar = ticksPerBar(m);
-      const start = Math.floor(Math.min(...at) / bar) * bar;
-      const stop = Math.max(start + bar, Math.ceil(Math.max(...ends) / bar) * bar);
-      const region = newRegion(start, stop - start, span.n > 1 ? `Recording (time ${span.n})` : 'Recording');
-      region.notes = notes.map((n) => ({ ...n, t: n.t - start }));
-      region.cc = Object.fromEntries(cc.map(([k, pts]) => [k, pts.map(([t, v]): [number, number] => [t - start, v])]));
-      for (const r of regions) if (r.start < stop && start < r.start + r.length) r.muted = true;
-      regions.push(region);
-      count += notes.length;
-    }
+    const regions = takeRegions(p, map, take, 'Recording', () => newId('rgn'));
+    for (const region of regions) count += region.notes.length;
     for (const region of regions) ops.push({ op: 'addRegion', track: take.track, region });
   }
   takes = new Map();
+  // (what was recorded isn't there for Capture to keep a second time)
+  forgetPlayed();
   if (ops.length) {
     apply(ops, 'Record');
     toast(`Recorded ${count} note${count === 1 ? '' : 's'}`);
   }
+}
+
+// ---- capture ----
+
+/** Nothing played up to now is Capture's to keep: it was kept, or recorded, or it's another song's. */
+export function forgetPlayed(): void {
+  captured.mark('floor', performance.now());
+  if (store.get().captureReady) store.set({ captureReady: false });
+}
+
+/** What was just played as the operations that would keep it (not applied), or why there are none. */
+export function planCaptured(): { plan: CapturePlan } | { nothing: string } {
+  const s = store.get();
+  const p = s.project;
+  if (!p) return { nothing: 'No song is open' };
+  const phrase = captured.phrase(performance.now());
+  if (!phrase) return { nothing: 'Nothing was played to keep' };
+  const plan = planCapture(p, phrase, {
+    selectedTrack: s.selectedTrack,
+    playhead: Math.max(0, engine.positionTick()),
+    playedNow: engine.positionTick() < 0 ? 0 : engine.playedPosition(),
+    map: engine.playMap,
+    id: () => newId('rgn'),
+  });
+  if (!plan) return { nothing: 'Select an instrument track to keep what you played on' };
+  return { plan };
+}
+
+/**
+ * Capture: what was just played becomes regions, whether or not Record was on, on the tracks that
+ * sounded it. One undo step.
+ */
+export function captureRecent(): void {
+  const made = planCaptured();
+  if ('nothing' in made) {
+    toast(made.nothing, 'info');
+    return;
+  }
+  const { plan } = made;
+  if (!apply(plan.ops, 'Capture')) return;
+  forgetPlayed();
+  const muted = plan.regions.length - plan.regions.filter((n) => n === 'Captured').length;
+  toast(
+    `Captured ${plan.notes} note${plan.notes === 1 ? '' : 's'} onto ${plan.tracks.join(', ')}${muted ? ` (${muted} earlier pass${muted === 1 ? '' : 'es'} kept, muted)` : ''}`,
+  );
 }
 
 // ---- audio recording ----

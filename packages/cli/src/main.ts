@@ -1220,6 +1220,7 @@ async function main(): Promise<void> {
     case 'timeline':
     case 'measure':
     case 'played':
+    case 'capture':
     case 'details':
     case 'import':
     case 'packs':

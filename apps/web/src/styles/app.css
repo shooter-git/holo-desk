@@ -2297,6 +2297,81 @@ a.btn {
   box-shadow: inset 1px 0 0 var(--hi);
 }
 
+/* a stack's tab, before its tracks' strips: its arrow, its name up the tab, M and S for its tracks */
+.stack-tab {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  width: 34px;
+  padding: 6px 0;
+  border-right: 1px solid var(--line);
+  border-left: 3px solid color-mix(in srgb, var(--stack, #7c8a99) 75%, transparent);
+  background: linear-gradient(180deg, #23282f, #1a1d22);
+}
+
+.stack-tab .stack-fold {
+  flex: none;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  color: var(--stack, var(--text-2));
+}
+
+.stack-tab-name {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 8px;
+  min-height: 0;
+  overflow: hidden;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+  writing-mode: vertical-rl;
+  transform: rotate(180deg);
+}
+
+.stack-tab-name span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.stack-tab-name .stack-tab-count {
+  flex: none;
+  color: var(--text-3);
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 400;
+}
+
+.stack-tab-chips {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  gap: 4px;
+}
+
+/* (the strips share a grid of rows, each strip through all of them: a tab stands through them too) */
+@supports (grid-template-rows: subgrid) {
+  .mixer > .stack-tab {
+    grid-row: 1 / -1;
+  }
+}
+
+.stack-tab.inactive .stack-tab-name {
+  color: var(--text-3);
+}
+
+/* a stack's strips carry its colour along their top edge */
+.strip.in-stack {
+  box-shadow:
+    inset 1px 0 0 var(--hi),
+    inset 0 3px 0 color-mix(in srgb, var(--stack, #7c8a99) 70%, transparent);
+}
+
 /* (under a finger a strip is wide enough for its slots' names beside their finger-sized buttons,
    and for the longest of its headings: --strip) */
 
@@ -7221,6 +7296,48 @@ html[data-layout="phone-landscape"] .toasts {
   background: var(--bg-2);
 }
 
+/* a stack's head in the remote's list of tracks, and its tracks set in under it */
+.remote-stack {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  padding: 0 12px 0 8px;
+  border: 1px solid var(--line);
+  border-left: 4px solid var(--c, var(--line-3));
+  border-radius: var(--radius-l);
+  background: var(--bg-3);
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.remote-stack svg {
+  width: 18px;
+  height: 18px;
+  color: var(--c, var(--text-2));
+}
+
+.remote-stack .name {
+  overflow: hidden;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.remote-stack .sub {
+  color: var(--text-3);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.remote-track.in-stack {
+  margin-left: 14px;
+  box-shadow: -4px 0 0 -1px color-mix(in srgb, var(--stack, #7c8a99) 70%, transparent);
+}
+
 .remote-track.selected {
   border-color: var(--c);
   background: var(--bg-3);
@@ -7398,6 +7515,50 @@ html[data-layout="phone-landscape"] .toasts {
   border-top: 3px solid var(--c, var(--line-3));
   border-radius: 10px;
   background: var(--bg-2);
+}
+
+/* a stack's head among the remote's faders: narrow, its name up it; a tap folds its strips away */
+.mini-stack {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  width: 38px;
+  padding: 8px 0 10px;
+  border: 1px solid var(--line);
+  border-top: 3px solid var(--c, var(--line-3));
+  border-radius: 10px;
+  background: var(--bg-3);
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+}
+
+.mini-stack svg {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  color: var(--c, var(--text-2));
+}
+
+.mini-stack .name {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  font-size: 12px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  writing-mode: vertical-rl;
+  transform: rotate(180deg);
+}
+
+.mini-stack .count {
+  flex: none;
+  color: var(--text-3);
+  font-family: var(--mono);
+  font-size: 10px;
 }
 
 .mini-strip.selected {

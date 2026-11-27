@@ -1,6 +1,7 @@
 /** The tracks pane's rows where a song has stacks: headers, folds, and what a dragged row does. */
 import { applyOp, applyOps, newBus, newProject, newTrack, type Op, type Project } from '@holo/session';
 import { describe, expect, it } from 'vitest';
+import { remoteRows } from '../src/app/remote.ts';
 import { hiddenTracks, selectionInSight, shownTracks, stepShown } from '../src/app/shown-tracks.ts';
 import { stackState } from '../src/app/stack-actions.ts';
 import {
@@ -252,5 +253,42 @@ describe('what a stack’s header shows of its tracks', () => {
       ['trk_e', 'trk_f'].map((t): Op => ({ op: 'updateTrack', track: t, patch: { inactive: true } })),
     );
     expect(stackState(off, y)).toMatchObject({ inactive: true, solo: false });
+  });
+});
+
+describe('a remote’s rows', () => {
+  const track = (id: string, stack?: string) =>
+    ({
+      id,
+      name: id.toUpperCase(),
+      color: '#fff',
+      kind: 'instrument',
+      sub: '',
+      armed: false,
+      mute: false,
+      solo: false,
+      volume: 0,
+      pan: 0,
+      ...(stack ? { stack } : {}),
+    }) as const;
+  const tracks = [track('a'), track('b', 'stk_x'), track('c', 'stk_x'), track('d')];
+  const stacks = [{ id: 'stk_x', name: 'X', color: '#f00', bus: true }];
+  const said = (rows: ReturnType<typeof remoteRows>) =>
+    rows
+      .map((r) =>
+        r.kind === 'stack'
+          ? `[${r.stack.name} ${r.count}${r.open ? '' : '›'}]`
+          : `${r.stack ? '·' : ''}${r.track.name}`,
+      )
+      .join(' ');
+
+  it('have a head before each stack’s tracks, which are left out while it’s closed here', () => {
+    expect(said(remoteRows(tracks, stacks, []))).toBe('A [X 2] ·B ·C D');
+    expect(said(remoteRows(tracks, stacks, ['stk_x']))).toBe('A [X 2›] D');
+  });
+
+  it('are a row a track for a studio that reports no stacks, or a stack it doesn’t list', () => {
+    expect(said(remoteRows(tracks, undefined, ['stk_x']))).toBe('A B C D');
+    expect(said(remoteRows(tracks, [], []))).toBe('A B C D');
   });
 });

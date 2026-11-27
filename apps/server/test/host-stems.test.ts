@@ -88,6 +88,25 @@ describe('a stems job in the host’s queue', () => {
     bounces.close();
   });
 
+  it('tells its process to make them by stack when that’s asked, and has a bounce’s time for each of those', async () => {
+    vi.useFakeTimers();
+    const { bounces, children } = fakes(1000);
+    const s = song();
+    // Keys and Bass stacked: two stems (the stack, and the Lead)
+    s.stacks = [{ id: 'stk_a', name: 'Rhythm' }];
+    for (const t of s.tracks.slice(0, 2)) t.stack = 'stk_a';
+    const job = bounces.start({ song: s, from: 0, to: BAR * 2, tail: 3, name: 'S', stems: true, stemsBy: 'stacks' });
+    expect(children[0]?.sent[0]?.input).toMatchObject({ stems: true, stemsBy: 'stacks' });
+    await vi.advanceTimersByTimeAsync(1900);
+    expect(bounces.get(job?.id ?? '')?.state).toBe('running');
+    await vi.advanceTimersByTimeAsync(200);
+    expect(bounces.get(job?.id ?? '')?.error).toMatch(/took too long/);
+    // (by track, nothing is said of stacks)
+    bounces.start({ song: s, from: 0, to: BAR * 2, tail: 3, name: 'T', stems: true });
+    expect(children[1]?.sent[0]?.input).not.toHaveProperty('stemsBy');
+    bounces.close();
+  });
+
   it('gives it a bounce’s time for each stem, and a bounce only its own', async () => {
     vi.useFakeTimers();
     const { bounces, children } = fakes(1000);

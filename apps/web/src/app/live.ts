@@ -112,8 +112,14 @@ export function device(): string {
  * The song's shape as reported: its markers and tracks, worked out again only when the song (or
  * the pack list the labels come from) has changed, since the report goes out a few times a second.
  */
-let shape: { project: Project | null; packs: PackSummary[]; markers: unknown[]; tracks: unknown[] } | null = null;
-function songShape(p: Project | null): { markers: unknown[]; tracks: unknown[] } {
+let shape: {
+  project: Project | null;
+  packs: PackSummary[];
+  markers: unknown[];
+  tracks: unknown[];
+  stacks: unknown[];
+} | null = null;
+function songShape(p: Project | null): { markers: unknown[]; tracks: unknown[]; stacks: unknown[] } {
   if (shape && shape.project === p && shape.packs === library.packs) return shape;
   shape = {
     project: p,
@@ -132,6 +138,14 @@ function songShape(p: Project | null): { markers: unknown[]; tracks: unknown[] }
       volume: t.channel.volume,
       pan: t.channel.pan,
       ...(t.inactive ? { inactive: true } : {}),
+      ...(t.stack ? { stack: t.stack } : {}),
+    })),
+    // its track stacks, for a remote's lists: each with the colour its header has in the studio
+    stacks: (p?.stacks ?? []).map((s) => ({
+      id: s.id,
+      name: s.name,
+      color: s.color ?? p?.tracks.find((t) => t.stack === s.id)?.color ?? '#7c8a99',
+      ...(s.bus ? { bus: true } : {}),
     })),
   };
   return shape;
@@ -144,7 +158,7 @@ function report(): boolean {
   const p = s.project;
   const tick = engine.positionTick();
   const lat = engine.latency();
-  const { markers, tracks } = songShape(p);
+  const { markers, tracks, stacks } = songShape(p);
   const state = {
     project: p?.id ?? null,
     title: p?.title ?? null,
@@ -179,6 +193,7 @@ function report(): boolean {
     saveState: s.saveState,
     markers,
     tracks,
+    stacks,
     master: p ? { volume: p.master.volume } : null,
     tempo: p?.tempo ?? [],
     meter: p?.meter ?? [],

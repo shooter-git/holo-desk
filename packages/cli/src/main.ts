@@ -300,10 +300,11 @@ In the studio, live
 
 Files and creations
   holo bounce                         render the song (or the cycle) to a WAV, kept with the song on the host
-  holo stems [--whole] [--out FILE.zip]
+  holo stems [--whole] [--by stacks] [--out FILE.zip]
                                       the song's stems: a 24-bit WAV for each track the mix is made of, in one
                                       ZIP the host makes and keeps with the song's bounces (the cycle when it's
-                                      on, unless --whole; --out saves the ZIP here too). No studio need be open
+                                      on, unless --whole; --out saves the ZIP here too; --by stacks: a file for each
+                                      stack, its tracks together, and each track in none). No studio need be open
   holo import-midi FILE.mid | holo export-midi [FILE.mid]
   holo import-score FILE.musicxml|.mxl | holo export-score [FILE.musicxml]   scores, for and from notation programs
   holo audio FILE.wav|.flac [--track T] [--at 9] [--name N]   a recording or stem on an audio track
@@ -317,7 +318,7 @@ Files and creations
   holo pair                           a code (and a link) that pairs a phone or computer with the agent in
                                       Settings › Agent: run it on the computer HO[LO] runs on
   holo render-audio [--session FILE] [--out FILE.wav] [--rate 44100] [--format float|24] [--from 9 --to 17]
-                    [--no-finish] [--no-loop] [--all-samples] [--stems --out DIR|FILE.zip]
+                    [--no-finish] [--no-loop] [--all-samples] [--stems [--by stacks] --out DIR|FILE.zip]
                                       the song rendered headless by HO[LO]'s engine, exactly as the studio
                                       bounces it (the open song, --song ID, or a session file); --all-samples
                                       loads every sample of its instruments, not only those it can sound
@@ -968,6 +969,7 @@ async function main(): Promise<void> {
         call,
         project: await song(),
         whole: has('whole'),
+        ...(flag('by') === 'stacks' ? { by: 'stacks' as const } : {}),
         ...(out !== undefined ? { out } : {}),
         log: console.log,
         progress: (text) => process.stderr.write(text ? `\r${text.padEnd(60)}` : `\r${''.padEnd(60)}\r`),
@@ -1072,6 +1074,7 @@ async function main(): Promise<void> {
         await renderStems({
           project,
           out: to,
+          ...(flag('by') === 'stacks' ? { by: 'stacks' as const } : {}),
           ...(range.from !== undefined ? { from: range.from } : {}),
           ...(range.to !== undefined ? { to: range.to } : {}),
           log: console.log,

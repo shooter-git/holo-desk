@@ -17,7 +17,7 @@ import { fork } from 'node:child_process';
 import { existsSync, mkdirSync, readdirSync, renameSync, rmSync } from 'node:fs';
 import { setPriority } from 'node:os';
 import { join } from 'node:path';
-import { stemSongs } from '@holo/agent/edits';
+import { type StemsBy, stemSongs } from '@holo/agent/edits';
 import { newId, type Project } from '@holo/session';
 import type { ChildLike } from './agent/measure/runner.ts';
 
@@ -82,6 +82,8 @@ export interface BounceAsk {
    * song's finish, in one ZIP (`@holo/agent/edits`, stems.ts).
    */
   stems?: boolean;
+  /** With `stems`: a file for each stack, its tracks together, and each track in no stack (else one a track). */
+  stemsBy?: StemsBy;
 }
 
 export interface HostBouncesOptions {
@@ -211,7 +213,7 @@ export class HostBounces {
     }
     job.state = 'running';
     // (a stems job renders the song once for each stem: each has a bounce's time)
-    const renders = ask.stems ? Math.max(1, stemSongs(ask.song).length) : 1;
+    const renders = ask.stems ? Math.max(1, stemSongs(ask.song, ask.stemsBy).length) : 1;
     const limit = setTimeout(
       () => this.stop(job, 'The bounce took too long: the host stopped it'),
       Math.min(this.limitMs * renders, 2 ** 31 - 1),
@@ -234,7 +236,7 @@ export class HostBounces {
         to: ask.to,
         tail: ask.tail,
         part,
-        ...(ask.stems ? { stems: true } : {}),
+        ...(ask.stems ? { stems: true, ...(ask.stemsBy === 'stacks' ? { stemsBy: 'stacks' } : {}) } : {}),
       },
     });
   }

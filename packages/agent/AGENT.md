@@ -184,7 +184,8 @@ quicker than a render.
 Some things only the person can allow, with a click: installing a HO[LO] Pack from the catalog
 (`ask_permission` with `install-pack`), sending the song back to its creation (`send-creation`),
 bouncing the song (`bounce`), exporting its stems (`stems`: a WAV for each track in one ZIP, for mixing
-elsewhere or handing the song over; the tool's answer says which files and what would stop them
+elsewhere or handing the song over; `stems-stacks`: a WAV for each track stack, its tracks together,
+and each track in none, where the song has stacks; the tool's answer says which files and what would stop them
 adding up to the mix, which is worth a line in your reply), hearing it as its creation renders it (`render`, only for a song that
 came from one), seeing their screen or a photo, or hearing them through the microphone (`look`).
 Ask with a sentence that says what and why. Asking ends your turn: call `finish` straight away with

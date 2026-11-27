@@ -11,7 +11,7 @@
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { availableParallelism, setPriority } from 'node:os';
 import { dirname, join } from 'node:path';
-import { stemSongs } from '@holo/agent/edits';
+import { type StemsBy, stemSongs } from '@holo/agent/edits';
 import { encodeWav, type RenderCosts, type RenderSplit, renderSession } from '@holo/engine';
 import { dataFolderSource, renderThreads, renderWorkersFor } from '@holo/engine/node';
 import { ZipWriter } from '@holo/music';
@@ -30,6 +30,8 @@ interface Input {
   part: string;
   /** The song's stems, a WAV for each track in one ZIP, instead of its mix. */
   stems?: boolean;
+  /** A stem for each stack and each track in no stack, instead of one a track. */
+  stemsBy?: StemsBy;
 }
 
 try {
@@ -126,7 +128,7 @@ async function bounce(input: Input, line: (text: string) => void): Promise<numbe
  * not kept, so the next bounce of the whole song is laid out as it was.
  */
 async function stems(input: Input, line: (text: string) => void): Promise<number> {
-  const list = stemSongs(input.project);
+  const list = stemSongs(input.project, input.stemsBy);
   if (!list.length) throw new Error('Nothing in the song would be heard: no track has anything to play');
   let split: RenderSplit | null = null;
   try {

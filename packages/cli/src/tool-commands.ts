@@ -105,6 +105,7 @@ export function terminalWords(text: string, tool: Tool | null, how: Wording | nu
   out = out
     .replace(/\(ask_permission "bounce"\)/g, '(holo bounce, in the open studio)')
     .replace(/ask_permission "bounce"/g, 'holo bounce (in the open studio)')
+    .replace(/ask_permission "stems-stacks"/g, 'holo stems --by stacks')
     .replace(/\(ask_permission "stems"\)/g, '(holo stems)')
     .replace(/ask_permission "stems"/g, 'holo stems')
     .replace(/ask_permission \{kind: "install-pack"\}/g, "install it from the studio's Library")

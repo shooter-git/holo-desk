@@ -23,7 +23,7 @@ import { constants as zlib } from 'node:zlib';
 import fastifyCompress from '@fastify/compress';
 import fastifyStatic from '@fastify/static';
 import fastifyWebsocket from '@fastify/websocket';
-import { stemSongs } from '@holo/agent/edits';
+import { isStemsBy, stemSongs } from '@holo/agent/edits';
 import {
   describePackChange,
   engineLabel,
@@ -1071,8 +1071,10 @@ export async function buildApp(
   }>('/api/projects/:id/bounces/host', async (req, reply) => {
     if (!store.row(req.params.id)) return reply.code(404).send({ error: 'No such project' });
     const { from, to, tail = 3, name } = req.body ?? {};
-    // `stems: true`: the song's stems (a WAV for each track, in a ZIP) instead of its mix
-    const stems = req.body?.stems === true;
+    // `stems: true`: the song's stems (a WAV for each track, in a ZIP) instead of its mix; `"stacks"`:
+    // a WAV for each stack, its tracks together, and each track in no stack
+    const stemsBy = isStemsBy(req.body?.stems) ? req.body.stems : 'tracks';
+    const stems = req.body?.stems === true || isStemsBy(req.body?.stems);
     let song: Project;
     try {
       song = parseProject(req.body?.doc);
@@ -1087,7 +1089,7 @@ export async function buildApp(
     if (!span(tail) || tail > 60) return reply.code(400).send({ error: 'A tail of 0 to 60 seconds' });
     // (the device that asks, when it's one the agent knows: it's told when the bounce is done)
     const device = agent.auth.device(req.headers.authorization)?.id ?? null;
-    if (stems && !stemSongs(song).length)
+    if (stems && !stemSongs(song, stemsBy).length)
       return reply.code(400).send({ error: 'Nothing in the song would be heard: no track has anything to play' });
     const job = bounces.start(
       {
@@ -1096,7 +1098,7 @@ export async function buildApp(
         to,
         tail,
         name: typeof name === 'string' && name ? name : stems ? `${song.title} (stems)` : song.title,
-        ...(stems ? { stems: true } : {}),
+        ...(stems ? { stems: true, ...(stemsBy === 'stacks' ? { stemsBy } : {}) } : {}),
       },
       device,
     );

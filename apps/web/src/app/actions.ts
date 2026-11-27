@@ -4,7 +4,7 @@
  * and the AI all call these.
  */
 
-import { notesIntoKey, stepInKey, swings, swungAt } from '@holo/agent/edits';
+import { notesIntoKey, type StemsBy, stepInKey, swings, swungAt } from '@holo/agent/edits';
 import {
   type ClickSound,
   clipKey,
@@ -2224,12 +2224,14 @@ export function moveTrack(id: string, index: number): void {
 }
 
 /**
- * Move a track to the `index`th place among the tracks shown (a header or a strip dragged there):
- * where View leaves inactive tracks out, that's the place in the song of the track shown there now.
+ * Move a track to the `index`th place among the tracks shown (a strip dragged there in the Mixer):
+ * where View leaves inactive tracks out, or a closed stack's are folded away, that's the place in
+ * the song of the track shown there now. It stays in the stack it's in, or out of every stack (the
+ * tracks pane is where a track is dragged into one).
  */
 export function moveShownTrack(id: string, index: number): void {
   const s = store.get();
-  if (s.project) moveTrack(id, songIndex(s.project.tracks, s.show, index));
+  if (s.project) moveTrack(id, songIndex(s.project.tracks, showNow(s), index));
 }
 
 /** What this device shows of the song's tracks: View's Inactive tracks, and the stacks closed here. */
@@ -2852,6 +2854,8 @@ export type StemsRange = 'cycle' | 'song';
 export async function exportStems(
   range: StemsRange = store.get().project?.cycle.on ? 'cycle' : 'song',
   download = true,
+  /** A file for each track, or for each stack (its tracks together) and each track in none. */
+  by: StemsBy = 'tracks',
 ): Promise<Bounced | null> {
   const p = store.get().project;
   if (!p) return null;
@@ -2874,7 +2878,7 @@ export async function exportStems(
       to,
       tail: BOUNCE_TAIL,
       name,
-      stems: true,
+      stems: by === 'stacks' ? 'stacks' : true,
       ...tokenOf(helloFields()),
     });
     if ('error' in job) {

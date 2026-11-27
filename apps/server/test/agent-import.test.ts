@@ -597,7 +597,8 @@ describe('asking for a bounce or the creation’s render', () => {
     const ask = (body: Msg) => w.tool(job, token, 'POST', '/permission', body);
     const wrong = await ask({ kind: 'mixdown', detail: 'x' });
     expect(wrong.json()).toEqual({
-      error: 'kind is install-pack, send-creation, bounce, render, screen, photo or microphone',
+      error:
+        'kind is one of install-pack, send-creation, bounce, stems, stems-stacks, render, screen, photo, microphone',
     });
     const render = await ask({ kind: 'render', detail: 'To hear the game’s own sound' });
     expect(render.statusCode).toBe(400);

@@ -1064,7 +1064,7 @@ change may also post a line under the bar (`…/progress`).
 | `attachment_get` | see | An attachment: a picture, a recording's measurements and notes, a MIDI file's notes, a text. |
 | `import` | change | Bring an attachment into the song: a recording onto an audio track, a MIDI or MusicXML file as tracks (below). |
 | `look` | ask | Ask for a screenshot, a photo or a recording (a permission: it ends the turn). |
-| `ask_permission` | ask | Ask to install a pack, send to the creation, bounce the song, export its stems (a WAV for each track, in one ZIP), have the creation render it, or for a screenshot, a photo or a recording. |
+| `ask_permission` | ask | Ask to install a pack, send to the creation, bounce the song, export its stems (a WAV for each track, in one ZIP; `stems-stacks`: a WAV for each track stack and each track in none), have the creation render it, or for a screenshot, a photo or a recording. |
 | `hand_off` | ask | A brief for the user's own coding agent, only for a change to HO[LO] Desk's code, holo-packs or a creation (no commands or code in it; never to read or send files, keys, passwords or tokens). |
 | `version` | change | Keep the song as it is now as a named version, for the reply's view to play or keep. |
 | `finish` | ask | End the turn, always, a question's too: the undo step's label, the reply (one or two short sentences of plain text, about 200 characters at most: what changed and where, or the answer), what shows under it (`view`) and where the studio goes as it arrives (`go`, when they asked to see something). |
@@ -1130,7 +1130,7 @@ picture is shown as it is, without parts.
 There are no tools for opening, creating or exporting songs, or for creations. What the user attached
 comes into the open song through `import`; a bounce, the song's stems, sending the song to its
 creation and the creation's own render each need the user's click (`ask_permission` with `bounce`,
-`stems`, `send-creation` or `render`). In a terminal those are `holo bounce`, `holo stems`,
+`stems` or `stems-stacks`, `send-creation` or `render`). In a terminal those are `holo bounce`, `holo stems` (`--by stacks`),
 `holo send` and `holo render`.
 
 ### A recording's notes: `audio_notes`

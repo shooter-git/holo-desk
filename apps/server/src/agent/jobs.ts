@@ -2238,6 +2238,7 @@ export const PERMISSION_KINDS: readonly PermissionKind[] = [
   'send-creation',
   'bounce',
   'stems',
+  'stems-stacks',
   'render',
   'screen',
   'photo',

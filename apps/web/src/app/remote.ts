@@ -22,6 +22,49 @@ export interface StudioTrack {
   pan: number;
   /** Switched off in the studio (Make Inactive): not heard, its buttons do nothing. */
   inactive?: boolean;
+  /** The track stack it's in (a studio before stacks didn't say). */
+  stack?: string;
+}
+
+/** A track stack, as the studio reports it: tracks kept together under one header. */
+export interface StudioStack {
+  id: string;
+  name: string;
+  color: string;
+  /** Its tracks are mixed through a bus of its own. */
+  bus?: boolean;
+}
+
+export type RemoteRow =
+  | { kind: 'stack'; stack: StudioStack; count: number; open: boolean }
+  | { kind: 'track'; track: StudioTrack; stack?: StudioStack };
+
+/**
+ * A remote's list of tracks with the studio's stacks in it: a head before each stack's tracks, which
+ * are left out while the stack is closed here. A studio that reports no stacks has a row a track.
+ */
+export function remoteRows(
+  tracks: readonly StudioTrack[],
+  stacks: readonly StudioStack[] | undefined,
+  folded: readonly string[],
+): RemoteRow[] {
+  const known = new Map((stacks ?? []).map((s) => [s.id, s]));
+  const rows: RemoteRow[] = [];
+  const headed = new Set<string>();
+  for (const track of tracks) {
+    const stack = track.stack ? known.get(track.stack) : undefined;
+    if (!stack) {
+      rows.push({ kind: 'track', track });
+      continue;
+    }
+    const open = !folded.includes(stack.id);
+    if (!headed.has(stack.id)) {
+      headed.add(stack.id);
+      rows.push({ kind: 'stack', stack, count: tracks.filter((t) => t.stack === stack.id).length, open });
+    }
+    if (open) rows.push({ kind: 'track', track, stack });
+  }
+  return rows;
 }
 
 export interface StudioState {
@@ -47,6 +90,8 @@ export interface StudioState {
   saveState: string;
   markers: { tick: number; name: string; at: string }[];
   tracks: StudioTrack[];
+  /** Its track stacks (a studio before stacks reports none). */
+  stacks?: StudioStack[];
   master: { volume: number } | null;
   tempo?: TempoPoint[];
   meter?: MeterPoint[];
@@ -260,6 +305,8 @@ function complete(raw: unknown): StudioState {
     saveState: s.saveState ?? 'saved',
     markers: Array.isArray(s.markers) ? s.markers : [],
     tracks: Array.isArray(s.tracks) ? s.tracks : [],
+    // (its track stacks: a studio before stacks reports none)
+    ...(Array.isArray(s.stacks) ? { stacks: s.stacks } : {}),
     master: s.master ?? null,
     tempo: Array.isArray(s.tempo) ? s.tempo : [],
     meter: Array.isArray(s.meter) ? s.meter : [],

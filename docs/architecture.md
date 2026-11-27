@@ -286,6 +286,12 @@ its open header or among its tracks, leaves its own when it's dropped outside it
 was at a stack's lower edge; a header moves its whole stack. The studio adds the routing in that
 same step where the stack has a bus, and says so in a toast.
 
+The Mixer lists the same rows (`trackRows`): a stack is a narrow tab before its strips, standing
+through the strips' shared grid of rows, and a closed stack's strips are left out. A strip dragged
+in the Mixer moves among the strips shown and stays in the stack it's in. HO[LO] Remote is told the
+stacks in the studio's report (`stacks`, and each track's `stack`) and lays its own lists out with
+`remoteRows`; which stacks are closed there is that device's own.
+
 ## The Step Grid
 
 A drum part shown as steps is the track's own notes: nothing is stored for a step. Reading
@@ -326,7 +332,9 @@ carries its own share of every bus it's sent to, and the stems added together ar
 the finish; a test renders a song both ways and compares them to within the 24 bits each is written
 at. That sum is exact unless something reacts to the level of the whole (a limiter on Stereo Out,
 a compressor on a bus several tracks reach, the finish): `stemWarnings` says which, and the dialog
-shows it before anything is made. The job renders the stems one after another, each split over
+shows it before anything is made. With `by: 'stacks'` (`stems: "stacks"` on the request) a stem is a
+track stack, its tracks rendered together, and each track in no stack has its own; a bus that reacts to
+level is then a warning only when stems of more than one group reach it. The job renders the stems one after another, each split over
 threads as a bounce is, into one ZIP written entry by entry (`packages/music/src/zip-write.ts`:
 stored, ZIP64 when it's needed), so it costs the memory of one bounce; it has a bounce's time for
 each stem. The ZIP is kept, listed, saved and deleted as a bounce is, and is told from one by its

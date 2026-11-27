@@ -21,20 +21,31 @@ import {
   type Seat,
   SPACE_FILE,
   SPACE_NAMES,
+  type Stack,
   type Stage,
   SYNTH_MACROS,
   SYNTH_NOTES,
   samplerKnobValue,
   type Track,
 } from '@holo/session';
-import { Headphones, Power, RotateCcw, SlidersHorizontal, X } from 'lucide-react';
-import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react';
+import { ChevronDown, ChevronRight, Headphones, Power, RotateCcw, SlidersHorizontal, X } from 'lucide-react';
+import {
+  type CSSProperties,
+  memo,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from 'react';
 import {
   addBusWithSend,
   addPlugin,
   apply,
   beginGesture,
   endGesture,
+  foldStack,
   gestureChange,
   hitsToMidi,
   moveShownTrack,
@@ -44,8 +55,9 @@ import {
   updateTrack,
 } from '../app/actions.ts';
 import { isPhone, useLayout } from '../app/layout.ts';
-import { shownTracks } from '../app/shown-tracks.ts';
+import { muteStack, soloStack, stackState } from '../app/stack-actions.ts';
 import { store, useApp } from '../app/store.ts';
+import { trackRows } from '../app/track-rows.ts';
 import { engine } from '../audio/engine.ts';
 import { library, type PackSummary, samplerKnobDefs } from '../audio/samples.ts';
 import { Fader, formatDb, Knob, Meter, PanKnob, startDrag, TAP } from './controls.tsx';
@@ -154,6 +166,8 @@ interface StripProps {
   number?: number;
   /** A phone's Stereo Out, kept at the mixer's left edge while the other strips scroll by. */
   pinned?: boolean;
+  /** The colour of the stack a track is in: its strip is marked with it, after the stack's tab. */
+  stackColor?: string;
 }
 
 const NO_BUSES: Bus[] = [];
@@ -173,6 +187,7 @@ export const Strip = memo(function Strip({
   movable,
   number,
   pinned,
+  stackColor,
 }: StripProps) {
   const buses = useApp((s) => s.project?.buses ?? NO_BUSES);
   const show = useApp((s) => s.show);
@@ -206,7 +221,8 @@ export const Strip = memo(function Strip({
   };
   return (
     <section
-      className={`strip ${kind}${selected ? ' selected' : ''}${track?.inactive ? ' inactive' : ''}${pinned ? ' pinned' : ''}`}
+      className={`strip ${kind}${selected ? ' selected' : ''}${track?.inactive ? ' inactive' : ''}${pinned ? ' pinned' : ''}${stackColor ? ' in-stack' : ''}`}
+      style={stackColor ? ({ '--stack': stackColor } as CSSProperties) : undefined}
       onPointerDown={(e) => {
         press.current = e.button === 0 ? { x: e.clientX, y: e.clientY } : null;
       }}
@@ -612,9 +628,73 @@ export const Strip = memo(function Strip({
 /** The editor pane's height the mixer wants at least: a few of its slots, a fader with room to travel, and the name, all in view. */
 const MIXER_PANE = 480;
 
+/**
+ * A stack's tab, before its tracks' strips: its arrow folds them away (on this device, as in the
+ * tracks pane), its name runs up it, and M and S act on its tracks together (M on its bus, when it
+ * has one: that bus's strip is among the buses, with its fader).
+ */
+function StackTab({ stack, open, color }: { stack: Stack; open: boolean; color: string }) {
+  const state = useApp((s) => {
+    if (!s.project) return '';
+    const st = stackState(s.project, stack);
+    return `${st.count}|${st.mute ? 1 : 0}|${st.solo ? 1 : 0}|${st.inactive ? 1 : 0}`;
+  });
+  const [count, mute, solo, inactive] = state.split('|').map(Number) as [number, number, number, number];
+  const bus = useApp((s) => (stack.bus ? (s.project?.buses.find((b) => b.id === stack.bus)?.name ?? null) : null));
+  const what = `${count === 1 ? '1 track' : `${count} tracks`}${bus ? `, mixed through ${bus}` : ''}`;
+  return (
+    <section
+      className={`stack-tab${open ? ' open' : ''}${inactive ? ' inactive' : ''}`}
+      style={{ '--stack': color } as CSSProperties}
+      aria-label={`The stack ${stack.name}: ${what}`}
+    >
+      <button
+        type="button"
+        className="btn ghost icon stack-fold"
+        title={open ? `Close ${stack.name}: fold its strips away` : `Open ${stack.name}`}
+        aria-label={open ? `Close the stack ${stack.name}` : `Open the stack ${stack.name}`}
+        aria-expanded={open}
+        onClick={() => foldStack(stack.id, open)}
+      >
+        {open ? <ChevronDown /> : <ChevronRight />}
+      </button>
+      <div className="stack-tab-name" title={`${stack.name}: ${what}`}>
+        <span>{stack.name}</span>
+        <span className="stack-tab-count">{count}</span>
+      </div>
+      <div className="stack-tab-chips">
+        <button
+          type="button"
+          className={`chip mute${mute ? ' on' : ''}`}
+          title={bus ? `Mute ${stack.name}: its bus, ${bus}` : `Mute ${stack.name}: its tracks`}
+          aria-label={`Mute ${stack.name}`}
+          aria-pressed={!!mute}
+          disabled={!!inactive}
+          onClick={() => muteStack(stack.id)}
+        >
+          M
+        </button>
+        <button
+          type="button"
+          className={`chip solo${solo ? ' on' : ''}`}
+          title={`Solo ${stack.name}: its tracks`}
+          aria-label={`Solo ${stack.name}`}
+          aria-pressed={!!solo}
+          disabled={!!inactive}
+          onClick={() => soloStack(stack.id)}
+        >
+          S
+        </button>
+      </div>
+    </section>
+  );
+}
+
 export function Mixer() {
   // the slices are stable while something else changes, so an edit redraws one strip, not the row
   const tracks = useApp((s) => s.project?.tracks);
+  const stacks = useApp((s) => s.project?.stacks);
+  const folded = useApp((s) => s.foldedStacks);
   const buses = useApp((s) => s.project?.buses);
   const master = useApp((s) => s.project?.master);
   const selected = useApp((s) => s.selectedTrack);
@@ -631,10 +711,11 @@ export function Mixer() {
     store.set((s) => ({ editorHeight: Math.max(s.editorHeight, Math.min(MIXER_PANE, window.innerHeight - 180)) }));
   }, [phone]);
   if (!tracks || !buses || !master) return null;
-  // View leaves strips out: the inactive tracks' (with the tracks pane), the buses' and the master's
-  const shown = shownTracks(tracks, show);
+  // View leaves strips out: the inactive tracks' (with the tracks pane), the buses' and the master's;
+  // a stack has a tab before its strips, and a closed one's strips are folded away under it
+  const rows = trackRows({ tracks, ...(stacks ? { stacks } : {}) }, { inactiveTracks: show.inactiveTracks, folded });
   // (with every strip the song has left out, the mixer says so, and brings them back)
-  if (!shown.length && !(show.mixerBuses && buses.length) && !(show.mixerMaster && !pinned) && !pinnedHere)
+  if (!rows.length && !(show.mixerBuses && buses.length) && !(show.mixerMaster && !pinned) && !pinnedHere)
     return (
       <div className="mixer-empty">
         <p>The strips this song has are hidden in View.</p>
@@ -646,21 +727,32 @@ export function Mixer() {
   return (
     <div className="mixer" ref={stripRows}>
       {pinnedHere && <Strip id="master" kind="master" name="Stereo Out" color="#e9d8b4" channel={master} pinned />}
-      {shown.map((t) => (
-        <Strip
-          key={t.id}
-          id={t.id}
-          kind="track"
-          name={t.name}
-          color={t.color}
-          channel={t.channel}
-          track={t}
-          selected={t.id === selected}
-          movable
-          // (its place in the song, whatever View leaves out of the mixer)
-          number={show.trackNumbers ? tracks.indexOf(t) + 1 : undefined}
-        />
-      ))}
+      {rows.map((row) => {
+        if (row.kind === 'stack') {
+          const color = row.stack.color ?? row.tracks[0]?.color ?? '#7c8a99';
+          return <StackTab key={`stack:${row.stack.id}`} stack={row.stack} open={row.open} color={color} />;
+        }
+        const t = row.track;
+        const inStack = row.stack
+          ? (row.stack.color ?? tracks.find((x) => x.stack === row.stack?.id)?.color)
+          : undefined;
+        return (
+          <Strip
+            key={t.id}
+            id={t.id}
+            kind="track"
+            name={t.name}
+            color={t.color}
+            channel={t.channel}
+            track={t}
+            selected={t.id === selected}
+            movable
+            // (its place in the song, whatever View leaves out of the mixer)
+            number={show.trackNumbers ? tracks.indexOf(t) + 1 : undefined}
+            {...(inStack ? { stackColor: inStack } : {})}
+          />
+        );
+      })}
       {show.mixerBuses &&
         buses.map((b) => <Strip key={b.id} id={b.id} kind="bus" name={b.name} color={b.color} channel={b.channel} />)}
       {show.mixerMaster && !pinned && !pinnedHere && (

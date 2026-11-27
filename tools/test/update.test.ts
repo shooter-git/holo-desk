@@ -1,10 +1,24 @@
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import { afterEach, describe, expect, it } from 'vitest';
 // @ts-expect-error: a plain script, without types
-import { followCheckout, followsOmr, lingerNote, omrImage, omrOn, runnerPath, runnerUnit } from '../update.mjs';
+import {
+  copyHere,
+  copyNote,
+  followCheckout,
+  followsOmr,
+  goesForward,
+  lingerNote,
+  omrImage,
+  omrOn,
+  PREVIOUS,
+  runnerPath,
+  runnerUnit,
+  startNew,
+} from '../update.mjs';
 
 const made: string[] = [];
 afterEach(() => {
@@ -173,5 +187,125 @@ describe('the recognition engines', () => {
     expect(followsOmr(undefined, 'ghcr.io/o/holo-desk')).toBe(true);
     expect(followsOmr('ghcr.io/o/holo-desk:omr-main', 'ghcr.io/o/holo-desk')).toBe(true);
     expect(followsOmr('holo-omr:local', 'ghcr.io/o/holo-desk')).toBe(false);
+  });
+});
+
+/** What `startNew` is given, with what it did written down: the version started answers or not, as told. */
+function starting(o: { answers: boolean[]; tags?: boolean }) {
+  const did: string[] = [];
+  const env: Record<string, string> = {};
+  const answers = [...o.answers];
+  return {
+    did,
+    env,
+    d: {
+      copy: async () => {
+        did.push('copy');
+      },
+      tag: (id: string) => {
+        did.push(`tag ${id}`);
+        return o.tags ?? true;
+      },
+      up: () => {
+        did.push(`up ${env.HOLO_IMAGE ?? 'new'}`);
+      },
+      answers: async (image: string | null) => {
+        did.push(`answers? ${image}`);
+        return answers.shift() ?? false;
+      },
+      imageId: () => 'sha256:new',
+      setEnv: (key: string, value: string) => {
+        env[key] = value;
+      },
+      log: (line: string) => {
+        did.push(`log ${line}`);
+      },
+    },
+  };
+}
+
+describe('starting a new version', () => {
+  it('copies the database, keeps the version before at hand, then starts it', async () => {
+    const s = starting({ answers: [true] });
+    expect(await startNew(s.d, 'repo:stable', 'sha256:old')).toBe('started');
+    expect(s.did).toEqual(['copy', 'tag sha256:old', 'up new', 'answers? sha256:new']);
+    expect(s.env).toEqual({});
+  });
+
+  it('goes back to the version before when the new one doesn’t answer, and notes which didn’t start', async () => {
+    const s = starting({ answers: [false, true] });
+    expect(await startNew(s.d, 'repo:stable', 'sha256:old')).toBe('back');
+    expect(s.env).toEqual({ HOLO_IMAGE: PREVIOUS, HOLO_ROLLED_BACK_FROM: 'sha256:new' });
+    expect(s.did.filter((l) => !l.startsWith('log '))).toEqual([
+      'copy',
+      'tag sha256:old',
+      'up new',
+      'answers? sha256:new',
+      `up ${PREVIOUS}`,
+      'answers? sha256:old',
+    ]);
+    expect(s.did.at(-1)).toMatch(/^log HO\[LO\] is back on the version before/);
+  });
+
+  it('says so when the version before doesn’t answer either', async () => {
+    const s = starting({ answers: [false, false] });
+    expect(await startNew(s.d, 'repo:stable', 'sha256:old')).toBe('down');
+    expect(s.env.HOLO_IMAGE).toBe(PREVIOUS);
+  });
+
+  it('changes nothing when there’s no version to go back to (nothing ran, or it couldn’t be kept)', async () => {
+    const none = starting({ answers: [false] });
+    expect(await startNew(none.d, 'repo:stable', null)).toBe('down');
+    expect(none.env).toEqual({});
+    expect(none.did.some((l) => l.startsWith('tag '))).toBe(false);
+    const kept = starting({ answers: [false], tags: false });
+    expect(await startNew(kept.d, 'repo:stable', 'sha256:old')).toBe('down');
+    expect(kept.env).toEqual({});
+    expect(kept.did.filter((l) => l.startsWith('up '))).toEqual(['up new']);
+  });
+
+  it('goes forward again only to another version than the one that didn’t start', () => {
+    const values = { HOLO_IMAGE: PREVIOUS, HOLO_ROLLED_BACK_FROM: 'sha256:bad' };
+    expect(goesForward(values, 'sha256:bad')).toBe(false);
+    expect(goesForward(values, 'sha256:newer')).toBe(true);
+    expect(goesForward(values, null)).toBe(false);
+  });
+});
+
+describe('the copy of the songs’ database', () => {
+  it('is said as it went', () => {
+    expect(copyNote(200, { file: 'backups/holo-1.2.3-20310506T070809Z.db', size: 3 * 1024 ** 2 })).toBe(
+      'The songs’ database was copied first: backups/holo-1.2.3-20310506T070809Z.db (3 MB)',
+    );
+    expect(copyNote(507, { need: 3 * 1024 ** 3, free: 200 * 1024 ** 2 })).toBe(
+      'No room for a copy of the songs’ database (it needs 3.0 GB, 200 MB are free): updating without one',
+    );
+    expect(copyNote(200, { file: 'backups/a.db', size: 118_784 })).toMatch(/\(116 KB\)$/);
+    expect(copyNote(404, null)).toMatch(/can’t copy its database yet/);
+    expect(copyNote(403, null)).toMatch(/runner key/);
+    expect(copyNote(500, null)).toMatch(/answered 500/);
+  });
+
+  it('is made from here when the server doesn’t answer: whole, in the data folder’s backups', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'holo-copy-'));
+    made.push(dir);
+    expect(await copyHere(dir)).toBeNull();
+    const db = new DatabaseSync(join(dir, 'holo.db'));
+    db.exec("PRAGMA journal_mode = WAL; CREATE TABLE songs (title TEXT); INSERT INTO songs VALUES ('Lantern Sketch')");
+    const note = await copyHere(dir, new Date(Date.UTC(2031, 4, 6, 7, 8, 9)));
+    db.close();
+    expect(note).toMatch(/^The songs’ database was copied first: backups.holo-before-update-20310506T070809Z\.db/);
+    expect(readdirSync(join(dir, 'backups'))).toEqual(['holo-before-update-20310506T070809Z.db']);
+    const copy = new DatabaseSync(join(dir, 'backups', 'holo-before-update-20310506T070809Z.db'), { readOnly: true });
+    expect(copy.prepare('SELECT title FROM songs').all()).toEqual([{ title: 'Lantern Sketch' }]);
+    copy.close();
+  });
+
+  it('isn’t made from here without room for it', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'holo-copy-'));
+    made.push(dir);
+    new DatabaseSync(join(dir, 'holo.db')).close();
+    expect(await copyHere(dir, new Date(), 1024)).toMatch(/^No room for a copy/);
+    expect(existsSync(join(dir, 'backups'))).toBe(false);
   });
 });

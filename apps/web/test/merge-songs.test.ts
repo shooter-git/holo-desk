@@ -177,3 +177,85 @@ describe('a song changed in two places, merged', () => {
     expect(same([1, 2], [2, 1])).toBe(false);
   });
 });
+
+describe('track stacks, merged', () => {
+  /** A, B, C and D, saved. */
+  function four(): Project {
+    const p = newProject('Four');
+    p.tracks = ['A', 'B', 'C', 'D'].map((name) => ({
+      ...newTrack(name, { type: 'synth', preset: 'Soft Keys' }),
+      id: `trk_${name.toLowerCase()}`,
+    }));
+    p.buses = [{ ...newBus('Sum'), id: 'bus_sum' }];
+    return { ...p, revision: 4 };
+  }
+  const order = (p: Project | null) =>
+    p?.tracks.map((t) => (t.stack ? `${t.name}:${t.stack.slice(4)}` : t.name)).join(' ');
+  const stack = (id: string, tracks: string[]): Op => ({ op: 'addStack', stack: { id, name: id.slice(4) }, tracks });
+
+  it('keeps a stack made here with what the other side changed, in a song that had none', () => {
+    const base = four();
+    const mine = applyOps(base, [stack('stk_x', ['trk_b', 'trk_c'])]);
+    const theirs = host(base, [{ op: 'updateTrack', track: 'trk_b', patch: { name: 'Bee' } }]);
+    const merged = mergeSongs(base, mine, theirs);
+    expect(order(merged)).toBe('A Bee:x C:x D');
+    expect(merged?.stacks).toEqual([{ id: 'stk_x', name: 'x' }]);
+    // and the other way round: the stack is theirs
+    expect(order(mergeSongs(base, theirs, { ...mine, revision: 7 }))).toBe('A Bee:x C:x D');
+  });
+
+  it('keeps a stack each side made, and a song with none still has no list of them', () => {
+    const base = four();
+    const mine = applyOps(base, [stack('stk_x', ['trk_a', 'trk_b'])]);
+    const theirs = host(base, [stack('stk_y', ['trk_d'])]);
+    const merged = mergeSongs(base, mine, theirs);
+    expect(order(merged)).toBe('A:x B:x C D:y');
+    expect(merged?.stacks?.map((s) => s.id).sort()).toEqual(['stk_x', 'stk_y']);
+    const plain = mergeSongs(base, applyOps(base, [{ op: 'setProject', patch: { key: 'C' } }]), host(base, []));
+    expect(plain && 'stacks' in plain).toBe(false);
+  });
+
+  it('keeps a stack one block when the other side added a track in the middle of it', () => {
+    const base = four();
+    const mine = applyOps(base, [stack('stk_x', ['trk_b', 'trk_c'])]);
+    const added = { ...newTrack('New', { type: 'synth', preset: 'Soft Keys' }), id: 'trk_new' };
+    const theirs = host(base, [{ op: 'addTrack', track: added, index: 2 }]);
+    const merged = mergeSongs(base, mine, theirs);
+    expect(merged?.tracks.filter((t) => t.stack).map((t) => t.name)).toEqual(['B', 'C']);
+    const names = merged?.tracks.map((t) => t.name) ?? [];
+    expect(names.indexOf('C') - names.indexOf('B')).toBe(1);
+    expect(names).toContain('New');
+  });
+
+  it('leaves a track loose that one side put into a stack the other took apart', () => {
+    const base = applyOps(four(), [stack('stk_x', ['trk_b', 'trk_c'])]);
+    const mine = applyOps(base, [{ op: 'removeStack', stack: 'stk_x' }]);
+    const theirs = host(base, [{ op: 'moveTrack', track: 'trk_d', index: 2, stack: 'stk_x' }]);
+    const merged = mergeSongs(base, mine, theirs);
+    expect(merged).not.toBeNull();
+    expect(merged?.stacks).toBeUndefined();
+    expect(merged?.tracks.every((t) => !t.stack)).toBe(true);
+  });
+
+  it('keeps a stack’s new bus with the other side’s track put into it, and never moves an output', () => {
+    const base = applyOps(four(), [stack('stk_x', ['trk_b', 'trk_c'])]);
+    const mine = applyOps(base, [{ op: 'updateStack', stack: 'stk_x', patch: { bus: 'bus_sum', name: 'Strings' } }]);
+    const theirs = host(base, [{ op: 'moveTrack', track: 'trk_d', index: 2, stack: 'stk_x' }]);
+    const merged = mergeSongs(base, mine, theirs);
+    expect(merged?.stacks).toEqual([{ id: 'stk_x', name: 'Strings', bus: 'bus_sum' }]);
+    expect(
+      merged?.tracks
+        .filter((t) => t.stack === 'stk_x')
+        .map((t) => t.name)
+        .sort(),
+    ).toEqual(['B', 'C', 'D']);
+    expect(merged?.tracks.every((t) => t.channel.output === 'master')).toBe(true);
+  });
+
+  it('counts a stack’s id kept twice as broken', () => {
+    const p = applyOps(four(), [stack('stk_x', ['trk_a'])]);
+    const twice = { ...p, stacks: [...(p.stacks ?? []), ...(p.stacks ?? [])] };
+    expect([...broken(twice)]).toContain('stack stk_x twice');
+    expect([...broken(p)]).toEqual([]);
+  });
+});

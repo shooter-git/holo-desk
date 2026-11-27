@@ -99,6 +99,7 @@ export function describeProject(project: Project): string {
       : 'empty';
     const flags = [
       t.inactive && 'inactive (not heard)',
+      t.stack && `in the stack "${project.stacks?.find((s) => s.id === t.stack)?.name ?? t.stack}"`,
       t.channel.mute && 'muted',
       t.channel.solo && 'solo',
       t.armed && 'armed',
@@ -153,6 +154,16 @@ export function describeProject(project: Project): string {
       lines.push(`     automation: ${lanes.join('; ')}`);
     }
   });
+  if (project.stacks?.length) {
+    lines.push('Stacks (tracks kept together under one header):');
+    for (const s of project.stacks) {
+      const members = project.tracks.filter((t) => t.stack === s.id).map((t) => t.name);
+      const bus = s.bus ? project.buses.find((b) => b.id === s.bus) : undefined;
+      lines.push(
+        `  ${s.name} [${s.id}]: ${members.join(', ')}; ${bus ? `its header controls the bus ${bus.name} [${bus.id}]` : 'a folder (no bus)'}`,
+      );
+    }
+  }
   if (project.buses.length) {
     lines.push('Buses:');
     for (const b of project.buses) {

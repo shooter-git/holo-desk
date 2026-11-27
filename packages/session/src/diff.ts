@@ -357,6 +357,40 @@ function trackChanges({ a, b, meter }: Context): string[] {
     if (!equal(o.score, t.score)) out.push(`${t.name}: how it's written on the score changed`);
   }
   if (reordered(a.tracks, b.tracks)) out.push('Track order changed');
+  out.push(...stackChanges(a, b));
+  return out;
+}
+
+/** Stacks made, renamed, given a bus or taken apart, and tracks put into one or taken out. */
+function stackChanges(a: Project, b: Project): string[] {
+  const out: string[] = [];
+  const was = byId(a.stacks ?? []);
+  const now = byId(b.stacks ?? []);
+  const bus = (p: Project, id: string | undefined) => (id ? (p.buses.find((x) => x.id === id)?.name ?? id) : null);
+  const list = (names: string[]) =>
+    names.length > 1 ? `${names.slice(0, -1).join(', ')} and ${names.at(-1)}` : (names[0] ?? '');
+  for (const s of a.stacks ?? []) if (!now.has(s.id)) out.push(`Unstacked "${s.name}"`);
+  for (const s of b.stacks ?? []) {
+    const o = was.get(s.id);
+    const members = b.tracks.filter((t) => t.stack === s.id).map((t) => t.name);
+    if (!o) {
+      out.push(`Stacked ${list(members)} as "${s.name}"${s.bus ? ` (its header controls ${bus(b, s.bus)})` : ''}`);
+      continue;
+    }
+    if (o.name !== s.name) out.push(`Stack "${o.name}" renamed "${s.name}"`);
+    if (o.bus !== s.bus)
+      out.push(
+        s.bus
+          ? `Stack "${s.name}": its header controls ${bus(b, s.bus)}`
+          : `Stack "${s.name}": a folder again (no bus)`,
+      );
+    const before = new Set(a.tracks.filter((t) => t.stack === s.id).map((t) => t.id));
+    const after = new Set(b.tracks.filter((t) => t.stack === s.id).map((t) => t.id));
+    const into = b.tracks.filter((t) => after.has(t.id) && !before.has(t.id) && a.tracks.some((x) => x.id === t.id));
+    const outOf = b.tracks.filter((t) => before.has(t.id) && !after.has(t.id));
+    if (into.length) out.push(`${list(into.map((t) => t.name))}: into the stack "${s.name}"`);
+    if (outOf.length) out.push(`${list(outOf.map((t) => t.name))}: out of the stack "${s.name}"`);
+  }
   return out;
 }
 

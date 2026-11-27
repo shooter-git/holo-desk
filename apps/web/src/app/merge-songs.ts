@@ -25,7 +25,10 @@ type Merged = unknown | typeof CLASH;
 export function mergeSongs(base: Project, mine: Project, theirs: Project): Project | null {
   // (which revision each was saved as isn't a change of the song's)
   const stamp = { revision: theirs.revision, modified: theirs.modified };
-  const merged = merge({ ...base, ...stamp }, { ...mine, ...stamp }, theirs);
+  // (a song with no stacks has no list of them: an empty one, here, so a stack made on one side
+  // isn't a list where the other has nothing)
+  const listed = (p: Project) => ({ ...p, stacks: p.stacks ?? [] });
+  const merged = merge({ ...listed(base), ...stamp }, { ...listed(mine), ...stamp }, listed(theirs));
   if (merged === CLASH) return null;
   let song: Project;
   try {
@@ -45,7 +48,9 @@ export function mergeSongs(base: Project, mine: Project, theirs: Project): Proje
  * seat's sends at a bus that isn't there, an automation lane at a send's bus or a plugin the channel
  * doesn't have, a note at an articulation its track doesn't have, an audio region at a file the song
  * doesn't list, a score's group of parts at a track that isn't there; a track, region, plugin, bus,
- * marker, file or a track's articulation id kept twice.
+ * marker, file, stack or a track's articulation id kept twice. (A track of a stack that's gone, or a
+ * stack of a bus that's gone, isn't here: reading the song drops those, as it gathers a stack's
+ * tracks back together, and what's left is a song.)
  */
 export function broken(p: Project): Set<string> {
   const out = new Set<string>();
@@ -94,6 +99,7 @@ export function broken(p: Project): Set<string> {
   const tracks = new Set(p.tracks.map((t) => t.id));
   for (const [first, last] of p.score?.groups ?? [])
     for (const t of [first, last]) if (!tracks.has(t)) out.add(`a score group joins ${t}`);
+  for (const s of p.stacks ?? []) once('stack', s.id);
   for (const m of p.markers) once('marker', m.id);
   for (const f of p.files ?? []) once('file', f.id);
   return out;

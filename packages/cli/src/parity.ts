@@ -43,11 +43,18 @@ export const TOOL_PARITY: Readonly<Record<string, Parity>> = {
   notes_clear: { commands: ['clear'] },
   regions: { commands: ['regions'] },
   steps: { commands: ['steps'] },
+  stack: { commands: ['stack'] },
   audio_notes: { commands: ['notes'] },
 
   // ---- tracks, sounds and the mix ----
-  track_add: { commands: ['track'], rest: "a palette's sound (--sound), and a new track's fader and pan" },
-  track_set: { commands: ['track'], rest: "a track's place in the list (--index) and its sends" },
+  track_add: {
+    commands: ['track'],
+    rest: "a palette's sound (--sound), a new track's fader and pan, and the stack it starts in (holo stack add puts a track in one)",
+  },
+  track_set: {
+    commands: ['track'],
+    rest: "a track's place in the list (--index), its sends, and its stack (holo stack add and remove do that)",
+  },
   synth_set: { commands: ['synth'] },
   kit_set: { commands: ['kit'] },
   instruments: { commands: ['instruments'], rest: 'narrowing the list (--search)' },

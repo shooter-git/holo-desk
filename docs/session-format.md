@@ -20,7 +20,8 @@ in what's missing.
   "master": { /* a channel */ },
   "cycle": { "on": false, "start": 0, "end": 15360 },
   "origin": { "creation": "your-game", "piece": "theme", "exportedAt": "…", "extra": {} },
-  "notes": "free text"
+  "notes": "free text",
+  "stacks": [{ "id": "stk_…", "name": "Strings", "color": "#e25d6c", "bus": "bus_…" }]   // track stacks; absent when none
 }
 ```
 
@@ -52,6 +53,7 @@ in what's missing.
   "input": { "port": "*", "channel": 0 },        // live MIDI: a port name or "*", channel 1-16 or 0 for all
   "armed": false,
   "inactive": true,                              // switched off (Make Inactive); absent when on
+  "stack": "stk_…",                              // the track stack it's in (Track stacks, below); absent when in none
   "midiFx": [ /* plugins */ ],
   "regions": [{
     "id": "rgn_…", "name": "", "start": 3840, "length": 7680, "muted": false,
@@ -74,6 +76,28 @@ in what's missing.
   aren't built and its samples and recordings aren't loaded, which frees what a mute doesn't (a muted
   track still runs them). A solo on an inactive track is left out too, and a bounce leaves the track
   out. An older HO[LO], or a creation built with an older engine, drops the flag and plays the track.
+
+### Track stacks
+
+A stack is tracks kept together under one header: the song's `stacks` lists them (`id`, `name`, an
+optional `color` and `bus`), and a track's `stack` says which it's in. As it is, a stack is a
+folder: its header folds its tracks away and mutes, solos or switches them off together. With
+`bus`, it's a summing stack: its header controls that bus, which the tracks are mixed through.
+
+- **A stack routes nothing.** Where a track's sound goes is its own `channel.output`. Naming a bus
+  on a stack, putting a track in one or taking it out never changes an output: whoever makes a
+  summing stack routes its tracks to the bus in the same step, as an `updateChannel` of each. So a
+  song plays the same samples with its stacks as without them (a test renders both).
+- **A stack's tracks are one block** of the track list. `moveTrack` keeps a track in the stack it's
+  in (or out of every stack) unless it says otherwise, and a track moved across a stack goes on past
+  it; `moveStack` moves the block whole. There are no stacks inside stacks.
+- **Reading a song mends what doesn't hold** (`healStacks`): a stack's stragglers are gathered to
+  its first track, in their order; a stack with no tracks, a track's `stack` that names none, and a
+  stack's `bus` the song doesn't have are dropped. A track is never taken out of a stack the song
+  has.
+- Both fields are optional in version 1. An older HO[LO] opens the song as it would any other and
+  plays it the same, since stacks change nothing that's heard; saving it there drops the stacks (its
+  tracks are then loose, in the same order, routed as they were).
 
 ### Performance and Glass instruments
 
@@ -317,9 +341,22 @@ Edits travel as operations (`ops.ts`): `setProject`, `addTrack`, `removeTrack`, 
 `updateTrack`, `updateChannel`, `addPlugin`, `updatePlugin`, `removePlugin`, `movePlugin`, `addBus`,
 `removeBus`, `updateBus`, `addRegion`, `updateRegion`, `removeRegion`, `moveRegion`, `setNotes`,
 `splitRegion`, `addNotes`, `setNotesIn` and `setMarksIn` (replace only what starts in `[from, to)` of a
-region), `setCC`, `setAutomation` (with `curve`), `addFile`, `arrange`. `setProject` takes `finish`, `loop`, `keys`, `form` and `score` (`null`
+region), `setCC`, `setAutomation` (with `curve`), `addFile`, `arrange`, and the track stacks' `addStack`,
+`updateStack`, `removeStack` and `moveStack`. `setProject` takes `finish`, `loop`, `keys`, `form` and `score` (`null`
 removes them). `POST /api/projects/:id/ops` with `{ "ops": [...], "author": "AI", "label": "…" }`
 applies them through the open studio when there is one.
+
+`{ "op": "addStack", "stack": { "id", "name", "color"?, "bus"? }, "tracks": [ids] }` gathers those tracks
+(out of any stack they were in) at the first one's place as a new stack;
+`{ "op": "updateStack", "stack", "patch": { "name"?, "color"?, "bus"? } }` renames it or gives it a bus
+(`null` takes the color or the bus away); `{ "op": "removeStack", "stack" }` takes it apart, its tracks
+left where they are; `{ "op": "moveStack", "stack", "index" }` moves the block, `index` being where its
+first track goes among the other tracks. `{ "op": "moveTrack", "track", "index", "stack"? }` puts a
+track in a stack (`"stack": id`, among its tracks) or takes it out (`null`); without `stack` it never
+changes which stack a track is in. `updateTrack` doesn't either (a `stack` in its patch isn't heard),
+and `addTrack` takes a track's own `stack` when the song has that stack. A stack goes with its last
+track, and `removeBus` leaves a stack whose bus it was a folder. None of these changes a track's
+output.
 
 `{ "op": "splitRegion", "track", "region", "at", "id" }` cuts a region in two at `at` (a tick of the song,
 inside the region), as the studio's Split does: the left half keeps the region's id, the right half takes

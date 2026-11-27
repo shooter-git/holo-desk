@@ -197,6 +197,15 @@ describe('regions', () => {
     const half = setup();
     await call(half, 'regions', { action: 'quantize', region: 'Riff', unit: '1/4', strength: 50 });
     expect(regionOf(half, 'rgn_riff').notes.map((n) => n.t)).toEqual([5, PPQ + 65, 2 * BAR + 235]);
+    // swung: the off-eighths fall late (60 % of half an eighth), the others where a straight quantize puts them
+    const swing = setup();
+    await call(swing, 'regions', { action: 'quantize', region: 'Riff', unit: '1/8', swing: 60 });
+    expect(regionOf(swing, 'rgn_riff').notes.map((n) => n.t)).toEqual([0, PPQ, 2 * BAR + PPQ / 2 + 144]);
+    expect(swing.batches.at(-1)?.label).toContain('swung 60%');
+    // a grid with no off-steps can't
+    expect(
+      await refused(setup(), 'regions', { action: 'quantize', region: 'Riff', unit: '1/8T', swing: 60 }),
+    ).toContain("doesn't swing");
     await call(api, 'regions', { action: 'transpose', region: 'Riff', semitones: -12 });
     expect(regionOf(api, 'rgn_riff').notes.map((n) => n.p)).toEqual([50, 53, 57]);
     expect(await refused(api, 'regions', { action: 'transpose', region: 'Take', semitones: 2 })).toMatch(/recording/);

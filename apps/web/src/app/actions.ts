@@ -4,6 +4,7 @@
  * and the AI all call these.
  */
 
+import { swings, swungAt } from '@holo/agent/edits';
 import {
   type ClickSound,
   clipKey,
@@ -2470,6 +2471,9 @@ export function quantizeSelection(): void {
   const p = s.project;
   if (!p) return;
   const grid = DIVISIONS[s.grid] ?? PPQ / 4;
+  // (this device's strength and swing: Quantize's own panel sets them. A grid that doesn't swing never does)
+  const strength = Math.max(0, Math.min(100, s.quantStrength)) / 100;
+  const swing = swings(grid) ? Math.max(0, s.quantSwing) / 100 : 0;
   let notes = s.selectedNotes;
   if (!notes.length) {
     const regions = s.selectedRegions.length
@@ -2482,7 +2486,9 @@ export function quantizeSelection(): void {
     const where = locateNote(p, n);
     if (!where) continue;
     const abs = where.region.start + n.t;
-    changes.set(n, { ...n, t: quantize(abs, grid) - where.region.start });
+    // straight, to the song's grid as ever; swung, its steps are counted from the note's bar line
+    const to = swing > 0 ? swungAt(p.meter, abs, grid, strength, swing) : quantize(abs, grid, strength);
+    changes.set(n, { ...n, t: to - where.region.start });
   }
   replaceNotes(changes, 'Quantize', s.selectedNotes.length > 0);
 }

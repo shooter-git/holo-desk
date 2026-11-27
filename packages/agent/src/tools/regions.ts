@@ -7,13 +7,11 @@
  */
 import {
   type AudioClip,
-  barToTick,
   type CCPoint,
   fadeTo,
   newId,
   type Op,
   type Project,
-  quantize,
   type Region,
   secondsToTick,
   setStretch,
@@ -25,6 +23,7 @@ import {
   trimMidiStart,
   trimStart,
 } from '@holo/session';
+import { swings, swungAt } from '../edits/timing.ts';
 import {
   barsText,
   bool,
@@ -242,7 +241,7 @@ export const regions: Tool = {
   name: 'regions',
   kind: 'change',
   summary:
-    'Edit regions (the blocks on the tracks), audio or MIDI. "region" is its id, its name, or "selected" (what\'s selected in the studio); with only "track", the region there ("at" for split) or its only one. Actions: show (a track\'s regions, or one in detail with its lanes); split at "at" (one position or several, e.g. "17 21 25", to chop); delete (with "confirm": true); copy or move to "at" and/or "to_track"; repeat it "times" after itself; trim its "start" and/or "end" (positions); gain "db" (audio: the region\'s gain, 0 as recorded; MIDI: scales velocities, −6 about halves them); fade "fade_in"/"fade_out" in seconds (MIDI: a velocity ramp); stretch by "ratio" (2 twice as long; audio keeps its pitch) or to an "end"; mute, unmute; rename to "name"; quantize (MIDI) to "unit" at "strength" %; transpose (MIDI) by "semitones"; cc (MIDI): a controller or pitch-bend "lane" ("1" mod, "7", "11" expression, "64" sustain, "pb", "at") written as "points" (position=value, replacing the lane from the first point to the last), or "clear", or shown. Examples: {"action": "split", "track": "Vocal", "at": "17"}; {"action": "fade", "region": "selected", "fade_out": 1.5}; {"action": "cc", "region": "rgn_…", "lane": "pb", "points": "9=0 9.3=4096 10=0"}.',
+    'Edit regions (the blocks on the tracks), audio or MIDI. "region" is its id, its name, or "selected" (what\'s selected in the studio); with only "track", the region there ("at" for split) or its only one. Actions: show (a track\'s regions, or one in detail with its lanes); split at "at" (one position or several, e.g. "17 21 25", to chop); delete (with "confirm": true); copy or move to "at" and/or "to_track"; repeat it "times" after itself; trim its "start" and/or "end" (positions); gain "db" (audio: the region\'s gain, 0 as recorded; MIDI: scales velocities, −6 about halves them); fade "fade_in"/"fade_out" in seconds (MIDI: a velocity ramp); stretch by "ratio" (2 twice as long; audio keeps its pitch) or to an "end"; mute, unmute; rename to "name"; quantize (MIDI) to "unit" at "strength" %, its off-steps late by "swing" % (straight grids only: 1/8, 1/16…; about 67 is a triplet feel); transpose (MIDI) by "semitones"; cc (MIDI): a controller or pitch-bend "lane" ("1" mod, "7", "11" expression, "64" sustain, "pb", "at") written as "points" (position=value, replacing the lane from the first point to the last), or "clear", or shown. Examples: {"action": "split", "track": "Vocal", "at": "17"}; {"action": "fade", "region": "selected", "fade_out": 1.5}; {"action": "cc", "region": "rgn_…", "lane": "pb", "points": "9=0 9.3=4096 10=0"}.',
   args: [
     { name: 'action', type: 'enum', values: ACTIONS, describe: 'What to do', required: true },
     { name: 'region', type: 'string', describe: 'The region: its id (rgn_…), its name, or "selected"', maxLength: 120 },
@@ -276,6 +275,14 @@ export const regions: Tool = {
       min: 0,
       max: 100,
       default: 100,
+    },
+    {
+      name: 'swing',
+      type: 'number',
+      describe: 'quantize: how late every other step of the grid falls, % of half a step (0 straight)',
+      min: 0,
+      max: 75,
+      default: 0,
     },
     { name: 'semitones', type: 'integer', describe: 'transpose: by how many semitones', min: -48, max: 48 },
     { name: 'lane', type: 'string', describe: 'cc: a CC number, "pb" (pitch bend) or "at" (pressure)' },
@@ -531,16 +538,20 @@ export const regions: Tool = {
         midiOnly('Quantizing');
         const grid = unitTicks(str(args, 'unit') ?? '1/16');
         const strength = (num(args, 'strength') ?? 100) / 100;
+        const swing = (num(args, 'swing') ?? 0) / 100;
+        if (swing > 0 && !swings(grid))
+          throw new ToolError(
+            `A ${str(args, 'unit')} grid doesn't swing: "swing" goes with a straight one (1/4, 1/8, 1/16, 1/32)`,
+          );
         for (const { track, region } of found) {
-          const notes = region.notes.map((n) => {
-            const at = region.start + n.t;
-            const bar = barToTick(project.meter, tickToBarBeat(project.meter, at).bar);
-            return { ...n, t: Math.max(0, bar + quantize(at - bar, grid, strength) - region.start) };
-          });
+          const notes = region.notes.map((n) => ({
+            ...n,
+            t: Math.max(0, swungAt(project.meter, region.start + n.t, grid, strength, swing) - region.start),
+          }));
           ops.push(...rewrite(track, region, { ...region, notes }));
         }
         if (!ops.length) return { text: `${named} is on the grid already.` };
-        label = `Quantized ${named} to ${str(args, 'unit') ?? '1/16'}${strength < 1 ? ` at ${Math.round(strength * 100)}%` : ''}`;
+        label = `Quantized ${named} to ${str(args, 'unit') ?? '1/16'}${strength < 1 ? ` at ${Math.round(strength * 100)}%` : ''}${swing > 0 ? `, swung ${Math.round(swing * 100)}%` : ''}`;
         break;
       }
 

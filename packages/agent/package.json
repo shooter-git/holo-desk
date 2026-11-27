@@ -9,7 +9,8 @@
     ".": "./src/index.ts",
     "./runner": "./src/runner.ts",
     "./harness": "./src/harness/index.ts",
-    "./view": "./src/view.ts"
+    "./view": "./src/view.ts",
+    "./edits": "./src/edits/index.ts"
   },
   "scripts": {
     "typecheck": "tsc -p ."

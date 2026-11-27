@@ -19,7 +19,15 @@ import {
   tickToBarBeat,
 } from '@holo/session';
 import { Eraser, MousePointer2, Pencil, ZoomIn, ZoomOut } from 'lucide-react';
-import { type PointerEvent as ReactPointerEvent, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import {
+  type PointerEvent as ReactPointerEvent,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import {
   apply,
   deleteNotes,
@@ -46,6 +54,7 @@ import {
 } from './gesture.ts';
 import { drawKeys, drawLanes } from './keys.ts';
 import { type MenuEntry, openMenu, openMenuAt } from './menu.tsx';
+import { QuantizeButton, QuantizePanel, quantizeHint } from './Quantize.tsx';
 import { UndoRedo } from './UndoRedo.tsx';
 import { UprightBar } from './UprightBar.tsx';
 import { DOUBLE_TAP_MS, gridStep, TouchPan, Viewport, WHEEL_ZOOM, ZOOM } from './view.ts';
@@ -1161,6 +1170,14 @@ export function PianoRollBar() {
   const phone = isPhone(layout);
   // (as narrow as the control bar leaves undo and redo to this bar: the velocity slider makes room)
   const narrow = useMedia('(max-width: 860px)');
+  // (a phone held upright has Quantize behind ⋯, and its strength and swing as a sheet from there)
+  const [quantOpen, setQuantOpen] = useState(false);
+  const closeQuant = useCallback(() => setQuantOpen(false), []);
+  const quantHint = quantizeHint(
+    useApp((s) => s.quantStrength),
+    useApp((s) => s.quantSwing),
+    grid,
+  );
   const vel = selectedNotes.length
     ? Math.round(selectedNotes.reduce((a, n) => a + n.v, 0) / selectedNotes.length)
     : null;
@@ -1236,28 +1253,32 @@ export function PianoRollBar() {
       ),
     ];
     return (
-      <UprightBar
-        more={(at) => [
-          { label: 'Quantize', hint: 'Q', onSelect: quantizeSelection },
-          ...(vel === null ? [] : [{ label: 'Grid', hint: grid, onSelect: () => openMenuAt(at, grids()) }]),
-          'sep',
-          { label: 'Zoom in', onSelect: () => zoomBy(1.4) },
-          { label: 'Zoom out', onSelect: () => zoomBy(0.7) },
-        ]}
-      >
-        {tools}
-        {vel === null ? (
-          gridSelect
-        ) : (
-          <>
-            {velocitySlider()}
-            <span className="vel-readout">
-              <span className="mono">{vel}</span>
-              <span className="label">vel</span>
-            </span>
-          </>
-        )}
-      </UprightBar>
+      <>
+        <UprightBar
+          more={(at) => [
+            { label: 'Quantize', hint: quantHint || 'Q', onSelect: quantizeSelection },
+            { label: 'Strength and swing…', onSelect: () => setQuantOpen(true) },
+            ...(vel === null ? [] : [{ label: 'Grid', hint: grid, onSelect: () => openMenuAt(at, grids()) }]),
+            'sep',
+            { label: 'Zoom in', onSelect: () => zoomBy(1.4) },
+            { label: 'Zoom out', onSelect: () => zoomBy(0.7) },
+          ]}
+        >
+          {tools}
+          {vel === null ? (
+            gridSelect
+          ) : (
+            <>
+              {velocitySlider()}
+              <span className="vel-readout">
+                <span className="mono">{vel}</span>
+                <span className="label">vel</span>
+              </span>
+            </>
+          )}
+        </UprightBar>
+        {quantOpen && <QuantizePanel anchor={null} onClose={closeQuant} />}
+      </>
     );
   }
   return (
@@ -1268,9 +1289,7 @@ export function PianoRollBar() {
       </span>
       {tools}
       {gridSelect}
-      <button type="button" className="btn" title="Quantize the selection (Q)" onClick={quantizeSelection}>
-        Q
-      </button>
+      <QuantizeButton />
       {selectedNotes.length > 0 && (
         <>
           <span className="label">vel</span>

@@ -7565,6 +7565,17 @@ html[data-layout^="phone"] .view-item kbd {
   padding: 0;
 }
 
+/* the song's key in the Piano Roll's bar: lit while it's shown, underlined while notes snap to it */
+.key-chip {
+  flex: none;
+  white-space: nowrap;
+}
+
+.key-chip.snap {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
 .quant-dot {
   position: absolute;
   top: 3px;

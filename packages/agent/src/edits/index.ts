@@ -3,4 +3,5 @@
  * control and the agent's tool both call it. Plain functions of the song (it imports only
  * @holo/session), so it runs in the browser, on the host and in the `holo` command alike.
  */
+export * from './pitch.ts';
 export * from './timing.ts';

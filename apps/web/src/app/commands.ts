@@ -11,6 +11,7 @@ import {
   PPQ,
   type Project,
   parsePosition,
+  scaleAt,
   ticksPerBeat,
   tickToBarBeat,
 } from '@holo/session';
@@ -35,6 +36,8 @@ export type BarState = Pick<
   | 'undo'
   | 'redo'
   | 'bouncing'
+  | 'rollKey'
+  | 'rollSnap'
 > & { playhead: number; phone: boolean };
 
 /** What the commands do: the studio's own actions (actions.ts, and the store's toggles as keys.ts sets them). */
@@ -57,6 +60,7 @@ export interface Actions {
   splitAtPlayhead(): void;
   repeatRegions(): void;
   transposeSelection(semitones: number): void;
+  moveIntoKey(): void;
   selectTrack(id: string): void;
   setChannel(track: string, patch: { mute?: boolean; solo?: boolean }, label: string): void;
   /** Switch a track on or off (Make Inactive): one undo step. */
@@ -121,6 +125,11 @@ function regionsInPlay(s: BarState) {
 /** Whether Split would cut something: the playhead inside one of those regions. */
 function splits(s: BarState): boolean {
   return regionsInPlay(s).some((r) => s.playhead > r.start && s.playhead < r.start + r.length);
+}
+
+/** Whether the song has a key (its text names one, or it has key points). */
+function keyed(s: BarState): boolean {
+  return !!s.project && (scaleAt(s.project, 0) !== null || (s.project.keys?.length ?? 0) > 0);
 }
 
 /** Whether Quantize has notes to move: the selected ones, or those in the regions it acts on. */
@@ -364,6 +373,30 @@ export function commandTable(s: BarState, act: Actions): Command[] {
       also: 'pitch lower',
       available: someNotes,
       run: () => act.transposeSelection(-12),
+    },
+    {
+      id: 'into-key',
+      title: 'Move the notes into the key',
+      group: 'Edit',
+      also: 'scale snap pitch correct',
+      available: (x) => keyed(x) && quantizes(x),
+      run: act.moveIntoKey,
+    },
+    {
+      id: 'key-shown',
+      title: s.rollKey ? 'Hide the key in the Piano Roll' : 'Show the key in the Piano Roll',
+      group: 'Edit',
+      also: 'scale highlight shade',
+      available: keyed,
+      run: () => act.set({ rollKey: !s.rollKey }),
+    },
+    {
+      id: 'key-snap',
+      title: s.rollSnap ? 'Stop snapping notes to the key' : 'Snap notes to the key',
+      group: 'Edit',
+      also: 'scale',
+      available: keyed,
+      run: () => act.set({ rollSnap: !s.rollSnap }),
     },
     {
       id: 'delete',

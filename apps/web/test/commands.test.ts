@@ -61,6 +61,8 @@ function studio(patch: Partial<BarState> = {}): BarState {
     undo: [],
     redo: [],
     bouncing: null,
+    rollKey: true,
+    rollSnap: false,
     playhead: 0,
     phone: false,
     ...patch,
@@ -126,6 +128,12 @@ describe('the bar’s commands', () => {
     const noteIds = ids(studio({ project, selectedTrack: piano, selectedNotes: notes }));
     expect(noteIds).toEqual(expect.arrayContaining(['quantize', 'transpose-up', 'transpose-octave-down', 'delete']));
     expect(noteIds).not.toContain('repeat');
+    // the key's commands need a song with a key; Move into key, notes to move as well
+    for (const id of ['into-key', 'key-shown', 'key-snap']) expect(noteIds).not.toContain(id);
+    const keyed = { ...project, key: 'D minor' };
+    expect(ids(studio({ project: keyed }))).toEqual(expect.arrayContaining(['key-shown', 'key-snap']));
+    expect(ids(studio({ project: keyed }))).not.toContain('into-key');
+    expect(ids(studio({ project: keyed, selectedTrack: piano, selectedNotes: notes }))).toContain('into-key');
     // no song yet: the panes still open, the transport and edits wait
     const empty = ids(studio({ project: null }));
     expect(empty).toContain('mixer');

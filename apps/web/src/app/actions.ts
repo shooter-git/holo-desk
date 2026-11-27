@@ -4,7 +4,7 @@
  * and the AI all call these.
  */
 
-import { swings, swungAt } from '@holo/agent/edits';
+import { notesIntoKey, stepInKey, swings, swungAt } from '@holo/agent/edits';
 import {
   type ClickSound,
   clipKey,
@@ -46,6 +46,7 @@ import {
   projectEnd,
   quantize,
   type Region,
+  scaleAt,
   secondsToTick,
   soundTrack,
   splitRegionAt,
@@ -2466,21 +2467,57 @@ export function replaceNotes(changes: Map<Note, Note>, label: string, keepSelect
   if (apply(ops, label) && keepSelected) store.set({ selectedNotes: [...changes.values()] });
 }
 
+/** The notes an edit of "the selection" acts on: the selected notes, else the selected regions', else the selected track's. */
+function notesInPlay(s: AppState, p: Project): Note[] {
+  if (s.selectedNotes.length) return s.selectedNotes;
+  const regions = s.selectedRegions.length
+    ? s.selectedRegions.map((id) => findRegion(p, id)?.region).filter((r): r is Region => !!r)
+    : (p.tracks.find((t) => t.id === s.selectedTrack)?.regions ?? []);
+  return regions.flatMap((r) => r.notes);
+}
+
+/**
+ * Move into key: the notes outside the song's key (the one in force where each starts) go to its
+ * nearest note. One undo step; the notes already in it stay.
+ */
+export function moveIntoKey(): void {
+  const s = store.get();
+  const p = s.project;
+  if (!p) return;
+  if (!scaleAt(p, 0) && !(p.keys?.length ?? 0)) {
+    toast('This song has no key yet: set one in the control bar’s KEY display');
+    return;
+  }
+  const picked = new Set(notesInPlay(s, p));
+  const changes = new Map<Note, Note>();
+  for (const track of p.tracks) {
+    for (const region of track.regions) {
+      if (region.audio || !region.notes.some((n) => picked.has(n))) continue;
+      const moved = notesIntoKey(p, region, picked);
+      if (!moved) continue;
+      region.notes.forEach((n, i) => {
+        const to = moved.notes[i] as Note;
+        if (to !== n) changes.set(n, to);
+      });
+    }
+  }
+  if (!changes.size) {
+    toast(picked.size ? 'Every one of those notes is in the key already' : 'No notes there to move');
+    return;
+  }
+  replaceNotes(changes, 'Move into Key', s.selectedNotes.length > 0);
+  toast(`Moved ${changes.size} note${changes.size === 1 ? '' : 's'} into the key`);
+}
+
 export function quantizeSelection(): void {
   const s = store.get();
   const p = s.project;
   if (!p) return;
   const grid = DIVISIONS[s.grid] ?? PPQ / 4;
+  const notes = notesInPlay(s, p);
   // (this device's strength and swing: Quantize's own panel sets them. A grid that doesn't swing never does)
   const strength = Math.max(0, Math.min(100, s.quantStrength)) / 100;
   const swing = swings(grid) ? Math.max(0, s.quantSwing) / 100 : 0;
-  let notes = s.selectedNotes;
-  if (!notes.length) {
-    const regions = s.selectedRegions.length
-      ? s.selectedRegions.map((id) => findRegion(p, id)?.region).filter((r): r is Region => !!r)
-      : (p.tracks.find((t) => t.id === s.selectedTrack)?.regions ?? []);
-    notes = regions.flatMap((r) => r.notes);
-  }
   const changes = new Map<Note, Note>();
   for (const n of notes) {
     const where = locateNote(p, n);
@@ -2494,9 +2531,23 @@ export function quantizeSelection(): void {
 }
 
 export function transposeSelection(semitones: number): void {
-  const notes = store.get().selectedNotes;
+  const s = store.get();
+  const notes = s.selectedNotes;
   if (!notes.length) return;
-  replaceNotes(new Map(notes.map((n) => [n, { ...n, p: Math.max(0, Math.min(127, n.p + semitones)) }])), 'Transpose');
+  const p = s.project;
+  // with Snap to key on, a step up or down is a step of the key (an octave is an octave either way)
+  const inKey = s.rollSnap && p && Math.abs(semitones) < 12;
+  replaceNotes(
+    new Map(
+      notes.map((n) => {
+        const where = inKey ? locateNote(p, n) : null;
+        const scale = where ? scaleAt(p as Project, Math.max(0, where.region.start + n.t)) : null;
+        const to = scale ? stepInKey(scale, n.p, semitones) : Math.max(0, Math.min(127, n.p + semitones));
+        return [n, { ...n, p: to }];
+      }),
+    ),
+    'Transpose',
+  );
 }
 
 export function selectAll(): void {

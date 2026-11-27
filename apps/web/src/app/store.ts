@@ -105,6 +105,9 @@ export interface AppState {
   /** Quantize: how far each note goes toward the grid, %, and how late every other step falls, % of half a step. */
   quantStrength: number;
   quantSwing: number;
+  /** The Piano Roll shows the song's key (its rows shaded, notes outside it marked), and moves notes by its steps. */
+  rollKey: boolean;
+  rollSnap: boolean;
   /** Pixels per quarter note in the tracks area and the piano roll. */
   zoom: number;
   pianoZoom: number;
@@ -267,6 +270,8 @@ const initial: AppState = {
   grid: '1/16',
   quantStrength: 100,
   quantSwing: 0,
+  rollKey: true,
+  rollSnap: false,
   zoom: 40,
   pianoZoom: 90,
   trackHeight: 56,
@@ -330,6 +335,8 @@ const REMEMBER: (keyof AppState)[] = [
   'grid',
   'quantStrength',
   'quantSwing',
+  'rollKey',
+  'rollSnap',
   'zoom',
   'pianoZoom',
   'trackHeight',

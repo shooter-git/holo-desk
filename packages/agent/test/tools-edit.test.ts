@@ -277,6 +277,79 @@ describe('regions', () => {
 });
 
 describe('timeline', () => {
+  it('lists the song’s sections and takes one by name', async () => {
+    // Intro 1–4, Verse 5–8, Chorus 9 on (the song's music ends with bar 9)
+    const sectioned = () => {
+      const p = editSong();
+      p.markers = [
+        { id: 'mrk_intro', tick: 0, name: 'Intro' },
+        { id: 'mrk_verse', tick: 4 * BAR, name: 'Verse' },
+        { id: 'mrk_chorus', tick: 8 * BAR, name: 'Chorus' },
+      ];
+      return fakeJobApi(p);
+    };
+    const api = sectioned();
+    const list = (await call(api, 'timeline', { action: 'sections' })).text;
+    expect(list).toBe('"Intro": bars 1–4\n"Verse": bars 5–8\n"Chorus": bar 9');
+    await call(api, 'timeline', { action: 'repeat', section: 'verse' });
+    expect(lastOps(api)).toEqual([{ op: 'arrange', edit: 'copy', from: 4 * BAR, to: 8 * BAR, at: 8 * BAR }]);
+    expect(api.batches.at(-1)?.label).toBe('Repeated "Verse" (bars 5–8)');
+    // before and after another section, and the confirm a move needs
+    const moved = sectioned();
+    expect(await refused(moved, 'timeline', { action: 'move', section: 'Chorus', at: 'before Verse' })).toMatch(
+      /confirm/,
+    );
+    await call(moved, 'timeline', { action: 'move', section: 'Chorus', at: 'before Verse', confirm: true });
+    expect(lastOps(moved)).toEqual([{ op: 'arrange', edit: 'move', from: 8 * BAR, to: 9 * BAR, at: 4 * BAR }]);
+    expect(moved.project.markers.map((m) => [m.name, m.tick / BAR])).toEqual([
+      ['Intro', 0],
+      ['Chorus', 4],
+      ['Verse', 5],
+    ]);
+    await call(moved, 'timeline', { action: 'copy', section: 'Intro', at: 'after Verse' });
+    expect(lastOps(moved)).toEqual([{ op: 'arrange', edit: 'copy', from: 0, to: 4 * BAR, at: 9 * BAR }]);
+    // a name no section has, and one two have
+    expect(await refused(sectioned(), 'timeline', { action: 'repeat', section: 'Bridge' })).toMatch(
+      /No section "Bridge". The sections: "Intro" \(bars 1–4\)/,
+    );
+    const twice = editSong();
+    twice.markers = [
+      { id: 'a', tick: 0, name: 'Theme' },
+      { id: 'b', tick: 4 * BAR, name: 'Theme' },
+    ];
+    const two = fakeJobApi(twice);
+    expect(await refused(two, 'timeline', { action: 'repeat', section: 'Theme' })).toMatch(/2 sections are named/);
+    await call(two, 'timeline', { action: 'repeat', section: 'Theme 1' });
+    expect(lastOps(two)).toEqual([{ op: 'arrange', edit: 'copy', from: 0, to: 4 * BAR, at: 4 * BAR }]);
+    // a section whose marker is inside a bar can't be moved as bars
+    const off = editSong();
+    off.markers = [{ id: 'a', tick: 4 * BAR + PPQ, name: 'Late' }];
+    expect(await refused(fakeJobApi(off), 'timeline', { action: 'repeat', section: 'Late' })).toMatch(/bar lines/);
+    // a song with no markers has none
+    const bare = editSong();
+    bare.markers = [];
+    expect((await call(fakeJobApi(bare), 'timeline', { action: 'sections' })).text).toMatch(/no sections/);
+  });
+
+  it('writes the song’s chord symbols', async () => {
+    const api = setup();
+    expect((await call(api, 'chords')).text).toBe('The chords: none.');
+    await call(api, 'chords', { at: '9', symbol: 'Dm7' });
+    await call(api, 'chords', { set: '1=Dm 1.3=A7 9=Gm7 13=' });
+    expect(api.project.chords).toEqual([
+      { tick: 0, symbol: 'Dm' },
+      { tick: 2 * PPQ, symbol: 'A7' },
+      { tick: 8 * BAR, symbol: 'Gm7' },
+    ]);
+    expect(api.batches.at(-1)?.label).toBe('4 chords written');
+    expect((await call(api, 'chords')).text).toBe('The chords: 1.1.1 Dm, 1.3.1 A7, 9.1.1 Gm7.');
+    await call(api, 'chords', { at: '1.3', remove: true });
+    expect(api.project.chords.map((c) => c.symbol)).toEqual(['Dm', 'Gm7']);
+    expect(await refused(api, 'chords', { at: '5', remove: true })).toMatch(/No chord at 5.1.1/);
+    expect(await refused(api, 'chords', { at: '5' })).toMatch(/"symbol"/);
+    expect(await refused(api, 'chords', { set: 'Dm7' })).toMatch(/isn't a chord at a position/);
+  });
+
   it('inserts bars across the song, as one operation', async () => {
     const api = setup();
     const r = await call(api, 'timeline', { action: 'insert', at: '5', bars: 2 });

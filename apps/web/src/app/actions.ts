@@ -1798,6 +1798,33 @@ function finishRecording(): void {
   }
 }
 
+// ---- sections ----
+
+/**
+ * A section started at the bar a tick is in: a marker there (the Arrangement lane's blocks run from
+ * each marker to the next). Its id, to name it; the one already there, when there is one.
+ */
+export function addSectionAt(tick: number): string | null {
+  const p = store.get().project;
+  if (!p) return null;
+  const m = meterAt(p.meter, Math.max(0, tick));
+  const bar = ticksPerBar(m);
+  const at = m.tick + Math.floor((Math.max(0, tick) - m.tick) / bar) * bar;
+  const there = p.markers.find((x) => x.tick === at);
+  if (there) return there.id;
+  const marker = { id: newId('mrk'), tick: at, name: `Section ${p.markers.length + 1}` };
+  const markers = [...p.markers, marker].sort((a, b) => a.tick - b.tick);
+  return apply([{ op: 'setProject', patch: { markers } }], 'Add Section') ? marker.id : null;
+}
+
+/** A section at the playhead's bar, with the Arrangement lane brought in to show it. */
+export function addSectionAtPlayhead(): string | null {
+  const id = addSectionAt(Math.max(0, engine.positionTick()));
+  const s = store.get();
+  if (id && !s.show.arrangement) store.set({ show: { ...s.show, arrangement: true } });
+  return id;
+}
+
 // ---- capture ----
 
 /** Nothing played up to now is Capture's to keep: it was kept, or recorded, or it's another song's. */

@@ -62,7 +62,7 @@ holo automate --bus Hall volume 33=0 41=-60                     # a bus; --track
 holo automate --track Piano distance 9=0.3 25=0.6 --smooth      # back on its stage, eased (on a stage)
 holo finish --lufs -16 --ceiling -1                             # master every bounce and render
 holo looping 1 57 --tail 4                                      # a game's loop: renders loop it forever
-holo tempo 92 · holo key "A lydian" · holo marker 17 "Chorus"
+holo tempo 92 · holo key "A lydian" · holo marker 17 "Chorus" · holo marker 17 --rename "Chorus 2" · holo marker 17 --remove
 ```
 
 Make each musical idea one command (one undo step for the user). Prefer adding a new track for a new
@@ -172,6 +172,11 @@ holo notes shift 5 --semitones 2 --linked          #   --from-region: another re
                                                    #   playing the recording gets the edit too
 holo timeline insert --at 17 --bars 4              # whole bars across every track: insert, copy (--from 9
 holo timeline copy --from 9 --to 17 --at 33        #   --to 17 --at 33); delete and move need --confirm
+holo timeline sections                             # the song's sections (each from a marker to the next), then by name:
+holo timeline move --section Bridge --at "before Chorus" --confirm   # move, copy, delete or repeat one
+holo timeline repeat --section Chorus              #   ("Theme 2": the second section named Theme)
+holo chords --set "9=Dm7 9.3=G7 10=Cmaj7"          # chord symbols over the tracks and the score (holo chords lists them;
+holo chords --at 9.3 --remove                      #   they're written, not played)
 holo measure take --track Vocal --from 17 --to 25  # a take's pitch (cents against the key or --against a
                                                    #   track), drift, vibrato, timing, phrase levels
 holo measure mix                                   # loudness, true peak, sections, balance (--source bounce)

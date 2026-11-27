@@ -33,6 +33,8 @@ export const GROUPS: [string, [ShowKey, string][]][] = [
       ['regionContents', 'Notes and waveforms in regions'],
       ['gridLines', 'Grid lines'],
       ['markers', 'Markers'],
+      ['arrangement', 'Arrangement lane'],
+      ['chordLane', 'Chords lane'],
       // (one choice for both: a track switched off is left out of the tracks and of the Mixer)
       ['inactiveTracks', 'Inactive tracks (in the Mixer too)'],
       // (a strip of its own, as tall as the studio, whether the Inspector is open or not; on a phone,

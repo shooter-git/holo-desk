@@ -60,6 +60,7 @@ export const COMMANDS = [
   'measure',
   'played',
   'capture',
+  'chords',
   'details',
   'import',
   'packs',
@@ -100,12 +101,17 @@ ${noteActions('        ')}
              holo notes paste 7 --from 3 · holo notes copy-settings 5-9 --from 3
              holo notes shift 5 --semitones 2 --linked   (--linked: in every region playing the recording too)
         (holo notes help lists what each does; holo notes ACTION --help its flags)
-  holo timeline insert|delete|copy|move [--at 17] [--from 9] [--to 17] [--bars 4] [--confirm]
+  holo timeline sections | insert|delete|copy|move|repeat [--at 17] [--from 9] [--to 17] [--bars 4]
+        [--section "Bridge"] [--confirm]   (sections lists them: each from a marker to the next; --section takes one
+        by name instead of --from and --to, and --at takes "before Chorus" or "after Chorus")
         whole bars across every track (delete and move need --confirm)
   holo measure take|mix|tracks|plugin|meters|file [--track T] [--region R] [--plugin P] [--from 9] [--to 17]
         [--against key|none|TRACK] [--grid 1/16] [--through effects] [--source bounce] [--seconds 8]
         [--file REC.wav] [--json] [--wait SECONDS]
         a take's pitch and timing, the mix's loudness, each track, a plugin, the studio's meters, a file
+  holo chords [--at 9.3 --symbol Dm7 | --at 9.3 --remove | --set "9=Dm7 9.3=G7 10=Cmaj7"]
+                                              the song's chord symbols (the Chords lane's, and the Score's):
+                                              listed with nothing, set, removed, or several written at once
   holo capture                                keep what was just played in the studio as regions, on the tracks
                                               that sounded it (the studio's Capture, Shift R)
   holo played [--seconds 20] [--analyze]      what was just played in the studio; --analyze: tempo, meter,

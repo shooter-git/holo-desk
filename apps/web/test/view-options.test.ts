@@ -37,7 +37,7 @@ describe('View’s options (the eye’s menu and Settings › View)', () => {
     expect(V.hiddenParts({ ...fresh, trackIcons: false, mixerMaster: false })).toBe(2);
     // every choice is one or the other: none begins off without being meant to
     const off = (Object.keys(fresh) as (keyof typeof fresh)[]).filter((k) => !fresh[k]);
-    expect(off.sort()).toEqual(['masterRail', 'trackNumbers']);
+    expect(off.sort()).toEqual(['arrangement', 'chordLane', 'masterRail', 'trackNumbers']);
   });
 
   it('show everything again without undoing what was added', () => {

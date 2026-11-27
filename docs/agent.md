@@ -1024,11 +1024,12 @@ change may also post a line under the bar (`…/progress`).
 | `song_status` | see | Where the user is: the song's settings and tracks, the playhead, the selection, the cycle, the view, how notes are named. |
 | `song_show` | see | The whole song as text: tempo and meter changes, markers, mastering, every track and bus. |
 | `song_set` | change | Title, tempo, key and meter, from the start or as a change at a position; who it's by and its album (beside the song, outside undo; a creation's song keeps its creation's). |
-| `marker` | change | Add, rename or remove a marker. |
+| `marker` | change | Add, rename or remove a marker (a marker starts a section of the Arrangement lane). |
+| `chords` | change | The song's chord symbols (the Chords lane's and the Score's: written, not played): list them, set or remove one at a bar and beat, or write several. |
 | `cycle` | change | Set the cycle, or turn it off. |
 | `looping` | change | Make the song a loop (a game's or an app's music), or an ordinary song again. |
 | `ops_apply` | change | Raw session ops for what no other tool covers; removals, and `arrange` deletes and moves, only with `confirm`. |
-| `timeline` | change | Insert, delete, copy or move whole bars across every track (one `arrange` op); delete and move only with `confirm`. |
+| `timeline` | change | Insert, delete, copy, move or repeat whole bars across every track (one `arrange` op); delete and move only with `confirm`. `sections` lists the song's sections (each from a marker to the next, as the Arrangement lane shows them), and delete, copy, move and repeat take one by name (`section`), with `at` a bar or `before`/`after` another section. |
 | `notes_show` | see | A track's notes, bar by bar, and after them which are outside the song's key. |
 | `notes_write` | change | Write notes from a position, in the compact notation. |
 | `notes_clear` | change | Remove the notes that start in a span. |

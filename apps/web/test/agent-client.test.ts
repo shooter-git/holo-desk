@@ -476,6 +476,11 @@ function barState(): BarState {
     undo: [],
     redo: [],
     bouncing: null,
+    rollKey: true,
+    rollSnap: false,
+    captureReady: false,
+    // (the lanes' commands read View's choices: none is on here)
+    show: {} as StoreModule.AppState['show'],
     playhead: 0,
     phone: false,
   };

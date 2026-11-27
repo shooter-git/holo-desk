@@ -31,10 +31,21 @@ export function instrumentManifest(pack: string, name: string): Promise<Instrume
       if (!res.ok) throw new Error(`No instrument ${key} (${res.status})`);
       return res.json() as Promise<InstrumentMap>;
     });
-    m.catch(() => manifests.delete(key));
+    m.then(
+      (map) => known.set(key, map),
+      () => manifests.delete(key),
+    );
     manifests.set(key, m);
   }
   return m;
+}
+
+/** The manifests that have come, for what can't wait for one. */
+const known = new Map<string, InstrumentMap>();
+
+/** An instrument's manifest if it has been fetched already (null: not yet, or never asked for). */
+export function instrumentManifestNow(pack: string, name: string): InstrumentMap | null {
+  return known.get(`${pack}/${name}`) ?? null;
 }
 
 let inFlight = 0;

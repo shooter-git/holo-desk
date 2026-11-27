@@ -141,6 +141,9 @@ function viewPatch(view: NonNullable<Go['view']>, phone: boolean): Partial<AppSt
       return { editor: 'mixer', mobileTab: 'mixer' };
     case 'score':
       return { editor: 'piano', noteView: 'score', mobileTab: 'editor' };
+    case 'steps':
+      // (a kit's Step Grid; a track that isn't a kit shows its Piano Roll)
+      return { editor: 'piano', noteView: 'steps', mobileTab: 'editor' };
     case 'notes':
       // (a recording's notes; a MIDI track's show in the Piano Roll, as with "editor")
       return { editor: 'piano', noteView: 'roll', audioMode: 'notes', mobileTab: 'editor' };

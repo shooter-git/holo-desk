@@ -101,6 +101,15 @@ plugin's automation, `automate` with `list` first gives each setting's exact nam
 second EQ's); `fx` with `move` reorders a chain. Who the song is by and its album are set with
 `song_set`, outside undo: say so in the reply.
 
+A drum part is best read and written as steps: `steps` shows a kit's bars as lines, a row for each
+piece and a character for each step (`X` accent, `x` hit, `o` soft, `g` ghost, `.` none), which is how
+the person sees it in the Step Grid. Write a groove with `action: "write"` and `lines` ("Kick:
+x...x...x...x...; Snare: ....X.......X..."), a few bars at a time, then `copy` it on; the other actions
+are the grid's own tools (`fill`, `euclid`, `shift`, `humanize`, `swing`…). A lit step is an ordinary
+note: one that was played off the grid keeps its place, and `notes_show` lists the same part. It's for
+kits only (a pitched part is `notes_write`'s). To show the person the grid, `go` with `"view":
+"steps"`.
+
 ## A recording's notes
 
 A recording of one line (a vocal, a solo instrument) is tuned and shaped note by note with

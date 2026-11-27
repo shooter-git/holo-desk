@@ -40,7 +40,12 @@ export type BarState = Pick<
   | 'rollSnap'
   | 'captureReady'
   | 'show'
-> & { playhead: number; phone: boolean };
+> & {
+  playhead: number;
+  phone: boolean;
+  /** Whether the selected track is a kit (its notes can be shown as steps). */
+  kit?: boolean;
+};
 
 /** What the commands do: the studio's own actions (actions.ts, and the store's toggles as keys.ts sets them). */
 export interface Actions {
@@ -146,7 +151,7 @@ function quantizes(s: BarState): boolean {
 
 /** The panes, opened and closed as their keys do (X, P, N); a phone shows one at a time, so they go to its tab. */
 function panes(s: BarState, act: Actions): Command[] {
-  const notes = (view: 'roll' | 'score') => () => {
+  const notes = (view: 'roll' | 'score' | 'steps') => () => {
     if (s.phone) act.set({ noteView: view, mobileTab: 'editor' });
     else {
       const open = s.editor === 'piano' && s.noteView === view;
@@ -167,6 +172,14 @@ function panes(s: BarState, act: Actions): Command[] {
     },
     { id: 'piano-roll', title: 'Piano Roll', group: 'Windows', keys: 'P', also: 'notes editor', run: notes('roll') },
     { id: 'score', title: 'Score', group: 'Windows', keys: 'N', also: 'notation sheet music', run: notes('score') },
+    {
+      id: 'step-grid',
+      title: 'Step Grid',
+      group: 'Windows',
+      also: 'drums pattern sequencer beat steps',
+      available: (x) => x.kit === true,
+      run: notes('steps'),
+    },
     {
       id: 'score-write',
       title: 'Write in the Score',

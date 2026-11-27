@@ -24,7 +24,8 @@ export type SaveState = 'saved' | 'dirty' | 'saving' | 'offline' | 'conflict' | 
 export type Tool = 'pointer' | 'pencil' | 'eraser';
 export type EditorPane = 'piano' | 'mixer' | null;
 /** What the editor shows for a track's notes: the Piano Roll or the Score. */
-export type NoteView = 'roll' | 'score';
+/** How an instrument track's notes are shown. `steps` (the Step Grid) is for a kit: any other track shows its Piano Roll. */
+export type NoteView = 'roll' | 'score' | 'steps';
 /** What the Audio Editor shows of a recording: its waveform or its notes. */
 export type AudioMode = 'wave' | 'notes';
 export type MobileTab = 'tracks' | 'editor' | 'mixer' | 'play' | 'library';
@@ -107,6 +108,10 @@ export interface AppState {
   /** Quantize: how far each note goes toward the grid, %, and how late every other step falls, % of half a step. */
   quantStrength: number;
   quantSwing: number;
+  /** The Step Grid's step, how many bars it shows at once (0: as many as fit), and whether every piece of the kit has a row. */
+  stepGrid: string;
+  stepBars: number;
+  stepAll: boolean;
   /** The Piano Roll shows the song's key (its rows shaded, notes outside it marked), and moves notes by its steps. */
   rollKey: boolean;
   rollSnap: boolean;
@@ -276,6 +281,9 @@ const initial: AppState = {
   grid: '1/16',
   quantStrength: 100,
   quantSwing: 0,
+  stepGrid: '1/16',
+  stepBars: 0,
+  stepAll: false,
   rollKey: true,
   rollSnap: false,
   zoom: 40,
@@ -341,6 +349,9 @@ const REMEMBER: (keyof AppState)[] = [
   'grid',
   'quantStrength',
   'quantSwing',
+  'stepGrid',
+  'stepBars',
+  'stepAll',
   'rollKey',
   'rollSnap',
   'zoom',

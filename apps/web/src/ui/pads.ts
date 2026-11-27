@@ -58,13 +58,10 @@ export function padTrack(
 
 /**
  * Whether an instrument plays each key as a sound of its own (a kit, the Drum Synth, a single
- * hit), not as a pitch: a MIDI effect that moves or adds notes then plays other drums.
+ * hit), not as a pitch: a MIDI effect that moves or adds notes then plays other drums. (The Step
+ * Grid and the agent ask the same question, of the same function.)
  */
-export function playsHits(instrument: Instrument | null | undefined, manifest: InstrumentMap | null): boolean {
-  if (instrument?.type === 'synth') return DRUM_PRESETS.includes(instrument.preset);
-  if (!padManifestKey(instrument) || !manifest) return false;
-  return Boolean(manifest.pads?.length) || manifest.pitched === false;
-}
+export { playsHits } from '@holo/agent/edits';
 
 /** The MIDI effects that change which notes play (not just how hard). */
 export const NOTE_EFFECTS = new Set(['arpeggiator', 'harmonizer', 'scale']);

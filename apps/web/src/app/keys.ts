@@ -30,6 +30,7 @@ import {
 } from './actions.ts';
 import { spaceIsTransport } from './fields.ts';
 import { layoutNow } from './layout.ts';
+import { shownNoteView } from './note-view.ts';
 import { agentOnNow, pageCovers, pageDocks, usesPage } from './page-layout.ts';
 import { closeBar, openBar, store } from './store.ts';
 
@@ -304,7 +305,8 @@ function onKeyDown(e: KeyboardEvent): void {
   else if (key === 'a') store.set({ automationView: !s.automationView });
   else if (key === 'x') store.set({ editor: s.editor === 'mixer' ? null : 'mixer', mobileTab: 'mixer' });
   else if (key === 'p') {
-    const open = s.editor === 'piano' && s.noteView === 'roll';
+    // (P closes the Piano Roll when it's what is showing: a kit's Step Grid gives way to it first)
+    const open = s.editor === 'piano' && shownNoteView(s) === 'roll';
     store.set({ editor: open ? null : 'piano', noteView: 'roll', mobileTab: 'editor' });
   } else if (key === 'n' && e.shiftKey) {
     // write in the Score

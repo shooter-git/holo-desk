@@ -1,9 +1,11 @@
 /** The studio's frame: the desktop layout, the tablet's, and the phone's (portrait and landscape). */
+import { playsHits } from '@holo/agent/edits';
 import { Library as LibraryIcon, Music2, Piano, Rows3, Settings, SlidersVertical, X } from 'lucide-react';
 import { lazy, type ReactNode, Suspense, useEffect, useRef, useState } from 'react';
 import { bounceClock, ensureAudio, putBounceAway, resolveConflict, saveBounce } from '../app/actions.ts';
 import { clampEditorHeight, fitEditorHeight, isPhone, type Layout, layoutNow, useLayout } from '../app/layout.ts';
 import { otherStudioToDrive } from '../app/live.ts';
+import { useKitMap } from '../app/note-view.ts';
 import { pageCovers, paneCovered } from '../app/page-layout.ts';
 import { closeBar, type MobileTab, openSettings, store, useApp, useShow } from '../app/store.ts';
 import { useVersion } from '../app/version.ts';
@@ -58,6 +60,8 @@ function Scanning() {
 }
 
 // the Audio Editor's Notes view (and its note-finding) loads the first time it's shown
+const StepGrid = lazy(() => import('./StepGrid.tsx').then((m) => ({ default: m.StepGrid })));
+const StepGridBar = lazy(() => import('./StepGrid.tsx').then((m) => ({ default: m.StepGridBar })));
 const AudioNotes = lazy(() => import('./AudioNotes.tsx').then((m) => ({ default: m.AudioNotes })));
 const AudioNotesBar = lazy(() => import('./AudioNotes.tsx').then((m) => ({ default: m.AudioNotesBar })));
 
@@ -114,11 +118,36 @@ function useScoreShown(): boolean {
   return useApp((s) => s.noteView === 'score') && !audio;
 }
 
-/** Piano Roll or Score, for an instrument track's notes. */
+/** The selected track, when it's a kit: its map is fetched, to know. */
+function useKitSelected(): boolean {
+  const track = useApp((s) => s.project?.tracks.find((t) => t.id === s.selectedTrack) ?? null);
+  const map = useKitMap(track?.instrument);
+  return track?.kind === 'instrument' && playsHits(track.instrument, map);
+}
+
+/** Whether the notes editor shows the Step Grid: chosen, and the selected track is a kit. */
+function useStepsShown(): boolean {
+  const kit = useKitSelected();
+  return useApp((s) => s.noteView === 'steps') && kit;
+}
+
+/** Piano Roll or Score, for an instrument track's notes; the Step Grid too, for a kit's. */
 function NoteViewSwitch() {
-  const view = useApp((s) => s.noteView);
+  const chosen = useApp((s) => s.noteView);
+  const kit = useKitSelected();
+  const view = chosen === 'steps' && !kit ? 'roll' : chosen;
   return (
     <div className="seg">
+      {kit && (
+        <button
+          type="button"
+          className={`btn${view === 'steps' ? ' on' : ''}`}
+          title="The Step Grid: the kit’s part as a drum machine shows it"
+          onClick={() => store.set({ noteView: 'steps' })}
+        >
+          Steps
+        </button>
+      )}
       <button
         type="button"
         className={`btn${view === 'roll' ? ' on' : ''}`}
@@ -157,9 +186,10 @@ function EditorPane() {
   const height = clampEditorHeight(useApp((s) => s.editorHeight));
   const audio = useAudioSelected();
   const score = useScoreShown();
+  const steps = useStepsShown() && !audio;
   const lastPress = useRef(0);
   if (!editor) return null;
-  const editorName = audio ? 'Audio Editor' : score ? 'Score' : 'Piano Roll';
+  const editorName = audio ? 'Audio Editor' : score ? 'Score' : steps ? 'Step Grid' : 'Piano Roll';
   return (
     <section className="editor-pane" style={{ height }} aria-label={editor === 'piano' ? editorName : 'Mixer'}>
       <div
@@ -210,6 +240,10 @@ function EditorPane() {
             <Suspense fallback={<span className="title">Score</span>}>
               <ScoreBar />
             </Suspense>
+          ) : steps ? (
+            <Suspense fallback={<span className="title">Step Grid</span>}>
+              <StepGridBar />
+            </Suspense>
           ) : (
             <PianoRollBar />
           )
@@ -230,6 +264,10 @@ function EditorPane() {
         ) : score ? (
           <Suspense fallback={<div className="score" />}>
             <Score />
+          </Suspense>
+        ) : steps ? (
+          <Suspense fallback={<div className="steps" />}>
+            <StepGrid />
           </Suspense>
         ) : (
           <PianoRoll />
@@ -418,6 +456,7 @@ function TabBar() {
   const tab = useApp((s) => s.mobileTab);
   const audio = useAudioSelected();
   const score = useScoreShown();
+  const steps = useStepsShown();
   return (
     <nav className="tabbar" aria-label="Views">
       {TABS.map(([id, label, Icon]) => (
@@ -433,7 +472,13 @@ function TabBar() {
           aria-current={tab === id}
         >
           <Icon />
-          {id === 'editor' && audio ? 'Editor' : id === 'editor' && score ? 'Score' : label}
+          {id === 'editor' && audio
+            ? 'Editor'
+            : id === 'editor' && score
+              ? 'Score'
+              : id === 'editor' && steps
+                ? 'Step Grid'
+                : label}
         </button>
       ))}
     </nav>
@@ -444,6 +489,7 @@ function PhoneView() {
   const tab = useApp((s) => s.mobileTab);
   const audio = useAudioSelected();
   const score = useScoreShown();
+  const steps = useStepsShown() && !audio;
   const upright = useLayout() === 'phone-portrait';
   if (tab === 'editor') {
     return (
@@ -454,6 +500,10 @@ function PhoneView() {
           ) : score ? (
             <Suspense fallback={null}>
               <ScoreBar />
+            </Suspense>
+          ) : steps ? (
+            <Suspense fallback={null}>
+              <StepGridBar />
             </Suspense>
           ) : (
             <PianoRollBar />
@@ -466,6 +516,10 @@ function PhoneView() {
         ) : score ? (
           <Suspense fallback={<div className="score" />}>
             <Score />
+          </Suspense>
+        ) : steps ? (
+          <Suspense fallback={<div className="steps" />}>
+            <StepGrid />
           </Suspense>
         ) : (
           <PianoRoll />

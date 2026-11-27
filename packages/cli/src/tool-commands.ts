@@ -77,6 +77,7 @@ const COMMAND_FOR: Record<string, string> = {
   played: 'holo played',
   capture: 'holo capture',
   chords: 'holo chords',
+  steps: 'holo steps',
   listen: 'holo listen',
   audition: 'holo audition',
 };
@@ -413,6 +414,19 @@ export async function toolCommand(ctx: ToolCommandContext): Promise<void> {
       }
       const a = api.measured;
       console.log(a && !a.done ? stillText(r.text) : r.text);
+      return;
+    }
+
+    case 'steps': {
+      const how: Wording = { command: 'holo steps', positional: { field: 'action', say: 'ACTION' } };
+      const tool = toolNamed('steps') as Tool;
+      const args = toolArgs(tool, flags, how);
+      const actions = tool.args.find((d) => d.name === 'action')?.values ?? [];
+      // a first word that isn't an action is the track to show: holo steps Drums
+      const action = actions.includes(words[0] ?? '') ? (words.shift() as string) : 'show';
+      const track = words.join(' ').trim();
+      if (track && args.track === undefined) args.track = track;
+      say(await runTool(env, 'steps', { ...args, action }, how));
       return;
     }
 

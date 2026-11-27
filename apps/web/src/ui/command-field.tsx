@@ -37,7 +37,7 @@ import {
   useAgent,
 } from '../app/agent.ts';
 import { type AttachmentKind, classify, MAX_FILES, type Ready, ready } from '../app/attach.ts';
-import { ACTIONS } from '../app/bar-actions.ts';
+import { ACTIONS, barStateOf } from '../app/bar-actions.ts';
 import { barRows, type Command, type Extra } from '../app/commands.ts';
 import { arrowsChooseRows, shownLines } from '../app/fields.ts';
 import { isPhone, isTouch, useLayout } from '../app/layout.ts';
@@ -138,7 +138,7 @@ export function useCommandField({ mode }: { mode: FieldMode }): CommandFieldStat
   const list = useRef<HTMLDivElement>(null);
   const id = useId();
   const playhead = playheadTick();
-  const state = { ...app, playhead, phone };
+  const state = barStateOf(app, playhead, phone);
   const project = app.project?.id ?? null;
   const on = isOn(a);
   const ex = exchange(a, project);

@@ -1,4 +1,4 @@
-import { type Note, newProject, newRegion, newTrack, PPQ } from '@holo/session';
+import { type Note, newProject, newRegion, newTrack, PPQ, type Project } from '@holo/session';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import type * as AgentModule from '../src/app/agent.ts';
 import type { AgentState, JobView } from '../src/app/agent.ts';
@@ -422,6 +422,20 @@ describe('what a request carries', () => {
     const phone = { ...S.store.get(), mobileTab: 'mixer' as const, scanView: null, printView: null };
     expect(A.viewName(phone, true)).toBe('mixer');
     expect(A.viewName({ ...phone, scanView: { id: 'scn_1' } }, true)).toBe('scan');
+    // the Step Grid is a kit's: the same choice on a track played by pitch is its Piano Roll
+    const steps = {
+      ...S.store.get(),
+      ...s,
+      editor: 'piano' as const,
+      noteView: 'steps' as const,
+      scanView: null,
+      printView: null,
+    };
+    expect(A.viewName(steps, false)).toBe('tracks and piano roll');
+    const kit = newTrack('Drums', { type: 'synth', preset: 'Drum Synth' });
+    const drums = { ...steps, project: { ...(s.project as Project), tracks: [kit] }, selectedTrack: kit.id };
+    expect(A.viewName(drums, false)).toBe('tracks and step grid');
+    expect(A.viewName({ ...drums, mobileTab: 'editor' as const }, true)).toBe('step grid');
   });
 });
 

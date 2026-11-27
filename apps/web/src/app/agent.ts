@@ -14,6 +14,7 @@ import { IDLE_MS, patiently } from './api.ts';
 import type { Ready } from './attach.ts';
 import { type Command, selectionSpan } from './commands.ts';
 import { diskSize } from './disk-size.ts';
+import { shownNoteView } from './note-view.ts';
 import { type AppState, store as studio } from './store.ts';
 
 export type HarnessId = 'claude' | 'codex' | 'cursor' | 'antigravity';
@@ -619,17 +620,25 @@ export function allowLabel(
 
 /** The studio's view, as a request says it ("tracks and piano roll", "mixer", "scan"). */
 export function viewName(
-  s: Pick<AppState, 'editor' | 'noteView' | 'mobileTab' | 'scanView' | 'printView'>,
+  s: Pick<AppState, 'editor' | 'noteView' | 'mobileTab' | 'scanView' | 'printView'> &
+    Partial<Pick<AppState, 'project' | 'selectedTrack'>>,
   phone: boolean,
 ): string {
   if (s.scanView) return 'scan';
   if (s.printView) return 'print';
+  // (the Step Grid is a kit's: any other track shows its Piano Roll)
+  const shown = shownNoteView({
+    noteView: s.noteView,
+    project: s.project ?? null,
+    selectedTrack: s.selectedTrack ?? null,
+  });
+  const notes = shown === 'score' ? 'score' : shown === 'steps' ? 'step grid' : 'piano roll';
   if (phone) {
-    if (s.mobileTab === 'editor') return s.noteView === 'score' ? 'score' : 'piano roll';
+    if (s.mobileTab === 'editor') return notes;
     return s.mobileTab;
   }
   if (s.editor === 'mixer') return 'tracks and mixer';
-  if (s.editor === 'piano') return `tracks and ${s.noteView === 'score' ? 'score' : 'piano roll'}`;
+  if (s.editor === 'piano') return `tracks and ${notes}`;
   return 'tracks';
 }
 

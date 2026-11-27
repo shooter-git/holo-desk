@@ -256,7 +256,7 @@ const VIEW_GRAMMAR = [
   '{"notes": {"track", "from", "to", "version"?}} bars of a track\'s notes drawn small (a recording\'s as sung, and where edits moved them); {"wave": …} a recording\'s waveform; a click goes there.',
   'Actions ("do"):',
   '{"play": {"from": bar, "to": bar (not played), "version"?, "solo"?: [tracks]}} clicked again it stops',
-  '{"go": {"bar"?, "track"?, "region"?, "notes"?: {"from", "to", "pitch"?}, "view"?: "tracks"|"editor"|"notes"|"mixer"|"score", "plugin"?}} selects, opens and moves the playhead there ("notes": a recording\'s notes in the Audio Editor; notes of a recording are selected there)',
+  '{"go": {"bar"?, "track"?, "region"?, "notes"?: {"from", "to", "pitch"?}, "view"?: "tracks"|"editor"|"notes"|"mixer"|"score"|"steps", "plugin"?}} selects, opens and moves the playhead there ("notes": a recording\'s notes in the Audio Editor; notes of a recording are selected there; "steps": a drum track\'s Step Grid)',
   '{"set": setting, "value": n}',
   '{"keep": version} makes it the song (one undo step)',
   '{"command": id} one of the studio\'s commands, as song_status lists them',

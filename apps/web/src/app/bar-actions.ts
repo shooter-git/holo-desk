@@ -34,7 +34,8 @@ import {
 import { type Actions, type BarState, type Command, commandTable } from './commands.ts';
 import { toggleTyping } from './keys.ts';
 import { isPhone, layoutNow } from './layout.ts';
-import { store } from './store.ts';
+import { isKitNow, shownNoteView } from './note-view.ts';
+import { type AppState, store } from './store.ts';
 
 /** What the bar's commands do: the same actions the keys and buttons use. */
 export const ACTIONS: Actions = {
@@ -68,9 +69,23 @@ export const ACTIONS: Actions = {
   stems: () => store.set({ dialog: 'stems' }),
 };
 
+/**
+ * What the bar reads of the studio, from the studio's state: the notes' view as it's shown (the Step
+ * Grid only for a kit), and whether the selected track is one.
+ */
+export function barStateOf(s: AppState, playhead: number, phone: boolean): BarState {
+  return {
+    ...s,
+    noteView: shownNoteView(s),
+    kit: isKitNow(s.project?.tracks.find((t) => t.id === s.selectedTrack)),
+    playhead,
+    phone,
+  };
+}
+
 /** What the bar reads of the studio, now. */
 export function barState(): BarState {
-  return { ...store.get(), playhead: playheadTick(), phone: isPhone(layoutNow()) };
+  return barStateOf(store.get(), playheadTick(), isPhone(layoutNow()));
 }
 
 /**

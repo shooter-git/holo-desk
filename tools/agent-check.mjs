@@ -10,7 +10,10 @@
 //   - a request: typed in the bar, it adds a track; the reply shows, the track is in the studio, and
 //     one Undo takes it out again;
 //   - a request while away: the studio's page is closed while the request works; its change is saved
-//     on the host, the reply waits, and the studio that comes back has both.
+//     on the host, the reply waits, and the studio that comes back has both;
+//   - a restart of HO[LO]: while a request works HO[LO] says it's busy (an update waits for it); stopped
+//     under it and started again, the request reads as cut short, saying why; a reply that was waiting
+//     for the user's OK still shows its button.
 //
 //   pnpm build && pnpm agent:check
 //
@@ -68,15 +71,17 @@ function start(name, args, env) {
   return child;
 }
 
-const server = start('server', ['apps/server/src/main.ts'], {
-  ...process.env,
-  HOLO_PORT: String(port),
-  HOLO_HOST: '127.0.0.1',
-  HOLO_DATA_DIR: data,
-  HOLO_WEB_DIR: built,
-  // (the recognition engines off: nothing is fetched)
-  HOLO_OMR_URL: '',
-});
+const startServer = () =>
+  start('server', ['apps/server/src/main.ts'], {
+    ...process.env,
+    HOLO_PORT: String(port),
+    HOLO_HOST: '127.0.0.1',
+    HOLO_DATA_DIR: data,
+    HOLO_WEB_DIR: built,
+    // (the recognition engines off: nothing is fetched)
+    HOLO_OMR_URL: '',
+  });
+let server = startServer();
 
 let browser;
 const tidy = () => {
@@ -175,14 +180,71 @@ const SCENARIOS = {
     await back.locator('.talk-page', { hasText: 'Added strings while you were away' }).waitFor();
     await back.close();
   },
+
+  /** HO[LO] restarts under a working request, and under a reply that waits for an OK. */
+  async restart({ ctx, id, token }) {
+    const lastTurn = async () => (await api(`/api/agent/threads/${id}`, { token })).thread?.turns.at(-1);
+    const page = await open(ctx, id);
+    // a request at work: HO[LO] is busy, so an update waits; stopped under it anyway, it says why
+    await ask(page, 'standin: wait 20000; finish Too late');
+    await until('the request never started', async () => ['waiting', 'running'].includes((await lastTurn())?.state));
+    if ((await api('/api/health')).busy !== true) throw new Error('HO[LO] didn’t say it’s busy while a request worked');
+    await restart(token);
+    const cut = await lastTurn();
+    if (cut?.state !== 'failed' || !/restarted/.test(cut.error ?? ''))
+      throw new Error(`the request cut short reads ${cut?.state}: ${cut?.error ?? 'no reason given'}`);
+    if ((await api('/api/health')).busy !== false) throw new Error('HO[LO] still says it’s busy after the restart');
+    await page.reload();
+    await page.getByRole('button', { name: 'Start the studio' }).click();
+    await page.locator('.track-row').first().waitFor();
+    await page.locator('.cb-bar').first().click();
+    await page.locator('.talk-page', { hasText: 'HO[LO] restarted while it was working' }).waitFor();
+
+    // a reply that waits for an OK: its button is there after a restart
+    await ask(
+      page,
+      'standin: ask_permission {"kind": "bounce", "detail": "To hear the mix"}; finish Shall I bounce it?',
+    );
+    const allow = () => page.locator('.talk-page button', { hasText: 'Bounce the song' });
+    await allow().waitFor();
+    await restart(token);
+    if ((await lastTurn())?.state !== 'awaiting')
+      throw new Error('the reply no longer waits for its OK after the restart');
+    await page.reload();
+    await page.getByRole('button', { name: 'Start the studio' }).click();
+    await page.locator('.track-row').first().waitFor();
+    await page.locator('.cb-bar').first().click();
+    await allow().waitFor();
+    await page.close();
+  },
 };
 
-const failures = [];
-try {
-  await until('The studio didn’t start', async () => {
+const answering = () =>
+  until('The studio didn’t start', async () => {
     if (server.exitCode !== null) throw new Error(`it stopped (${server.exitCode})`);
     return (await fetch(`${base}/api/health`)).ok;
   });
+
+/** Whether both stand-in harnesses are ready, as the runner reports them. */
+async function harnessesReady(token) {
+  const { harnesses } = await api('/api/agent/settings', { token });
+  const ready = (h) => h?.found && h.sealed && h.signedIn !== false;
+  return ready(harnesses.find((h) => h.id === 'claude')) && ready(harnesses.find((h) => h.id === 'codex'));
+}
+
+/** HO[LO] stopped (as an update or a reboot stops it) and started again on the same data; its runner finds it again. */
+async function restart(token) {
+  const gone = new Promise((ok) => server.once('exit', ok));
+  server.kill();
+  await gone;
+  server = startServer();
+  await answering();
+  await until('The runner never came back after the restart', () => harnessesReady(token), 40_000);
+}
+
+const failures = [];
+try {
+  await answering();
   const key = readFileSync(join(data, 'runner.key'), 'utf8').trim();
   const bin = writeLaunchers(join(scratch, 'bin'));
   mkdirSync(join(scratch, 'home'), { recursive: true });
@@ -204,11 +266,7 @@ try {
   );
   const { token, device } = await api('/api/agent/pair', { method: 'POST', body: { code, name: 'Agent check' } });
   await api('/api/agent/settings', { method: 'PUT', token, body: { harness: 'claude', model: 'opus', effort: 'low' } });
-  await until('The runner never reported the stand-in harnesses as ready', async () => {
-    const { harnesses } = await api('/api/agent/settings', { token });
-    const ready = (h) => h?.found && h.sealed && h.signedIn !== false;
-    return ready(harnesses.find((h) => h.id === 'claude')) && ready(harnesses.find((h) => h.id === 'codex'));
-  });
+  await until('The runner never reported the stand-in harnesses as ready', () => harnessesReady(token));
 
   browser = await chromium.launch({
     args: ['--autoplay-policy=no-user-gesture-required'],

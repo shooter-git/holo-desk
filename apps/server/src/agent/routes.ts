@@ -171,6 +171,8 @@ export function agentRoutes(
     ...(o.limits ? { limits: o.limits } : {}),
   });
   jobs = theJobs;
+  // (what wasn't over when HO[LO] last stopped: a click still waited for, a request that says it was cut short)
+  theJobs.recover();
   live.agent = theJobs;
   // notices outside HO[LO], for devices that turned them on (push.ts); the key is made only once a
   // device subscribes (GET /api/agent/push?key=1), never as the server or a studio starts

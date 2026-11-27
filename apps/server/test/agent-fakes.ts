@@ -55,8 +55,8 @@ export const CLAUDE = {
   version: '2.1.0',
 };
 
-export async function agentApp() {
-  const work = mkdtempSync(join(tmpdir(), 'holo-agent-test-'));
+/** HO[LO]'s server in a scratch folder of its own, or (given `work`) in one a server before it left: a restart. */
+export async function agentApp(work: string = mkdtempSync(join(tmpdir(), 'holo-agent-test-'))) {
   const dataDir = join(work, 'data');
   const { app, services } = await buildApp({
     port: 47899,
@@ -153,8 +153,10 @@ export async function agentApp() {
     await app.close();
     rmSync(work, { recursive: true, force: true });
   };
+  /** HO[LO] stops, its data kept: `agentApp(work)` is it started again. */
+  const stop = () => app.close();
 
-  return { app, services, dataDir, key, connect, runner, studio, pair, admit, song, save, close };
+  return { app, services, work, dataDir, key, connect, runner, studio, pair, admit, song, save, close, stop };
 }
 
 export const auth = (token: string) => ({ authorization: `Bearer ${token}` });

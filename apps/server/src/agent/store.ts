@@ -10,6 +10,7 @@
 import type { DatabaseSync } from 'node:sqlite';
 import type { RunUsage } from '@holo/agent/limits';
 import type { Go, View } from '@holo/agent/view';
+import type { RequestContext, ScanPreset } from './prompt.ts';
 
 export type HarnessId = 'claude' | 'codex' | 'cursor' | 'antigravity';
 export const HARNESSES: readonly HarnessId[] = ['claude', 'codex', 'cursor', 'antigravity'];
@@ -90,7 +91,34 @@ export interface TurnExtra {
   /** What its reply shows under it, and where the studio went as it arrived. */
   view?: View;
   go?: Go;
+  /** When its job began and ended, and the song's title then (the job's view, kept for a restart). */
+  started?: number;
+  finished?: number;
+  title?: string;
+  /** What it ran with: the harness, and the model and effort handed to its runner (empty: the harness's own). */
+  harness?: HarnessId;
+  model?: string;
+  effort?: string;
+  /** What the studio showed as it was asked, and the preset it was (a scan's): to carry the request on. */
+  context?: RequestContext;
+  preset?: ScanPreset;
+  /** What the agent was told the user did before it, as it read it (the thread's events then). */
+  heard?: string[];
+  /** What its tools changed, in order: each batch's label, and how many in a row had it. */
+  changes?: [string, number][];
+  /** Why it didn't go on, when that's known for sure (`interrupted`: HO[LO] or its runner stopped under it). */
+  stop?: TurnStop;
+  /** The song before the conversation's previous request (the job's "previous"). */
+  previous?: number;
 }
+
+/** Why a turn stopped short, where HO[LO] knows. */
+export interface TurnStop {
+  why: 'interrupted';
+}
+
+/** How many of a turn's changes are kept (the rest are counted as one more line). */
+export const KEEP_CHANGES = 40;
 
 export interface TurnRow {
   thread: string;
@@ -102,6 +130,14 @@ export interface TurnRow {
   at: number;
   /** TurnExtra, as JSON. */
   extra: string | null;
+  /** The device that asked (null: a turn from before this was kept). */
+  device?: string | null;
+}
+
+/** A turn that wasn't over when HO[LO] last stopped, with its thread's song and whether that thread is current. */
+export interface UnfinishedTurn extends TurnRow {
+  project: string | null;
+  current: number | null;
 }
 
 /** When a device is told of a reply outside HO[LO] (Settings › Agent, "Tell me outside HO[LO]"). */
@@ -229,11 +265,9 @@ export class AgentStore {
       (this.db.prepare('PRAGMA table_info(agent_turns)').all() as { name: string }[]).map((c) => c.name),
     );
     if (!columns.has('extra')) this.db.exec('ALTER TABLE agent_turns ADD COLUMN extra TEXT');
-    // jobs live in memory: a turn still running, or waiting for a click, when HO[LO] stopped can't go on
-    this.db.exec(`
-      UPDATE agent_turns SET state = 'failed' WHERE state IN ('waiting', 'running');
-      UPDATE agent_turns SET state = 'cancelled' WHERE state = 'awaiting';
-    `);
+    // added later still: who asked, so a turn waiting for their click is theirs after a restart too
+    if (!columns.has('device')) this.db.exec('ALTER TABLE agent_turns ADD COLUMN device TEXT');
+    // (the turns that weren't over when HO[LO] stopped are seen to as it starts: Jobs.recover)
   }
 
   // ---- settings ----
@@ -450,9 +484,9 @@ export class AgentStore {
   addTurn(t: TurnRow): void {
     this.db
       .prepare(
-        'INSERT OR REPLACE INTO agent_turns (job, thread, request, reply, label, state, at, extra) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+        'INSERT OR REPLACE INTO agent_turns (job, thread, request, reply, label, state, at, extra, device) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
       )
-      .run(t.job, t.thread, t.request, t.reply, t.label, t.state, t.at, t.extra);
+      .run(t.job, t.thread, t.request, t.reply, t.label, t.state, t.at, t.extra, t.device ?? null);
     this.db
       .prepare(
         `DELETE FROM agent_turns WHERE thread = ? AND job NOT IN
@@ -475,8 +509,21 @@ export class AgentStore {
   turns(thread: string): TurnRow[] {
     return this.db
       .prepare(
-        'SELECT thread, job, request, reply, label, state, at, extra FROM agent_turns WHERE thread = ? ORDER BY at, rowid',
+        'SELECT thread, job, request, reply, label, state, at, extra, device FROM agent_turns WHERE thread = ? ORDER BY at, rowid',
       )
       .all(thread) as unknown as TurnRow[];
+  }
+
+  /** The turns that weren't over when HO[LO] last stopped (working, or waiting for a click), oldest first. */
+  unfinishedTurns(): UnfinishedTurn[] {
+    return this.db
+      .prepare(
+        `SELECT t.thread, t.job, t.request, t.reply, t.label, t.state, t.at, t.extra, t.device,
+                th.project AS project, th.current AS current
+         FROM agent_turns t LEFT JOIN agent_threads th ON th.id = t.thread
+         WHERE t.state IN ('waiting', 'running', 'awaiting')
+         ORDER BY t.at, t.rowid`,
+      )
+      .all() as unknown as UnfinishedTurn[];
   }
 }

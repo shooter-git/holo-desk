@@ -231,8 +231,9 @@ export async function buildApp(
       ok: true,
       version,
       build,
-      // a studio playing or recording, or a bounce the host is making: an update waits for it (tools/update.mjs)
-      busy: editor?.playing === true || editor?.recording === true || bounces.busy(),
+      // a studio playing or recording, a bounce the host is making, or a request the agent is working
+      // on: an update waits for it (tools/update.mjs)
+      busy: editor?.playing === true || editor?.recording === true || bounces.busy() || agent.jobs.working(),
       engine: { ...studio, label: engineLabel(studio) },
     };
   });

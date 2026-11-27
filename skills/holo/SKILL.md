@@ -155,7 +155,8 @@ holo regions show --track Vocal                    # a track's regions (a region
 holo regions split --track Vocal --at "17 21 25"   # chop; also delete (--confirm), copy, move (--to-track),
 holo regions fade selected --fade-out 1.5          #   repeat (--times), trim (--start/--end), gain (--db),
 holo regions stretch "Take 2" --ratio 2            #   stretch, mute, unmute, rename (--name); MIDI only:
-holo regions quantize --track Keys --unit 1/16 --strength 80   # quantize, transpose (--semitones) and
+holo regions quantize --track Keys --unit 1/16 --strength 80   # quantize (--swing 60: every other step late,
+holo regions quantize --track Drums --unit 1/8 --swing 67     #   straight grids only), transpose (--semitones) and
 holo regions cc rgn_… --lane pb --points "9=0 9.3=4096 10=0"   # controller lanes (mod 1, 11, 64, pb, at)
 holo notes show --track Vocal                      # a recording's notes, numbered: pitch and cents, vibrato, drift
 holo notes shift --notes 5 --semitones 2           # each Audio Editor edit, on notes chosen as all, 1-12,15,

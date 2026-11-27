@@ -7531,9 +7531,48 @@ html[data-layout^="phone"] .view-item kbd {
   animation: sheet 0.22s cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 
-.metro-settings {
+.metro-settings,
+.quant-settings {
   gap: 12px;
   max-width: 360px;
+}
+
+.quant-settings input[type="range"] {
+  width: 100%;
+}
+
+.quant-settings .grow {
+  flex: 1;
+}
+
+.quant-note {
+  font-size: 11.5px;
+  line-height: 1.35;
+}
+
+/* Q, and the arrow to its strength and swing: one control. The dot says it isn't a plain quantize */
+.quant-seg {
+  flex: none;
+}
+
+.quant-seg .btn {
+  position: relative;
+}
+
+.quant-seg .quant-more {
+  width: 20px;
+  min-width: 20px;
+  padding: 0;
+}
+
+.quant-dot {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--accent);
 }
 
 .metro-settings .seg {

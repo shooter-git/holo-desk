@@ -89,7 +89,7 @@ export const TOOL_HELP = `What the in-app agent does, from here (each runs the a
         stretch, mute, unmute, rename, quantize, transpose, cc: a region by id, name or "selected"
         e.g. holo regions show --track Vocal · holo regions split --track Vocal --at "17 21"
              holo regions fade selected --fade-out 1.5 · holo regions delete "Verse 2" --confirm
-             holo regions cc rgn_… --lane pb --points "9=0 9.3=4096 10=0" · holo regions quantize --track Keys --unit 1/16
+             holo regions cc rgn_… --lane pb --points "9=0 9.3=4096 10=0" · holo regions quantize --track Keys --unit 1/16 --swing 60
   holo notes [ACTION] [--track T] [--region R] [--notes all|selected|1-12,15|"bars 9-13"|"pitch E4"] [--ARG value…]
         a recording's notes, one by one, as the Audio Editor edits them (holo notes alone shows them):
 ${noteActions('        ')}

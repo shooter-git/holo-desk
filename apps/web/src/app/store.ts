@@ -102,6 +102,9 @@ export interface AppState {
 
   tool: Tool;
   grid: keyof typeof DIVISIONS;
+  /** Quantize: how far each note goes toward the grid, %, and how late every other step falls, % of half a step. */
+  quantStrength: number;
+  quantSwing: number;
   /** Pixels per quarter note in the tracks area and the piano roll. */
   zoom: number;
   pianoZoom: number;
@@ -262,6 +265,8 @@ const initial: AppState = {
   playWaiting: null,
   tool: 'pointer',
   grid: '1/16',
+  quantStrength: 100,
+  quantSwing: 0,
   zoom: 40,
   pianoZoom: 90,
   trackHeight: 56,
@@ -323,6 +328,8 @@ const REMEMBER: (keyof AppState)[] = [
   'inspector',
   'library',
   'grid',
+  'quantStrength',
+  'quantSwing',
   'zoom',
   'pianoZoom',
   'trackHeight',

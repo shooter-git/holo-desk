@@ -60,3 +60,26 @@ jobs:
         run: pnpm ui:check
         env:
           PLAYWRIGHT: ${{ runner.temp }}/playwright/node_modules/playwright/index.mjs
+
+  # The agent, end to end in a browser: the real runner, adapters, tools and server, with a stand-in
+  # for the harnesses (packages/agent/stand-in), so no sign-in and no subscription (tools/agent-check.mjs).
+  agent:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Build the studio
+        run: pnpm build
+      - name: A browser to look at it in (Playwright, kept out of the repo's own dependencies)
+        run: |
+          npm install --no-save --no-audit --no-fund --prefix "$RUNNER_TEMP/playwright" playwright@1.56.1
+          "$RUNNER_TEMP/playwright/node_modules/.bin/playwright" install --with-deps chromium
+      - name: A request, and one while the studio is away
+        run: pnpm agent:check
+        env:
+          PLAYWRIGHT: ${{ runner.temp }}/playwright/node_modules/playwright/index.mjs

@@ -1,6 +1,7 @@
 /**
  * Which of the song's tracks this device shows: all of them, or, with View's Inactive tracks off,
- * only the ones that are on. The tracks pane and the Mixer leave the others out, and going from
+ * only the ones that are on; and, where it's told which stacks are closed here, without the tracks
+ * folded away in those. The tracks pane and the Mixer leave the others out, and going from
  * track to track with the keyboard skips them; nothing else does. The song is whole whatever is
  * shown of it: the engine, the Score, the Inspector, the agent and every other device go by all of
  * its tracks, and a track left out is still selected when something selects it by name (the Score,
@@ -9,21 +10,29 @@
 import type { Project, Track } from '@holo/session';
 import type { AppState } from './store.ts';
 
-type Show = Pick<AppState['show'], 'inactiveTracks'>;
+/**
+ * What's shown here: View's Inactive tracks, and the stacks closed on this device (their tracks are
+ * folded away under their headers). With no `folded`, every stack is open.
+ */
+export type Show = Pick<AppState['show'], 'inactiveTracks'> & { folded?: readonly string[] };
 
 // (a song's tracks are a new list whenever one of them changes, so what's shown of a list is worked
 // out once and is the same list until then: what draws from it can tell that nothing changed)
-const shownOf = new WeakMap<Track[], Track[]>();
-const songOf = new WeakMap<Project, Project>();
+const shownOf = new WeakMap<Track[], { inactive: boolean; folded: readonly string[] | undefined; shown: Track[] }>();
+const songOf = new WeakMap<Project, { tracks: Track[]; song: Project }>();
+
+const none: readonly string[] = [];
 
 /** The tracks shown, in the song's order: the song's own list where none is left out. */
 export function shownTracks(tracks: Track[], show: Show): Track[] {
-  if (show.inactiveTracks) return tracks;
-  let shown = shownOf.get(tracks);
-  if (!shown) {
-    shown = tracks.some((t) => t.inactive) ? tracks.filter((t) => !t.inactive) : tracks;
-    shownOf.set(tracks, shown);
-  }
+  const folded = show.folded?.length ? show.folded : none;
+  if (show.inactiveTracks && !folded.length) return tracks;
+  const kept = shownOf.get(tracks);
+  if (kept && kept.inactive === show.inactiveTracks && kept.folded === folded) return kept.shown;
+  const away = (t: Track) =>
+    (!show.inactiveTracks && t.inactive) || (t.stack !== undefined && folded.includes(t.stack));
+  const shown = tracks.some(away) ? tracks.filter((t) => !away(t)) : tracks;
+  shownOf.set(tracks, { inactive: show.inactiveTracks, folded, shown });
   return shown;
 }
 
@@ -35,17 +44,16 @@ export function shownTracks(tracks: Track[], show: Show): Track[] {
 export function shownSong(project: Project, show: Show): Project {
   const tracks = shownTracks(project.tracks, show);
   if (tracks === project.tracks) return project;
-  let song = songOf.get(project);
-  if (!song) {
-    song = { ...project, tracks };
-    songOf.set(project, song);
-  }
+  const kept = songOf.get(project);
+  if (kept?.tracks === tracks) return kept.song;
+  const song = { ...project, tracks };
+  songOf.set(project, { tracks, song });
   return song;
 }
 
-/** How many tracks are left out. */
+/** How many tracks View leaves out (a closed stack's aren't counted: their header is there to say so). */
 export function hiddenTracks(tracks: Track[], show: Show): number {
-  return tracks.length - shownTracks(tracks, show).length;
+  return tracks.length - shownTracks(tracks, { inactiveTracks: show.inactiveTracks }).length;
 }
 
 /**

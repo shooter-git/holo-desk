@@ -266,6 +266,26 @@ What comes next, in this order:
 3. **Smarter sample memory**: stream long samples and recordings. (A render already loads only the
    samples its song can sound, below; a phone's studio loads those of the keys its song plays.)
 
+## Track stacks in the tracks pane
+
+The song's side of stacks (what they are, the one-block rule, that they route nothing) is in
+`docs/session-format.md`. In the studio a stack's header is a row of the track list, as tall as a
+track's, so a row's place is still its number times a row's height and nothing that lays out, draws
+or hit-tests the pane had to learn a second geometry. The pane works from a song whose `tracks` are
+its rows (`rowsSong` in `apps/web/src/app/track-rows.ts`): each header is a stand-in track there,
+with the stack's name and colour and nothing to play, and `stackRow` tells it from a track. The
+header's own lane draws its tracks' regions as thin strips; presses in it do nothing.
+
+Whether a stack is open is this device's own, kept by song (the last twenty songs'), and never an
+undo step. The tracks folded away are left out of what the pane shows (`shownTracks`), so the arrow
+keys step past them and the selection moves to the nearest track showing when a stack closes around
+it.
+
+A dragged row becomes one operation (`planDrop`): a track lands in a stack when it's dropped under
+its open header or among its tracks, leaves its own when it's dropped outside it, and stays as it
+was at a stack's lower edge; a header moves its whole stack. The studio adds the routing in that
+same step where the stack has a bus, and says so in a toast.
+
 ## The Step Grid
 
 A drum part shown as steps is the track's own notes: nothing is stored for a step. Reading

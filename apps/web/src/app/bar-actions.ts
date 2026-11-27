@@ -35,6 +35,7 @@ import { type Actions, type BarState, type Command, commandTable } from './comma
 import { toggleTyping } from './keys.ts';
 import { isPhone, layoutNow } from './layout.ts';
 import { isKitNow, shownNoteView } from './note-view.ts';
+import { stackSelected, takeOutOfStack } from './stack-actions.ts';
 import { type AppState, store } from './store.ts';
 
 /** What the bar's commands do: the same actions the keys and buttons use. */
@@ -64,6 +65,11 @@ export const ACTIONS: Actions = {
   setChannel: (track, patch, label) => updateChannel(track, patch, label),
   setActive: (track, active) => setTrackActive(track, active),
   newTrack: () => void addTrack({ type: 'synth', preset: 'Soft Keys' }),
+  stackTrack: stackSelected,
+  unstackTrack: () => {
+    const id = store.get().selectedTrack;
+    if (id) takeOutOfStack(id);
+  },
   save: () => void saveNow(),
   bounce: () => void bounceSong(true),
   stems: () => store.set({ dialog: 'stems' }),

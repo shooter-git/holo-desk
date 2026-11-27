@@ -2,6 +2,7 @@
 import {
   type AudioClip,
   automationTargets,
+  type Bus,
   DIVISIONS,
   DRUM_PRESETS,
   type FormMark,
@@ -12,6 +13,7 @@ import {
   type Project,
   quantize,
   type Region,
+  type Stack,
   SYNTH_FAMILIES,
   type Track,
   ticksPerBar,
@@ -21,6 +23,8 @@ import {
 import {
   Activity,
   AudioLines,
+  ChevronDown,
+  ChevronRight,
   Drum,
   Eraser,
   EyeOff,
@@ -39,6 +43,7 @@ import {
   ZoomOut,
 } from 'lucide-react';
 import {
+  type CSSProperties,
   memo,
   type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
@@ -56,27 +61,42 @@ import {
   createRegionAt,
   deleteSelection,
   deleteTrack,
+  dropRow,
   endGesture,
   findRegion,
+  foldStack,
   gestureChange,
   importAudio,
   liveTakes,
   locate,
-  moveShownTrack,
   normalizeRegion,
   quantizeSelection,
   repeatRegions,
   selectTrack,
   setCycle,
   setTrackActive,
+  showNow,
   splitAtPlayhead,
   takeLinkedTick,
   updateChannel,
   updateTrack,
 } from '../app/actions.ts';
 import { isPhone, isTouch, layoutNow, useLayout } from '../app/layout.ts';
-import { hiddenTracks, shownSong, shownTracks } from '../app/shown-tracks.ts';
+import { hiddenTracks, type Show } from '../app/shown-tracks.ts';
+import {
+  addToStack,
+  makeStack,
+  mixStackThroughBus,
+  muteStack,
+  renameStack,
+  setStackActive,
+  soloStack,
+  stackState,
+  takeOutOfStack,
+  unstack,
+} from '../app/stack-actions.ts';
 import { type AppState, store, useApp } from '../app/store.ts';
+import { rowId, rowsSong, stackRow, trackRows } from '../app/track-rows.ts';
 import { engine } from '../audio/engine.ts';
 import { audioFiles } from '../audio/files.ts';
 import { library } from '../audio/samples.ts';
@@ -290,8 +310,8 @@ const listHeight = (tracks: number, row: number) => tracks * row + LIST_TAIL;
  * The track list for a song as it's shown here: a row for each track View doesn't leave out, the
  * room under them, and the note's where some are left out.
  */
-const shownListHeight = (song: Project, show: AppState['show'], row: number) =>
-  listHeight(shownTracks(song.tracks, show).length, row) + (hiddenTracks(song.tracks, show) ? HIDDEN_NOTE : 0);
+const shownListHeight = (song: Project, show: Show, row: number) =>
+  listHeight(rowsSong(song, show).tracks.length, row) + (hiddenTracks(song.tracks, show) ? HIDDEN_NOTE : 0);
 /** The track list on screen (there's one tracks area at a time), for spareTrackRoom. */
 let shownList: HTMLDivElement | null = null;
 
@@ -299,7 +319,7 @@ let shownList: HTMLDivElement | null = null;
 export function spareTrackRoom(): number {
   const s = store.get();
   if (!shownList || !s.project) return 0;
-  return shownList.clientHeight - shownListHeight(s.project, s.show, rowHeight(s.trackHeight));
+  return shownList.clientHeight - shownListHeight(s.project, showNow(s), rowHeight(s.trackHeight));
 }
 
 /**
@@ -308,11 +328,23 @@ export function spareTrackRoom(): number {
  */
 function moveEntries(id: string): MenuEntry[] {
   const s = store.get();
-  const tracks = s.project ? shownTracks(s.project.tracks, s.show) : [];
-  const i = tracks.findIndex((t) => t.id === id);
+  const rows = s.project ? trackRows(s.project, showNow(s)) : [];
+  const i = rows.findIndex((r) => rowId(r) === id);
   return [
-    { label: 'Move up', disabled: i <= 0, onSelect: () => moveShownTrack(id, i - 1) },
-    { label: 'Move down', disabled: i < 0 || i >= tracks.length - 1, onSelect: () => moveShownTrack(id, i + 1) },
+    { label: 'Move up', disabled: i <= 0, onSelect: () => dropRow(id, i - 1) },
+    { label: 'Move down', disabled: i < 0 || i >= rows.length - 1, onSelect: () => dropRow(id, i + 1) },
+  ];
+}
+
+/** A track's part in stacks, for its menu: into one the song has, into a new one, or out of its own. */
+function stackEntries(track: Track): MenuEntry[] {
+  const p = store.get().project;
+  const stacks = p?.stacks ?? [];
+  const own = stacks.find((s) => s.id === track.stack);
+  if (own) return [{ label: `Take out of “${own.name}”`, onSelect: () => takeOutOfStack(track.id) }];
+  return [
+    { label: 'New stack with this track', hint: 'Ctrl Shift D', onSelect: () => void makeStack([track.id]) },
+    ...stacks.map((s): MenuEntry => ({ label: `Add to “${s.name}”`, onSelect: () => addToStack(track.id, s.id) })),
   ];
 }
 
@@ -327,9 +359,21 @@ interface TrackRowProps {
   maxScrollY: number;
   /** Its place among the song's tracks, from 1 (View › Track numbers shows it before the name). */
   number: number;
+  /** The colour of the stack it's in (its rows are set in a little, down a line of that colour). */
+  stackColor?: string;
 }
 
-const TrackRow = memo(function TrackRow({ track, top, height, selected, fold, maxScrollY, number }: TrackRowProps) {
+const TrackRow = memo(function TrackRow({
+  track,
+  top,
+  height,
+  selected,
+  fold,
+  maxScrollY,
+  number,
+  stackColor,
+}: TrackRowProps) {
+  const place = { top, height, ...(stackColor ? { '--stack': stackColor } : {}) } as CSSProperties;
   const [renaming, setRenaming] = useState(false);
   const automationView = useApp((s) => s.automationView);
   const show = useApp((s) => s.show);
@@ -362,6 +406,8 @@ const TrackRow = memo(function TrackRow({ track, top, height, selected, fold, ma
         onSelect: () => setTrackActive(track.id, !!track.inactive),
       },
       'sep',
+      ...stackEntries(track),
+      'sep',
       ...moveEntries(track.id),
       'sep',
       { label: 'Delete track', onSelect: () => deleteTrack(track.id) },
@@ -377,7 +423,7 @@ const TrackRow = memo(function TrackRow({ track, top, height, selected, fold, ma
       axis: 'y',
       box: row.closest<HTMLElement>('.track-list') ?? row,
       scroll: { get: () => tracksView.y, by: (d) => tracksView.scrollBy(0, d, maxScrollY) },
-      onDrop: (index) => moveShownTrack(track.id, index),
+      onDrop: (index) => dropRow(track.id, index),
     };
     if (e.pointerType !== 'touch') {
       selectTrack(track.id);
@@ -439,8 +485,8 @@ const TrackRow = memo(function TrackRow({ track, top, height, selected, fold, ma
     return (
       <button
         type="button"
-        className={`track-row rail-cell${selected ? ' selected' : ''}${height < RAIL_CELL_TALL ? ' short' : ''}${track.inactive ? ' inactive' : ''}`}
-        style={{ top, height }}
+        className={`track-row rail-cell${selected ? ' selected' : ''}${height < RAIL_CELL_TALL ? ' short' : ''}${track.inactive ? ' inactive' : ''}${track.stack ? ' in-stack' : ''}`}
+        style={place}
         title={track.name}
         aria-label={[track.name, ...on.filter(Boolean)].join(', ')}
         onPointerDown={onDown}
@@ -464,7 +510,7 @@ const TrackRow = memo(function TrackRow({ track, top, height, selected, fold, ma
   }
   const icons = show.trackIcons;
   const sub = `${track.kind === 'audio' ? inputLabel(track) : instrumentLabel(track.instrument)}${track.origin?.edited ? ' · edited' : ''}`;
-  const rowClass = `track-row${selected ? ' selected' : ''}${icons ? '' : ' no-icon'}${track.inactive ? ' inactive' : ''}`;
+  const rowClass = `track-row${selected ? ' selected' : ''}${icons ? '' : ' no-icon'}${track.inactive ? ' inactive' : ''}${track.stack ? ' in-stack' : ''}`;
   const nameField = (
     <input
       className="input"
@@ -507,7 +553,7 @@ const TrackRow = memo(function TrackRow({ track, top, height, selected, fold, ma
   return (
     <div
       className={`${rowClass} two${lines ? '' : ' one'}${compact ? ' flat' : ''}`}
-      style={{ top, height }}
+      style={place}
       onPointerDown={onDown}
       onContextMenu={onContextMenu}
     >
@@ -531,6 +577,237 @@ const TrackRow = memo(function TrackRow({ track, top, height, selected, fold, ma
     </div>
   );
 });
+
+interface StackRowProps {
+  /** Its row's id (the stack's, marked as a stack's). */
+  id: string;
+  stack: Stack;
+  open: boolean;
+  color: string;
+  top: number;
+  height: number;
+  fold: 'rail' | 'drawer' | null;
+  maxScrollY: number;
+}
+
+/**
+ * A stack's header, a row of the list like a track's: its arrow folds its tracks away (on this
+ * device), its name is renamed in place, M and S act on its tracks together (M on its bus, when it
+ * has one), and a summing stack has its bus's fader. Dragged, the whole stack moves.
+ */
+const StackRow = memo(function StackRow({ id, stack, open, color, top, height, fold, maxScrollY }: StackRowProps) {
+  const [renaming, setRenaming] = useState(false);
+  const show = useApp((s) => s.show);
+  // (what its tracks are doing, as one word the store can compare)
+  const state = useApp((s) => {
+    if (!s.project) return '';
+    const st = stackState(s.project, stack);
+    return `${st.count}|${st.mute ? 1 : 0}|${st.solo ? 1 : 0}|${st.inactive ? 1 : 0}`;
+  });
+  const [count, mute, solo, inactive] = state.split('|').map(Number) as [number, number, number, number];
+  const bus = useApp((s) => (stack.bus ? (s.project?.buses.find((b) => b.id === stack.bus) ?? null) : null));
+  const compact = height < FLAT_ROW;
+  const what = `${count === 1 ? '1 track' : `${count} tracks`}${bus ? ` · through ${bus.name}` : ''}`;
+  const toggle = () => foldStack(stack.id, open);
+  const menu = (x: number, y: number) =>
+    openMenu(x, y, [
+      { heading: stack.name },
+      { label: open ? 'Close' : 'Open', onSelect: toggle },
+      { label: 'Rename', onSelect: () => setRenaming(true) },
+      'sep',
+      bus
+        ? { label: 'Stop mixing through its bus', onSelect: () => mixStackThroughBus(stack.id, false) }
+        : { label: 'Mix through a bus', onSelect: () => mixStackThroughBus(stack.id, true) },
+      {
+        label: inactive ? 'Make its tracks active' : 'Make its tracks inactive',
+        onSelect: () => setStackActive(stack.id, !!inactive),
+      },
+      'sep',
+      ...moveEntries(id),
+      'sep',
+      { label: 'Unstack', hint: 'the tracks stay', onSelect: () => unstack(stack.id) },
+    ]);
+  const fingerDown = useRef(false);
+  const onDown = (e: ReactPointerEvent<HTMLElement>) => {
+    const row = e.currentTarget;
+    const list: ReorderList = {
+      item: row,
+      items: () => [...(row.parentElement?.querySelectorAll<HTMLElement>(':scope > .track-row') ?? [])],
+      axis: 'y',
+      box: row.closest<HTMLElement>('.track-list') ?? row,
+      scroll: { get: () => tracksView.y, by: (d) => tracksView.scrollBy(0, d, maxScrollY) },
+      onDrop: (index) => dropRow(id, index),
+    };
+    if (e.pointerType !== 'touch') {
+      const field = e.target instanceof Element && e.target.closest('input, select, textarea, button');
+      if (e.button === 0 && !isMenuPress(e) && !field) pressToReorder(e, list);
+      return;
+    }
+    fingerDown.current = true;
+    const caught = tracksView.stopFling();
+    const pan = new TouchPan(tracksView, 'y', () => maxScrollY, e);
+    const onButton = e.target instanceof Element && !!e.target.closest('input, button.chip, .fader');
+    pressToReorder(e, {
+      ...list,
+      onSwipe: (ev) => pan.move(ev),
+      // (on a phone's rail the cell is the stack's fold: a tap opens or closes it)
+      onTap: () => {
+        if (!caught && fold === 'rail' && !onButton) toggle();
+      },
+      onHold: (ev) => menu(ev.clientX, ev.clientY),
+      onEnd: (ev) => {
+        fingerDown.current = false;
+        if (ev) pan.end(ev.timeStamp);
+      },
+    });
+  };
+  const onContextMenu = (e: ReactMouseEvent) => {
+    e.preventDefault();
+    if (!fingerDown.current) menu(e.clientX, e.clientY);
+  };
+  const arrow = open ? <ChevronDown /> : <ChevronRight />;
+  if (fold === 'rail') {
+    return (
+      <button
+        type="button"
+        className={`track-row rail-cell stack-row${open ? ' open' : ''}${inactive ? ' inactive' : ''}`}
+        style={{ top, height, '--stack': color } as CSSProperties}
+        title={`${stack.name}: ${what}`}
+        aria-label={`${stack.name}, a stack of ${what}, ${open ? 'open' : 'closed'}`}
+        aria-expanded={open}
+        onPointerDown={onDown}
+        onClick={(e) => {
+          if (e.detail === 0) toggle();
+        }}
+        onContextMenu={onContextMenu}
+      >
+        <div className="swatch" style={{ background: color }} />
+        <span className="rail-icon" style={{ color }}>
+          {arrow}
+        </span>
+        <span className="stack-count" aria-hidden="true">
+          {count}
+        </span>
+      </button>
+    );
+  }
+  const lines = show.trackButtons || (show.trackMix && bus);
+  return (
+    <div
+      className={`track-row stack-row two${lines ? '' : ' one'}${compact ? ' flat' : ''}${open ? ' open' : ''}${inactive ? ' inactive' : ''}`}
+      style={{ top, height, '--stack': color } as CSSProperties}
+      onPointerDown={onDown}
+      onContextMenu={onContextMenu}
+    >
+      <div className="swatch" style={{ background: color }} />
+      <button
+        type="button"
+        className="btn ghost icon stack-fold"
+        title={open ? `Close ${stack.name}: fold its tracks away` : `Open ${stack.name}`}
+        aria-label={open ? `Close the stack ${stack.name}` : `Open the stack ${stack.name}`}
+        aria-expanded={open}
+        onClick={toggle}
+      >
+        {arrow}
+      </button>
+      <div className="title" onDoubleClick={() => setRenaming(true)}>
+        {renaming ? (
+          <input
+            className="input"
+            // biome-ignore lint/a11y/noAutofocus: shown because the name was double-clicked
+            autoFocus
+            defaultValue={stack.name}
+            aria-label="The stack's name"
+            style={{ height: 22, width: '100%' }}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') e.currentTarget.blur();
+              if (e.key === 'Escape') setRenaming(false);
+              e.stopPropagation();
+            }}
+            onBlur={(e) => {
+              renameStack(stack.id, e.currentTarget.value);
+              setRenaming(false);
+            }}
+          />
+        ) : (
+          <>
+            <div className="name" title={stack.name}>
+              {stack.name}
+            </div>
+            {!compact && show.trackSub && <div className="sub">{what}</div>}
+          </>
+        )}
+      </div>
+      {lines && (
+        <div className="ctl" onPointerDown={(e) => e.stopPropagation()}>
+          {show.trackButtons && (
+            <div className="chips" onPointerDown={(e) => e.stopPropagation()}>
+              <button
+                type="button"
+                className={`chip power${inactive ? '' : ' on'}`}
+                title={
+                  inactive
+                    ? `${stack.name}’s tracks are inactive: turn them on`
+                    : 'Active: turn its tracks off to free their CPU and memory'
+                }
+                aria-label={inactive ? `Make ${stack.name}’s tracks active` : `Make ${stack.name}’s tracks inactive`}
+                aria-pressed={!inactive}
+                onClick={() => setStackActive(stack.id, !!inactive)}
+              >
+                <Power />
+              </button>
+              <button
+                type="button"
+                className={`chip mute${mute ? ' on' : ''}`}
+                title={bus ? `Mute ${stack.name}: its bus, ${bus.name}` : `Mute ${stack.name}: its tracks`}
+                aria-label={`Mute ${stack.name}`}
+                aria-pressed={!!mute}
+                disabled={!!inactive}
+                onClick={() => muteStack(stack.id)}
+              >
+                M
+              </button>
+              <button
+                type="button"
+                className={`chip solo${solo ? ' on' : ''}`}
+                title={`Solo ${stack.name}: its tracks`}
+                aria-label={`Solo ${stack.name}`}
+                aria-pressed={!!solo}
+                disabled={!!inactive}
+                onClick={() => soloStack(stack.id)}
+              >
+                S
+              </button>
+            </div>
+          )}
+          {show.trackMix && bus && <StackFader bus={bus} name={stack.name} />}
+        </div>
+      )}
+    </div>
+  );
+});
+
+/** A summing stack's fader: its bus's, with the bus's level in its groove. */
+function StackFader({ bus, name }: { bus: Bus; name: string }) {
+  const box = useRef<HTMLDivElement>(null);
+  const size = useSize(box);
+  return (
+    <div className="track-vol" ref={box}>
+      {size.w >= 24 && (
+        <Fader
+          mini
+          meter={bus.id}
+          length={Math.floor(size.w)}
+          db={bus.channel.volume}
+          label={`${name} volume (its bus, ${bus.name})`}
+          onBegin={() => beginGesture('Volume')}
+          onEnd={endGesture}
+          onChange={(volume) => gestureChange([{ op: 'updateChannel', target: bus.id, patch: { volume } }])}
+        />
+      )}
+    </div>
+  );
+}
 
 /**
  * A track's icon, which is its on/off (Make Inactive, as in other studios): what it plays while it's
@@ -849,9 +1126,12 @@ function drawTimeline(ctx: CanvasRenderingContext2D, d: Draw): void {
     if (y > h || y + trackHeight < 0) return;
     // (an inactive track's lane sits darker, as its header does)
     ctx.fillStyle = t.inactive ? '#0f1114' : t.id === d.selectedTrack ? '#1a1e24' : i % 2 ? '#131519' : '#14171b';
+    const head = stackRow(t);
+    if (head) ctx.fillStyle = '#171a1f';
     ctx.fillRect(0, y, w, trackHeight);
     ctx.fillStyle = '#0b0d10';
     ctx.fillRect(0, y + trackHeight - 1, w, 1);
+    if (head) drawStackLane(ctx, head.tracks, v, y, w, trackHeight);
   });
 
   // cycle band
@@ -935,6 +1215,39 @@ const NAME_FONT = '600 11.5px Inter Variable, system-ui, sans-serif';
  * left edge, under the regions' name bands, where it stays as the song scrolls by (a region's own
  * name goes off the edge with the region's start). A muted or inactive track's lane is dimmed.
  */
+/**
+ * A stack's own lane: its tracks' parts together, a thin strip for each track where it has regions,
+ * in that track's colour (fainter for one that's off or muted). It's to see by, not to edit.
+ */
+function drawStackLane(
+  ctx: CanvasRenderingContext2D,
+  tracks: readonly Track[],
+  v: Viewport,
+  y: number,
+  w: number,
+  rowH: number,
+): void {
+  if (!tracks.length) return;
+  const room = rowH - 12;
+  const strip = Math.max(2, Math.min(7, Math.floor(room / tracks.length) - 1));
+  const gap = strip >= 4 ? 1 : 0;
+  const total = tracks.length * (strip + gap) - gap;
+  const top = y + 6 + Math.max(0, (room - total) / 2);
+  tracks.forEach((t, k) => {
+    const sy = top + k * (strip + gap);
+    if (sy + strip > y + rowH - 3) return;
+    ctx.globalAlpha = t.inactive ? 0.25 : t.channel.mute ? 0.4 : 0.85;
+    ctx.fillStyle = t.color;
+    for (const r of t.regions) {
+      const x = v.tickToX(r.start);
+      const rw = Math.max(2, r.length * v.pxPerTick - 1);
+      if (x > w || x + rw < 0) continue;
+      ctx.fillRect(Math.max(-2, x), sy, Math.min(rw, w + 4), strip);
+    }
+  });
+  ctx.globalAlpha = 1;
+}
+
 function drawLaneNames(
   ctx: CanvasRenderingContext2D,
   project: Project,
@@ -1212,9 +1525,11 @@ export function TracksArea() {
   const phone = isPhone(layout);
   const song = useApp((s) => s.project);
   const show = useApp((s) => s.show);
-  // the rows are the tracks View shows (it may leave the inactive ones out): everything here that
-  // lays out, draws or finds what's under the pointer goes by this list, never by the song's own
-  const project = song && shownSong(song, show);
+  const folded = useApp((s) => s.foldedStacks);
+  // the rows are the tracks View shows (it may leave the inactive ones out), with a header's row for
+  // each stack and without the tracks folded away in a closed one: everything here that lays out,
+  // draws or finds what's under the pointer goes by this list, never by the song's own
+  const project = song && rowsSong(song, { inactiveTracks: show.inactiveTracks, folded });
   const hidden = song ? hiddenTracks(song.tracks, show) : 0;
   const selectedTrack = useApp((s) => s.selectedTrack);
   const selectedRegionsList = useApp((s) => s.selectedRegions);
@@ -1333,7 +1648,7 @@ export function TracksArea() {
   /** How far the list scrolls: read as it's asked, so a gesture under way goes by the song as it is now. */
   const maxScrollY = () => {
     const s = store.get();
-    return s.project ? Math.max(0, shownListHeight(s.project, s.show, trackHeight) - size.h) : 0;
+    return s.project ? Math.max(0, shownListHeight(s.project, showNow(s), trackHeight) - size.h) : 0;
   };
   // rows gone from under the view (tracks left out in View, or deleted): the list comes back up to its end
   const listEnd = maxScrollY();
@@ -1354,7 +1669,7 @@ export function TracksArea() {
   useFrame(() => {
     const s = store.get();
     if (!s.project) return;
-    const p = shownSong(s.project, s.show);
+    const p = rowsSong(s.project, showNow(s));
     const tick = engine.positionTick();
     const busy = !!gesture.current || pinch.current.active;
     if (follow && !busy) {
@@ -1456,7 +1771,8 @@ export function TracksArea() {
   ): { track: Track; index: number; region: Region | null; edge: Edge | null } | null => {
     const index = Math.floor((y + tracksView.y) / trackHeight);
     const track = project.tracks[index];
-    if (!track) return null;
+    // (a stack's header has no lane of its own: nothing is selected, drawn or dropped there)
+    if (!track || stackRow(track)) return null;
     const tick = tracksView.xToTick(x);
     const edgePx = touch ? EDGE_TOUCH : EDGE;
     for (let i = track.regions.length - 1; i >= 0; i--) {
@@ -1794,7 +2110,7 @@ export function TracksArea() {
     for (let d = 0; d < project.tracks.length; d++) {
       for (const i of [want - d, want + d]) {
         const t = project.tracks[i];
-        if (t && t.kind === kind && (d === 0 || (dRow < 0 ? i <= from : i >= from))) return i;
+        if (t && t.kind === kind && !stackRow(t) && (d === 0 || (dRow < 0 ? i <= from : i >= from))) return i;
       }
     }
     return from;
@@ -2024,10 +2340,12 @@ export function TracksArea() {
     // the row between the fingers stays between them
     const y = ((tracksView.y + cy) * row) / old - cy;
     store.set({ trackHeight: row });
-    tracksView.scrollBy(0, y - tracksView.y, Math.max(0, shownListHeight(s.project, s.show, row) - size.h));
+    tracksView.scrollBy(0, y - tracksView.y, Math.max(0, shownListHeight(s.project, showNow(s), row) - size.h));
   };
 
   const headerWidth = phone ? RAIL : layout === 'tablet' ? 210 : 230;
+  // (each stack's colour, as its header has it: its tracks' rows carry it down their left edge)
+  const stackColors = new Map(project.tracks.filter((t) => stackRow(t)).map((t) => [t.stack as string, t.color]));
   const listMax = maxScrollY();
   const peekIndex = peek ? project.tracks.findIndex((t) => t.id === peek) : -1;
   const peekTrack = project.tracks[peekIndex];
@@ -2144,19 +2462,35 @@ export function TracksArea() {
         }}
       >
         <div className="track-list-inner" ref={listInner}>
-          {project.tracks.map((t, i) => (
-            <TrackRow
-              key={t.id}
-              track={t}
-              top={i * trackHeight}
-              height={trackHeight}
-              selected={t.id === selectedTrack}
-              fold={fold}
-              maxScrollY={listMax}
-              // (its place in the song, whatever View leaves out of the list)
-              number={(song?.tracks.indexOf(t) ?? i) + 1}
-            />
-          ))}
+          {project.tracks.map((t, i) => {
+            const head = stackRow(t);
+            return head ? (
+              <StackRow
+                key={t.id}
+                id={t.id}
+                stack={head.stack}
+                open={head.open}
+                color={t.color}
+                top={i * trackHeight}
+                height={trackHeight}
+                fold={fold}
+                maxScrollY={listMax}
+              />
+            ) : (
+              <TrackRow
+                key={t.id}
+                track={t}
+                top={i * trackHeight}
+                height={trackHeight}
+                selected={t.id === selectedTrack}
+                fold={fold}
+                maxScrollY={listMax}
+                // (its place in the song, whatever View leaves out of the list)
+                number={(song?.tracks.indexOf(t) ?? i) + 1}
+                {...(t.stack ? { stackColor: stackColors.get(t.stack) ?? t.color } : {})}
+              />
+            );
+          })}
           <button
             type="button"
             className={`btn ghost new-track${fold === 'rail' ? ' on-rail' : ''}`}

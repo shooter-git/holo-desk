@@ -3,6 +3,7 @@
  * regions. Values sit on the lane the way their controls move: volume and sends on the fader's law,
  * plugin frequencies and times on a log scale, everything else straight.
  */
+
 import {
   type AutomationTarget,
   automationTargets,
@@ -14,6 +15,7 @@ import {
   type Track,
   toUnit,
 } from '@holo/session';
+import { isStackRowId } from '../app/track-rows.ts';
 import { dbToFader, faderToDb } from './controls.tsx';
 import type { Viewport } from './view.ts';
 
@@ -90,6 +92,8 @@ export function drawLanes(
   project.tracks.forEach((track, i) => {
     const g = laneGeometry(i, trackHeight, view.y);
     if (g.top + g.height < 0 || g.top > h) return;
+    // (a stack's header row has no lane to draw on)
+    if (isStackRowId(track.id)) return;
     // the regions recede so the line reads
     ctx.fillStyle = 'rgba(9, 11, 14, 0.55)';
     ctx.fillRect(0, g.top - 4, w, trackHeight - 3);

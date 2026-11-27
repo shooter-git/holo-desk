@@ -1345,6 +1345,76 @@ a.btn {
   padding: 0 0 var(--lanes, 0px);
 }
 
+/* ---------- track stacks: a header's row, and its tracks set in under it ---------- */
+
+.track-row.stack-row {
+  background: linear-gradient(180deg, #23282f, #1c2026);
+  box-shadow:
+    inset 0 1px 0 var(--hi),
+    inset 0 -1px 0 color-mix(in srgb, var(--stack, #7c8a99) 45%, transparent);
+}
+
+.track-row.stack-row .name {
+  font-weight: 700;
+}
+
+.track-row.two > .stack-fold {
+  grid-row: 1 / span 2;
+}
+
+.track-row .stack-fold {
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  color: var(--stack, var(--text-2));
+}
+
+.track-row .stack-fold svg {
+  width: 18px;
+  height: 18px;
+}
+
+.track-row.two.flat > .stack-fold {
+  grid-row: 1;
+}
+
+/* a stack's tracks: set in a little, down a line of the stack's colour */
+.track-row.in-stack {
+  left: 12px;
+}
+
+.track-row.in-stack::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: -1px;
+  left: -12px;
+  width: 12px;
+  border-left: 3px solid color-mix(in srgb, var(--stack, #7c8a99) 70%, transparent);
+  background: #14171b;
+}
+
+/* (a phone's rail has no room to set a cell in: the line alone says it) */
+.track-row.rail-cell.in-stack {
+  left: 0;
+  box-shadow: inset 3px 0 0 color-mix(in srgb, var(--stack, #7c8a99) 70%, transparent);
+}
+
+.track-row.rail-cell.in-stack::before {
+  content: none;
+}
+
+.track-row.rail-cell.stack-row .rail-icon svg {
+  width: 20px;
+  height: 20px;
+}
+
+.track-row.rail-cell .stack-count {
+  color: var(--text-2);
+  font-family: var(--mono);
+  font-size: 9px;
+}
+
 .track-row.rail-cell {
   display: flex;
   flex-direction: column;

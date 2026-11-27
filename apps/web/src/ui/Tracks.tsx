@@ -1145,12 +1145,24 @@ function drawRuler(
   g.addColorStop(1, '#191c21');
   ctx.fillStyle = g;
   ctx.fillRect(0, 0, w, h);
-  // cycle strip (top half)
+  // cycle strip (top half): yellow while the cycle is on. Off, its range is still here, to move or
+  // to switch back on, as a grey outline: a fainter yellow read as a cycle that was still lit
   const x0 = v.tickToX(cycle.start);
   const x1 = v.tickToX(cycle.end);
-  ctx.fillStyle = cycle.on ? 'rgba(246,196,83,0.9)' : 'rgba(246,196,83,0.22)';
-  roundRect(ctx, x0, 2, Math.max(2, x1 - x0), h / 2 - 4, 3);
-  ctx.fill();
+  const cw = Math.max(2, x1 - x0);
+  if (cycle.on) {
+    ctx.fillStyle = 'rgba(246,196,83,0.9)';
+    roundRect(ctx, x0, 2, cw, h / 2 - 4, 3);
+    ctx.fill();
+  } else {
+    ctx.fillStyle = 'rgba(169,177,190,0.08)';
+    roundRect(ctx, x0, 2, cw, h / 2 - 4, 3);
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(169,177,190,0.5)';
+    ctx.lineWidth = 1;
+    roundRect(ctx, x0 + 0.5, 2.5, Math.max(1, cw - 1), h / 2 - 5, 3);
+    ctx.stroke();
+  }
   // bar numbers and ticks
   const step = gridStep(v.pxPerTick, 7, beat, bar);
   const labelEvery = gridStep(v.pxPerTick, 34, bar, bar);

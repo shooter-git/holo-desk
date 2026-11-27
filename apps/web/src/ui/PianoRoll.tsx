@@ -4,6 +4,8 @@
  * note's velocity or draws any controller (mod wheel, expression, sustain, pitch bend, aftertouch,
  * any CC number).
  */
+
+import { inKey, intoKey, keySpans, stepInKey } from '@holo/agent/edits';
 import {
   type CCPoint,
   DIVISIONS,
@@ -14,6 +16,7 @@ import {
   type Project,
   quantize,
   type Region,
+  scaleAt,
   ticksPerBar,
   ticksPerBeat,
   tickToBarBeat,
@@ -33,6 +36,7 @@ import {
   deleteNotes,
   ensureAudio,
   locate,
+  moveIntoKey,
   quantizeSelection,
   replaceNotes,
   transposeSelection,
@@ -52,6 +56,7 @@ import {
   screenDpr,
   useWheel,
 } from './gesture.ts';
+import { keyShort } from './key-short.ts';
 import { drawKeys, drawLanes } from './keys.ts';
 import { type MenuEntry, openMenu, openMenuAt } from './menu.tsx';
 import { QuantizeButton, QuantizePanel, quantizeHint } from './Quantize.tsx';
@@ -60,6 +65,27 @@ import { UprightBar } from './UprightBar.tsx';
 import { DOUBLE_TAP_MS, gridStep, TouchPan, Viewport, WHEEL_ZOOM, ZOOM } from './view.ts';
 
 export const rollView = new Viewport(store.get().pianoZoom);
+
+/** The hatching over a note outside the key: made once. */
+let hatch: CanvasPattern | null = null;
+function hatchOf(ctx: CanvasRenderingContext2D): CanvasPattern | null {
+  if (hatch) return hatch;
+  const tile = document.createElement('canvas');
+  tile.width = 6;
+  tile.height = 6;
+  const t = tile.getContext('2d');
+  if (!t) return null;
+  t.strokeStyle = 'rgba(8,10,12,0.55)';
+  t.lineWidth = 1.5;
+  t.beginPath();
+  for (const d of [-6, 0, 6]) {
+    t.moveTo(d - 1, 7);
+    t.lineTo(d + 7, -1);
+  }
+  t.stroke();
+  hatch = ctx.createPattern(tile, 'repeat');
+  return hatch;
+}
 
 /** The lanes: id, the short name the narrow picker shows, the full name (for undo). */
 const LANES: [string, string, string][] = [
@@ -127,6 +153,9 @@ export function PianoRoll() {
   const grid = useApp((s) => s.grid);
   const lane = useApp((s) => s.lane);
   const middleC = useApp((s) => s.middleC);
+  const keyOn = useApp((s) => s.rollKey);
+  /** The tonic marked on the keyboard: the key's at the view's left edge (it changes where the key does). */
+  const tonicShown = useRef<number | null>(null);
   const follow = useApp((s) => s.follow);
 
   const track = project?.tracks.find((t) => t.id === trackId) ?? null;
@@ -198,6 +227,9 @@ export function PianoRoll() {
     selected,
     keyHeight,
     gridTicks,
+    keyOn,
+    project?.key,
+    project?.keys,
     lane,
     middleC,
     size,
@@ -259,6 +291,7 @@ export function PianoRoll() {
       color: track?.color ?? '#5cb8ff',
       lit: held.current,
       middleC,
+      tonic: tonicShown.current,
     });
   };
 
@@ -290,7 +323,23 @@ export function PianoRoll() {
       // (the keys' rows cover the canvas; under them, all of it is filled, as an opaque canvas must be)
       ctx.fillStyle = '#121418';
       ctx.fillRect(0, 0, w, h);
-      drawLanes(ctx, w, h, keyHeight, yOf);
+      // the song's key, where it has one and it's shown: its rows lighter, the others darker
+      const spans = keyOn ? keySpans(p, Math.max(0, v.xToTick(0)), Math.max(1, v.xToTick(w))) : [];
+      const scaleFor = (tick: number) =>
+        spans.find((s) => tick >= s.from && tick < s.to)?.scale ?? (keyOn ? scaleAt(p, Math.max(0, tick)) : null);
+      const tonic = spans[0]?.scale.tonic ?? null;
+      if (tonic !== tonicShown.current) {
+        tonicShown.current = tonic;
+        keysDirty.current = true;
+      }
+      drawLanes(
+        ctx,
+        w,
+        h,
+        keyHeight,
+        yOf,
+        spans.map((s) => ({ x0: v.tickToX(s.from), x1: v.tickToX(s.to), tonic: s.scale.tonic, steps: s.scale.steps })),
+      );
       // regions: lighter where the track has one, the selected ones a touch more
       for (const r of track?.regions ?? []) {
         const x0 = v.tickToX(r.start);
@@ -337,6 +386,15 @@ export function PianoRoll() {
         ctx.strokeStyle = isSel ? '#ffffff' : 'rgba(0,0,0,0.55)';
         ctx.lineWidth = isSel ? 1.25 : 1;
         ctx.stroke();
+        // a note outside the key is hatched (the key's own notes are plain)
+        if (keyOn && !inKey(scaleFor(region.start + n.t), n.p)) {
+          const hatch = hatchOf(ctx);
+          if (hatch) {
+            roundRect(ctx, x, y, nw, nh, Math.min(3, nh / 3));
+            ctx.fillStyle = hatch;
+            ctx.fill();
+          }
+        }
         // a lighter top edge gives the note its shape without a gradient per note
         if (!isSel && nh > 4) {
           ctx.fillStyle = 'rgba(255,255,255,0.22)';
@@ -516,8 +574,9 @@ export function PianoRoll() {
       dirty.current = false;
       keysDirty.current = false;
       laneDirty.current = false;
-      drawKeyboard();
       drawNotes(p);
+      keysDirty.current = false;
+      drawKeyboard();
       drawLane(p);
     } else {
       if (keysDirty.current) {
@@ -627,6 +686,7 @@ export function PianoRoll() {
       { label: 'Down an octave', hint: 'Shift ↓', onSelect: () => transposeSelection(-12) },
       { label: 'Up a semitone', hint: '↑', onSelect: () => transposeSelection(1) },
       { label: 'Down a semitone', hint: '↓', onSelect: () => transposeSelection(-1) },
+      ...(project && scaleAt(project, 0) ? [{ label: 'Move into key', onSelect: moveIntoKey } as const] : []),
       'sep',
       { heading: 'Velocity' },
       { label: 'Soft', hint: '50', onSelect: () => velocity(50) },
@@ -749,8 +809,11 @@ export function PianoRoll() {
     });
   };
 
-  const drawNoteAt = (e: ReactPointerEvent, tick: number, pitch: number) => {
+  const drawNoteAt = (e: ReactPointerEvent, tick: number, at: number) => {
     const start0 = Math.max(0, Math.floor(tick / gridTicks) * gridTicks);
+    // (with Snap to key on, a note drawn outside the key lands on its nearest note)
+    const s = store.get();
+    const pitch = s.rollSnap && s.project ? intoKey(scaleAt(s.project, start0), at) : at;
     let length = lastLength.current;
     audition(pitch);
     preview.current = { changed: new Map(), drawing: { start: start0, length, pitch } };
@@ -800,6 +863,8 @@ export function PianoRoll() {
     const startY = e.clientY;
     let lastPitchShift = 0;
     const byNote = new Map(refs.map((r) => [r.note, r]));
+    const song = store.get().project;
+    const snap = store.get().rollSnap;
     start(e, {
       edgeScroll: 'xy',
       onMove: (ev, g) => {
@@ -819,10 +884,12 @@ export function PianoRoll() {
             const t = Math.min(n.t + n.d - 10, Math.max(-r.region.start, n.t + dTick));
             changed.set(n, { ...n, t, d: n.d - (t - n.t) });
           } else {
+            // (with Snap to key on, a row up or down is a step of the key in force at the note)
+            const key = snap && song ? scaleAt(song, Math.max(0, r.region.start + n.t)) : null;
             changed.set(n, {
               ...n,
               t: Math.max(-r.region.start, n.t + dTick),
-              p: Math.max(0, Math.min(127, n.p + dPitch)),
+              p: key ? stepInKey(key, n.p, dPitch) : Math.max(0, Math.min(127, n.p + dPitch)),
             });
           }
         }
@@ -1185,6 +1252,16 @@ export function PianoRollBar() {
     rollView.zoomAt(factor, 0, ...ZOOM.roll);
     store.set({ pianoZoom: rollView.zoom });
   };
+  // The song's key: shown in the roll or not, notes moved by its steps or not, and the notes outside it brought in
+  const songKey = useApp((s) => s.project?.key ?? null);
+  const hasKey = useApp((s) => (s.project ? scaleAt(s.project, 0) !== null : false));
+  const keyOn = useApp((s) => s.rollKey);
+  const keySnap = useApp((s) => s.rollSnap);
+  const keyEntries = (): MenuEntry[] => [
+    { label: 'Show the key', checked: keyOn, onSelect: () => store.set({ rollKey: !keyOn }) },
+    { label: 'Snap to key', checked: keySnap, onSelect: () => store.set({ rollSnap: !keySnap }) },
+    { label: 'Move into key', onSelect: moveIntoKey },
+  ];
   const tools = (
     <div className="seg">
       {(
@@ -1258,6 +1335,7 @@ export function PianoRollBar() {
           more={(at) => [
             { label: 'Quantize', hint: quantHint || 'Q', onSelect: quantizeSelection },
             { label: 'Strength and swing…', onSelect: () => setQuantOpen(true) },
+            ...(hasKey ? ['sep' as const, { heading: `Key: ${songKey}` }, ...keyEntries()] : []),
             ...(vel === null ? [] : [{ label: 'Grid', hint: grid, onSelect: () => openMenuAt(at, grids()) }]),
             'sep',
             { label: 'Zoom in', onSelect: () => zoomBy(1.4) },
@@ -1290,6 +1368,17 @@ export function PianoRollBar() {
       {tools}
       {gridSelect}
       <QuantizeButton />
+      {hasKey && songKey && (
+        <button
+          type="button"
+          className={`btn key-chip${keyOn ? ' on' : ''}${keySnap ? ' snap' : ''}`}
+          title={`The song’s key, ${songKey}: ${keyOn ? 'shown' : 'not shown'} in the Piano Roll${keySnap ? ', notes snap to it' : ''}`}
+          aria-haspopup="menu"
+          onClick={(e) => openMenuAt(e.currentTarget, [{ heading: songKey }, ...keyEntries()])}
+        >
+          {keyShort(songKey)}
+        </button>
+      )}
       {selectedNotes.length > 0 && (
         <>
           <span className="label">vel</span>

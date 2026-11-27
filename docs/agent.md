@@ -1025,10 +1025,10 @@ change may also post a line under the bar (`…/progress`).
 | `looping` | change | Make the song a loop (a game's or an app's music), or an ordinary song again. |
 | `ops_apply` | change | Raw session ops for what no other tool covers; removals, and `arrange` deletes and moves, only with `confirm`. |
 | `timeline` | change | Insert, delete, copy or move whole bars across every track (one `arrange` op); delete and move only with `confirm`. |
-| `notes_show` | see | A track's notes, bar by bar. |
+| `notes_show` | see | A track's notes, bar by bar, and after them which are outside the song's key. |
 | `notes_write` | change | Write notes from a position, in the compact notation. |
 | `notes_clear` | change | Remove the notes that start in a span. |
-| `regions` | change | Show, split (chop), delete (with `confirm`), copy, move, repeat, trim, gain, fade, stretch, mute, rename audio and MIDI regions; quantize (to a grid, at a `strength`, with a `swing` on a straight grid) and transpose MIDI; write a MIDI region's controller and pitch-bend lanes. A region by id, name or "selected". |
+| `regions` | change | Show, split (chop), delete (with `confirm`), copy, move, repeat, trim, gain, fade, stretch, mute, rename audio and MIDI regions; quantize (to a grid, at a `strength`, with a `swing` on a straight grid) and transpose MIDI, and move a region's notes into the song's key (`into_key`); write a MIDI region's controller and pitch-bend lanes. A region by id, name or "selected". |
 | `audio_notes` | change | A recording's notes, note by note, as the Audio Editor's Notes edits them: show, detect, one action for each of the session's note edits (`NOTE_EDITS`): pitch, drift, vibrato, glide, formant, level, mute, timing, split, join, octave, add, remove, reset, a note's sound or edits pasted onto others (`paste`, `copy-settings`), and the macros (correct pitch, quantize time, level); and `midi`, the notes as a new MIDI track (below). Any edit can be `linked`: made in every region playing the same recording too. |
 | `track_add` | change | Add a track: a built-in synth, a pack's instrument, or a palette's sound. |
 | `track_set` | change | A track's name, fader, pan, mute, solo, arm, instrument, place and sends, and whether it's inactive (kept, but not played or loaded). |

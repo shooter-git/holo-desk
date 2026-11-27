@@ -28,6 +28,7 @@
  * other region playing the recording too, on the same notes (the session's `linkedNoteEdits`, from
  * the edits that made it: each `runEdit` remembers what it was made from), in the same undo step.
  */
+import { keySpans } from '@holo/agent/edits';
 import { DETECT_V, editedPitch, isEdited, regionPatches } from '@holo/engine';
 import {
   ATTACK_S,
@@ -1485,7 +1486,23 @@ function draw(ctx: CanvasRenderingContext2D, s: Scene): void {
   const bar = ticksPerBar(m);
   ctx.fillStyle = '#101216';
   ctx.fillRect(0, 0, w, h);
-  drawLanes(ctx, w, h, view.keyHeight, (pitch) => laneTop(pitch, view.keyHeight, view.y));
+  // (the song's key, shaded as the Piano Roll shades it, when that's on)
+  const spans = store.get().rollKey
+    ? keySpans(project, Math.max(0, audioView.xToTick(0)), Math.max(1, audioView.xToTick(w)))
+    : [];
+  drawLanes(
+    ctx,
+    w,
+    h,
+    view.keyHeight,
+    (pitch) => laneTop(pitch, view.keyHeight, view.y),
+    spans.map((k) => ({
+      x0: audioView.tickToX(k.from),
+      x1: audioView.tickToX(k.to),
+      tonic: k.scale.tonic,
+      steps: k.scale.steps,
+    })),
+  );
   const step = gridStep(audioView.pxPerTick, 14, beat, bar);
   for (let t = Math.floor(audioView.x / step) * step; t < audioView.xToTick(w); t += step) {
     const x = Math.round(audioView.tickToX(t)) + 0.5;

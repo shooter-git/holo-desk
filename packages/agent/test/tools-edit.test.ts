@@ -206,6 +206,28 @@ describe('regions', () => {
     expect(
       await refused(setup(), 'regions', { action: 'quantize', region: 'Riff', unit: '1/8T', swing: 60 }),
     ).toContain("doesn't swing");
+    // into the key: the song is in D minor; an F♯ and a C♯ go to the F and the C under them, the D stays
+    const sharp = editSong();
+    const riff = sharp.tracks[0]?.regions[0] as Region;
+    riff.notes = [
+      { ...(riff.notes[0] as Region['notes'][number]), p: 62 },
+      { ...(riff.notes[1] as Region['notes'][number]), p: 66 },
+      { ...(riff.notes[2] as Region['notes'][number]), p: 61 },
+    ];
+    const keyed = fakeJobApi(sharp);
+    expect((await call(keyed, 'notes_show', { track: 'Piano' })).text).toContain(
+      '2 notes outside the key (D minor): F#',
+    );
+    await call(keyed, 'regions', { action: 'into_key', region: 'Riff' });
+    expect(regionOf(keyed, 'rgn_riff').notes.map((n) => n.p)).toEqual([62, 65, 60]);
+    expect(keyed.batches.at(-1)?.label).toBe('Moved 2 notes of "Riff" into the key');
+    expect((await call(keyed, 'regions', { action: 'into_key', region: 'Riff' })).text).toContain('in the key already');
+    expect((await call(keyed, 'notes_show', { track: 'Piano' })).text).not.toContain('outside the key');
+    const keyless = editSong();
+    keyless.key = null;
+    expect(await refused(fakeJobApi(keyless), 'regions', { action: 'into_key', region: 'Riff' })).toContain(
+      'has no key',
+    );
     await call(api, 'regions', { action: 'transpose', region: 'Riff', semitones: -12 });
     expect(regionOf(api, 'rgn_riff').notes.map((n) => n.p)).toEqual([50, 53, 57]);
     expect(await refused(api, 'regions', { action: 'transpose', region: 'Take', semitones: 2 })).toMatch(/recording/);

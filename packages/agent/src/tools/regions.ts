@@ -13,6 +13,7 @@ import {
   type Op,
   type Project,
   type Region,
+  scaleAt,
   secondsToTick,
   setStretch,
   stretchMidi,
@@ -23,6 +24,7 @@ import {
   trimMidiStart,
   trimStart,
 } from '@holo/session';
+import { notesIntoKey } from '../edits/pitch.ts';
 import { swings, swungAt } from '../edits/timing.ts';
 import {
   barsText,
@@ -203,6 +205,7 @@ const ACTIONS = [
   'rename',
   'quantize',
   'transpose',
+  'into_key',
   'cc',
 ] as const;
 
@@ -241,7 +244,7 @@ export const regions: Tool = {
   name: 'regions',
   kind: 'change',
   summary:
-    'Edit regions (the blocks on the tracks), audio or MIDI. "region" is its id, its name, or "selected" (what\'s selected in the studio); with only "track", the region there ("at" for split) or its only one. Actions: show (a track\'s regions, or one in detail with its lanes); split at "at" (one position or several, e.g. "17 21 25", to chop); delete (with "confirm": true); copy or move to "at" and/or "to_track"; repeat it "times" after itself; trim its "start" and/or "end" (positions); gain "db" (audio: the region\'s gain, 0 as recorded; MIDI: scales velocities, −6 about halves them); fade "fade_in"/"fade_out" in seconds (MIDI: a velocity ramp); stretch by "ratio" (2 twice as long; audio keeps its pitch) or to an "end"; mute, unmute; rename to "name"; quantize (MIDI) to "unit" at "strength" %, its off-steps late by "swing" % (straight grids only: 1/8, 1/16…; about 67 is a triplet feel); transpose (MIDI) by "semitones"; cc (MIDI): a controller or pitch-bend "lane" ("1" mod, "7", "11" expression, "64" sustain, "pb", "at") written as "points" (position=value, replacing the lane from the first point to the last), or "clear", or shown. Examples: {"action": "split", "track": "Vocal", "at": "17"}; {"action": "fade", "region": "selected", "fade_out": 1.5}; {"action": "cc", "region": "rgn_…", "lane": "pb", "points": "9=0 9.3=4096 10=0"}.',
+    'Edit regions (the blocks on the tracks), audio or MIDI. "region" is its id, its name, or "selected" (what\'s selected in the studio); with only "track", the region there ("at" for split) or its only one. Actions: show (a track\'s regions, or one in detail with its lanes); split at "at" (one position or several, e.g. "17 21 25", to chop); delete (with "confirm": true); copy or move to "at" and/or "to_track"; repeat it "times" after itself; trim its "start" and/or "end" (positions); gain "db" (audio: the region\'s gain, 0 as recorded; MIDI: scales velocities, −6 about halves them); fade "fade_in"/"fade_out" in seconds (MIDI: a velocity ramp); stretch by "ratio" (2 twice as long; audio keeps its pitch) or to an "end"; mute, unmute; rename to "name"; quantize (MIDI) to "unit" at "strength" %, its off-steps late by "swing" % (straight grids only: 1/8, 1/16…; about 67 is a triplet feel); transpose (MIDI) by "semitones"; into_key (MIDI): its notes outside the song\'s key move to the nearest note of the key (the one in force where each starts); cc (MIDI): a controller or pitch-bend "lane" ("1" mod, "7", "11" expression, "64" sustain, "pb", "at") written as "points" (position=value, replacing the lane from the first point to the last), or "clear", or shown. Examples: {"action": "split", "track": "Vocal", "at": "17"}; {"action": "fade", "region": "selected", "fade_out": 1.5}; {"action": "cc", "region": "rgn_…", "lane": "pb", "points": "9=0 9.3=4096 10=0"}.',
   args: [
     { name: 'action', type: 'enum', values: ACTIONS, describe: 'What to do', required: true },
     { name: 'region', type: 'string', describe: 'The region: its id (rgn_…), its name, or "selected"', maxLength: 120 },
@@ -565,6 +568,22 @@ export const regions: Tool = {
           ops.push(...rewrite(track, region, { ...region, notes }));
         }
         label = `Transposed ${named} ${by > 0 ? '+' : ''}${by}`;
+        break;
+      }
+
+      case 'into_key': {
+        midiOnly('Moving notes into the key');
+        if (!scaleAt(project, 0) && !project.keys?.length)
+          throw new ToolError('The song has no key: set one first (song_set {"key": "D minor"})');
+        let moved = 0;
+        for (const { track, region } of found) {
+          const into = notesIntoKey(project, region);
+          if (!into) continue;
+          moved += into.moved;
+          ops.push(...rewrite(track, region, { ...region, notes: into.notes }));
+        }
+        if (!ops.length) return { text: `Every note of ${named} is in the key already.` };
+        label = `Moved ${plural(moved, 'note')} of ${named} into the key`;
         break;
       }
 

@@ -86,7 +86,7 @@ const noteActions = (indent: string, width = 104): string => {
 /** Their lines in `holo help`. */
 export const TOOL_HELP = `What the in-app agent does, from here (each runs the agent's own tool, on the song)
   holo regions [ACTION] [REGION] [--track T] …   show, split, delete, copy, move, repeat, trim, gain, fade,
-        stretch, mute, unmute, rename, quantize, transpose, cc: a region by id, name or "selected"
+        stretch, mute, unmute, rename, quantize, transpose, into_key, cc: a region by id, name or "selected"
         e.g. holo regions show --track Vocal · holo regions split --track Vocal --at "17 21"
              holo regions fade selected --fade-out 1.5 · holo regions delete "Verse 2" --confirm
              holo regions cc rgn_… --lane pb --points "9=0 9.3=4096 10=0" · holo regions quantize --track Keys --unit 1/16 --swing 60

@@ -21,6 +21,16 @@ export interface KeysStyle {
   /** Keys lit (being played). */
   lit?: ReadonlySet<number>;
   middleC: MiddleC;
+  /** The key's tonic (a pitch class, C 0 … B 11), marked on its keys; left out, none is. */
+  tonic?: number | null;
+}
+
+/** A stretch of a pitch grid in one key: its rows are shaded as the key's notes or not. */
+export interface KeyShade {
+  x0: number;
+  x1: number;
+  tonic: number;
+  steps: readonly number[];
 }
 
 /** The keyboard, its C keys named. */
@@ -60,6 +70,14 @@ export function drawKeys(kctx: CanvasRenderingContext2D, s: KeysStyle): void {
       kctx.fillStyle = '#3a414c';
       kctx.fillText(noteName(pitch, s.middleC), kw - 22, y + keyHeight / 2);
     }
+    // the key's tonic: a dot at the grid's edge of its keys (beside a C's name, not over it)
+    if (s.tonic !== undefined && s.tonic !== null && (((pitch - s.tonic) % 12) + 12) % 12 === 0 && keyHeight >= 7) {
+      const r = Math.min(2.5, keyHeight / 4);
+      kctx.fillStyle = isBlack(pitch) ? '#3a414c' : '#5d6673';
+      kctx.beginPath();
+      kctx.arc(kw - 5, y + keyHeight / 2, r, 0, Math.PI * 2);
+      kctx.fill();
+    }
   }
   kctx.fillStyle = '#0b0d10';
   kctx.fillRect(kw - 1, 0, 1, h);
@@ -72,12 +90,22 @@ export function drawLanes(
   h: number,
   keyHeight: number,
   yOf: (pitch: number) => number,
+  /** Where the song has a key and it's shown: there the rows are the key's (lighter, its tonic most) or not (darker). */
+  shade: readonly KeyShade[] = [],
 ): void {
   for (let pitch = 0; pitch < 128; pitch++) {
     const y = yOf(pitch);
     if (y > h || y + keyHeight < 0) continue;
     ctx.fillStyle = isBlack(pitch) ? '#121418' : '#181b20';
     ctx.fillRect(0, y, w, keyHeight);
+    for (const s of shade) {
+      const x0 = Math.max(0, s.x0);
+      const x1 = Math.min(w, s.x1);
+      if (x1 <= x0) continue;
+      const step = (((pitch - s.tonic) % 12) + 12) % 12;
+      ctx.fillStyle = step === 0 ? '#20262f' : s.steps.includes(step) ? '#1a1e24' : '#0f1114';
+      ctx.fillRect(x0, y, x1 - x0, keyHeight);
+    }
     if (pitch % 12 === 0 || pitch % 12 === 5) {
       ctx.fillStyle = pitch % 12 === 0 ? '#2a2f37' : '#1f2329';
       ctx.fillRect(0, y + keyHeight - 1, w, 1);

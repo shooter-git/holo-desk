@@ -11,14 +11,17 @@ import {
   meterAt,
   type Note,
   newRegion,
+  noteName,
   type Op,
   type Project,
   parseNotation,
   type Region,
+  scaleAt,
   type Track,
   ticksPerBar,
   tickToBarBeat,
 } from '@holo/session';
+import { outsideKey } from '../edits/pitch.ts';
 import {
   barsText,
   bool,
@@ -71,7 +74,24 @@ export const notesShow: Tool = {
       .filter((t) => t >= from && t < to)
       .sort((a, b) => a - b);
     const cut = starts.length > SHOW_MAX ? (starts[SHOW_MAX] as number) : to;
-    const text = describeNotes(project, track, { from, to: cut, middleC: ctx.middleC });
+    const listed = describeNotes(project, track, { from, to: cut, middleC: ctx.middleC });
+    // the notes outside the song's key (the one in force where each starts), named after the list
+    const outside = track.regions.flatMap((r) =>
+      outsideKey(project, r)
+        .map((n) => ({ at: r.start + n.t, p: n.p }))
+        .filter((n) => n.at >= from && n.at < cut),
+    );
+    outside.sort((a, b) => a.at - b.at || a.p - b.p);
+    const where = (tick: number) => {
+      const b = tickToBarBeat(project.meter, tick);
+      return `${b.bar}.${b.beat}.${b.div}.${b.tick}`;
+    };
+    const text = outside.length
+      ? `${listed}\n${plural(outside.length, 'note')} outside the key (${scaleAt(project, Math.max(0, (outside[0] as { at: number }).at))?.name ?? project.key}): ${outside
+          .slice(0, 16)
+          .map((n) => `${noteName(n.p, ctx.middleC)} at ${where(n.at)}`)
+          .join(', ')}${outside.length > 16 ? '…' : ''}. regions {"action": "into_key"} moves them onto it.`
+      : listed;
     if (cut >= to) return { text };
     const p = tickToBarBeat(project.meter, cut);
     const rest = starts.filter((t) => t >= cut).length;

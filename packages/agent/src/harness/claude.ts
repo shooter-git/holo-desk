@@ -9,6 +9,7 @@
  * on any other tool used or any permission refused.
  */
 import { join } from 'node:path';
+import { checkUsage, type LimitGroup, type LimitsRead, type LimitWindow, type RunUsage, tokens } from '../limits.ts';
 import {
   type AdapterOptions,
   type Context,
@@ -135,7 +136,14 @@ export function claudeReader(): Reader {
         }
         return out;
       }
+      if (e.type === 'rate_limit_event') {
+        const limits = claudeLimits(e.rate_limit_info);
+        if (limits) out.push({ kind: 'limits', limits });
+        return out;
+      }
       if (e.type === 'result') {
+        const usage = claudeUsage(e.usage);
+        if (usage) out.push({ kind: 'usage', usage });
         if (Array.isArray(e.permission_denials) && e.permission_denials.length)
           out.push({ kind: 'trip', why: 'Claude Code tried tools that aren’t HO[LO]’s' });
         else if (e.is_error === true || (typeof e.subtype === 'string' && e.subtype !== 'success'))
@@ -150,13 +158,73 @@ export function claudeReader(): Reader {
   };
 }
 
-/** `claude auth status` (JSON; exits 1 when signed out). */
-export function parseClaudeAuth(stdout: string): { signedIn: boolean; account?: string } | null {
+/** The windows a `rate_limit_event` names, in minutes. */
+const CLAUDE_WINDOWS: Record<string, number> = { five_hour: 300, seven_day: 10080 };
+
+/** One of its windows: `utilization` is the share used (0 to 1), `resetsAt` in seconds. */
+function claudeWindow(minutes: number, raw: unknown): LimitWindow | null {
+  if (!isObject(raw) || typeof raw.utilization !== 'number') return null;
+  return {
+    minutes,
+    used: raw.utilization,
+    ...(typeof raw.resetsAt === 'number' ? { resets: raw.resetsAt * 1000 } : {}),
+  };
+}
+
+/**
+ * What a run's `rate_limit_event` says of the account (a claude.ai sign-in's; an API key has none):
+ * the five-hour and the seven-day windows every model shares (`unifiedWindows`), and, when the limit
+ * it names is one model's own week (`seven_day_opus`, `seven_day_sonnet`), that model's. Windows it
+ * names that aren't known here are left out.
+ */
+export function claudeLimits(info: unknown): LimitsRead | null {
+  if (!isObject(info)) return null;
+  const groups: LimitGroup[] = [];
+  const all: LimitWindow[] = [];
+  const unified = isObject(info.unifiedWindows) ? info.unifiedWindows : {};
+  for (const [key, minutes] of Object.entries(CLAUDE_WINDOWS)) {
+    const w = claudeWindow(minutes, unified[key]);
+    if (w) all.push(w);
+  }
+  const type = typeof info.rateLimitType === 'string' ? info.rateLimitType : '';
+  // an older Claude Code names one window only, the one nearest its limit
+  if (!all.length && CLAUDE_WINDOWS[type]) {
+    const w = claudeWindow(CLAUDE_WINDOWS[type], info);
+    if (w) all.push(w);
+  }
+  if (all.length) groups.push({ windows: all });
+  const model = /^seven_day_(opus|sonnet)$/.exec(type)?.[1];
+  const own = model ? claudeWindow(10080, info) : null;
+  if (model && own) {
+    const name = model.charAt(0).toUpperCase() + model.slice(1);
+    groups.push({ name: `${name} models`, models: [name], windows: [own] });
+  }
+  return groups.length ? { groups } : null;
+}
+
+/** What its `result` says the run used: input not from the cache (what it wrote there too), cache reads, output. */
+export function claudeUsage(usage: unknown): RunUsage | null {
+  if (!isObject(usage)) return null;
+  // (one that counts nothing says nothing)
+  return checkUsage({
+    input: tokens(usage.input_tokens) + tokens(usage.cache_creation_input_tokens),
+    cached: tokens(usage.cache_read_input_tokens),
+    output: tokens(usage.output_tokens),
+  });
+}
+
+/** `claude auth status` (JSON; exits 1 when signed out): its account, and its plan (`subscriptionType`). */
+export function parseClaudeAuth(stdout: string): { signedIn: boolean; account?: string; plan?: string } | null {
   try {
     const d = JSON.parse(stdout) as Record<string, unknown>;
     if (typeof d.loggedIn !== 'boolean') return null;
     const account = [d.email, d.orgName].find((v): v is string => typeof v === 'string' && v.length > 0);
-    return { signedIn: d.loggedIn, ...(d.loggedIn && account ? { account } : {}) };
+    const plan = typeof d.subscriptionType === 'string' && d.subscriptionType ? d.subscriptionType : undefined;
+    return {
+      signedIn: d.loggedIn,
+      ...(d.loggedIn && account ? { account } : {}),
+      ...(d.loggedIn && plan ? { plan } : {}),
+    };
   } catch {
     return null;
   }

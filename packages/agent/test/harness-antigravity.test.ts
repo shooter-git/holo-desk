@@ -14,12 +14,14 @@ import {
   antigravityPlatform,
   antigravityProbe,
   antigravityReader,
+  antigravityUsage,
   antigravityWantsSignIn,
   parseAntigravityAuth,
   parseAntigravityModels,
+  parseAntigravityUsage,
 } from '../src/harness/antigravity.ts';
 import { GIT_ENV } from '../src/harness/env.ts';
-import type { HarnessId } from '../src/harness/types.ts';
+import type { HarnessId, RunEvent } from '../src/harness/types.ts';
 import { TOOLS } from '../src/tools/index.ts';
 import {
   alive,
@@ -74,6 +76,38 @@ const PROBE_SAID = readFileSync(join(FIXTURES, 'antigravity-probe.stderr.txt'), 
 /** How Antigravity says Gemini refused a request (its result's `error`). */
 const REFUSED_ERROR = 'INVALID_ARGUMENT (code 400): Request contains an invalid argument.';
 
+/** What the recorded runs say they used: a new conversation's, and a carried-on one's. */
+const USED = { input: 3183, cached: 0, output: 66 };
+const USED_RESUMED = { input: 2027, cached: 0, output: 104 };
+/** The recorded `/usage`, as HO[LO] keeps it: each group's week first, a window never used with no reset. */
+const QUOTA = [
+  {
+    name: 'Gemini Models',
+    models: [
+      'Gemini 4 Neon',
+      'Gemini 4 Carbon',
+      'Gemini 4 Argon',
+      'Gemini 4 Hydrogen',
+      'Orchestrator (Neon)',
+      'Orchestrator (Carbon)',
+      'Orchestrator (Argon)',
+      'Gemini 3.8 Flash',
+    ],
+    windows: [
+      { minutes: 10080, used: expect.closeTo(0.627, 3), resets: Date.parse('2026-12-03T07:02:10Z') },
+      { minutes: 300, used: 0, resets: Date.parse('2026-11-27T21:35:20Z') },
+    ],
+  },
+  {
+    name: 'Claude and GPT models',
+    models: ['Claude Opus 5.5', 'Claude Sonnet 5.5', 'GPT-OSS 120B'],
+    windows: [
+      { minutes: 10080, used: 0 },
+      { minutes: 300, used: 0 },
+    ],
+  },
+];
+
 let s: Sandbox;
 afterEach(() => s?.cleanup());
 
@@ -87,6 +121,8 @@ interface FakeOptions {
   signedIn?: boolean;
   help?: string;
   probe?: string;
+  /** What `-p /usage` does (sh): the recorded answer unless said. */
+  usage?: string;
   platform?: NodeJS.Platform;
   startupMs?: number;
 }
@@ -127,6 +163,12 @@ echo "couldn't log in: token exchange failed: oauth2: \\"invalid_grant\\" \\"Mal
       {
         when: 'update',
         run: `env -0 > ${q(join(s.rec, 'update-env'))}; echo "⟳ Checking for updates... (current version 1.5.13)"; echo "✓ You are already on the latest version."; exit 0`,
+      },
+      {
+        // its own /usage, printed: the account's quota, as a signed-in 1.5.18 answered
+        when: '-p\\ /usage*',
+        run: `echo usage >> ${q(join(s.rec, 'usage-asked'))}; env -0 > ${q(join(s.rec, 'usage-env'))}
+${o.usage ?? `cat ${q(join(FIXTURES, 'antigravity-usage.jsonl'))}; exit 0`}`,
       },
     ],
     // HO[LO]'s MCP server, as Antigravity starts it, marks the workspace
@@ -179,7 +221,11 @@ describe('Antigravity: finding it', () => {
         'gpt-oss-120b': ['medium'],
       },
       update: { available: true, latest: '1.5.14' },
+      // what the account has left, by the groups of models that share a limit
+      limits: { at: expect.any(Number), groups: QUOTA },
     });
+    // asked with the private home, as its models are
+    expect(envOf('usage-env')).toContain(`HOME=${join(s.root, '.antigravity-home')}`);
     expect(h.fetched).toEqual([`${ANTIGRAVITY_MANIFESTS}/${antigravityPlatform('linux')}.json`]);
     expect(await h.efforts('gemini-3.8-flash')).toEqual(['low', 'medium', 'high']);
     expect(await h.efforts('gpt-oss-120b')).toEqual(['medium']);
@@ -319,6 +365,81 @@ describe('Antigravity: finding it', () => {
   });
 });
 
+describe('Antigravity: what the account has left', () => {
+  const recordedUsage = readFileSync(join(FIXTURES, 'antigravity-usage.jsonl'), 'utf8');
+
+  it('reads its own /usage: each group’s models, its week and its five hours', () => {
+    expect(parseAntigravityUsage(recordedUsage)).toEqual({ groups: QUOTA });
+    // one that answers only in text: the same, without the models
+    const d = JSON.parse(recordedUsage) as { command?: unknown };
+    delete d.command;
+    expect(parseAntigravityUsage(JSON.stringify(d))?.groups).toEqual(
+      // (its text rounds what's left to a whole percent)
+      QUOTA.map(({ name, windows }) => ({ name, windows: windows.map((w) => (w.used ? { ...w, used: 0.63 } : w)) })),
+    );
+    // a window it names that isn't known is left out; an error, or anything else, is nothing
+    expect(
+      parseAntigravityUsage(
+        JSON.stringify({
+          status: 'SUCCESS',
+          command: {
+            data: {
+              groups: [
+                {
+                  name: 'G',
+                  buckets: [
+                    { window: 'fortnight-ish', name: 'Odd', remaining_fraction: 0.5 },
+                    { window: '24h', remaining_fraction: 0.25, reset_time: '2026-12-01T00:00:00Z' },
+                  ],
+                },
+              ],
+            },
+          },
+        }),
+      ),
+    ).toEqual({
+      groups: [{ name: 'G', windows: [{ minutes: 1440, used: 0.75, resets: Date.parse('2026-12-01T00:00:00Z') }] }],
+    });
+    expect(parseAntigravityUsage(JSON.stringify({ status: 'ERROR', error: 'nope' }))).toBeNull();
+    expect(parseAntigravityUsage('Please sign in')).toBeNull();
+    // what a run says it used: its input counts what it read from the cache
+    expect(
+      antigravityUsage({ input_tokens: 11458, output_tokens: 78, cache_read_tokens: 7220, total_tokens: 11536 }),
+    ).toEqual({
+      input: 4238,
+      cached: 7220,
+      output: 78,
+    });
+  });
+
+  it('never asks one that’s signed out (it would wait for a sign-in), and shows none with an API key', async () => {
+    s = sandbox();
+    const out = await fake().info();
+    expect(out.signedIn).toBe(false);
+    expect(out.limits).toBeUndefined();
+    expect(count('usage-asked')).toBe(0);
+    s.cleanup();
+    s = sandbox();
+    // (an API key has no account quota: /usage exits 2)
+    const keyed = await fake({ signedIn: true, usage: 'echo "No account quota with an API key" >&2; exit 2' }).info();
+    expect(keyed.limits).toBeUndefined();
+  });
+
+  it('asks again once a run is over, and says what’s left then', async () => {
+    s = sandbox();
+    const h = fake({ signedIn: true });
+    const events: RunEvent[] = [];
+    const run = h.run(job(s), (e) => events.push(e));
+    await run.done;
+    await until(() => events.some((e) => e.type === 'limits'));
+    // after the end, holding nothing up
+    expect(events.map((e) => e.type)).toEqual(['session', 'progress', 'done', 'limits']);
+    expect(events.at(-1)).toEqual({ type: 'limits', limits: { at: expect.any(Number), groups: QUOTA } });
+    // the run itself isn't one of them: /usage is its own command
+    expect(count('usage-asked')).toBe(1);
+  });
+});
+
 describe('Antigravity: a sealed run', () => {
   it('passes the prompt on stdin as one stream-json line, runs as HO[LO]’s agent with its tools only, in a private home', async () => {
     s = sandbox();
@@ -328,7 +449,7 @@ describe('Antigravity: a sealed run', () => {
     expect(events).toEqual([
       { type: 'session', session: 'c7a94997-872a-4181-a684-499816e061a0' },
       { type: 'progress', line: 'Working' },
-      { type: 'done', reply: 'Echoed text: "spike-42", main colour: green.' },
+      { type: 'done', reply: 'Echoed text: "spike-42", main colour: green.', usage: USED },
     ]);
     const r = recorded(s);
     expect(r.argv.join(' ')).not.toContain('PROMPT-MARK');
@@ -409,7 +530,11 @@ describe('Antigravity: a sealed run', () => {
     writeFileSync(join(j.workspace, '.holo-mcp-ready'), '');
     expect(await runToEnd(dead, j)).toEqual([
       { type: 'session', session: '353139ba-a600-4fd1-ae54-5b948d504c57' },
-      { type: 'failed', error: 'HO[LO]’s tools didn’t start in Antigravity, so it answered without them' },
+      {
+        type: 'failed',
+        error: 'HO[LO]’s tools didn’t start in Antigravity, so it answered without them',
+        usage: USED_RESUMED,
+      },
     ]);
     // one that called them had them, mark or not
     const called = fake({ signedIn: true, run: `${replay('antigravity-normal')}\nexit 0` });
@@ -422,7 +547,7 @@ describe('Antigravity: a sealed run', () => {
     const events = await runToEnd(h, job(s, { session: '353139ba-a600-4fd1-ae54-5b948d504c57' }));
     expect(events).toEqual([
       { type: 'session', session: '353139ba-a600-4fd1-ae54-5b948d504c57' },
-      { type: 'done', reply: 'You asked me to remember the number 4417. BANANA' },
+      { type: 'done', reply: 'You asked me to remember the number 4417. BANANA', usage: USED_RESUMED },
     ]);
     expect(recorded(s).argv.at(-1)).toBe('--conversation=353139ba-a600-4fd1-ae54-5b948d504c57');
     expect(antigravityArgs({ model: '', effort: '', session: 'abc' }, null).at(-1)).toBe('--conversation=abc');
@@ -465,7 +590,7 @@ describe('Antigravity: a sealed run', () => {
         { type: 'session', session: OLD },
         { type: 'session', session: 'c7a94997-872a-4181-a684-499816e061a0' },
         { type: 'progress', line: 'Working' },
-        { type: 'done', reply: 'Echoed text: "spike-42", main colour: green.' },
+        { type: 'done', reply: 'Echoed text: "spike-42", main colour: green.', usage: USED },
       ]);
       expect(runs()).toBe(2);
       expect(recorded(s, 0).argv.at(-1)).toBe(`--conversation=${OLD}`);
@@ -647,6 +772,7 @@ describe('Antigravity: a sealed run', () => {
       { kind: 'session', id: 'c7a94997-872a-4181-a684-499816e061a0' },
       { kind: 'tool', name: 'echo' },
       { kind: 'tool', name: 'image' },
+      { kind: 'usage', usage: USED },
       { kind: 'text', text: 'Echoed text: "spike-42", main colour: green.' },
       { kind: 'ended' },
     ]);

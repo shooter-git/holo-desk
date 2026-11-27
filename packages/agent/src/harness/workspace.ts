@@ -179,6 +179,12 @@ export const READY_FILE = '.holo-mcp-ready';
 export const FAILED_ONCE_FILE = '.holo-failed-once';
 
 /**
+ * Written by the runner after a run of a harness that counts the tokens of the whole conversation so
+ * far (`Spec.usageIsTotal`): the conversation and its total, so the next run's own can be told.
+ */
+export const USAGE_FILE = '.holo-usage';
+
+/**
  * Antigravity's files: the workspace's MCP config (HO[LO]'s server, each of its tools loaded up front,
  * so the model has them without the built-in tools that read their schemas; told to mark when it's
  * started, which Antigravity doesn't say, and how big a picture may be), the custom agent, and the

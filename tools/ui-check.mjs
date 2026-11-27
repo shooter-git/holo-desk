@@ -25,6 +25,9 @@
 //   - a reply's view is measured and laid out again while one of its sliders moves (it's laid out when
 //     what it shows changes, or its width: not each time the page renders again);
 //   - Settings › Agent's Tell me outside HO[LO] isn't whole: its three choices side by side, in the dialog;
+//   - Settings › Agent's harnesses don't say their usage whole, folded or unfolded: a limit without its
+//     name, its bar and its words, one running past its row, bars of different widths in one harness, or
+//     the requests' numbers not in their columns;
 //   - with a reply that has a dock read and the page closed, a phone shows no tray, or one that isn't a
 //     row of its own (or × leaves it there); a tablet or a desktop shows one;
 //   - Songs' open song's bounces, folded under its row or opened with a delete asked, aren't whole, or Keep
@@ -541,6 +544,59 @@ function noticesFit() {
 }
 
 /**
+ * Settings › Agent's harnesses, each with its usage under its row: every limit whole (its name, its bar,
+ * its words, none cut off or past its row), one harness's bars the same width, and, unfolded, the
+ * requests' numbers in their columns. The four of `harnesses()` are there: two with limits, one whose
+ * limits go by groups of models, one that reports none.
+ */
+function usageFits() {
+  const out = [];
+  const rows = [...document.querySelectorAll('.agent-harness')];
+  if (rows.length !== 4) return [`Settings › Agent lists ${rows.length} harnesses, not 4`];
+  for (const row of rows) {
+    const name = row.querySelector('.strong')?.textContent.trim() ?? 'A harness';
+    const usage = row.querySelector('.agent-usage');
+    if (!usage) {
+      out.push(`${name} says nothing of its usage`);
+      continue;
+    }
+    const box = row.getBoundingClientRect();
+    for (const el of usage.querySelectorAll('span, a, button, div')) {
+      const r = el.getBoundingClientRect();
+      if (!r.width) continue;
+      const what = `${name}: “${el.textContent.trim().slice(0, 30)}”`;
+      if (r.left < box.left - 1 || r.right > box.right + 1) out.push(`${what} runs past its row`);
+      if (!el.children.length && el.scrollWidth > el.clientWidth + 1) out.push(`${what} is cut off`);
+    }
+    const meters = [...usage.querySelectorAll('.usage-meter')];
+    for (const m of meters) {
+      const label = m.querySelector('.usage-label')?.textContent.trim();
+      const bar = m.querySelector('.usage-bar')?.getBoundingClientRect();
+      const words = m.querySelector('.usage-left')?.textContent.trim();
+      if (!label || !words) out.push(`${name}: a limit has no ${label ? 'words' : 'name'}`);
+      if (!bar || bar.width < 60 || bar.height < 4)
+        out.push(`${name}: ${label ?? 'a limit'}’s bar is too small to read`);
+    }
+    const widths = new Set(
+      meters.map((m) => Math.round(m.querySelector('.usage-bar')?.getBoundingClientRect().width ?? 0)),
+    );
+    if (widths.size > 1) out.push(`${name}: its bars aren’t the same width (${[...widths].join(', ')})`);
+    if (name === 'Cursor' && meters.length) out.push('Cursor shows a limit, though it reports none');
+    if (name !== 'Cursor' && !meters.length) out.push(`${name} shows none of its limits`);
+    // unfolded: each row of the requests' numbers under its heading
+    const head = [...(usage.querySelector('.usage-head')?.children ?? [])];
+    for (const line of usage.querySelectorAll('.usage-row:not(.usage-head)')) {
+      [...line.children].slice(1).forEach((cell, i) => {
+        const over = head[i + 1]?.getBoundingClientRect();
+        if (over && Math.abs(cell.getBoundingClientRect().right - over.right) > 1)
+          out.push(`${name}: “${cell.textContent.trim()}” isn’t under “${head[i + 1].textContent.trim()}”`);
+      });
+    }
+  }
+  return out;
+}
+
+/**
  * A reply with a dock read, the page closed: on a phone its row waits in the studio, one row of its own
  * on the screen (the view ends above it; held upright, the transport starts below it), with × and ^.
  */
@@ -762,6 +818,7 @@ const CHECKS = {
   windowClear,
   wide,
   noticesFit,
+  usageFits,
   tray,
   noTray,
   viewFits,
@@ -1049,6 +1106,112 @@ function conversation(doc, id, running, newest) {
 }
 
 /**
+ * The four harnesses as a host might have them, for Settings › Agent: Claude Code with its week nearly
+ * used and a five-hour limit that has started again since it was read, Codex with its week used up,
+ * Cursor (which reports no limits), and Antigravity, whose limits go by groups of models, in use.
+ */
+function harnesses(now) {
+  const hour = 3_600_000;
+  const efforts = ['low', 'medium', 'high'];
+  const one = (id, name, version, more) => ({ id, name, found: true, sealed: true, signedIn: true, version, ...more });
+  return [
+    one('claude', 'Claude Code', '2.1.322', {
+      plan: 'max',
+      models: ['opus', 'sonnet'],
+      efforts,
+      mustChoose: true,
+      limits: {
+        at: now - 9 * hour,
+        groups: [
+          {
+            windows: [
+              { minutes: 10080, used: 0.88, resets: now + 51 * hour },
+              { minutes: 300, used: 0.4, resets: now - 4 * hour },
+            ],
+          },
+        ],
+      },
+    }),
+    one('codex', 'Codex', '0.167.1', {
+      plan: 'plus',
+      models: ['gpt-6-luna'],
+      efforts,
+      defaultModel: 'gpt-6-luna',
+      update: { available: true, latest: '0.170.0' },
+      limits: {
+        at: now - 60_000,
+        note: '1 early reset of its limit available, in Codex',
+        groups: [
+          {
+            windows: [
+              { minutes: 10080, used: 1, resets: now + 55 * hour },
+              { minutes: 300, used: 0.4, resets: now + 1.4 * hour },
+            ],
+          },
+        ],
+      },
+    }),
+    one('cursor', 'Cursor', '2026.11.11-043ef28', {
+      plan: 'Pro+',
+      models: ['auto'],
+      efforts: [],
+      defaultModel: 'auto',
+    }),
+    one('antigravity', 'Antigravity', '1.5.18', {
+      models: ['gemini-4-neon', 'claude-opus-5-5'],
+      efforts,
+      modelEfforts: { 'gemini-4-neon': efforts, 'claude-opus-5-5': [] },
+      limits: {
+        at: now - 60_000,
+        groups: [
+          {
+            name: 'Gemini Models',
+            models: ['Gemini 4 Neon', 'Gemini 4 Carbon', 'Gemini 4 Argon', 'Orchestrator (Neon)', 'Gemini 3.8 Flash'],
+            windows: [
+              { minutes: 10080, used: 0.627, resets: now + 134 * hour },
+              { minutes: 300, used: 0.12, resets: now + 4.5 * hour },
+            ],
+          },
+          {
+            name: 'Claude and GPT models',
+            models: ['Claude Opus 5.5', 'Claude Sonnet 5.5', 'GPT-OSS 120B'],
+            windows: [
+              { minutes: 10080, used: 0 },
+              { minutes: 300, used: 0 },
+            ],
+          },
+        ],
+      },
+    }),
+  ];
+}
+
+/** What the requests of the last 30 days used, by harness and model. */
+const USED = [
+  { harness: 'claude', model: 'opus', effort: 'high', requests: 98, input: 412_000, cached: 2_950_000, output: 61_400 },
+  {
+    harness: 'claude',
+    model: 'sonnet',
+    effort: 'medium',
+    requests: 26,
+    input: 88_000,
+    cached: 512_000,
+    output: 12_300,
+  },
+  {
+    harness: 'antigravity',
+    model: 'gemini-4-neon',
+    effort: 'high',
+    requests: 1204,
+    input: 91_240_000,
+    cached: 310_000_000,
+    output: 2_044_000,
+  },
+  { harness: 'codex', model: 'gpt-6-luna', effort: 'low', requests: 12, input: 96_000, cached: 610_000, output: 5_200 },
+  { harness: 'cursor', model: 'auto', effort: '', requests: 9, input: 54_000, cached: 141_000, output: 3_900 },
+];
+
+/**
  * A browser where the agent is on and this device allowed: its token is kept as a paired device's is,
  * and the agent's routes are answered here (the live channel's hello with a token the host doesn't
  * know is only that: no device).
@@ -1069,7 +1232,14 @@ async function withAgent(ctx, doc, id, running, newest) {
         runner: { connected: true, keyed: true, state: 'ready' },
       });
     if (path === '/api/agent/settings')
-      return json({ enabled: true, harness: 'claude', model: '', effort: '', harnesses: [] });
+      return json({
+        enabled: true,
+        harness: 'antigravity',
+        model: 'gemini-4-neon',
+        effort: 'high',
+        harnesses: harnesses(Date.now()),
+        usage: { days: 30, rows: USED },
+      });
     if (path === '/api/agent/devices')
       return json({
         devices: [{ id: 'dev_uicheck0000', name: 'UI check', added: 1, seen: 1, current: true }],
@@ -1231,7 +1401,25 @@ function agentViews(page, layout, finger, running) {
       await page.locator('.agent-notices').scrollIntoViewIfNeeded();
     },
     () => page.keyboard.press('Escape'),
-    ['noticesFit'],
+    ['noticesFit', 'usageFits'],
+  ];
+  // the same, each harness's usage unfolded with More: every limit, its plan, the requests by model
+  const usage = [
+    'Settings › Agent, usage unfolded',
+    async () => {
+      await press(control(page, 'Settings'));
+      await press(page.getByRole('tab', { name: 'Agent' }));
+      await page.locator('.agent-usage').first().waitFor();
+      for (let i = 0; i < 4; i++) {
+        const more = page.locator('.usage-toggle[aria-expanded="false"]').first();
+        if (!(await more.count())) break;
+        await more.scrollIntoViewIfNeeded();
+        await press(more);
+      }
+      await page.locator('.usage-through').first().waitFor();
+    },
+    () => page.keyboard.press('Escape'),
+    ['usageFits'],
   ];
   // the reply read on the page (or the bar), then closed
   const read = async () => {
@@ -1249,6 +1437,7 @@ function agentViews(page, layout, finger, running) {
     ? [[`${where}: working turn`, open, shut, [...checks, 'workingFits', 'threadRoom']]]
     : [
         settings,
+        usage,
         [`${where} with a thread`, open, shut, [...checks, 'viewFits', 'fitsOnce', 'threadRoom']],
         // a desktop's dock, typed in (the commands it finds, over its field) and with a plugin's window opened
         ...(layout === 'desktop' ? commands(page, layout, press, true).slice(1) : []),

@@ -25,6 +25,7 @@
 import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
+import { checkUsage, type LimitGroup, type LimitsRead, type LimitWindow, type RunUsage, tokens } from '../limits.ts';
 import { TOOLS } from '../tools/index.ts';
 import {
   type AdapterOptions,
@@ -182,6 +183,8 @@ export function antigravityReader(): Reader {
       }
       if (e.event === 'result') {
         const r = isObject(e.result) ? e.result : {};
+        const usage = antigravityUsage(r.usage);
+        if (usage) out.push({ kind: 'usage', usage });
         if (Array.isArray(r.denied_actions) && r.denied_actions.length) {
           out.push({ kind: 'trip', why: 'Antigravity tried something it was refused' });
           return out;
@@ -215,6 +218,90 @@ export function antigravityReader(): Reader {
       return error ? [{ kind: 'note', text: error }] : [];
     },
   };
+}
+
+/** What its `result` says the run used: `input_tokens` counts what was read from the cache too. */
+export function antigravityUsage(usage: unknown): RunUsage | null {
+  if (!isObject(usage)) return null;
+  const cached = tokens(usage.cache_read_tokens);
+  // (one that counts nothing says nothing)
+  return checkUsage({
+    input: Math.max(0, tokens(usage.input_tokens) - cached),
+    cached,
+    output: tokens(usage.output_tokens),
+  });
+}
+
+/** A quota window's length in minutes, from its `window` ("weekly", "5h") or, failing that, its name. */
+function antigravityMinutes(window: unknown, name: unknown): number | null {
+  const w = typeof window === 'string' ? window.trim().toLowerCase() : '';
+  const n = /^(\d+)\s*(m|min|h|d|w)$/.exec(w);
+  if (n) return Number(n[1]) * { m: 1, min: 1, h: 60, d: 1440, w: 10080 }[n[2] as 'm' | 'min' | 'h' | 'd' | 'w'];
+  const said = `${w} ${typeof name === 'string' ? name.toLowerCase() : ''}`;
+  if (/\bweek/.test(said)) return 10080;
+  if (/\bfive[ -]hour/.test(said)) return 300;
+  if (/\b(daily|day)\b/.test(said)) return 1440;
+  if (/\bmonth/.test(said)) return 43200;
+  return null;
+}
+
+/** When a window starts again (ms); a time at 1970 means it hasn't been used, and has none. */
+function antigravityReset(time: unknown): number | undefined {
+  const at = typeof time === 'string' ? Date.parse(time) : Number.NaN;
+  return Number.isFinite(at) && at > 0 ? at : undefined;
+}
+
+/**
+ * What `-p "/usage" --output-format json` answers (its `command.data`): groups of models that share a
+ * weekly and a five-hour limit, each bucket with the share that remains and when it starts again; the
+ * models are in the group's description ("Models within this group: A, B"). An Antigravity that
+ * answers only in text has the same in tab-separated lines (group, bucket, "37%", time).
+ */
+export function parseAntigravityUsage(stdout: string): LimitsRead | null {
+  let d: unknown;
+  try {
+    d = JSON.parse(stdout.trim());
+  } catch {
+    return null;
+  }
+  if (!isObject(d) || d.status !== 'SUCCESS') return null;
+  const data = isObject(d.command) && isObject(d.command.data) ? d.command.data : null;
+  const groups: LimitGroup[] = [];
+  if (data && Array.isArray(data.groups)) {
+    for (const g of data.groups.filter(isObject)) {
+      const windows: LimitWindow[] = [];
+      for (const b of (Array.isArray(g.buckets) ? g.buckets : []).filter(isObject)) {
+        const minutes = antigravityMinutes(b.window, b.name);
+        if (minutes === null || typeof b.remaining_fraction !== 'number') continue;
+        const resets = antigravityReset(b.reset_time);
+        windows.push({ minutes, used: 1 - b.remaining_fraction, ...(resets ? { resets } : {}) });
+      }
+      if (!windows.length) continue;
+      const listed = typeof g.description === 'string' ? /:\s*(.+)$/.exec(g.description.trim())?.[1] : undefined;
+      const models = listed
+        ?.split(',')
+        .map((m) => m.trim())
+        .filter(Boolean);
+      groups.push({
+        ...(typeof g.name === 'string' && g.name ? { name: g.name } : {}),
+        ...(models?.length ? { models } : {}),
+        windows,
+      });
+    }
+  } else if (typeof d.response === 'string') {
+    for (const row of d.response.split('\n')) {
+      const [group, bucket, left, time] = row.split('\t').map((c) => c.trim());
+      const percent = /^(\d+(?:\.\d+)?)%$/.exec(left ?? '')?.[1];
+      const minutes = antigravityMinutes('', bucket);
+      if (!group || !percent || minutes === null) continue;
+      const resets = antigravityReset(time);
+      const window: LimitWindow = { minutes, used: 1 - Number(percent) / 100, ...(resets ? { resets } : {}) };
+      const known = groups.find((g) => g.name === group);
+      if (known) known.windows.push(window);
+      else groups.push({ name: group, windows: [window] });
+    }
+  }
+  return groups.length ? { groups } : null;
 }
 
 /** `models`: "slug<tab>Name" lines after "Fetching available models...". */
@@ -346,6 +433,16 @@ export function antigravitySpec(o: { startupMs?: number } = {}): Spec {
     return found;
   };
   const auth = async (ctx: Context) => parseAntigravityAuth(await modelList(ctx));
+  // its own /usage, printed: it reads the account's quota and calls no model (exit 2 with an API key,
+  // which has no account quota). Asked only of one that's signed in: signed out, it would wait for a sign-in
+  const limits = async (ctx: Context): Promise<LimitsRead | null> => {
+    if ((await auth(ctx))?.signedIn !== true) return null;
+    const out = await capture(ctx.bin, ['-p', '/usage', '--output-format', 'json'], {
+      ...probe(ctx),
+      timeoutMs: 30_000,
+    });
+    return out.code === 0 ? parseAntigravityUsage(out.stdout) : null;
+  };
 
   return {
     id: 'antigravity',
@@ -371,6 +468,7 @@ export function antigravitySpec(o: { startupMs?: number } = {}): Spec {
     },
     parseVersion: (out) => /^\s*(\d+\.\d+\.\d+[\w.-]*)/.exec(out)?.[1] ?? null,
     auth,
+    limits,
     async sealed(ctx) {
       if (ctx.platform !== 'linux')
         return { sealed: false, reason: 'HO[LO] keeps Antigravity’s own settings out of a run on Linux only, so far' };

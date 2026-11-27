@@ -5124,6 +5124,12 @@ html[data-layout="phone-landscape"] .tray {
   color: var(--text-2);
 }
 
+/* beside the harnesses, a list as tall as what they say of themselves: at its first row, not its middle */
+.agent-grid .agent-key-top {
+  align-self: start;
+  padding-top: 9px;
+}
+
 .agent-select {
   min-width: 220px;
 }
@@ -5170,6 +5176,159 @@ html[data-layout="phone-landscape"] .tray {
   padding-bottom: 2px;
   font-size: 12px;
   line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+/* a harness's usage, under its row: what its account has left, a line a limit (its name, a bar of
+   what's left, the words), and what the requests through HO[LO] used. Folded it's one line with More
+   at its end; the bars are the studio's own blue, amber when a fifth or less is left */
+.agent-harness .agent-usage {
+  display: grid;
+  gap: 8px;
+  margin-top: 2px;
+  padding-top: 6px;
+  border-top: 1px solid var(--line-2);
+}
+
+.usage-main {
+  display: flex;
+  align-items: flex-start;
+  gap: 4px 12px;
+}
+
+.usage-meters {
+  display: grid;
+  flex: 1 1 auto;
+  grid-template-columns: max-content minmax(72px, 200px) minmax(0, 1fr);
+  align-items: center;
+  gap: 5px 12px;
+  min-width: 0;
+}
+
+/* (its three parts sit in the columns the limits share, so the bars line up) */
+.usage-meter {
+  display: contents;
+}
+
+.usage-label {
+  color: var(--text-2);
+}
+
+.usage-bar {
+  display: block;
+  height: 6px;
+  overflow: hidden;
+  border-radius: var(--radius-pill);
+  background: var(--bg-5);
+  box-shadow: inset 0 0 0 1px rgb(0 0 0 / 0.25);
+}
+
+.usage-fill {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--accent);
+}
+
+/* its words in pieces, each kept whole: where there's no room for all, a piece goes to the next line */
+.usage-text {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 8px;
+  min-width: 0;
+  line-height: 1.5;
+}
+
+.usage-left,
+.usage-when {
+  white-space: nowrap;
+}
+
+.usage-left {
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+.usage-meter[data-level="low"] .usage-fill {
+  background: var(--warn);
+}
+
+.usage-meter[data-level="out"] .usage-left {
+  color: var(--danger);
+}
+
+.usage-meter[data-level="out"] .usage-bar {
+  box-shadow: inset 0 0 0 1px var(--danger-line);
+}
+
+/* started again since it was read: no bar to show, only its outline */
+.usage-meter[data-level="stale"] .usage-bar {
+  background: none;
+  box-shadow: inset 0 0 0 1px var(--line-3);
+}
+
+.usage-meter[data-level="stale"] .usage-left {
+  color: var(--text-2);
+}
+
+/* the models that share the limits under it: the vendor's name for them, then which they are */
+.usage-group {
+  grid-column: 1 / -1;
+  line-height: 1.45;
+}
+
+.usage-group:not(:first-child) {
+  margin-top: 6px;
+}
+
+.usage-group-name {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.usage-models {
+  display: block;
+  font-size: 11px;
+}
+
+/* a harness that doesn't say what's left: its plan and why, then what HO[LO] counted, a line each */
+.usage-plain {
+  display: grid;
+  flex: 1 1 auto;
+  gap: 2px;
+  min-width: 0;
+}
+
+.usage-toggle {
+  flex: none;
+  min-height: 0;
+  margin: -3px -6px -3px 0;
+  padding: 2px 6px;
+  font-size: 12px;
+}
+
+/* the requests through HO[LO], by model: its name, then three columns of numbers */
+.usage-through {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) repeat(3, max-content);
+  gap: 3px 18px;
+}
+
+.usage-row {
+  display: contents;
+}
+
+.usage-row > span:not(:first-child) {
+  text-align: right;
+}
+
+.usage-row.usage-head > span {
+  padding-bottom: 2px;
+  border-bottom: 1px solid var(--line-2);
+}
+
+.usage-model {
+  color: var(--text);
   overflow-wrap: anywhere;
 }
 
@@ -5263,6 +5422,9 @@ html[data-layout="phone-landscape"] .tray {
   .agent-grid .agent-key {
     margin-top: 8px;
   }
+  .agent-grid .agent-key-top {
+    padding-top: 0;
+  }
   .agent-select {
     min-width: 0;
     width: 100%;
@@ -5281,6 +5443,38 @@ html[data-layout="phone-landscape"] .tray {
   }
   .agent-harness .agent-cell {
     min-width: 0;
+  }
+  /* a phone: a limit's name and its words on one line, its bar under them, full width */
+  .usage-meters {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 8px;
+  }
+  .usage-meter {
+    display: grid;
+    grid-template-columns: max-content minmax(0, 1fr);
+    grid-template-areas: "label text" "bar bar";
+    align-items: baseline;
+    gap: 4px 10px;
+  }
+  .usage-label {
+    grid-area: label;
+  }
+  .usage-text {
+    grid-area: text;
+  }
+  .usage-bar {
+    grid-area: bar;
+  }
+  .usage-group:not(:first-child) {
+    margin-top: 4px;
+  }
+  .usage-toggle {
+    min-height: 32px;
+    margin: -8px -6px -8px 0;
+    padding: 4px 8px;
+  }
+  .usage-through {
+    gap: 4px 14px;
   }
   .agent-confirm > .grow {
     flex-basis: 100%;

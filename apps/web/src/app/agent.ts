@@ -7,6 +7,7 @@
  * The device's token is kept apart from the view this device remembers (`holo:view`), in a key of its
  * own, and goes only to HO[LO]'s host: as the bearer of the agent's routes, and in each live hello.
  */
+import type { HarnessLimits, RunUsage } from '@holo/agent/limits';
 import type { Go, View } from '@holo/agent/view';
 import { type Project, parseProject } from '@holo/session';
 import { useSyncExternalStore } from 'react';
@@ -27,6 +28,13 @@ export interface HarnessInfo {
   version?: string;
   signedIn?: boolean;
   account?: string;
+  /** The account's plan, in its vendor's word for it ("max", "Pro+"), when the harness says. */
+  plan?: string;
+  /**
+   * What the account has left, as its vendor reports it: read as Settings › Agent opens and after each
+   * of its requests (Claude Code says it only with a request). None for one that doesn't report it (Cursor).
+   */
+  limits?: HarnessLimits;
   update?: { available: boolean; latest?: string };
   /** It can be limited to HO[LO]'s tools; when not, it can't be used, and `reason` says why. */
   sealed: boolean;
@@ -57,12 +65,23 @@ export interface HarnessInfo {
   installer?: string;
 }
 
+/** What the requests that ran with one model and effort of a harness used, added up. */
+export interface UsageSum extends RunUsage {
+  harness: HarnessId;
+  /** The model they ran with (empty: the harness's own, when it doesn't name it). */
+  model: string;
+  effort: string;
+  requests: number;
+}
+
 export interface AgentSettings {
   enabled: boolean;
   harness: HarnessId | null;
   model: string;
   effort: string;
   harnesses: HarnessInfo[];
+  /** What the requests of the last `days` days used, as their harnesses counted it, by harness and model. */
+  usage?: { days: number; rows: UsageSum[] };
   /** Sign-ins, updates and installs under way, as the host has them (shown again after a reload, or on another device). */
   relays?: HarnessEvent[];
 }

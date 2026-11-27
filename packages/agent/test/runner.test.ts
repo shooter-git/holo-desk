@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { claudeHarness } from '../src/harness/claude.ts';
 import type { Harness, HarnessEvent, HarnessId, HarnessInfo, Job, RunEvent } from '../src/harness/types.ts';
+import type { HarnessLimits } from '../src/limits.ts';
 import { parseRun, readInstructions, startAgentRunner, withoutInstructions } from '../src/runner.ts';
 import { fakeBinary, REPO, recorded, replay, type Sandbox, sandbox, until } from './fakes.ts';
 
@@ -13,7 +14,14 @@ let s: Sandbox;
 afterEach(() => s?.cleanup());
 
 /** A harness whose runs the test drives by hand. */
-function stub(id: HarnessId, o: { delayInfo?: number; missing?: boolean } = {}) {
+function stub(
+  id: HarnessId,
+  o: {
+    delayInfo?: number;
+    missing?: boolean;
+    limits?: () => { limits: HarnessLimits | null; plan?: string } | null;
+  } = {},
+) {
   const runs: { job: Job; on: (e: RunEvent) => void; finish: () => void; cancelled: boolean }[] = [];
   const logins: ((e: HarnessEvent) => void)[] = [];
   const codes: string[] = [];
@@ -54,6 +62,7 @@ function stub(id: HarnessId, o: { delayInfo?: number; missing?: boolean } = {}) 
     recheck() {
       rechecks++;
     },
+    limits: async () => o.limits?.() ?? null,
     models: async () => [],
     efforts: async () => [],
     run(job, on) {
@@ -75,11 +84,17 @@ function stub(id: HarnessId, o: { delayInfo?: number; missing?: boolean } = {}) 
   return { h, runs, codes, infoCalls: () => infoCalls, rechecks: () => rechecks };
 }
 
-function runner(over: { delayInfo?: number; missing?: HarnessId[] } = {}) {
+type Limits = () => { limits: HarnessLimits | null; plan?: string } | null;
+
+function runner(over: { delayInfo?: number; missing?: HarnessId[]; codexLimits?: Limits } = {}) {
   const sent: Record<string, unknown>[] = [];
   const logs: string[] = [];
   const claude = stub('claude', { ...over, missing: over.missing?.includes('claude') });
-  const codex = stub('codex', { ...over, missing: over.missing?.includes('codex') });
+  const codex = stub('codex', {
+    ...over,
+    missing: over.missing?.includes('codex'),
+    ...(over.codexLimits ? { limits: over.codexLimits } : {}),
+  });
   const cursor = stub('cursor', { ...over, missing: over.missing?.includes('cursor') });
   const antigravity = stub('antigravity', { ...over, missing: over.missing?.includes('antigravity') });
   const r = startAgentRunner({
@@ -218,6 +233,79 @@ describe('the agent runner', () => {
     expect(claude.infoCalls()).toBe(1);
     // nothing about it goes to the job's thread
     expect(sent.filter((m) => m.type !== 'harnesses')).toEqual([{ type: 'agent-done', job: 'agj_000000000001' }]);
+  });
+
+  it('passes on what a turn used with its end, and what the account has left as soon as a run says', async () => {
+    s = sandbox();
+    const { r, sent, claude } = runner();
+    r.handle({ type: 'agent-on' });
+    await until(() => sent.some((m) => m.type === 'harnesses'));
+    const week = { at: Date.now(), groups: [{ windows: [{ minutes: 10080, used: 0.71 }] }] };
+    r.handle(run(1));
+    await until(() => claude.runs.length === 1);
+    const looks = claude.infoCalls();
+    claude.runs[0]?.on({ type: 'limits', limits: week, plan: 'max' });
+    // the list said again at once, with no look: Settings shows it now
+    const said = sent.filter((m) => m.type === 'harnesses').at(-1) as { from?: string; list: HarnessInfo[] };
+    expect(said.from).toBe('run');
+    expect(said.list.find((h) => h.id === 'claude')).toMatchObject({ limits: week, plan: 'max' });
+    expect(said.list.find((h) => h.id === 'codex')?.limits).toBeUndefined();
+    expect(claude.infoCalls()).toBe(looks);
+    const usage = { input: 317, cached: 8636, output: 107 };
+    claude.runs[0]?.on({ type: 'done', reply: 'Done.', usage });
+    claude.runs[0]?.finish();
+    await until(() => sent.some((m) => m.type === 'agent-done'));
+    expect(sent.find((m) => m.type === 'agent-done')).toEqual({
+      type: 'agent-done',
+      job: 'agj_000000000001',
+      reply: 'Done.',
+      usage,
+    });
+    // a failed turn's, too; one that says none sends none
+    r.handle(run(2));
+    await until(() => claude.runs.length === 2);
+    claude.runs[1]?.on({ type: 'failed', error: 'It stopped', usage });
+    claude.runs[1]?.finish();
+    r.handle(run(3));
+    await until(() => claude.runs.length === 3);
+    claude.runs[2]?.on({ type: 'done' });
+    claude.runs[2]?.finish();
+    await until(() => sent.filter((m) => m.type === 'agent-done').length === 2);
+    expect(sent.find((m) => m.type === 'agent-failed')).toMatchObject({ error: 'It stopped', usage });
+    expect(sent.filter((m) => m.type === 'agent-done').at(-1)).toEqual({ type: 'agent-done', job: 'agj_000000000003' });
+  });
+
+  it('asks the harnesses what their accounts have left when Settings › Agent is opened, and looks at nothing else', async () => {
+    s = sandbox();
+    let left = 0.4;
+    const { r, sent, claude, codex } = runner({
+      codexLimits: () => ({
+        limits: { at: Date.now(), groups: [{ windows: [{ minutes: 10080, used: left }] }] },
+        plan: 'plus',
+      }),
+    });
+    // nothing is known yet: nothing to ask
+    expect(r.handle({ type: 'agent-limits' })).toBe(true);
+    await new Promise((ok) => setTimeout(ok, 20));
+    expect(sent).toEqual([]);
+    r.handle({ type: 'agent-on' });
+    await until(() => sent.some((m) => m.type === 'harnesses'));
+    const looks = [claude.infoCalls(), codex.infoCalls()];
+    const lists = () => sent.filter((m) => m.type === 'harnesses') as { from?: string; list: HarnessInfo[] }[];
+    r.handle({ type: 'agent-limits' });
+    await until(() => lists().length === 2);
+    expect(lists()[1]?.from).toBe('run');
+    expect(lists()[1]?.list.find((h) => h.id === 'codex')).toMatchObject({
+      plan: 'plus',
+      limits: { groups: [{ windows: [{ minutes: 10080, used: 0.4 }] }] },
+    });
+    // one with nothing to say keeps what's known of it
+    expect(lists()[1]?.list.find((h) => h.id === 'claude')?.limits).toBeUndefined();
+    left = 0.9;
+    r.handle({ type: 'agent-limits' });
+    await until(() => lists().length === 3);
+    expect(lists()[2]?.list.find((h) => h.id === 'codex')?.limits?.groups[0]?.windows[0]?.used).toBe(0.9);
+    expect([claude.infoCalls(), codex.infoCalls()]).toEqual(looks);
   });
 
   it('refuses a job HO[LO] couldn’t have made', () => {

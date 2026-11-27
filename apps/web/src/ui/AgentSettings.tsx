@@ -30,6 +30,7 @@ import {
   sendLoginCode,
   setSettings,
   startPairing,
+  type UsageSum,
   useAgent,
 } from '../app/agent.ts';
 import { device } from '../app/live.ts';
@@ -44,6 +45,7 @@ import {
   unsubscribe,
 } from '../app/notify.ts';
 import { takePairCode } from '../app/pair-link.ts';
+import { HarnessUsage } from './HarnessUsage.tsx';
 import {
   caution,
   choices,
@@ -338,9 +340,15 @@ function Allowed() {
         </div>
       )}
       <div className="agent-grid">
-        <span className="agent-key">Harness</span>
+        <span className={listed.length ? 'agent-key agent-key-top' : 'agent-key'}>Harness</span>
         {listed.length ? (
-          <Harnesses listed={listed} current={current} />
+          <Harnesses
+            listed={listed}
+            current={current}
+            model={settings.model}
+            effort={settings.effort}
+            usage={settings.usage}
+          />
         ) : (
           <div className="hstack" style={{ flexWrap: 'wrap' }}>
             <span className="muted">
@@ -382,16 +390,41 @@ function LookAgain() {
   );
 }
 
+/** What the requests of the last days used, every harness's (the settings' `usage`). */
+type Usage = { days: number; rows: readonly UsageSum[] } | undefined;
+
 /**
  * Claude Code, Codex, Cursor and Antigravity, a row each, installed or not: its version, sign-in and
- * update, and the one the agent runs with; one that isn't on the host offers Install.
+ * update, and the one the agent runs with; one that isn't on the host offers Install. Under each, what
+ * its account has left and what the requests through HO[LO] used (HarnessUsage).
  */
-function Harnesses({ listed, current }: { listed: HarnessInfo[]; current: HarnessInfo | null }) {
+function Harnesses({
+  listed,
+  current,
+  model,
+  effort,
+  usage,
+}: {
+  listed: HarnessInfo[];
+  current: HarnessInfo | null;
+  model: string;
+  effort: string;
+  usage: Usage;
+}) {
+  // the model a request runs with now: its limits lead, where a harness has them by groups of models
+  const runs = current ? runsWith(current, model, effort).model : null;
   return (
     <div className="vstack agent-harness-list">
       <div className="list boxed agent-harnesses">
         {listed.map((h) => (
-          <HarnessRow key={h.id} harness={h} current={h === current} />
+          <HarnessRow
+            key={h.id}
+            harness={h}
+            current={h === current}
+            chosen={h === current ? model : null}
+            runs={h === current ? runs : null}
+            usage={usage}
+          />
         ))}
       </div>
       <LookAgain />
@@ -405,7 +438,19 @@ function Harnesses({ listed, current }: { listed: HarnessInfo[]; current: Harnes
  * Sign in and Use for a harness its vendor doesn't support HO[LO] running (`caution`). Under it, a
  * sign-in, an update or an install under way, and why one can't be used yet.
  */
-function HarnessRow({ harness: h, current }: { harness: HarnessInfo; current: boolean }) {
+function HarnessRow({
+  harness: h,
+  current,
+  chosen,
+  runs,
+  usage,
+}: {
+  harness: HarnessInfo;
+  current: boolean;
+  chosen: string | null;
+  runs: string | null;
+  usage: Usage;
+}) {
   const event = useAgent((a) => a.harness[h.id]);
   const [confirm, setConfirm] = useState<null | 'update' | 'install' | 'login' | 'use'>(null);
   const [code, setCode] = useState('');
@@ -598,6 +643,7 @@ function HarnessRow({ harness: h, current }: { harness: HarnessInfo; current: bo
           {v.signin.error && <span className="agent-error">{v.signin.error}</span>}
         </div>
       )}
+      <HarnessUsage harness={h} current={current} chosen={chosen} runs={runs} usage={usage} />
     </div>
   );
 }

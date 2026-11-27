@@ -4,6 +4,8 @@
  * docs/agent-harnesses.md records why each adapter does what it does.
  */
 
+import type { HarnessLimits, RunUsage } from '../limits.ts';
+
 export type HarnessId = 'claude' | 'codex' | 'cursor' | 'antigravity';
 
 export const HARNESS_IDS: readonly HarnessId[] = ['claude', 'codex', 'cursor', 'antigravity'];
@@ -31,6 +33,14 @@ export interface HarnessInfo {
   version?: string;
   signedIn?: boolean;
   account?: string;
+  /** The account's plan, in the vendor's own word for it ("max", "Pro+"), when the harness says. */
+  plan?: string;
+  /**
+   * What the account has left, as its vendor reports it (limits.ts): read at each look and after each
+   * of its runs, or said by the runs themselves (Claude Code). None for a harness that doesn't report
+   * it (Cursor).
+   */
+  limits?: HarnessLimits;
   update?: { available: boolean; latest?: string };
   /** False when it can't be limited to HO[LO]'s tools here; `reason` says why. */
   sealed: boolean;
@@ -105,14 +115,17 @@ export interface Job {
  * `aliases` comes before the end when the run said its model under another name than it was given
  * (Claude Code's `opus` ran under its full name): every alias the harness's runs have said so far.
  * A failure with `fresh` leaves a session not to carry on: its model service refused the request
- * itself, so the next turn starts a new conversation.
+ * itself, so the next turn starts a new conversation. The end carries the tokens the turn used
+ * (`usage`), when the harness said. `limits` is what the account has left now: before the end when the
+ * run itself said (Claude Code), or a moment after it when the harness is asked (Codex, Antigravity).
  */
 export type RunEvent =
   | { type: 'progress'; line: string }
   | { type: 'session'; session: string }
   | { type: 'aliases'; aliases: Record<string, string> }
-  | { type: 'done'; reply?: string }
-  | { type: 'failed'; error: string; fresh?: true };
+  | { type: 'limits'; limits: HarnessLimits; plan?: string }
+  | { type: 'done'; reply?: string; usage?: RunUsage }
+  | { type: 'failed'; error: string; fresh?: true; usage?: RunUsage };
 
 export interface Run {
   /** Settles once the harness and everything it started are gone. */
@@ -137,6 +150,8 @@ export interface HarnessEvent {
 export interface AuthStatus {
   signedIn: boolean;
   account?: string;
+  /** The account's plan, when the sign-in's status says it. */
+  plan?: string;
 }
 
 export interface Harness {
@@ -168,6 +183,11 @@ export interface Harness {
   install(onLine: (line: string) => void): Promise<void>;
   /** Forget a seal check that failed for this version (Look again): the next look checks it again. */
   recheck(): void;
+  /**
+   * What the account has left now, asked of the harness again where it can be (else as its last run
+   * said), and its plan when that comes with it; null when nothing is known.
+   */
+  limits(): Promise<{ limits: HarnessLimits | null; plan?: string } | null>;
   models(): Promise<string[]>;
   /** The efforts a model takes (none: effort is part of the model, or there's no such setting). */
   efforts(model?: string): Promise<string[]>;

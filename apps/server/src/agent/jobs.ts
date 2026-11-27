@@ -20,6 +20,7 @@
  * the device was removed, the agent turned off).
  */
 import { randomBytes } from 'node:crypto';
+import { checkLimits, checkPlan, checkUsage, type HarnessLimits } from '@holo/agent/limits';
 import {
   AFTER,
   BEFORE,
@@ -63,7 +64,15 @@ import {
   sinceLines,
   songLines,
 } from './prompt.ts';
-import { type AgentStore, CHOSEN_ONLY, HARNESSES, type HarnessId, type ThreadRow, type TurnExtra } from './store.ts';
+import {
+  type AgentStore,
+  CHOSEN_ONLY,
+  HARNESSES,
+  type HarnessId,
+  type ThreadRow,
+  type TurnExtra,
+  type UsageSum,
+} from './store.ts';
 import { parseExtra, type Threads } from './threads.ts';
 
 export type JobState = 'waiting' | 'running' | 'awaiting' | 'done' | 'failed' | 'cancelled';
@@ -106,6 +115,10 @@ export interface HarnessInfo {
   version?: string;
   signedIn?: boolean;
   account?: string;
+  /** The account's plan, in its vendor's word for it. */
+  plan?: string;
+  /** What the account has left, as its vendor reports it (`@holo/agent/limits`), when the harness says. */
+  limits?: HarnessLimits;
   update?: { available: boolean; latest?: string };
   sealed: boolean;
   /** Its seal couldn't be checked yet: it asks for its sign-in first (it's signed out). */
@@ -132,11 +145,20 @@ export interface HarnessInfo {
 /** How often, at most, opening Settings › Agent has a runner look at its harnesses again. */
 export const LOOK_EVERY_MS = 3_600_000;
 
+/** How often, at most, opening Settings › Agent has a runner ask its harnesses what their accounts have left. */
+export const LIMITS_EVERY_MS = 60_000;
+
+/** How far back Settings › Agent adds up what the requests used. */
+export const USAGE_DAYS = 30;
+
 /** A job as the server keeps it. */
 export interface AgentJob {
   view: JobView;
   thread: string;
   harness: HarnessId;
+  /** The model and effort it was handed to its runner with (empty: the harness's own). */
+  model: string;
+  effort: string;
   /** sha256 of its tools' token; null once revoked. */
   tokenHash: string | null;
   preset: ScanPreset | null;
@@ -460,6 +482,8 @@ export class Jobs implements AgentHooks {
   private readonly reported = new WeakMap<LiveClient, HarnessInfo[]>();
   /** When each runner last said what it has, or was last asked to look (whichever came last). */
   private readonly looked = new WeakMap<LiveClient, number>();
+  /** When each runner was last asked what its harnesses' accounts have left. */
+  private readonly limitsAsked = new WeakMap<LiveClient, number>();
   /**
    * A sign-in, an update or an install under way, by harness, as its runner last told it: a studio that
    * opens Settings later, or again after a reload (a phone does, coming back from the sign-in page), is
@@ -631,6 +655,9 @@ export class Jobs implements AgentHooks {
    * Settings › Agent was opened: each runner that last looked at its harnesses an hour ago or more looks
    * again, quietly (`agent-refresh {light}`), so new versions' models and efforts show. At most once an
    * hour per runner; nothing is asked when nobody opens Settings. How many were asked.
+   *
+   * One that looked more recently is asked only what its harnesses' accounts have left
+   * (`agent-limits`: a look reads that too), at most once a minute per runner: it's what changes between looks.
    */
   look(): number {
     const now = Date.now();
@@ -638,10 +665,16 @@ export class Jobs implements AgentHooks {
     for (const runner of this.o.live.agentRunners()) {
       const last = this.looked.get(runner);
       // one that hasn't reported yet looks anyway once the agent is on (agent-on)
-      if (last === undefined || now - last < LOOK_EVERY_MS) continue;
-      this.looked.set(runner, now);
-      this.o.live.sendTo(runner, { type: 'agent-refresh', light: true });
-      asked++;
+      if (last === undefined) continue;
+      if (now - last >= LOOK_EVERY_MS) {
+        this.looked.set(runner, now);
+        this.limitsAsked.set(runner, now);
+        this.o.live.sendTo(runner, { type: 'agent-refresh', light: true });
+        asked++;
+      } else if (now - Math.max(last, this.limitsAsked.get(runner) ?? 0) >= LIMITS_EVERY_MS) {
+        this.limitsAsked.set(runner, now);
+        this.o.live.sendTo(runner, { type: 'agent-limits' });
+      }
     }
     return asked;
   }
@@ -746,6 +779,8 @@ export class Jobs implements AgentHooks {
         },
         thread: thread.id,
         harness: thread.harness,
+        model: settings.model,
+        effort: settings.effort,
         tokenHash: hashToken(token),
         preset,
         asked: null,
@@ -1133,6 +1168,7 @@ export class Jobs implements AgentHooks {
         }
         break;
       case 'agent-done':
+        this.used(job, msg.usage);
         // the harness's last words stand as the reply when the agent never called finish: what it
         // said in its own chat, often markdown, made plain for the bar
         if (job.view.reply === undefined && typeof msg.reply === 'string') {
@@ -1142,6 +1178,7 @@ export class Jobs implements AgentHooks {
         void this.turnDone(job);
         break;
       case 'agent-failed': {
+        this.used(job, msg.usage);
         // its model service refused the conversation itself: carried on, it would be refused again
         const fresh = msg.fresh === true;
         if (fresh) this.o.threads.forgetSession(job.thread);
@@ -1150,6 +1187,25 @@ export class Jobs implements AgentHooks {
         break;
       }
     }
+  }
+
+  /**
+   * What a turn used, as its harness counted it (the runner says with the turn's end): kept by the
+   * model it ran with, the harness's default by name when none was chosen and it lists one. A turn
+   * stopped from here says nothing, and isn't counted.
+   */
+  private used(job: AgentJob, raw: unknown): void {
+    const usage = checkUsage(raw);
+    if (!usage) return;
+    const model = job.model || (this.harnesses().find((h) => h.id === job.harness)?.defaultModel ?? '');
+    this.o.agentStore.addUsage({
+      job: job.view.id,
+      harness: job.harness,
+      model,
+      effort: job.effort,
+      ...usage,
+      at: Date.now(),
+    });
   }
 
   /**
@@ -1303,6 +1359,7 @@ export class Jobs implements AgentHooks {
     effort: string;
     harnesses: HarnessInfo[];
     relays: Record<string, unknown>[];
+    usage: { days: number; rows: UsageSum[] };
   } {
     const now = Date.now();
     const relays: Record<string, unknown>[] = [];
@@ -1310,7 +1367,13 @@ export class Jobs implements AgentHooks {
       if (now - r.at > RELAY_LIFE || !this.o.live.agentRunners().includes(r.runner)) this.relays.delete(harness);
       else relays.push(r.event);
     }
-    return { ...this.o.agentStore.settings(), harnesses: this.harnesses(), relays };
+    return {
+      ...this.o.agentStore.settings(),
+      harnesses: this.harnesses(),
+      relays,
+      // what the requests used, added up by harness and model
+      usage: { days: USAGE_DAYS, rows: this.o.agentStore.usage(now - USAGE_DAYS * 86_400_000) },
+    };
   }
 
   /**
@@ -2151,6 +2214,10 @@ export function parseHarnesses(list: unknown): HarnessInfo[] {
     if (typeof h.signedIn === 'boolean') info.signedIn = h.signedIn;
     const account = str(h.account, 120);
     if (account) info.account = account;
+    const plan = checkPlan(h.plan);
+    if (plan) info.plan = plan;
+    const limits = checkLimits(h.limits);
+    if (limits && info.found) info.limits = limits;
     if (typeof h.update === 'object' && h.update !== null) {
       const u = h.update as Record<string, unknown>;
       const latest = str(u.latest, 80);

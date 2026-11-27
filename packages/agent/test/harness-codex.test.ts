@@ -8,12 +8,14 @@ import {
   codexHarness,
   codexReader,
   codexSealedTools,
+  codexUsage,
   parseCodexAuth,
+  parseCodexLimits,
   parseCodexLogin,
   parseCodexModels,
 } from '../src/harness/codex.ts';
 import { GIT_ENV } from '../src/harness/env.ts';
-import { FAILED_ONCE_FILE } from '../src/harness/workspace.ts';
+import { FAILED_ONCE_FILE, USAGE_FILE } from '../src/harness/workspace.ts';
 import {
   alive,
   collect,
@@ -72,10 +74,13 @@ Follow these steps to sign in with ChatGPT using device code authorization:
 
 Continue only if you started this login in Codex.`;
 
+/** What the recorded run's `turn.completed` says: a new conversation's total is all its own. */
+const USED = { input: 2590, cached: 32640, output: 174 };
+
 let s: Sandbox;
 afterEach(() => s?.cleanup());
 
-function fake(o: { run?: string; signedIn?: boolean; sealed?: 'sealed' | 'loose' } = {}) {
+function fake(o: { run?: string; signedIn?: boolean; sealed?: 'sealed' | 'loose'; appServer?: string } = {}) {
   const signed = q(join(s.rec, 'signed-in'));
   if (o.signedIn) writeFileSync(join(s.rec, 'signed-in'), '');
   const path = fakeBinary(
@@ -97,6 +102,15 @@ function fake(o: { run?: string; signedIn?: boolean; sealed?: 'sealed' | 'loose'
         run: `printf '%s' "$*" > ${q(join(s.rec, 'probe-args'))}; env -0 > ${q(join(s.rec, 'probe-env'))}; cat ${q(join(FIXTURES, `codex-prompt-input-${o.sealed ?? 'sealed'}.json`))}; exit 0`,
       },
       { when: 'update', run: 'echo "Updating Codex to 0.170.0"; exit 0' },
+      {
+        // the app server: greeted, then asked the account's limits (a line each way), as 0.167.1 answered
+        when: 'app-server',
+        run:
+          o.appServer ??
+          `echo asked >> ${q(join(s.rec, 'limits-asked'))}; read -r hello; printf '%s\\n' "$hello" > ${q(join(s.rec, 'app-hello'))}
+echo '{"id":1,"result":{"userAgent":"codex"}}'; read -r ready; read -r ask; printf '%s\\n' "$ask" > ${q(join(s.rec, 'app-ask'))}
+cat ${q(join(FIXTURES, 'codex-rate-limits.jsonl'))}; sleep 5; exit 0`,
+      },
     ],
     o.run ??
       `case "$*" in exec\\ resume*) ${replay('codex-resume')};; *) ${replay('codex-normal')};; esac
@@ -139,7 +153,74 @@ describe('Codex: finding it', () => {
       defaultModel: 'gpt-6-luna',
       defaultEfforts: { 'gpt-6-sol': 'medium', 'gpt-6-luna': 'low' },
       update: { available: true, latest: '0.170.0' },
+      // the account's plan and what it has left, as its app server answers
+      plan: 'plus',
+      limits: {
+        at: expect.any(Number),
+        note: '1 early reset of its limit available, in Codex',
+        groups: [{ windows: [{ minutes: 10080, used: 1, resets: 1795994404000 }] }],
+      },
     });
+    // greeted, then asked that one thing: no conversation is started
+    expect(JSON.parse(readFileSync(join(s.rec, 'app-hello'), 'utf8'))).toMatchObject({ id: 1, method: 'initialize' });
+    expect(JSON.parse(readFileSync(join(s.rec, 'app-ask'), 'utf8'))).toEqual({
+      id: 2,
+      method: 'account/rateLimits/read',
+    });
+  });
+
+  it('reads the account’s limits from its app server: each limit’s windows, the shared one first', () => {
+    expect(
+      parseCodexLimits({
+        rateLimitsByLimitId: {
+          spark: {
+            limitId: 'spark',
+            limitName: 'Spark',
+            normalModelSlug: 'gpt-6-spark',
+            primary: { usedPercent: 12, windowDurationMins: 10080, resetsAt: 1796000000 },
+          },
+          codex: {
+            limitId: 'codex',
+            limitName: null,
+            planType: 'plus',
+            primary: { usedPercent: 40, windowDurationMins: 300, resetsAt: 1795900000 },
+            secondary: { usedPercent: 85, windowDurationMins: 10080, resetsAt: 1796000000 },
+          },
+        },
+      }),
+    ).toEqual({
+      plan: 'plus',
+      groups: [
+        {
+          windows: [
+            { minutes: 300, used: 0.4, resets: 1795900000000 },
+            { minutes: 10080, used: 0.85, resets: 1796000000000 },
+          ],
+        },
+        { name: 'Spark', models: ['gpt-6-spark'], windows: [{ minutes: 10080, used: 0.12, resets: 1796000000000 }] },
+      ],
+    });
+    // an older app server names one limit only; nothing to read is nothing
+    expect(parseCodexLimits({ rateLimits: { primary: { usedPercent: 5, windowDurationMins: 300 } } })?.groups).toEqual([
+      { windows: [{ minutes: 300, used: 0.05 }] },
+    ]);
+    expect(parseCodexLimits({ rateLimits: null })).toBeNull();
+    expect(parseCodexLimits('nope')).toBeNull();
+  });
+
+  it('shows no limits when its app server doesn’t answer, or it’s signed out', async () => {
+    s = sandbox();
+    const silent = await fake({
+      signedIn: true,
+      appServer: 'echo "error: unrecognized subcommand" >&2; exit 2',
+    }).info();
+    expect(silent.limits).toBeUndefined();
+    expect(silent.plan).toBeUndefined();
+    s.cleanup();
+    s = sandbox();
+    const out = await fake().info();
+    expect(out.signedIn).toBe(false);
+    expect(out.limits).toBeUndefined();
   });
 
   it('checks the seal with an empty CODEX_HOME of its own and the run’s switches', async () => {
@@ -241,7 +322,7 @@ describe('Codex: a sealed run', () => {
     expect(events).toEqual([
       { type: 'session', session: '01a1cbcd-f893-71a1-aa67-6013e3fe50b3' },
       { type: 'progress', line: 'Working' },
-      { type: 'done', reply: 'spike-42 — yellow.' },
+      { type: 'done', reply: 'spike-42 — yellow.', usage: USED },
     ]);
     const r = recorded(s);
     expect(r.argv.join(' ')).not.toContain('PROMPT-MARK');
@@ -383,6 +464,7 @@ sleep 300`,
       { kind: 'tool', name: 'echo' },
       { kind: 'tool', name: 'image' },
       { kind: 'text', text: 'spike-42 — yellow.' },
+      { kind: 'usage', usage: USED },
       { kind: 'ended' },
     ]);
     for (const name of [
@@ -444,6 +526,45 @@ const FAILED = {
   'codex-refused-websocket':
     '{"type":"error","status":400,"error":{"type":"invalid_request_error","code":null,"message":"No tool output found for function call call_MockMockMockMock.","param":"input"}}',
 } as const;
+
+describe('Codex: what a turn used', () => {
+  const THREAD = '01a1cbcd-f893-71a1-aa67-6013e3fe50b3';
+
+  it('counts a carried-on conversation’s own tokens: Codex says the conversation’s total so far', async () => {
+    s = sandbox();
+    const h = fake({ signedIn: true });
+    expect((await runToEnd(h, job(s))).at(-1)).toMatchObject({ type: 'done', usage: USED });
+    // the total is noted in the workspace, for the next turn
+    expect(JSON.parse(readFileSync(join(job(s).workspace, USAGE_FILE), 'utf8'))).toEqual({ session: THREAD, ...USED });
+    // carried on: 44,267 in (41,472 from the cache) and 185 out so far, so this turn's are the difference
+    expect((await runToEnd(h, job(s, { session: THREAD }))).at(-1)).toEqual({
+      type: 'done',
+      reply: 'spike-42; yellow.',
+      usage: { input: 205, cached: 8832, output: 11 },
+    });
+    expect(codexUsage({ input_tokens: 44267, cached_input_tokens: 41472, output_tokens: 185 })).toEqual({
+      input: 2795,
+      cached: 41472,
+      output: 185,
+    });
+  });
+
+  it('counts nothing for a conversation whose total so far it never noted, rather than guess', async () => {
+    s = sandbox();
+    const h = fake({ signedIn: true });
+    // begun before HO[LO] counted, or in another workspace
+    const events = await runToEnd(h, job(s, { session: THREAD }));
+    expect(events.at(-1)).toEqual({ type: 'done', reply: 'spike-42; yellow.' });
+    // noted now: the turn after it is counted
+    expect(JSON.parse(readFileSync(join(job(s).workspace, USAGE_FILE), 'utf8')).session).toBe(THREAD);
+    // a total noted for another conversation says nothing of this one
+    writeFileSync(join(job(s).workspace, USAGE_FILE), JSON.stringify({ session: 'another', ...USED }));
+    expect((await runToEnd(h, job(s, { session: THREAD }))).at(-1)).toEqual({
+      type: 'done',
+      reply: 'spike-42; yellow.',
+    });
+  });
+});
 
 describe('Codex: a conversation its model service refused', () => {
   const OLD = '01a1cbcd-f893-71a1-aa67-6013e3fe50b3';
@@ -507,7 +628,7 @@ describe('Codex: a conversation its model service refused', () => {
     // a new thread reads the rules from AGENTS.md: the prompt alone
     expect(recorded(s, 1).stdin).toBe(`${PROMPT_MARK}\n`);
     expect(events[0]).toEqual({ type: 'session', session: threadOf('codex-refused-tool-output') });
-    expect(events.at(-1)).toEqual({ type: 'done', reply: 'spike-42 — yellow.' });
+    expect(events.at(-1)).toEqual({ type: 'done', reply: 'spike-42 — yellow.', usage: USED });
     expect(events.some((e) => e.type === 'failed')).toBe(false);
   });
 
@@ -516,7 +637,7 @@ describe('Codex: a conversation its model service refused', () => {
     const events = await runToEnd(resumed(lines('codex-refused-websocket').join('\n')), job(s, { session: OLD }));
     expect(runs()).toBe(2);
     expect(recorded(s, 1).argv[1]).not.toBe('resume');
-    expect(events.at(-1)).toEqual({ type: 'done', reply: 'spike-42 — yellow.' });
+    expect(events.at(-1)).toEqual({ type: 'done', reply: 'spike-42 — yellow.', usage: USED });
     s.cleanup();
     s = sandbox();
     expect((await runToEnd(resumed(afterACall('codex-refused-websocket')), job(s, { session: OLD }))).at(-1)).toEqual({
@@ -621,7 +742,7 @@ describe('Codex: a conversation its model service refused', () => {
       expect(recorded(s, 1).argv.slice(0, 2)).toEqual(['exec', 'resume']);
       expect(recorded(s, 2).argv[1]).not.toBe('resume');
       expect(recorded(s, 2).stdin).toBe(`${PROMPT_MARK}\n`);
-      expect(events.at(-1)).toEqual({ type: 'done', reply: 'spike-42 — yellow.' });
+      expect(events.at(-1)).toEqual({ type: 'done', reply: 'spike-42 — yellow.', usage: USED });
       expect(failedOnce(first)).toBeNull();
     });
 

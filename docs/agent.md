@@ -117,10 +117,10 @@ Turning the agent off cancels every job, so the job-scoped routes answer 403.
 | `GET /api/agent/devices` | | `{devices:[{id, name, added, seen, current}], requests:[{id, name, code, created}]}`. `current` is the device asking; `requests` are those waiting. |
 | `POST /api/agent/devices/requests/:id/approve` and `/deny` | | `{ok}`; 404 if none of that id is waiting. |
 | `DELETE /api/agent/devices/:id` | | `{ok}`; 404. It takes effect at once: the device's studios get `agent-removed` and lose agent access, its jobs (running or waiting for a click) are cancelled, and allowed devices get `agent-devices`. |
-| `GET /api/agent/settings` | | `{enabled, harness, model, effort, harnesses:[HarnessInfo], relays:[…]}`. `relays` are the sign-ins, updates and installs under way, each as its runner last told it (its `agent-harness` message, less `type`), for a studio that opens Settings later or reloads; one is let go when it ends, after 15 minutes, or when its runner goes. |
+| `GET /api/agent/settings` | | `{enabled, harness, model, effort, harnesses:[HarnessInfo], relays:[…], usage:{days, rows:[…]}}`. `usage` is what the requests of the last `days` (30) days used, as their harnesses counted it, added up by harness, model and effort: each row is `{harness, model, effort, requests, input, cached, output}` (below, "Usage"). `relays` are the sign-ins, updates and installs under way, each as its runner last told it (its `agent-harness` message, less `type`), for a studio that opens Settings later or reloads; one is let go when it ends, after 15 minutes, or when its runner goes. |
 | `PUT /api/agent/settings` | `{enabled?, harness?, model?, effort?}` | The settings, as GET. `harness` is an id or null (the first that can be sealed, never Antigravity: it runs only once it's chosen, and with none chosen a request is refused `no-harness`, saying so, when it's the only one). `model` and `effort` must match `^[A-Za-z0-9][\w.:\-\[\]=]{0,79}$` or be empty (the harness's own default; Claude Code has none, and refuses requests until both are set). Off stops every job; on sends `agent-on` to the runners; any change is announced as `agent-settings`. |
 | `POST /api/agent/harnesses/refresh` | | `{ok}`. **Look again**: the runners look again (`agent-refresh`), a seal check that failed for a version included. 409 `no-runner`. |
-| `POST /api/agent/harnesses/look` | | `{ok, asked}`. Settings › Agent was opened: each runner whose last look (its last `harnesses`, or the last time it was asked) is an hour old or more is sent `agent-refresh {light:true}`; `asked` is how many. At most once an hour per runner, and only when a studio asks. |
+| `POST /api/agent/harnesses/look` | | `{ok, asked}`. Settings › Agent was opened: each runner whose last look (its last `harnesses`, or the last time it was asked) is an hour old or more is sent `agent-refresh {light:true}`; `asked` is how many. At most once an hour per runner, and only when a studio asks. A runner that looked more recently is asked only what its harnesses' accounts have left (`agent-limits`), at most once a minute. |
 | `POST /api/agent/harnesses/:id/login` | | `{ok}`. Sent to the runner that has it; progress arrives as `agent-harness` live messages. 404 for an unknown harness; 409 `no-harness`, `busy` (a job runs on it), or no reason when it's signed in already (HO[LO] never signs out or switches accounts). |
 | `POST /api/agent/harnesses/:id/login/code` | `{code}` (printable, ≤ 200) | `{ok}`, for a sign-in that asks for a pasted code. |
 | `POST /api/agent/harnesses/:id/update` | | `{ok}`. 409 `no-harness` or `busy`. |
@@ -152,7 +152,7 @@ studio goes (its changes are then saved on the server). Scan's own Read in, whic
 step. That isn't an agent route.
 
 **`HarnessInfo`** is:
-`{id:'claude'|'codex'|'cursor'|'antigravity', name, found, version?, signedIn?, account?, update?:{available, latest?}, sealed, sealUnknown?, reason?, models?:string[], efforts?:string[], modelEfforts?:{[model]:effort[]}, defaultModel?, defaultEfforts?:{[model]:effort}, aliases?:{[alias]:model}, mustChoose?, host?, installer?}`.
+`{id:'claude'|'codex'|'cursor'|'antigravity', name, found, version?, signedIn?, account?, plan?, limits?:HarnessLimits, update?:{available, latest?}, sealed, sealUnknown?, reason?, models?:string[], efforts?:string[], modelEfforts?:{[model]:effort[]}, defaultModel?, defaultEfforts?:{[model]:effort}, aliases?:{[alias]:model}, mustChoose?, host?, installer?}`.
 - The runner reports all four, found or not.
 - `sealed: false` means the harness can't be locked down to HO[LO]'s tools. The studio shows it as
   unavailable, with `reason`.
@@ -160,6 +160,9 @@ step. That isn't an agent route.
   for its sign-in before it reads its options (Cursor 2026.11.11-b912975), or its check would start a
   browser sign-in (Antigravity). The studio offers Sign in;
   a request is refused `signed-out`, not `not-sealed`. The first look after the sign-in checks the seal.
+- `plan` is the account's plan in its vendor's own word ("max", "Pro+", ≤ 40 characters), when the
+  harness says. `limits` is what the account has left, as its vendor reports it (below, "Usage"); a
+  harness that doesn't report it (Cursor), or isn't found, has none.
 - `host` is the runner's computer (its host name: letters, digits, `.`, `-`, `_`, ≤ 64).
 - `installer` is given only when the harness isn't found and the runner can run its installer (Linux
   and macOS): the command Install runs there, as the confirmation shows it (≤ 200 characters).
@@ -217,6 +220,33 @@ hour old or more (`POST …/harnesses/look`): the lists show at once as they wer
 new `harnesses` report comes (as `agent-settings`). Nothing is asked while nobody opens it, and nothing
 is polled.
 
+**Usage**, under each harness's row (`apps/web/src/ui/harness-usage.ts`, drawn by `HarnessUsage.tsx`),
+says what its account has left and what the requests through HO[LO] used:
+
+- A limit is a line: its name by its length ("Weekly", "5-hour"), a bar of what's left, and the words
+  ("37% left", "Used up", then "resets in 2 h 10 min" under a day away, "resets Thu 3 Dec, 07:02"
+  otherwise). The bar is the studio's blue, the warning colour when a fifth or less is left, and empty
+  with a red outline when nothing is.
+- Folded, a row shows its longest limit alone. The harness the agent runs with shows every limit its
+  model counts against. Where a vendor's limits go by groups of models (Antigravity: its own models,
+  and the others it serves), the group is named over its limits, and the group of the model in use
+  leads (`groupFor` in `@holo/agent/limits`: a group lists its models by the vendor's names, matched to
+  the harness's ids by their letters and digits).
+- **More** unfolds the rest: every limit of every group with the models in it, the plan, anything the
+  vendor says beside its limits, how long ago they were read once that's ten minutes or more, and the
+  requests of the last 30 days by model and effort (requests, tokens in, tokens out). **Less** folds
+  it again.
+- A limit that has started again since it was read is never shown as full: the account may have been
+  used elsewhere. Its bar is an outline, and it says "Reset 4 h ago · not read since".
+- A harness that doesn't report what's left says so, with its plan, a link to its vendor's own usage
+  page, and the requests through HO[LO] in a line: "Pro+ plan · Cursor doesn't report what's left of
+  its plan: see Cursor's usage page".
+- Claude Code says what's left only with a request, so before its first one its row says it shows
+  after the next. The others are asked as Settings › Agent opens.
+- A harness that isn't installed says nothing; one signed out, only what was counted.
+
+Nothing of this shows outside Settings › Agent: no bar, badge or notice in the studio or the agent's page.
+
 **Model and Effort** list the harness's own names, with no line under them unless one saved is no
 longer offered. Such a model or effort stays selected, labeled "(no longer offered)", with a line saying
 so, and a run uses the harness's default instead of failing (the adapter drops it before the run).
@@ -235,6 +265,35 @@ alias stands for (Claude Code lists only aliases, so its Model menu adds each on
 The choice is the host's, shared by every allowed device, so a request from a phone runs as one from
 the desktop. A run that says something new of an alias sends the harness list again at once (the runner's
 `harnesses` message), so the row follows without a look.
+
+### Usage
+
+Two things, both shown only in Settings › Agent (above), both as the vendors and their harnesses
+report them: HO[LO] works nothing out, and asks no vendor anything itself. docs/agent-harnesses.md,
+"Limits and usage", says where each harness's come from.
+
+**What an account has left: `HarnessLimits`** (`packages/agent/src/limits.ts`, `@holo/agent/limits`):
+`{at, note?, groups:[{name?, models?:string[], windows:[{minutes, used, resets?}]}]}`.
+- A window is `minutes` long (300: five hours; 10080: a week), `used` from 0 to 1, and starts again
+  at `resets` (ms) when the vendor says.
+- A group is the windows some models share. A harness with one limit for every model has one group
+  without a name; `models` are the vendor's own names for them.
+- `at` is when they were read; `note` is a line the vendor says beside them (Codex: early resets of
+  its limit the account may still take).
+- The runner reads them at each look, again when Settings › Agent opens (`agent-limits`), and after
+  each of a harness's runs (the run says them, or the harness is asked a moment after the turn's end:
+  nothing waits for it). They're kept in the runner's notes with the account they were read for
+  (`limits:<id>` in `.harnesses.json`): another account's aren't shown.
+- The server checks what a runner reports before a studio sees it (`checkLimits`): at most 8 groups
+  of 6 windows and 40 models, the share used held to 0…1, names in one line.
+
+**What the requests used.** A run's end carries `usage: {input, cached, output}`: tokens the model
+read that weren't from its vendor's cache, tokens read from the cache, and tokens it wrote. Every go
+of a turn counts (one carried on to ask for `finish`, a retry). The server keeps one row a request
+that said (`agent_usage`: the job, its harness, the model and effort it was handed to its runner
+with, the counts, when), names the harness's default model when none was chosen and it lists one, and
+drops rows after 90 days. `GET /api/agent/settings` adds up the last 30 days. A turn stopped from the
+studio says nothing and isn't counted; nor is one whose harness didn't say.
 
 ## REST: `/api/agent/jobs/:job/*`
 
@@ -460,8 +519,9 @@ agent's other traffic uses the existing `state`, `played`, `ack`, `transport`, `
   true` means it runs agent jobs. Only a keyed runner with `caps.agent` is handed jobs, sign-ins and
   `agent-on`.
 - `harnesses {list:[HarnessInfo], from?:'run'}`. Allowed devices hear the result as `agent-settings`.
-  `from:'run'`: said again because a run said what an alias stood for (Claude Code's), the rest as its
-  last look found it; it doesn't count as a look (`…/harnesses/look`).
+  `from:'run'`: said again with no look made, because a run said what an alias stood for (Claude
+  Code's) or what its account has left, or because only the limits were read again (`agent-limits`);
+  the rest is as its last look found it, and it doesn't count as a look (`…/harnesses/look`).
 - `agent-queued {job, why?:'harness'}`: the runner holds the job until another has finished (it runs
   two at once, and one a conversation), or, with `why: 'harness'`, until the job's harness has signed
   in or updated. The server lets it wait as long as that takes: no quiet and no ceiling count for it,
@@ -471,11 +531,14 @@ agent's other traffic uses the existing `state`, `played`, `ack`, `transport`, `
   message of the runner's about the job starts them too). A job that starts at once is said neither.
 - `agent-progress {job, line}`
 - `agent-session {job, session}`
-- `agent-done {job, reply?}`. `reply`, the harness's last chat message, stands as the reply only when
+- `agent-done {job, reply?, usage?}`. `usage: {input, cached, output}` is the tokens the turn used, as
+  its harness counted them (below, "Usage"); the server keeps it by the job's harness, model and
+  effort. `reply`, the harness's last chat message, stands as the reply only when
   the agent never called `finish`, even once asked for it (below, "End of the turn"). It's often markdown, so it's made plain first (`plainReply` in
   `apps/server/src/agent/plain.ts`): its markup goes, paragraphs, headings, list items and table rows
   keep a line each, and past 600 characters it's cut at the end of a sentence, with "…".
-- `agent-failed {job, error, fresh?}`. `fresh: true`: the harness's model service refused the
+- `agent-failed {job, error, fresh?, usage?}` (`usage` as for `agent-done`: a failed turn used what it
+  used). `fresh: true`: the harness's model service refused the
   conversation itself, and the thread's next request starts a new conversation (below, "Ending early").
 - `agent-harness {harness, kind:'login'|'update'|'install'|'refresh', state:'running'|'done'|'failed', url?, code?, ask?:'code', line?, error?}`.
   A sign-in, an update or an install says `done` or `failed` only after the runner has looked at its
@@ -504,6 +567,10 @@ taken only from the runner it was handed to, while it runs.
   for each harness. With `light: true` (Settings › Agent was opened), it looks again quietly, unless a
   look is under way: versions, sign-ins, models and efforts as they are now, each seal as remembered for
   its version; it answers `harnesses` only.
+- `agent-limits {}`: Settings › Agent was opened. The runner asks each harness that's found, signed in
+  and not signing in or updating what its account has left (`Harness.limits()`), and says the list
+  again (`harnesses {from:'run'}`) if any answered. Nothing else is looked at, and nothing is asked
+  while a look is under way (a look reads the limits too).
 - `pairing-code {code, expires}` (the runner prints it)
 
 **Studio → server**

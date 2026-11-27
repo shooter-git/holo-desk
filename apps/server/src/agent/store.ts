@@ -8,6 +8,7 @@
  */
 
 import type { DatabaseSync } from 'node:sqlite';
+import type { RunUsage } from '@holo/agent/limits';
 import type { Go, View } from '@holo/agent/view';
 
 export type HarnessId = 'claude' | 'codex' | 'cursor' | 'antigravity';
@@ -118,7 +119,27 @@ export interface PushRow {
   added: number;
 }
 
+/** What a request used, as its harness counted it: one row a request that said. */
+export interface UsageRow extends RunUsage {
+  job: string;
+  harness: HarnessId;
+  /** The model it ran with (the harness's default by name, when none was chosen and it lists one). */
+  model: string;
+  effort: string;
+  at: number;
+}
+
+/** The requests that ran with one model and effort of a harness, added up. */
+export interface UsageSum extends RunUsage {
+  harness: HarnessId;
+  model: string;
+  effort: string;
+  requests: number;
+}
+
 const KEEP_TURNS = 50;
+/** How long a request's usage is kept: Settings › Agent adds up the last 30 days. */
+const KEEP_USAGE_MS = 90 * 86_400_000;
 /** A device's unseen replies kept for its badge: the newest this many. */
 const KEEP_UNSEEN = 50;
 
@@ -190,6 +211,17 @@ export class AgentStore {
       );
       CREATE INDEX IF NOT EXISTS agent_unseen_device ON agent_unseen (device, at);
       CREATE INDEX IF NOT EXISTS agent_unseen_project ON agent_unseen (project);
+      CREATE TABLE IF NOT EXISTS agent_usage (
+        job TEXT PRIMARY KEY,
+        harness TEXT NOT NULL,
+        model TEXT NOT NULL DEFAULT '',
+        effort TEXT NOT NULL DEFAULT '',
+        input INTEGER NOT NULL,
+        cached INTEGER NOT NULL,
+        output INTEGER NOT NULL,
+        at INTEGER NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS agent_usage_at ON agent_usage (at);
       INSERT OR IGNORE INTO agent_settings (id) VALUES (1);
     `);
     // added after the first version: turns keep what they asked, their brief, why they stopped
@@ -385,6 +417,32 @@ export class AgentStore {
         'UPDATE agent_threads SET session = ?, seen_doc = ?, seen_revision = ?, events_json = ?, updated = ? WHERE id = ?',
       )
       .run(next.session, next.seen_doc, next.seen_revision, next.events_json, Date.now(), id);
+  }
+
+  // ---- usage: what each request used, as its harness counted it ----
+
+  /** Keep what a request used (once a request: a second word for the same one replaces the first). */
+  addUsage(u: UsageRow): void {
+    this.db
+      .prepare(
+        'INSERT OR REPLACE INTO agent_usage (job, harness, model, effort, input, cached, output, at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+      )
+      .run(u.job, u.harness, u.model, u.effort, u.input, u.cached, u.output, u.at);
+    this.db.prepare('DELETE FROM agent_usage WHERE at < ?').run(u.at - KEEP_USAGE_MS);
+  }
+
+  /** The requests since a time, added up by harness, model and effort: the most used first. */
+  usage(since: number): UsageSum[] {
+    const rows = this.db
+      .prepare(
+        `SELECT harness, model, effort, COUNT(*) AS requests,
+                SUM(input) AS input, SUM(cached) AS cached, SUM(output) AS output
+         FROM agent_usage WHERE at >= ?
+         GROUP BY harness, model, effort
+         ORDER BY requests DESC, harness, model, effort`,
+      )
+      .all(since) as unknown as UsageSum[];
+    return rows.filter((r) => HARNESSES.includes(r.harness));
   }
 
   // ---- turns: what the bar shows of a thread ----

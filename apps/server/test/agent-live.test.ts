@@ -102,6 +102,8 @@ describe('settings, as they change', () => {
         relays: [],
         effort: '',
         harnesses: [expect.objectContaining({ id: 'claude', found: true })],
+        // what the requests used, for Settings › Agent: none yet
+        usage: { days: 30, rows: [] },
       },
     ]);
     await put({ enabled: true });

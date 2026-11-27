@@ -8,6 +8,16 @@
 import type { ChildProcess } from 'node:child_process';
 import { existsSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import {
+  addUsage,
+  checkLimits,
+  checkPlan,
+  checkRead,
+  checkUsage,
+  type HarnessLimits,
+  type LimitsRead,
+  type RunUsage,
+} from '../limits.ts';
 import { harnessEnv } from './env.ts';
 import {
   candidates,
@@ -22,7 +32,7 @@ import {
 } from './process.ts';
 import type { AuthStatus, Binary, Harness, HarnessEvent, HarnessId, HarnessInfo, Job, Run, RunEvent } from './types.ts';
 import { MODEL } from './types.ts';
-import { FAILED_ONCE_FILE, FINISHED_FILE, mcpServer, privateDir, writePrivate } from './workspace.ts';
+import { FAILED_ONCE_FILE, FINISHED_FILE, mcpServer, privateDir, USAGE_FILE, writePrivate } from './workspace.ts';
 
 /** What reading one event (or one line of stderr) found. */
 export type Seen =
@@ -39,6 +49,10 @@ export type Seen =
   | { kind: 'failed'; error: string }
   /** Something the harness said that explains a failure, if one follows. */
   | { kind: 'note'; text: string }
+  /** The tokens the run used, as the harness counts them at its end (the last said stands). */
+  | { kind: 'usage'; usage: RunUsage }
+  /** What the account has left, when the run itself says (Claude Code): the last said stands. */
+  | { kind: 'limits'; limits: LimitsRead }
   /** The turn is over. */
   | { kind: 'ended' };
 
@@ -87,6 +101,17 @@ export interface Spec {
    * with whatever the harness picks (`HarnessInfo.mustChoose`).
    */
   mustChoose?: boolean;
+  /**
+   * What the account has left, asked of the harness itself (a command of its own that reads the
+   * account and calls no model), and its plan when that's said with it; null when it doesn't say. A
+   * harness without it has only what its runs say (`Seen`'s `limits`), or nothing.
+   */
+  limits?(ctx: Context): Promise<LimitsRead | null>;
+  /**
+   * Its runs count the tokens of the whole conversation so far, not their own (Codex): a run's own
+   * are what was added since the conversation's last run, noted in the workspace.
+   */
+  usageIsTotal?: boolean;
   /** The newest version out, from where its installer gets it; null when unknown. */
   latest(ctx: Context): Promise<{ latest: string; available?: boolean } | null>;
   login: { args: string[]; asksCode: boolean; parse(text: string): { url?: string; code?: string } };
@@ -162,6 +187,13 @@ interface Said {
   account?: string;
   /** By the model a run was given: the model it said it ran. */
   aliases: Record<string, string>;
+}
+
+/** A harness's limits as last read or said, kept between runs (`limits:<id>` in the runner's notes). */
+interface KeptLimits {
+  /** The account signed in when they were read. */
+  account?: string;
+  limits: HarnessLimits;
 }
 
 /** The most aliases remembered from runs. */
@@ -432,6 +464,24 @@ export function defineHarness(spec: Spec, o: AdapterOptions): Harness {
     return true;
   }
 
+  const limitsKey = `limits:${spec.id}`;
+
+  /** The limits last read or said, for the account signed in now (another's are its own). */
+  function limitsKnown(): HarnessLimits | null {
+    const kept = memory.get<KeptLimits>(limitsKey);
+    if (!kept || typeof kept !== 'object' || (account && kept.account && kept.account !== account)) return null;
+    return checkLimits(kept.limits);
+  }
+
+  /** Keep what a read, or a run, said of the limits; one that said none leaves what's known. */
+  function keepLimits(read: LimitsRead | null): HarnessLimits | null {
+    const said = checkRead(read);
+    if (!said || (!said.groups.length && !said.note)) return limitsKnown();
+    const limits: HarnessLimits = { at: now(), ...(said.note ? { note: said.note } : {}), groups: said.groups };
+    memory.set(limitsKey, { ...(account ? { account } : {}), limits } satisfies KeptLimits);
+    return limits;
+  }
+
   /** The harness's defaults as it lists them, and what its aliases stood for. */
   function defaults(): Pick<HarnessInfo, 'defaultModel' | 'defaultEfforts' | 'aliases'> {
     const out: Pick<HarnessInfo, 'defaultModel' | 'defaultEfforts' | 'aliases'> = {};
@@ -574,7 +624,7 @@ export function defineHarness(spec: Spec, o: AdapterOptions): Harness {
         }
         const info: HarnessInfo = { ...base, found: true };
         if (ctx.version) info.version = ctx.version;
-        const [auth, sealed, models, efforts, update, given] = await Promise.all([
+        const [auth, sealed, models, efforts, update, given, read] = await Promise.all([
           spec.auth(ctx).catch(() => null),
           spec.sealed(ctx).catch(
             (err: unknown): Sealed => ({
@@ -586,6 +636,7 @@ export function defineHarness(spec: Spec, o: AdapterOptions): Harness {
           spec.efforts(ctx).catch(() => []),
           checkUpdate(ctx),
           spec.defaults ? spec.defaults(ctx).catch(() => null) : null,
+          spec.limits ? spec.limits(ctx).catch(() => null) : null,
         ]);
         if (auth) {
           info.signedIn = auth.signedIn;
@@ -604,6 +655,13 @@ export function defineHarness(spec: Spec, o: AdapterOptions): Harness {
           delete info.account;
           info.sealed = false;
           info.sealUnknown = true;
+        }
+        // what its account has left, and its plan: only of one that's signed in
+        if (info.signedIn !== false) {
+          const plan = checkPlan(auth?.plan) ?? checkPlan(read?.plan);
+          if (plan) info.plan = plan;
+          const limits = keepLimits(read);
+          if (limits) info.limits = limits;
         }
         const okModels = models.filter((m) => MODEL.test(m));
         offered = { version: ctx.version, models: okModels };
@@ -737,6 +795,14 @@ export function defineHarness(spec: Spec, o: AdapterOptions): Harness {
       forgetFailedSeal();
     },
 
+    async limits() {
+      const ctx = await found();
+      if (!ctx) return null;
+      const read = spec.limits ? await spec.limits(ctx).catch(() => null) : null;
+      const plan = checkPlan(read?.plan);
+      return { limits: keepLimits(read), ...(plan ? { plan } : {}) };
+    },
+
     async models() {
       const ctx = await found();
       return ctx ? spec.models(ctx) : [];
@@ -751,10 +817,34 @@ export function defineHarness(spec: Spec, o: AdapterOptions): Harness {
       let cancelled = false;
       let current: ChildProcess | null = null;
       let settled = false;
+      /** The tokens the turn has used so far: every go of it counts (one asked again for finish, a retry). */
+      let usage: RunUsage | null = null;
+      const used = (u: RunUsage) => {
+        usage = addUsage(usage, u);
+      };
       const report = (e: RunEvent) => {
         if (cancelled || settled) return;
-        if (e.type === 'done' || e.type === 'failed') settled = true;
+        if (e.type === 'done' || e.type === 'failed') {
+          settled = true;
+          onEvent(usage ? { ...e, usage } : e);
+          return;
+        }
         onEvent(e);
+      };
+      /**
+       * Once the turn is over, a harness that can be asked says what the account has left now; it
+       * comes a moment after the end, and holds nothing up.
+       */
+      const limitsAfter = (ctx: Context) => {
+        if (!spec.limits || cancelled) return;
+        void spec
+          .limits(ctx)
+          .then((read) => {
+            const limits = keepLimits(read);
+            const plan = checkPlan(read?.plan);
+            if (limits && !cancelled) onEvent({ type: 'limits', limits, ...(plan ? { plan } : {}) });
+          })
+          .catch(() => undefined);
       };
       const done = (async () => {
         const ctx = await found();
@@ -778,6 +868,7 @@ export function defineHarness(spec: Spec, o: AdapterOptions): Harness {
             },
             asked,
             deadline,
+            used,
           );
           if (outcome.again === 'finish' && !asked) {
             // the same conversation, asked only for finish (not a retry: it doesn't count as one)
@@ -793,8 +884,9 @@ export function defineHarness(spec: Spec, o: AdapterOptions): Harness {
             continue;
           }
           if (outcome.again === 'same') continue;
-          return;
+          break;
         }
+        limitsAfter(ctx);
       })().catch((err: unknown) =>
         report({ type: 'failed', error: cleanError(err instanceof Error ? err.message : String(err)) }),
       );
@@ -834,6 +926,38 @@ export function defineHarness(spec: Spec, o: AdapterOptions): Harness {
     return again;
   }
 
+  /**
+   * A run's own tokens, from a harness that counts the whole conversation so far (`spec.usageIsTotal`):
+   * what was added since the conversation's last run, whose total is noted in the workspace. A new
+   * conversation's are all its own. Null when a conversation is carried on with no total noted for it
+   * (it began before this was counted) or with a smaller one: then it isn't known, and nothing is counted.
+   */
+  function ownUsage(job: Job, session: string | null, total: RunUsage): RunUsage | null {
+    const file = join(job.workspace, USAGE_FILE);
+    type Noted = Partial<RunUsage> & { session?: string };
+    let before: Noted | null = null;
+    try {
+      before = existsSync(file) ? (JSON.parse(readFileSync(file, 'utf8')) as Noted | null) : null;
+    } catch {
+      // as if it weren't there
+    }
+    const id = session ?? job.session;
+    try {
+      if (id) writePrivate(file, JSON.stringify({ session: id, ...total }));
+      else rmSync(file, { force: true });
+    } catch {
+      // only a note: without it, the conversation's next run isn't counted
+    }
+    if (!job.session) return total;
+    if (!before || before.session !== job.session) return null;
+    const own = {
+      input: total.input - (before.input ?? Number.NaN),
+      cached: total.cached - (before.cached ?? Number.NaN),
+      output: total.output - (before.output ?? Number.NaN),
+    };
+    return checkUsage(own);
+  }
+
   /** A resumed turn's prompt, for a harness that reads its instructions only when a conversation starts: the rules first. */
   function withRules(job: Job): Job {
     const rules = job.instructions?.trim();
@@ -854,6 +978,7 @@ export function defineHarness(spec: Spec, o: AdapterOptions): Harness {
     started: (c: ChildProcess) => void,
     asked: { said: string } | null,
     deadline: { at: number; ms: number },
+    used: (u: RunUsage) => void,
   ): Promise<{ again?: 'fresh' | 'same' } | { again: 'finish'; session: string; said?: string }> {
     return new Promise((resolve) => {
       const { args, env: extra } = spec.prepare(ctx, job);
@@ -877,6 +1002,9 @@ export function defineHarness(spec: Spec, o: AdapterOptions): Harness {
       let heard = false;
       let lastLine = '';
       let reply: string | undefined;
+      /** The tokens this go used, and what the account has left, as the harness said them last. */
+      let runUsage: RunUsage | null = null;
+      let saidLimits: LimitsRead | null = null;
       // written by HO[LO]'s MCP server when a finish goes through: this run's own, from nothing
       const finishedFile = join(job.workspace, FINISHED_FILE);
       rmSync(finishedFile, { force: true });
@@ -918,6 +1046,12 @@ export function defineHarness(spec: Spec, o: AdapterOptions): Harness {
               break;
             case 'note':
               note = s.text;
+              break;
+            case 'usage':
+              runUsage = checkUsage(s.usage);
+              break;
+            case 'limits':
+              saidLimits = s.limits;
               break;
             case 'ended':
               ended = true;
@@ -984,6 +1118,15 @@ export function defineHarness(spec: Spec, o: AdapterOptions): Harness {
         if (silent) clearTimeout(silent);
         // after every run, whatever it started goes (Cursor's worker outlives it otherwise)
         stopGroup(child, 500);
+        // what it used counts however it ended, and what it said is left of the account is kept
+        if (runUsage) {
+          const own = spec.usageIsTotal ? ownUsage(job, session, runUsage) : runUsage;
+          if (own) used(own);
+        }
+        if (saidLimits) {
+          const limits = keepLimits(saidLimits);
+          if (limits) report({ type: 'limits', limits });
+        }
         // whether it failed, again, in the same conversation, with an error that counts only then
         const again = failedOnce(job, session, timedOut || tripped || spawnError ? null : harnessError);
         if (tripped) {

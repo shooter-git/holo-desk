@@ -277,6 +277,22 @@ never holding it. The host renders as the studio's worker does, with the same op
 recordings read from the data folder, so the file is the one that studio would have made (a test
 compares them to the byte).
 
+**A song's stems are made the same way, by the host only** (`stems: true` on the same request; a
+device has no path of its own for them, so a small host is slower and nothing falls back). What a
+stem is is worked out in one place, `packages/agent/src/edits/stems.ts`, which the studio's dialog,
+the host's job, the agent's offer and `holo render-audio --stems` all read: the song rendered with
+every other track inactive (not played, its instruments not loaded) and without the song's finish,
+for each track that's on, not muted (or soloed, while any is) and has something to play. So a stem
+carries its own share of every bus it's sent to, and the stems added together are the mix before
+the finish; a test renders a song both ways and compares them to within the 24 bits each is written
+at. That sum is exact unless something reacts to the level of the whole (a limiter on Stereo Out,
+a compressor on a bus several tracks reach, the finish): `stemWarnings` says which, and the dialog
+shows it before anything is made. The job renders the stems one after another, each split over
+threads as a bounce is, into one ZIP written entry by entry (`packages/music/src/zip-write.ts`:
+stored, ZIP64 when it's needed), so it costs the memory of one bounce; it has a bounce's time for
+each stem. The ZIP is kept, listed, saved and deleted as a bounce is, and is told from one by its
+name (`.zip`); measuring a song's newest bounce never takes it for the mix.
+
 **On a host with cores to spare, the bounce is rendered on several of them**, and is the same
 file to the byte (`RenderOptions.split` in `packages/engine/src/render.ts`, `renderThreads` in the
 engine's `node.ts`; `packages/engine/test/render-split.test.ts` compares them on real threads).

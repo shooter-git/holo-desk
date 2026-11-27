@@ -17,18 +17,19 @@ import { fork } from 'node:child_process';
 import { existsSync, mkdirSync, readdirSync, renameSync, rmSync } from 'node:fs';
 import { setPriority } from 'node:os';
 import { join } from 'node:path';
+import { stemSongs } from '@holo/agent/edits';
 import { newId, type Project } from '@holo/session';
 import type { ChildLike } from './agent/measure/runner.ts';
 
 /** A bounce's file, named for when it was made and what it's of (as the studio's upload is). */
-export function bounceFileName(name: string, now = new Date()): string {
+export function bounceFileName(name: string, now = new Date(), ext: 'wav' | 'zip' = 'wav'): string {
   const stamp = now.toISOString().replace('T', ' ').replace(/:/g, '.').slice(0, 19);
   const title =
     name
       .replace(/[^\w .()'-]+/g, '')
       .trim()
       .slice(0, 80) || 'Bounce';
-  return `${stamp} ${title}.wav`;
+  return `${stamp} ${title}.${ext}`;
 }
 
 /** Where a song's bounces are kept. */
@@ -60,6 +61,8 @@ export interface BounceJob {
    * for want of memory or time, is said to have failed, with why.)
    */
   lost: boolean;
+  /** Its stems (a ZIP of a WAV for each track) rather than the mix. */
+  stems?: boolean;
   /** Done: the file, where it's fetched, where it is in the data folder, and its length in seconds. */
   file: string | null;
   url: string | null;
@@ -74,6 +77,11 @@ export interface BounceAsk {
   to: number;
   tail: number;
   name: string;
+  /**
+   * The song's stems instead of its mix: a file for each track the mix is made of, without the
+   * song's finish, in one ZIP (`@holo/agent/edits`, stems.ts).
+   */
+  stems?: boolean;
 }
 
 export interface HostBouncesOptions {
@@ -141,6 +149,7 @@ export class HostBounces {
       finished: null,
       error: null,
       lost: false,
+      ...(ask.stems ? { stems: true } : {}),
       file: null,
       url: null,
       path: null,
@@ -201,7 +210,12 @@ export class HostBounces {
       // (the child lowers its own, where it may)
     }
     job.state = 'running';
-    const limit = setTimeout(() => this.stop(job, 'The bounce took too long: the host stopped it'), this.limitMs);
+    // (a stems job renders the song once for each stem: each has a bounce's time)
+    const renders = ask.stems ? Math.max(1, stemSongs(ask.song).length) : 1;
+    const limit = setTimeout(
+      () => this.stop(job, 'The bounce took too long: the host stopped it'),
+      Math.min(this.limitMs * renders, 2 ** 31 - 1),
+    );
     limit.unref();
     this.running = { job, child, limit, part };
     process.once('exit', this.onExit);
@@ -213,7 +227,15 @@ export class HostBounces {
     child.send({
       type: 'run',
       id: job.id,
-      input: { dataDir: this.dataDir, project: ask.song, from: ask.from, to: ask.to, tail: ask.tail, part },
+      input: {
+        dataDir: this.dataDir,
+        project: ask.song,
+        from: ask.from,
+        to: ask.to,
+        tail: ask.tail,
+        part,
+        ...(ask.stems ? { stems: true } : {}),
+      },
     });
   }
 
@@ -228,7 +250,7 @@ export class HostBounces {
     if (msg.type !== 'done' && msg.type !== 'failed') return;
     this.finish();
     if (msg.type === 'done' && existsSync(now.part)) {
-      const file = bounceFileName(job.name);
+      const file = bounceFileName(job.name, new Date(), job.stems ? 'zip' : 'wav');
       try {
         renameSync(now.part, join(bounceDir(this.dataDir, job.project), file));
         job.file = file;

@@ -11,8 +11,10 @@
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { availableParallelism, setPriority } from 'node:os';
 import { dirname, join } from 'node:path';
+import { stemSongs } from '@holo/agent/edits';
 import { encodeWav, type RenderCosts, type RenderSplit, renderSession } from '@holo/engine';
 import { dataFolderSource, renderThreads, renderWorkersFor } from '@holo/engine/node';
+import { ZipWriter } from '@holo/music';
 import type { Project } from '@holo/session';
 import { threadsAllowed } from './host-bounce.ts';
 
@@ -26,6 +28,8 @@ interface Input {
   tail: number;
   /** Where the file is written. */
   part: string;
+  /** The song's stems, a WAV for each track in one ZIP, instead of its mix. */
+  stems?: boolean;
 }
 
 try {
@@ -114,12 +118,55 @@ async function bounce(input: Input, line: (text: string) => void): Promise<numbe
   return (out.channels[0]?.length ?? 0) / out.sampleRate;
 }
 
+/**
+ * The song's stems: each track the mix is made of rendered alone (the others switched off, the
+ * song's finish left out), one after another into a ZIP. A stem's sound is let go once it's written,
+ * so the job holds one at a time however many there are. Each render is split over the host's
+ * threads as a bounce is, by what the song's last bounce learned; what a one-track song costs is
+ * not kept, so the next bounce of the whole song is laid out as it was.
+ */
+async function stems(input: Input, line: (text: string) => void): Promise<number> {
+  const list = stemSongs(input.project);
+  if (!list.length) throw new Error('Nothing in the song would be heard: no track has anything to play');
+  let split: RenderSplit | null = null;
+  try {
+    const all = threads(input.dataDir, input.project.id);
+    split = all ? { ...all, learned: undefined } : null;
+  } catch {
+    split = null;
+  }
+  mkdirSync(dirname(input.part), { recursive: true });
+  const zip = new ZipWriter(input.part);
+  let seconds = 0;
+  try {
+    for (const [i, stem] of list.entries()) {
+      const said = `Stem ${i + 1} of ${list.length}, ${stem.name}`;
+      line(said);
+      const out = await renderSession(stem.song, dataFolderSource(input.dataDir, input.project.id), {
+        sampleRate: input.project.sampleRate ?? 48000,
+        from: input.from,
+        to: input.to,
+        tail: input.tail,
+        finish: false,
+        ...(split ? { split } : {}),
+        onProgress: (text) => line(`${said}: ${text}`),
+      });
+      if (out.errors.length) throw new Error(`The engine stopped on ${stem.name}: ${out.errors[0]}`);
+      zip.add(stem.file, encodeWav(out.channels, out.sampleRate, 'pcm24'));
+      seconds = Math.max(seconds, (out.channels[0]?.length ?? 0) / out.sampleRate);
+    }
+  } finally {
+    zip.close();
+  }
+  return seconds;
+}
+
 process.on('message', (raw) => {
   const msg = raw as { type?: string; id?: string; input?: Input };
   if (msg.type !== 'run' || typeof msg.id !== 'string' || !msg.input) return;
   const id = msg.id;
   let last = 0;
-  bounce(msg.input, (text) => {
+  (msg.input.stems ? stems : bounce)(msg.input, (text) => {
     // (the render doesn't stop to listen: a server that went without stopping it is noticed here)
     if (process.ppid !== parent) process.exit(1);
     const now = Date.now();

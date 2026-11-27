@@ -7,6 +7,7 @@
  */
 import { type MiddleC, noteName, PPQ, tickToBarBeat } from '@holo/session';
 import { ApiError, type PermissionKind } from '../api.ts';
+import { stemSongs, stemWarnings } from '../edits/stems.ts';
 import { AFTER, BEFORE, LIMITS, PREVIOUS, VERSION_NAME } from '../view.ts';
 import { getAttachment, need, plural, str, type Tool, ToolError } from './common.ts';
 import { playedText, recordedNotes } from './play.ts';
@@ -161,12 +162,12 @@ export const look: Tool = {
 export const askPermission: Tool = {
   name: 'ask_permission',
   kind: 'ask',
-  summary: `Ask the user to allow something only they can: "install-pack" (a HO[LO] Pack from the catalog, named in "pack"; the packs tool with available lists them), "send-creation" (send the open song back to the creation it came from), "bounce" (render the song, or the cycle when it's on, to a WAV kept with the song: what you then measure of the mix), "render" (the creation the song came from renders it with its own sound; it comes back as a soloed audio track, which can take minutes), "screen" or "photo" (as look), or ${MICROPHONE}. "detail" says what and why in a sentence; the studio shows it with one button. ${WAIT} A pack that isn't in the catalog can't be installed: hand_off a brief instead.`,
+  summary: `Ask the user to allow something only they can: "install-pack" (a HO[LO] Pack from the catalog, named in "pack"; the packs tool with available lists them), "send-creation" (send the open song back to the creation it came from), "bounce" (render the song, or the cycle when it's on, to a WAV kept with the song: what you then measure of the mix), "stems" (export the song, or the cycle when it's on, as a 24-bit WAV for each track the mix is made of, in one ZIP the host makes and keeps with the song's bounces: for mixing elsewhere or handing the song over; the answer here says which files it would hold and why they wouldn't add up to the mix), "render" (the creation the song came from renders it with its own sound; it comes back as a soloed audio track, which can take minutes), "screen" or "photo" (as look), or ${MICROPHONE}. "detail" says what and why in a sentence; the studio shows it with one button. ${WAIT} A pack that isn't in the catalog can't be installed: hand_off a brief instead.`,
   args: [
     {
       name: 'kind',
       type: 'enum',
-      values: ['install-pack', 'send-creation', 'bounce', 'render', 'screen', 'photo', 'microphone'],
+      values: ['install-pack', 'send-creation', 'bounce', 'stems', 'render', 'screen', 'photo', 'microphone'],
       describe: 'What to ask for',
       required: true,
     },
@@ -194,8 +195,18 @@ export const askPermission: Tool = {
           `No pack "${pack}" in the catalog: ${catalog.packs.map((p) => p.id).join(', ') || 'it is empty'}. A new pack is a hand_off.`,
         );
     } else if (pack) throw new ToolError('"pack" goes only with install-pack');
+    let more = '';
+    if (kind === 'stems') {
+      // what the ZIP would hold, and why its files wouldn't add up to the mix: said before the user is asked
+      const song = await ctx.api.song();
+      const stems = stemSongs(song);
+      if (!stems.length)
+        throw new ToolError('Nothing in the song would be heard (no track has anything to play): there are no stems');
+      const warnings = stemWarnings(song);
+      more = ` It would hold ${stems.length === 1 ? '1 stem' : `${stems.length} stems`}: ${stems.map((s) => s.file).join(', ')}.${warnings.length ? ` Worth telling them: ${warnings.join(' ')}` : ' Added together they are the mix.'}`;
+    }
     await ctx.api.permission({ kind, detail, ...(pack ? { pack } : {}) });
-    return { text: `Asked the user (${kind}). ${WAIT}` };
+    return { text: `Asked the user (${kind}).${more} ${WAIT}` };
   },
 };
 

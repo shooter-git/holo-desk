@@ -7,6 +7,7 @@
  * The share sheet opens only straight from a tap, so the file is fetched beforehand (while the
  * page is in front) and held here until it's saved or let go.
  */
+import { isStems } from './host-bounce.ts';
 import { isIosLike } from './notify.ts';
 
 /** How a device saves a bounce: 'auto', by itself when it's done; 'tap', from a button; 'share', the button opens the share sheet. */
@@ -81,7 +82,10 @@ export function letFileGo(): void {
  */
 export function holdFile(name: string, source: Blob | string, ready: () => void): void {
   letFileGo();
-  const file = (blob: Blob) => new File([blob], `${name}.wav`, { type: 'audio/wav' });
+  // (a bounce is a WAV; a song's stems, fetched from the host, a ZIP)
+  const zip = typeof source === 'string' && isStems(source);
+  const file = (blob: Blob) =>
+    new File([blob], `${name}.${zip ? 'zip' : 'wav'}`, { type: zip ? 'application/zip' : 'audio/wav' });
   if (typeof source !== 'string') {
     held = file(source);
     ready();
@@ -119,10 +123,10 @@ export function holdFile(name: string, source: Blob | string, ready: () => void)
 }
 
 /** Follow a link to the file: a download where there's a browser to take it. */
-function follow(href: string, name: string): void {
+function follow(href: string, name: string, ext = 'wav'): void {
   const a = document.createElement('a');
   a.href = href;
-  a.download = `${name}.wav`;
+  a.download = `${name}.${ext}`;
   a.click();
 }
 
@@ -133,7 +137,13 @@ function follow(href: string, name: string): void {
  */
 export async function saveFile(name: string, url: string | null): Promise<boolean> {
   const file = held;
-  if (file && typeof navigator.share === 'function') {
+  const ext = isStems(url) || file?.name.endsWith('.zip') ? 'zip' : 'wav';
+  // (a device may share a recording and not an archive: then its link is followed, as for a file too big to hold)
+  const shares =
+    file !== null &&
+    typeof navigator.share === 'function' &&
+    (ext === 'wav' || navigator.canShare?.({ files: [file] }) === true);
+  if (file && shares) {
     try {
       await navigator.share({ files: [file] });
       return true;
@@ -142,10 +152,10 @@ export async function saveFile(name: string, url: string | null): Promise<boolea
       // (it wouldn't share: the link, as before)
     }
   }
-  if (url) follow(`${url}?as=${encodeURIComponent(name)}`, name);
+  if (url) follow(`${url}?as=${encodeURIComponent(name)}`, name, ext);
   else if (file) {
     const href = URL.createObjectURL(file);
-    follow(href, name);
+    follow(href, name, ext);
     window.setTimeout(() => URL.revokeObjectURL(href), 60_000);
   } else return false;
   return true;

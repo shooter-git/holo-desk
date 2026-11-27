@@ -353,13 +353,24 @@ describe('what a notice says', () => {
 });
 
 describe('what a bounce’s notice says', () => {
-  const bounce = (state: string, took: number, more: { name?: string; seconds?: number | null } = {}) => ({
+  const bounce = (
+    state: string,
+    took: number,
+    more: { name?: string; seconds?: number | null; stems?: boolean } = {},
+  ) => ({
     project: 'prj_1',
     name: more.name ?? 'Lantern Sketch',
     state,
     started: 1_000_000,
     finished: 1_000_000 + took,
     seconds: more.seconds === undefined ? 247 : more.seconds,
+    ...(more.stems ? { stems: true } : {}),
+  });
+
+  it('says a song’s stems are ready, or failed, by the song’s name', () => {
+    const stems = { name: 'Lantern Sketch (stems)', stems: true };
+    expect(bounceNotice(bounce('done', 500_000, stems), 'every')?.body).toBe('Lantern Sketch: the stems are ready.');
+    expect(bounceNotice(bounce('failed', 500_000, stems), 'every')?.body).toBe('Lantern Sketch: the stems failed.');
   });
 
   it('is that the bounce is ready, with its length, or that it failed: which song, and no more', () => {

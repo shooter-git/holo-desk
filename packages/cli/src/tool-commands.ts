@@ -103,6 +103,8 @@ export function terminalWords(text: string, tool: Tool | null, how: Wording | nu
   out = out
     .replace(/\(ask_permission "bounce"\)/g, '(holo bounce, in the open studio)')
     .replace(/ask_permission "bounce"/g, 'holo bounce (in the open studio)')
+    .replace(/\(ask_permission "stems"\)/g, '(holo stems)')
+    .replace(/ask_permission "stems"/g, 'holo stems')
     .replace(/ask_permission \{kind: "install-pack"\}/g, "install it from the studio's Library")
     .replace(/score_meta \{"pickup": ([\d.]+)\}/g, 'holo score pickup $1');
   if (fields && tool && how) {

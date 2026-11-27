@@ -81,8 +81,10 @@ import { type CapturePlan, captured, planCapture, takeRegions } from './capture.
 import { comparePlan, type Pass } from './compare.ts';
 import * as history from './history.ts';
 import {
+  askHostBounce,
   dropBounce,
   findBounce,
+  isStems,
   type KeptBounce,
   keepBounce,
   keptBounce,
@@ -2704,7 +2706,7 @@ export async function openPiece(creation: string, piece: string): Promise<void> 
 
 type Bounced = { file: string; url: string; path: string; seconds: number };
 /** How long a bounce rings on after its last tick, seconds. */
-const BOUNCE_TAIL = 3;
+export const BOUNCE_TAIL = 3;
 /** A bounce is under way (the line that shows it is also a creation's render's, which comes and goes by itself). */
 let bounceUnderWay = false;
 /** The kept bounce whose line is showing (null: one that was never kept, a bounce made here that didn't reach the host). */
@@ -2718,9 +2720,11 @@ export const bounceClock = (seconds: number): string => {
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
 };
 
-const bouncedToast = (seconds: number | null, name: string, kept: boolean) =>
+const bouncedToast = (seconds: number | null, name: string, kept: boolean, stems = false) =>
   toast(
-    `Bounced ${seconds === null ? '' : `${bounceClock(seconds)} of `}“${name}” (24-bit WAV${kept ? ', kept with the song' : ''})`,
+    stems
+      ? `Exported “${name}” (a ZIP of 24-bit WAVs, kept with the song)`
+      : `Bounced ${seconds === null ? '' : `${bounceClock(seconds)} of `}“${name}” (24-bit WAV${kept ? ', kept with the song' : ''})`,
   );
 
 /**
@@ -2771,6 +2775,57 @@ export async function bounceSong(download = true): Promise<Bounced | null> {
   }
 }
 
+/** The stretch a song's stems cover: the cycle, or the whole song. */
+export type StemsRange = 'cycle' | 'song';
+
+/**
+ * Export the song's stems: a 24-bit WAV for each track the mix is made of, in one ZIP, made by the
+ * host (always: a device has no way to make them, and a small host is only slower) and kept with
+ * the song's bounces. A computer downloads the ZIP when it's done; a phone or a tablet is shown its
+ * line, to save it from. Why the host won't start them is said, as there's nothing to fall back to.
+ */
+export async function exportStems(
+  range: StemsRange = store.get().project?.cycle.on ? 'cycle' : 'song',
+  download = true,
+): Promise<Bounced | null> {
+  const p = store.get().project;
+  if (!p) return null;
+  if (store.get().bouncing || bounceUnderWay) {
+    if (download) toast('A bounce is already under way: the stems can be exported when it’s done');
+    return null;
+  }
+  const cycle = range === 'cycle' && p.cycle.end > p.cycle.start;
+  const from = cycle ? p.cycle.start : 0;
+  const to = cycle ? p.cycle.end : projectEnd(p);
+  const name = `${p.title}${cycle ? ' (cycle)' : ''} (stems)`;
+  const way = thisSaveWay();
+  bounceUnderWay = true;
+  if (download) putBounceAway();
+  try {
+    store.set({ bouncing: 'Asking the host…' });
+    const job = await askHostBounce({
+      project: p,
+      from,
+      to,
+      tail: BOUNCE_TAIL,
+      name,
+      stems: true,
+      ...tokenOf(helloFields()),
+    });
+    if ('error' in job) {
+      toast(`The stems weren’t started: ${job.error}`, 'error', 8000);
+      return null;
+    }
+    const made = await followHostBounce({ ...job, project: p.id, name, download, at: Date.now(), stems: true }, way);
+    if (made !== 'lost') return made;
+    toast('The host didn’t finish the stems: export them again', 'error', 8000);
+    return null;
+  } finally {
+    bounceUnderWay = false;
+    store.set({ bouncing: null });
+  }
+}
+
 /**
  * A bounce the host is making, followed to its end: its progress shown, and what came of it said.
  * Done, a computer downloads it; a phone or a tablet is shown its line, to save it from. 'lost':
@@ -2788,13 +2843,13 @@ async function followHostBounce(kept: KeptBounce, way: SaveWay): Promise<Bounced
   if (made.state === 'done') done = made;
   // a host started again forgets its bounces, not their files: one it finished is among the song's
   else if (made.lost && kept.download && kept.project) {
-    const found = await findBounce(kept.project, kept.name, kept.started);
+    const found = await findBounce(kept.project, kept.name, kept.started, fetch, kept.stems ? 'zip' : 'wav');
     if (found) done = { ...found, seconds: null };
   }
   if (!done) {
     dropBounce(kept.id, shelf);
     if (made.state === 'failed' && !made.lost) {
-      toast(`The bounce failed on the host: ${made.error}`, 'error', 8000);
+      toast(`The ${kept.stems ? 'stems' : 'bounce'} failed on the host: ${made.error}`, 'error', 8000);
       return null;
     }
     return 'lost';
@@ -2804,7 +2859,7 @@ async function followHostBounce(kept: KeptBounce, way: SaveWay): Promise<Bounced
     dropBounce(kept.id, shelf);
     // (straight from the host to the device's files: the page never holds it)
     if (kept.download) void saveFile(kept.name, done.url);
-    bouncedToast(done.seconds, kept.name, true);
+    bouncedToast(done.seconds, kept.name, true, kept.stems);
     return result;
   }
   markBounced(kept.id, { url: done.url, file: done.file, seconds: done.seconds }, shelf);
@@ -2826,7 +2881,8 @@ function showBounced(
 ): void {
   bouncedId = id;
   const share = way === 'share' && source !== null;
-  store.set({ bounced: { name, seconds, url, ready: !share } });
+  // (a song's stems are known by their file: a ZIP)
+  store.set({ bounced: { name, seconds, url, ready: !share, ...(isStems(url) ? { stems: true } : {}) } });
   if (!share) return;
   holdFile(name, source, () => {
     const now = store.get().bounced;
@@ -2909,7 +2965,13 @@ export async function resumeHostBounce(): Promise<void> {
   try {
     store.set({ bouncing: 'On the host: …' });
     if ((await followHostBounce(kept, way)) === 'lost')
-      toast(`The host didn’t finish bouncing “${kept.name}”: bounce it again`, 'error', 8000);
+      toast(
+        kept.stems
+          ? `The host didn’t finish “${kept.name}”: export the stems again`
+          : `The host didn’t finish bouncing “${kept.name}”: bounce it again`,
+        'error',
+        8000,
+      );
   } finally {
     bounceUnderWay = false;
     store.set({ bouncing: null });

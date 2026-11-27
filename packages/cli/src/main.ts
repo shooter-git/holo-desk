@@ -66,6 +66,8 @@ const SWITCHES = new Set([
   'no-finish',
   'no-loop',
   'all-samples',
+  'stems',
+  'whole',
   // (the commands that do what the agent's tools do)
   'confirm',
   'clear',
@@ -298,6 +300,10 @@ In the studio, live
 
 Files and creations
   holo bounce                         render the song (or the cycle) to a WAV, kept with the song on the host
+  holo stems [--whole] [--out FILE.zip]
+                                      the song's stems: a 24-bit WAV for each track the mix is made of, in one
+                                      ZIP the host makes and keeps with the song's bounces (the cycle when it's
+                                      on, unless --whole; --out saves the ZIP here too). No studio need be open
   holo import-midi FILE.mid | holo export-midi [FILE.mid]
   holo import-score FILE.musicxml|.mxl | holo export-score [FILE.musicxml]   scores, for and from notation programs
   holo audio FILE.wav|.flac [--track T] [--at 9] [--name N]   a recording or stem on an audio track
@@ -311,11 +317,12 @@ Files and creations
   holo pair                           a code (and a link) that pairs a phone or computer with the agent in
                                       Settings › Agent: run it on the computer HO[LO] runs on
   holo render-audio [--session FILE] [--out FILE.wav] [--rate 44100] [--format float|24] [--from 9 --to 17]
-                    [--no-finish] [--no-loop] [--all-samples]
+                    [--no-finish] [--no-loop] [--all-samples] [--stems --out DIR|FILE.zip]
                                       the song rendered headless by HO[LO]'s engine, exactly as the studio
                                       bounces it (the open song, --song ID, or a session file); --all-samples
                                       loads every sample of its instruments, not only those it can sound
-                                      (the same file, slower)
+                                      (the same file, slower); --stems renders a 24-bit WAV for each track
+                                      instead (without the song's finish), into a folder or a ZIP
 
 Experiences (a new project whose music is made here and built by the project itself)
   holo init [DIR] [--name N] [--title T] [--out music/build] [--format wav|wav24] [--ref REF]
@@ -953,6 +960,21 @@ async function main(): Promise<void> {
       return;
     }
 
+    case 'stems': {
+      const { hostStems } = await import('./stems.ts');
+      const out = flag('out');
+      await hostStems({
+        base: BASE,
+        call,
+        project: await song(),
+        whole: has('whole'),
+        ...(out !== undefined ? { out } : {}),
+        log: console.log,
+        progress: (text) => process.stderr.write(text ? `\r${text.padEnd(60)}` : `\r${''.padEnd(60)}\r`),
+      });
+      return;
+    }
+
     case 'open': {
       await call('/api/live/open', { method: 'POST', body: JSON.stringify({ project: words[0] }) });
       console.log(`Opened ${words[0]}`);
@@ -1042,6 +1064,35 @@ async function main(): Promise<void> {
         to: flag('to') ? position(project, String(flag('to'))) : undefined,
       };
       const started = Date.now();
+      if (has('stems')) {
+        // a file for each track the mix is made of (never with the song's finish): a folder of them, or a ZIP
+        const { renderStems } = await import('./stems.ts');
+        const to = flag('out');
+        if (!to) throw new Error('Say where the stems go: --out DIR, or --out FILE.zip');
+        await renderStems({
+          project,
+          out: to,
+          ...(range.from !== undefined ? { from: range.from } : {}),
+          ...(range.to !== undefined ? { to: range.to } : {}),
+          log: console.log,
+          render: async (stem, name, stretch) => {
+            const made = await renderSession(stem, dataFolderSource(dataDir, project.id), {
+              sampleRate: rate,
+              ...stretch,
+              tail: Number(flag('tail') ?? 4),
+              finish: false,
+              ...(flag('no-loop') !== undefined ? { loop: false } : {}),
+              ...(flag('all-samples') !== undefined ? { samples: 'all' as const } : {}),
+              onProgress: (text) => process.stderr.write(`\r${`${name}: ${text}`.padEnd(60)}`),
+            });
+            process.stderr.write('\n');
+            if (made.errors.length) throw new Error(`The engine stopped: ${made.errors[0]}`);
+            return encodeWav(made.channels, rate, flag('format') === 'float' ? 'float32' : 'pcm24');
+          },
+        });
+        console.log(`(${((Date.now() - started) / 1000).toFixed(1)} s)`);
+        return;
+      }
       const out = await renderSession(project, dataFolderSource(dataDir, project.id), {
         sampleRate: rate,
         ...range,

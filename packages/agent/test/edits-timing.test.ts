@@ -37,7 +37,7 @@ describe('swung', () => {
   it('at two thirds, eighths fall as the first and last of a triplet', () => {
     // the off-eighth lands a third of an eighth late: two thirds of the way through the beat
     expect(swung(E, E, 1, 2 / 3)).toBe(Math.round(E + E / 3));
-    expect(swung(E, E, 1, 2 / 3)).toBe(DIVISIONS['1/8T'] * 2);
+    expect(swung(E, E, 1, 2 / 3)).toBe((DIVISIONS['1/8T'] as number) * 2);
   });
 
   it('goes part of the way at a strength under 100 %', () => {

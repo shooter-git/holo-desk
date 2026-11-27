@@ -76,6 +76,7 @@ const COMMAND_FOR: Record<string, string> = {
   measure: 'holo measure',
   played: 'holo played',
   capture: 'holo capture',
+  chords: 'holo chords',
   listen: 'holo listen',
   audition: 'holo audition',
 };
@@ -379,7 +380,8 @@ export async function toolCommand(ctx: ToolCommandContext): Promise<void> {
     case 'timeline': {
       const how: Wording = { command: 'holo timeline', positional: { field: 'action', say: 'ACTION' } };
       const args = toolArgs(toolNamed('timeline') as Tool, flags, how);
-      if (!words[0]) throw new Error('holo timeline insert|delete|copy|move …: say what to do (holo help)');
+      if (!words[0])
+        throw new Error('holo timeline sections|insert|delete|copy|move|repeat …: say what to do (holo help)');
       say(await runTool(env, 'timeline', { ...args, action: words[0] }, how));
       return;
     }
@@ -409,6 +411,12 @@ export async function toolCommand(ctx: ToolCommandContext): Promise<void> {
       }
       const a = api.measured;
       console.log(a && !a.done ? stillText(r.text) : r.text);
+      return;
+    }
+
+    case 'chords': {
+      const how: Wording = { command: 'holo chords' };
+      say(await runTool(env, 'chords', toolArgs(toolNamed('chords') as Tool, flags, how), how));
       return;
     }
 

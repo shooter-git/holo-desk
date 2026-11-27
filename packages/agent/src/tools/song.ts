@@ -20,6 +20,7 @@ import {
   tickToBarBeat,
 } from '@holo/session';
 import { ApiError } from '../api.ts';
+import { withChord } from '../edits/chords.ts';
 import { barOf, barsText, bool, change, need, num, plural, position, str, type Tool, ToolError } from './common.ts';
 
 const at = (project: Project, tick: number): string => {
@@ -271,6 +272,62 @@ export const marker: Tool = {
   },
 };
 
+export const chords: Tool = {
+  name: 'chords',
+  kind: 'change',
+  summary:
+    'The song\'s chord symbols: what the Chords lane shows over the tracks and the Score over the staff (they\'re written, not played: no instrument follows them). With nothing, lists them by position. {"at": "9", "symbol": "Dm7"} sets the chord at a position (bar or bar.beat), replacing one there; {"at": "9.3", "remove": true} takes it away; "set" writes several at once: "9=Dm7 9.3=G7 10=Cmaj7" (an empty value removes: "11=").',
+  args: [
+    { name: 'at', type: 'string', describe: 'Where: a bar or bar.beat, e.g. "9" or "9.3"' },
+    { name: 'symbol', type: 'string', describe: 'The chord as written, e.g. "Dm7", "G7/B", "Cmaj7"', maxLength: 24 },
+    { name: 'remove', type: 'boolean', describe: 'Remove the chord at "at"', default: false },
+    { name: 'set', type: 'string', describe: 'Several: "9=Dm7 9.3=G7 10=Cmaj7"', maxLength: 2000 },
+  ],
+  async run(ctx, args) {
+    const project = await ctx.api.song();
+    const list = (p: Project) =>
+      p.chords.length
+        ? [...p.chords]
+            .sort((a, b) => a.tick - b.tick)
+            .map((c) => `${at(p, c.tick)} ${c.symbol}`)
+            .join(', ')
+        : 'none';
+    const pairs: [number, string][] = [];
+    const several = str(args, 'set')?.trim();
+    if (several) {
+      for (const word of several.split(/\s+/)) {
+        const cut = word.indexOf('=');
+        if (cut < 1) throw new ToolError(`"${word}" isn't a chord at a position: write them as "9=Dm7 9.3=G7"`);
+        pairs.push([position(project, word.slice(0, cut)), word.slice(cut + 1)]);
+      }
+    }
+    const where = str(args, 'at');
+    if (where) {
+      const tick = position(project, where);
+      if (bool(args, 'remove')) {
+        if (!project.chords.some((c) => c.tick === tick))
+          throw new ToolError(`No chord at ${at(project, tick)}. The chords: ${list(project)}`);
+        pairs.push([tick, '']);
+      } else {
+        const symbol = str(args, 'symbol')?.trim();
+        if (!symbol) throw new ToolError('Say the chord: "symbol" (e.g. "Dm7"), or "remove": true');
+        pairs.push([tick, symbol]);
+      }
+    }
+    if (!pairs.length) return { text: `The chords: ${list(project)}.` };
+    // one after the other, each on the song as the last left it: together they're one change
+    let written = project.chords;
+    for (const [tick, symbol] of pairs) written = withChord(written, tick, symbol);
+    const song = { ...project, chords: written };
+    const label =
+      pairs.length === 1
+        ? `Chord ${(pairs[0] as [number, string])[1] || 'removed'} at ${at(project, (pairs[0] as [number, string])[0])}`
+        : `${plural(pairs.length, 'chord')} written`;
+    await change(ctx, project, [{ op: 'setProject', patch: { chords: song.chords } }], label);
+    return { text: `${label}. The chords now: ${list(song)}.`, progress: label };
+  },
+};
+
 export const cycle: Tool = {
   name: 'cycle',
   kind: 'change',
@@ -429,4 +486,4 @@ export const opsApply: Tool = {
   },
 };
 
-export const songTools: Tool[] = [songStatus, songShow, songSet, marker, cycle, looping, opsApply];
+export const songTools: Tool[] = [songStatus, songShow, songSet, marker, chords, cycle, looping, opsApply];

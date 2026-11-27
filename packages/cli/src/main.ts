@@ -72,6 +72,7 @@ const SWITCHES = new Set([
   'json',
   'analyze',
   'available',
+  'remove',
 ]);
 for (let i = 0; i < argv.length; i++) {
   const a = argv[i] as string;
@@ -281,6 +282,7 @@ Writing (positions are bar.beat.sixteenth: 14, 14.3, 14.3.2; notes as "D5:1 B5:2
                 | TYPE.PARAM (reverb.mix, eq.b2Gain…)
   holo automate --track T PARAM clear|off|read
   holo tempo BPM | holo key "A lydian" | holo marker 9 "Chorus"
+  holo marker 9 --rename "Verse 2" | holo marker 9 --remove | holo marker "Chorus" --remove
   holo finish --lufs -16 --ceiling -1 [--glue on|off] [--lowcut 28] [--tilt 0] | holo finish off
                                       master every bounce and render: loudness, a true-peak ceiling, glue
   holo looping 1 57 [--tail 4] | holo looping off
@@ -811,6 +813,29 @@ async function main(): Promise<void> {
 
     case 'marker': {
       const project = await song();
+      // --remove takes away the marker at BAR, or the one named; --rename gives the one at BAR a new name
+      if (has('remove') || has('rename')) {
+        const first = words[0];
+        const there = first && /^\d/.test(first) ? position(project, first) : undefined;
+        const named = (there !== undefined ? words.slice(1) : words).join(' ').trim().toLowerCase();
+        const found = project.markers.filter(
+          (m) => (there !== undefined && m.tick === there) || (named && m.name.toLowerCase() === named),
+        );
+        if (!found.length)
+          throw new Error(
+            `No such marker. The markers: ${project.markers.map((m) => `"${m.name}" at ${formatBarBeat(project.meter, m.tick)}`).join(', ') || 'none'}`,
+          );
+        if (has('remove')) {
+          const markers = project.markers.filter((m) => !found.includes(m));
+          await ops(project, [{ op: 'setProject', patch: { markers } }], `Removed marker "${found[0]?.name}"`);
+          return;
+        }
+        const name = (flag('rename') ?? '').trim();
+        if (!name) throw new Error('holo marker BAR --rename "New name"');
+        const markers = project.markers.map((m) => (m === found[0] ? { ...m, name } : m));
+        await ops(project, [{ op: 'setProject', patch: { markers } }], `Marker "${name}"`);
+        return;
+      }
       const at = position(project, words.shift());
       const name = words.join(' ') || 'Marker';
       const markers = [...project.markers, { id: `mrk_${Date.now().toString(36)}`, tick: at, name }].sort(
@@ -1221,6 +1246,7 @@ async function main(): Promise<void> {
     case 'measure':
     case 'played':
     case 'capture':
+    case 'chords':
     case 'details':
     case 'import':
     case 'packs':

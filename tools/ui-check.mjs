@@ -29,6 +29,8 @@
 //     row of its own (or × leaves it there); a tablet or a desktop shows one;
 //   - Songs' open song's bounces, folded under its row or opened with a delete asked, aren't whole, or Keep
 //     doesn't bring the bounce back;
+//   - the Arrangement and Chords lanes, switched on in Settings › View, cut a control off or don't go when
+//     switched off again;
 //   - Scan's list of a song's earlier scans, a delete asked, isn't whole, or Keep doesn't bring the scan back;
 //   - a scan's review (Scan, over the whole studio) isn't whole, or its header's Commands button can't
 //     be pressed; the commands opened from it don't come up over the review, under its header; Escape
@@ -1323,6 +1325,21 @@ function scanViews(page, layout, press, agent) {
 function views(page, layout, finger) {
   const phone = layout.startsWith('phone');
   const press = (loc) => (finger ? loc.tap() : loc.click());
+  const lanes = async (on) => {
+    await press(control(page, 'Settings'));
+    await press(page.getByRole('tab', { name: 'View' }));
+    for (const name of ['Arrangement lane', 'Chords lane']) {
+      const box = page.locator('.view-item', { hasText: name }).locator('input');
+      await box.scrollIntoViewIfNeeded();
+      if ((await box.isChecked()) !== on) await press(box);
+    }
+    // (left on its first tab, as the views after this one find it)
+    await press(page.getByRole('tab', { name: 'General' }));
+    await page.keyboard.press('Escape');
+    if (on) await page.locator('.song-lanes').waitFor();
+    else if (await page.locator('.song-lanes').count())
+      throw new Error('the lanes are still there with View’s two off');
+  };
   const dialogs = [
     ['Songs', () => press(control(page, 'Songs')), () => page.keyboard.press('Escape')],
     // the open song's bounces (under its row, folded until pressed), all of them, one's delete asked: the
@@ -1344,6 +1361,8 @@ function views(page, layout, finger) {
       },
     ],
     ['Settings', () => press(control(page, 'Settings')), () => page.keyboard.press('Escape')],
+    // the Arrangement and Chords lanes, switched on in Settings › View: the tracks with both under the ruler
+    ['Tracks, with the Arrangement and Chords lanes', () => lanes(true), () => lanes(false)],
     // Settings › Audio: the rate, where bounces are made, the devices
     [
       'Settings › Audio',

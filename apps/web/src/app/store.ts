@@ -208,6 +208,8 @@ export const SHOW_DEFAULTS = {
   regionContents: true,
   gridLines: true,
   markers: true,
+  arrangement: false,
+  chordLane: false,
   inactiveTracks: true,
   masterRail: false,
   stripInstrument: true,

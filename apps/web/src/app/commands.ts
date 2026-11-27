@@ -39,6 +39,7 @@ export type BarState = Pick<
   | 'rollKey'
   | 'rollSnap'
   | 'captureReady'
+  | 'show'
 > & { playhead: number; phone: boolean };
 
 /** What the commands do: the studio's own actions (actions.ts, and the store's toggles as keys.ts sets them). */
@@ -47,6 +48,8 @@ export interface Actions {
   togglePlay(): void;
   toggleRecord(): void;
   captureRecent(): void;
+  /** A section started at the playhead's bar (a marker there), with the Arrangement lane shown. */
+  addSection(): void;
   toggleCycle(): void;
   toggleMetronome(): void;
   stop(): void;
@@ -235,6 +238,30 @@ export function commandTable(s: BarState, act: Actions): Command[] {
       also: 'keep retrospective record flashback',
       available: (x) => x.project !== null && !x.recording,
       run: act.captureRecent,
+    },
+    {
+      id: 'section-add',
+      title: 'Add a section at the playhead',
+      group: 'Edit',
+      also: 'marker arrangement verse chorus part',
+      available: song,
+      run: act.addSection,
+    },
+    {
+      id: 'lane-arrangement',
+      title: s.show.arrangement ? 'Hide the Arrangement lane' : 'Show the Arrangement lane',
+      group: 'Windows',
+      also: 'sections markers arranger global tracks',
+      available: song,
+      run: () => act.set({ show: { ...s.show, arrangement: !s.show.arrangement } }),
+    },
+    {
+      id: 'lane-chords',
+      title: s.show.chordLane ? 'Hide the Chords lane' : 'Show the Chords lane',
+      group: 'Windows',
+      also: 'chord symbols harmony global tracks',
+      available: song,
+      run: () => act.set({ show: { ...s.show, chordLane: !s.show.chordLane } }),
     },
     {
       id: 'cycle',

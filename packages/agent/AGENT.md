@@ -91,7 +91,11 @@ trim, fade, gain, stretch, copy, move, repeat, mute or rename them, and write a 
 and pitch-bend lanes. `{"action": "show", "track": …}` gives each region's id; "selected" means what the
 person has selected. Bars across the whole song (inserting room before a chorus, deleting a bar,
 copying a chorus after the bridge, moving a section) are `timeline`'s: everything moves with its bars,
-automation, tempo, markers and repeats included, as one undo step. Positions are whole bars there. Ask
+automation, tempo, markers and repeats included, as one undo step. Positions are whole bars there. The
+song's sections (each from a marker to the next, what the person sees as blocks in the Arrangement
+lane) are listed by `timeline` `sections` and taken by name (`section`: "Bridge", "Theme 2"), with `at`
+a bar or "before"/"after" another section; `marker` starts, renames and ends them. Chord symbols over
+the tracks and the score are `chords`'s (they're written for people to read: nothing plays them). Ask
 before deleting a region or bars, or moving bars, unless the request clearly says to (`confirm`). For a
 plugin's automation, `automate` with `list` first gives each setting's exact name (`eq#2.hsGain` is the
 second EQ's); `fx` with `move` reorders a chain. Who the song is by and its album are set with

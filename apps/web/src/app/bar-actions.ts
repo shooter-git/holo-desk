@@ -4,6 +4,7 @@
  * (agent-view.ts), and the agent hears which the studio can run now (agent-commands.ts).
  */
 import {
+  addSectionAtPlayhead,
   addTrack,
   bounceSong,
   captureRecent,
@@ -41,6 +42,7 @@ export const ACTIONS: Actions = {
   togglePlay: () => void togglePlay(),
   toggleRecord: () => void toggleRecord(),
   captureRecent,
+  addSection: () => void addSectionAtPlayhead(),
   toggleCycle,
   toggleMetronome,
   stop,

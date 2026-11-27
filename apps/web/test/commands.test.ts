@@ -9,6 +9,7 @@ import {
   typedPosition,
 } from '../src/app/commands.ts';
 import { KEY_COMMANDS } from '../src/app/keys.ts';
+import { SHOW_DEFAULTS } from '../src/app/store.ts';
 
 const BAR = PPQ * 4;
 
@@ -64,6 +65,7 @@ function studio(patch: Partial<BarState> = {}): BarState {
     rollKey: true,
     rollSnap: false,
     captureReady: false,
+    show: { ...SHOW_DEFAULTS },
     playhead: 0,
     phone: false,
     ...patch,

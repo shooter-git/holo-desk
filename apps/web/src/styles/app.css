@@ -1004,16 +1004,18 @@ a.btn {
 .tracks {
   display: grid;
   grid-template-columns: var(--headers, 230px) minmax(0, 1fr);
-  grid-template-rows: calc(var(--control) + 4px) minmax(0, 1fr);
+  /* (the ruler's row is taller by the Arrangement and Chords lanes, when View has them on) */
+  grid-template-rows: calc(var(--control) + 4px + var(--lanes, 0px)) minmax(0, 1fr);
   min-height: 0;
   background: var(--bg-1);
 }
 
 .tracks-toolbar {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 4px;
-  padding: 0 6px;
+  padding: 0 6px var(--lanes, 0px);
   border-bottom: 1px solid var(--line);
   border-right: 1px solid var(--line);
   background: var(--bg-2);
@@ -1029,7 +1031,7 @@ a.btn {
 @media not (pointer: coarse) {
   [data-layout="tablet"] .tracks-toolbar {
     gap: 2px;
-    padding: 0 4px;
+    padding: 0 4px var(--lanes, 0px);
   }
 }
 
@@ -1340,7 +1342,7 @@ a.btn {
 
 .tracks.rail:not(.drawer-open) > .tracks-toolbar {
   justify-content: center;
-  padding: 0;
+  padding: 0 0 var(--lanes, 0px);
 }
 
 .track-row.rail-cell {
@@ -1530,7 +1532,7 @@ a.btn {
 
 .rail-peek {
   position: absolute;
-  top: calc(var(--control) + 4px + var(--row-top));
+  top: calc(var(--control) + 4px + var(--lanes, 0px) + var(--row-top));
   left: var(--headers);
   z-index: 9;
   /* a finger drawn back to the left puts them away: the drag is this panel's own, where the browser
@@ -1588,7 +1590,7 @@ a.btn {
 
 /* the selected track's header, under the lanes of a phone held upright */
 .tracks.docked {
-  grid-template-rows: calc(var(--control) + 4px) minmax(0, 1fr) auto;
+  grid-template-rows: calc(var(--control) + 4px + var(--lanes, 0px)) minmax(0, 1fr) auto;
 }
 
 .track-dock {
@@ -1666,11 +1668,101 @@ a.btn {
   background: var(--rec);
 }
 
+/* the ruler's cell: the ruler itself, and under it the Arrangement and Chords lanes when they're on */
 .ruler {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+.ruler-strip {
   position: relative;
+  flex: none;
+  height: calc(var(--control) + 4px);
   border-bottom: 1px solid var(--line);
   background: linear-gradient(180deg, #1d2126, #181b20);
   touch-action: none;
+}
+
+.song-lanes {
+  position: relative;
+  flex: none;
+  overflow: hidden;
+  touch-action: none;
+  user-select: none;
+}
+
+.song-lanes canvas {
+  display: block;
+}
+
+/* a section's name or a chord, typed in its place */
+.lane-entry {
+  position: absolute;
+  left: 0;
+  z-index: 3;
+  width: 148px;
+  padding: 0 6px;
+  font-size: 11.5px;
+}
+
+/* the lanes' names, at the foot of the tools' cell */
+.lane-heads {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  background: #15181c;
+  box-shadow: inset 0 1px 0 var(--line);
+}
+
+.lane-head {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 4px 0 10px;
+  border-bottom: 1px solid #0b0d10;
+  color: var(--text-2);
+  font-size: 10.5px;
+  font-weight: 600;
+}
+
+.lane-head .name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.lane-head .lane-add {
+  flex: none;
+  width: 20px;
+  min-width: 20px;
+  height: 20px;
+  padding: 0;
+}
+
+.lane-heads.short .lane-head {
+  justify-content: center;
+  padding: 0;
+}
+
+.lane-heads.short .lane-head .name {
+  flex: none;
+}
+
+@media (pointer: coarse) {
+  .lane-head {
+    font-size: 11.5px;
+  }
+
+  .lane-head .lane-add {
+    width: 26px;
+    min-width: 26px;
+    height: 26px;
+  }
 }
 
 .lane-tip {

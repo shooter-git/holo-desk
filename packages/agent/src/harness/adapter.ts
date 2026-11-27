@@ -267,6 +267,7 @@ const TOOL_WORDS: Record<string, string> = {
   played: 'Reading what you played',
   analyze_played: 'Reading what you played',
   capture: 'Keeping what you played',
+  chords: 'Writing the chords',
   compare: 'Setting up a comparison',
   scan_show: 'Reading the scan',
   scan_status: 'Marking the scan',

@@ -102,11 +102,13 @@ import {
   screenDpr,
   useWheel,
 } from './gesture.ts';
+import { LANE, LANE_TOUCH, type LaneRows, lanesHeight } from './lanes.ts';
 import { type MenuEntry, openMenu, openMenuAt } from './menu.tsx';
 import { drawMiniNotes, pitchRange } from './mini-notes.ts';
 import { DRAWER, PEEK_SWIPE, pinchAxis as pinchAxisOf, pinchedRow, pulledOut, RAIL, railRow } from './rail.ts';
 import { pressToReorder, type ReorderList } from './reorder.ts';
 import { rulerHold } from './ruler.ts';
+import { SongLaneHeads, SongLanes } from './SongLanes.tsx';
 import { DOUBLE_TAP_MS, gridStep, revealBy, TouchPan, Viewport, WHEEL_ZOOM, ZOOM } from './view.ts';
 import { drawClipWave, drawFades, fadeTo, trimEnd, trimStart } from './wave.ts';
 
@@ -1398,7 +1400,8 @@ export function TracksArea() {
           numbers: phone && s.show.trackNumbers ? p.tracks.map((t) => (s.project?.tracks.indexOf(t) ?? -1) + 1) : null,
         });
       const rctx = prepare(rulerCanvas.current, rulerSize.w, rulerSize.h, true);
-      if (rctx) drawRuler(rctx, p, cycle, s.show.markers, rulerSize.w, rulerSize.h);
+      // (the Arrangement lane names the markers: the ruler doesn't say them twice)
+      if (rctx) drawRuler(rctx, p, cycle, s.show.markers && !s.show.arrangement, rulerSize.w, rulerSize.h);
     }
     // what's being recorded is drawn on a layer over the timeline, each frame while there is any
     // (and once more as it ends, to clear it): nothing is drawn there the rest of the time
@@ -1430,6 +1433,13 @@ export function TracksArea() {
     if (store.get().project) tracksView.scrollBy(0, dy, maxScrollY());
   });
 
+  // the Arrangement and Chords lanes, under the ruler, when View has them on
+  const laneRows: LaneRows = {
+    arrangement: show.arrangement,
+    chords: show.chordLane,
+    row: isTouch() ? LANE_TOUCH : LANE,
+  };
+  const lanesTall = lanesHeight(laneRows);
   if (!project || !song) return <div className="tracks" />;
   const m = project.meter[0] ?? { tick: 0, num: 4, den: 4 };
   const bar = ticksPerBar(m);
@@ -2029,9 +2039,14 @@ export function TracksArea() {
   return (
     <div
       className={`tracks${phone ? ' rail' : ''}${drawer ? ' drawer-open' : ''}${docked ? ' docked' : ''}`}
-      style={{ ['--headers' as string]: `${headerWidth}px`, ['--drawer' as string]: `${DRAWER}px` }}
+      style={{
+        ['--headers' as string]: `${headerWidth}px`,
+        ['--drawer' as string]: `${DRAWER}px`,
+        ['--lanes' as string]: `${lanesTall}px`,
+      }}
     >
       <div className="tracks-toolbar">
+        {lanesTall > 0 && <SongLaneHeads rows={laneRows} short={phone && !drawer} />}
         {phone && (
           <button
             type="button"
@@ -2097,14 +2112,17 @@ export function TracksArea() {
           </>
         )}
       </div>
-      <div
-        className="ruler"
-        ref={rulerBox}
-        onPointerDown={onRulerDown}
-        onContextMenu={(e) => e.preventDefault()}
-        title="Top: drag to set the cycle. Bottom: click to move the playhead"
-      >
-        <canvas ref={rulerCanvas} />
+      <div className="ruler">
+        <div
+          className="ruler-strip"
+          ref={rulerBox}
+          onPointerDown={onRulerDown}
+          onContextMenu={(e) => e.preventDefault()}
+          title="Top: drag to set the cycle. Bottom: click to move the playhead"
+        >
+          <canvas ref={rulerCanvas} />
+        </div>
+        {lanesTall > 0 && <SongLanes view={tracksView} rows={laneRows} onWheel={onWheel} />}
       </div>
       <div
         className="track-list"

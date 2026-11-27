@@ -145,6 +145,7 @@ describe('the tool list', () => {
       'automate',
       'song_set',
       'marker',
+      'chords',
       'cycle',
       'score_write',
       'score_part',

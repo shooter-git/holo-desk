@@ -29,6 +29,24 @@ describe('View’s options (the eye’s menu and Settings › View)', () => {
     expect(keys(phone)).toHaveLength(keys(V.GROUPS).filter((k) => !k.startsWith('bar')).length);
   });
 
+  it('count as hidden only what begins shown: a choice that begins off hides nothing', () => {
+    const fresh = { ...S.SHOW_DEFAULTS };
+    expect(V.hiddenParts(fresh)).toBe(0);
+    // (taken or left, track numbers and Stereo Out pinned are not hidden parts)
+    expect(V.hiddenParts({ ...fresh, trackNumbers: true, masterRail: true })).toBe(0);
+    expect(V.hiddenParts({ ...fresh, trackIcons: false, mixerMaster: false })).toBe(2);
+    // every choice is one or the other: none begins off without being meant to
+    const off = (Object.keys(fresh) as (keyof typeof fresh)[]).filter((k) => !fresh[k]);
+    expect(off.sort()).toEqual(['masterRail', 'trackNumbers']);
+  });
+
+  it('show everything again without undoing what was added', () => {
+    const fresh = { ...S.SHOW_DEFAULTS };
+    const shown = V.showEverything({ ...fresh, trackIcons: false, stripPan: false, trackNumbers: true });
+    expect(V.hiddenParts(shown)).toBe(0);
+    expect(shown).toMatchObject({ trackIcons: true, stripPan: true, trackNumbers: true, masterRail: false });
+  });
+
   it('show and hide the panes', () => {
     S.store.set({ library: false, inspector: true, editor: null, noteView: 'roll', automationView: false });
     const on = () => V.PANES.map(([p]) => V.paneOn(S.store.get(), p));

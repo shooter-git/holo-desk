@@ -7,15 +7,15 @@
 import { Eye } from 'lucide-react';
 import { useEffect, useId, useRef, useState } from 'react';
 import { isPhone, useLayout } from '../app/layout.ts';
-import { SHOW_DEFAULTS, type ShowKey, store, useApp } from '../app/store.ts';
-import { PANES, paneOn, togglePane, viewGroups } from './view-options.ts';
+import { type ShowKey, store, useApp } from '../app/store.ts';
+import { hiddenParts, PANES, paneOn, showEverything, togglePane, viewGroups } from './view-options.ts';
 
 /** The options themselves: the panes, then each group's parts, then a way back to everything. */
 export function ViewOptions() {
   const show = useApp((s) => s.show);
   const panes = useApp((s) => PANES.map(([p]) => paneOn(s, p)).join(','));
   const phone = isPhone(useLayout());
-  const hidden = Object.values(show).filter((v) => !v).length;
+  const hidden = hiddenParts(show);
   const set = (key: ShowKey, on: boolean) => store.set({ show: { ...store.get().show, [key]: on } });
   const paneStates = panes.split(',');
   return (
@@ -46,7 +46,7 @@ export function ViewOptions() {
           type="button"
           className="btn"
           disabled={hidden === 0}
-          onClick={() => store.set({ show: { ...SHOW_DEFAULTS } })}
+          onClick={() => store.set({ show: showEverything(store.get().show) })}
         >
           Show everything
         </button>
@@ -60,7 +60,7 @@ export function ViewMenu() {
   const [open, setOpen] = useState(false);
   const button = useRef<HTMLButtonElement>(null);
   const panel = useRef<HTMLDivElement>(null);
-  const hidden = useApp((s) => Object.values(s.show).filter((v) => !v).length);
+  const hidden = useApp((s) => hiddenParts(s.show));
   const labelId = useId();
 
   useEffect(() => {

@@ -4,7 +4,7 @@
  * Most are parts of what's drawn; Inactive tracks, Buses and Master leave whole tracks or strips out
  * (app/shown-tracks.ts), on this device only: the song is whole whatever is shown of it.
  */
-import { type AppState, type ShowKey, store } from '../app/store.ts';
+import { type AppState, SHOW_DEFAULTS, type ShowKey, store } from '../app/store.ts';
 
 export type Pane = 'library' | 'inspector' | 'editor' | 'score' | 'mixer' | 'automation';
 
@@ -76,6 +76,22 @@ export const GROUPS: [string, [ShowKey, string][]][] = [
 /** The groups this layout offers: all of them, but a phone's leaves out the control bar's. */
 export function viewGroups(phone: boolean): [string, [ShowKey, string][]][] {
   return phone ? GROUPS.filter(([group]) => group !== CONTROL_BAR) : GROUPS;
+}
+
+/**
+ * How many parts View hides: the choices that begin on and are off now. A choice that begins off
+ * (track numbers, Stereo Out pinned at the left) adds something when it's taken: left alone, it
+ * hides nothing, and isn't counted.
+ */
+export function hiddenParts(show: AppState['show']): number {
+  return (Object.keys(SHOW_DEFAULTS) as ShowKey[]).filter((key) => SHOW_DEFAULTS[key] && !show[key]).length;
+}
+
+/** Every hidden part shown again. The choices that begin off stay as they are: they aren't hidden parts. */
+export function showEverything(show: AppState['show']): AppState['show'] {
+  const all = { ...show };
+  for (const key of Object.keys(SHOW_DEFAULTS) as ShowKey[]) if (SHOW_DEFAULTS[key]) all[key] = true;
+  return all;
 }
 
 export function paneOn(s: AppState, pane: Pane): boolean {

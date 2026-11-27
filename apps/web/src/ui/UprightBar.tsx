@@ -7,6 +7,7 @@
 import { ChevronDown, Ellipsis } from 'lucide-react';
 import { type ReactNode, useRef } from 'react';
 import { selectTrack } from '../app/actions.ts';
+import { isKitNow, shownNoteView } from '../app/note-view.ts';
 import { store, useApp } from '../app/store.ts';
 import { type MenuEntry, openMenuAt } from './menu.tsx';
 import { useScrollCue } from './scroll-cue.ts';
@@ -59,10 +60,15 @@ function viewEntries(): MenuEntry[] {
       { label: 'Notes', checked: s.audioMode === 'notes', onSelect: () => store.set({ audioMode: 'notes' }) },
     ];
   }
+  const shown = shownNoteView(s);
+  const kit = isKitNow(s.project?.tracks.find((t) => t.id === s.selectedTrack));
   return [
     { heading: 'View' },
-    { label: 'Piano Roll', checked: s.noteView === 'roll', onSelect: () => store.set({ noteView: 'roll' }) },
-    { label: 'Score', checked: s.noteView === 'score', onSelect: () => store.set({ noteView: 'score' }) },
+    ...(kit
+      ? [{ label: 'Step Grid', checked: shown === 'steps', onSelect: () => store.set({ noteView: 'steps' }) }]
+      : []),
+    { label: 'Piano Roll', checked: shown === 'roll', onSelect: () => store.set({ noteView: 'roll' }) },
+    { label: 'Score', checked: shown === 'score', onSelect: () => store.set({ noteView: 'score' }) },
   ];
 }
 

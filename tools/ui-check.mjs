@@ -1322,6 +1322,45 @@ function scanViews(page, layout, press, agent) {
   ];
 }
 
+/**
+ * The Step Grid: the song's Drums selected and shown as steps, both from the bar (its commands are
+ * the one way that's the same on every screen), then the Piano Roll again for the views after it.
+ */
+function stepGrid(page, layout, press) {
+  const sheet = layout !== 'desktop';
+  const open = () => (sheet ? press(control(page, 'Commands')) : page.keyboard.press('Control+/'));
+  const field = () => page.locator('.talk-page .field textarea, .bar .field input').first();
+  const run = async (typed) => {
+    await open();
+    await field().fill(typed);
+    await page.keyboard.press('Enter');
+    // (a sheet stays for the next command: put away, as a person would)
+    if (
+      sheet &&
+      (await field()
+        .isVisible()
+        .catch(() => false))
+    )
+      await press(control(page, 'Commands'));
+  };
+  return [
+    'Step Grid',
+    async () => {
+      await run('Select track: Drums');
+      await run('Step Grid');
+      if (layout.startsWith('phone')) await press(page.locator('.tabbar button', { hasText: 'Step Grid' }).first());
+      await page.locator('.steps .step').first().waitFor();
+    },
+    async () => {
+      await run('Piano Roll');
+      if (layout.startsWith('phone')) await press(page.locator('.tabbar button', { hasText: 'Tracks' }).first());
+      else if (!(await page.locator('.roll').count())) await page.keyboard.press('p');
+      if (await page.locator('.steps').count())
+        throw new Error('the Step Grid is still there after the Piano Roll was asked for');
+    },
+  ];
+}
+
 function views(page, layout, finger) {
   const phone = layout.startsWith('phone');
   const press = (loc) => (finger ? loc.tap() : loc.click());
@@ -1396,6 +1435,7 @@ function views(page, layout, finger) {
       ...dialogs,
       ...commands(page, layout, press),
       ...scanViews(page, layout, press, false),
+      stepGrid(page, layout, press),
     ];
   }
   const key = (label, k) => [label, () => page.keyboard.press(k), () => page.keyboard.press(k)];
@@ -1409,6 +1449,7 @@ function views(page, layout, finger) {
     ...dialogs,
     ...commands(page, layout, press),
     ...scanViews(page, layout, press, false),
+    stepGrid(page, layout, press),
   ];
 }
 

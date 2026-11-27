@@ -17,8 +17,11 @@ import { type Channel, formatParam, type Op, type ParamDef, type Plugin, type Pr
 // ---- the format ----
 
 /** The studio's views a go can bring in front. */
-/** `notes`: a recording's notes in the Audio Editor's Notes view (a MIDI track's in the Piano Roll). */
-export const VIEW_NAMES = ['tracks', 'editor', 'notes', 'mixer', 'score'] as const;
+/**
+ * `notes`: a recording's notes in the Audio Editor's Notes view (a MIDI track's in the Piano Roll).
+ * `steps`: a kit's part in the Step Grid (a track that isn't a kit shows its Piano Roll).
+ */
+export const VIEW_NAMES = ['tracks', 'editor', 'notes', 'mixer', 'score', 'steps'] as const;
 export type ViewName = (typeof VIEW_NAMES)[number];
 
 /**

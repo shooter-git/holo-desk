@@ -170,6 +170,7 @@ describe('the tool list', () => {
       'finish',
       'regions',
       'timeline',
+      'steps',
     ])
       expect(names.has(n), n).toBe(true);
   });

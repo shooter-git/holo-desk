@@ -42,6 +42,7 @@ export const TOOL_PARITY: Readonly<Record<string, Parity>> = {
   notes_write: { commands: ['write'] },
   notes_clear: { commands: ['clear'] },
   regions: { commands: ['regions'] },
+  steps: { commands: ['steps'] },
   audio_notes: { commands: ['notes'] },
 
   // ---- tracks, sounds and the mix ----

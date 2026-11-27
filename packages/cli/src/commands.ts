@@ -62,6 +62,7 @@ export const COMMANDS = [
   'played',
   'capture',
   'chords',
+  'steps',
   'details',
   'import',
   'packs',
@@ -113,6 +114,12 @@ ${noteActions('        ')}
   holo chords [--at 9.3 --symbol Dm7 | --at 9.3 --remove | --set "9=Dm7 9.3=G7 10=Cmaj7"]
                                               the song's chord symbols (the Chords lane's, and the Score's):
                                               listed with nothing, set, removed, or several written at once
+  holo steps [ACTION] TRACK [--bars 9-12] [--grid 1/16] [--row "Snare"] [--lines "Kick: x...x...; Snare: ....X..."] …
+        a drum track as the Step Grid shows it, a row a piece (X accent, x hit, o soft, g ghost, . none): shown
+        with no action; write (--lines, or --row with --pattern), set, clear (--step N or --steps 1,5,9),
+        velocity (--level accent | --velocity 90 | --by -10), fill (--every 4), euclid (--hits 5 --rotate 2),
+        shift (--by 1), humanize (--amount 12), copy (--to 13 --times 3), swing (--amount 58), clear-row
+        e.g. holo steps Drums --bars 9-10 · holo steps euclid Drums --bars 9-12 --row "Closed Hat" --hits 11
   holo capture                                keep what was just played in the studio as regions, on the tracks
                                               that sounded it (the studio's Capture, Shift R)
   holo played [--seconds 20] [--analyze]      what was just played in the studio; --analyze: tempo, meter,

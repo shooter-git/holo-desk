@@ -164,6 +164,10 @@ holo regions quantize --track Keys --unit 1/16 --strength 80   # quantize (--swi
 holo regions quantize --track Drums --unit 1/8 --swing 67     #   straight grids only), transpose (--semitones),
 holo regions into_key --track Keys                           #   into_key (notes outside the song's key move onto it) and
 holo regions cc rgn_… --lane pb --points "9=0 9.3=4096 10=0"   # controller lanes (mod 1, 11, 64, pb, at)
+holo steps Drums --bars 9-10                       # a drum track as the Step Grid shows it: a row a piece,
+holo steps write Drums --bars 9-12 --lines "Kick: x...x...x...x...; Snare: ....X.......X..."
+holo steps euclid Drums --bars 9-12 --row "Closed Hat" --hits 11   #   X accent, x hit, o soft, g ghost, . none;
+holo steps swing Drums --bars 9-12 --amount 58     #   also set, clear, velocity, fill, shift, humanize, copy, clear-row
 holo notes show --track Vocal                      # a recording's notes, numbered: pitch and cents, vibrato, drift
 holo notes shift --notes 5 --semitones 2           # each Audio Editor edit, on notes chosen as all, 1-12,15,
 holo notes vibrato --notes "bars 9-12" --keep 60   #   "bars 9-12" or "pitch E4" (holo notes help lists the

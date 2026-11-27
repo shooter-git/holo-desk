@@ -266,6 +266,25 @@ What comes next, in this order:
 3. **Smarter sample memory**: stream long samples and recordings. (A render already loads only the
    samples its song can sound, below; a phone's studio loads those of the keys its song plays.)
 
+## The Step Grid
+
+A drum part shown as steps is the track's own notes: nothing is stored for a step. Reading
+(`readSteps` in `packages/agent/src/edits/steps.ts`) gives each note to the step it's nearest and
+keeps how far it is from it, so a part played by hand opens as it was played and stays that way
+until a step is changed; several notes of one pitch on a step (a flam) are one lit step. Every edit
+is in that file too (`STEP_EDITS`: set, clear, velocity, fill, euclid, shift, humanize, copy, swing,
+clear-row, write), each a function from the track's part to operations on it, and three things call
+them: the studio's grid (`apps/web/src/ui/StepGrid.tsx`), the agent's `steps` tool and `holo steps`.
+Tests hold all three to the list: an edit added there without a control in the studio or an action in
+the tool fails. A step lit where the part has no region gets one over the free part of that bar,
+joined to its neighbours made in the same edit.
+
+The grid is a view of the notes editor, beside the Piano Roll and the Score, offered for a kit (a drum
+synth, or a sampled instrument whose map names pads or says it isn't played by pitch); any other
+track shows its Piano Roll, whatever was last chosen (`apps/web/src/app/note-view.ts`). It draws
+with elements, not a canvas: a page is at most four bars of steps, and the steps' swell as they're
+lit or struck is the browser's own animation, left out where motion is to be spared.
+
 ## A bounce on the host
 
 A studio renders its own bounce in the page, its instruments' samples loaded there as floats (those

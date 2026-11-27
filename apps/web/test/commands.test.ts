@@ -225,6 +225,18 @@ describe('the bar’s commands', () => {
     expect(missing).toEqual([]);
   });
 
+  it('offers the Step Grid for a kit, and not for a track played by pitch', () => {
+    const { project, piano } = song();
+    const { act, calls } = recorder();
+    const off = studio({ project, selectedTrack: piano, editor: 'piano', noteView: 'roll' });
+    const stepGrid = (s: BarState) => commandTable(s, act).find((c) => c.id === 'step-grid');
+    expect(stepGrid(off)?.available?.(off)).toBe(false);
+    const on = { ...off, kit: true };
+    expect(stepGrid(on)?.available?.(on)).toBe(true);
+    stepGrid(on)?.run();
+    expect(calls).toEqual(['set({"editor":"piano","noteView":"steps","mobileTab":"editor"})']);
+  });
+
   it('runs what the keys run', () => {
     const { project, piano } = song();
     const s = studio({ project, selectedTrack: piano, editor: 'piano', noteView: 'roll' });

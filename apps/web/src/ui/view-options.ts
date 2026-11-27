@@ -100,7 +100,7 @@ export function showEverything(show: AppState['show']): AppState['show'] {
 export function paneOn(s: AppState, pane: Pane): boolean {
   if (pane === 'library') return s.library;
   if (pane === 'inspector') return s.inspector;
-  if (pane === 'editor') return s.editor === 'piano' && s.noteView === 'roll';
+  if (pane === 'editor') return s.editor === 'piano' && s.noteView !== 'score';
   if (pane === 'score') return s.editor === 'piano' && s.noteView === 'score';
   if (pane === 'mixer') return s.editor === 'mixer';
   return s.automationView;
@@ -111,7 +111,8 @@ export function togglePane(pane: Pane): void {
   if (pane === 'library') store.set({ library: !s.library });
   else if (pane === 'inspector') store.set({ inspector: !s.inspector });
   else if (pane === 'editor' || pane === 'score') {
-    const view = pane === 'score' ? 'score' : 'roll';
+    // (the notes editor is the Piano Roll, or the Step Grid where that's what a kit shows)
+    const view = pane === 'score' ? 'score' : s.noteView === 'steps' ? 'steps' : 'roll';
     store.set({ editor: s.editor === 'piano' && s.noteView === view ? null : 'piano', noteView: view });
   } else if (pane === 'mixer') store.set({ editor: s.editor === 'mixer' ? null : 'mixer' });
   else store.set({ automationView: !s.automationView });

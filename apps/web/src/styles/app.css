@@ -8130,6 +8130,422 @@ html[data-layout^="phone"] .view-item kbd {
   color: var(--warn);
 }
 
+/* ---------- the Step Grid: a kit's part as a drum machine shows it ---------- */
+
+.steps {
+  --row: 30px;
+  --gap: 3px;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  /* (it takes the pane's width, however many bars its strip has: the strip scrolls) */
+  min-width: 0;
+  min-height: 0;
+  background: var(--bg-1);
+}
+
+.steps.s-touch {
+  --row: 42px;
+}
+
+/* the part, bar by bar: where the page is, and where anything is played */
+.steps-top {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+  padding: 4px 4px;
+  border-bottom: 1px solid var(--line);
+  background: var(--bg-2);
+}
+
+.steps-strip {
+  display: flex;
+  flex: 1;
+  gap: 3px;
+  min-width: 0;
+  padding: 2px;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.steps-strip::-webkit-scrollbar {
+  display: none;
+}
+
+.strip-bar {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  width: 36px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid var(--line-2);
+  border-radius: 6px;
+  background: var(--bg-3);
+  color: var(--text-3);
+  font: inherit;
+  font-size: 9px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.strip-bar:hover {
+  border-color: var(--line-3);
+  color: var(--text-2);
+}
+
+.strip-bar.s-on {
+  border-color: color-mix(in srgb, var(--c) 70%, transparent);
+  background: color-mix(in srgb, var(--c) 16%, var(--bg-3));
+  color: var(--text);
+}
+
+.strip-parts {
+  display: flex;
+  gap: 2px;
+}
+
+.strip-parts i {
+  width: 5px;
+  height: 5px;
+  border-radius: 1.5px;
+  background: var(--bg-5);
+}
+
+.strip-parts i.s-hit {
+  background: var(--c);
+}
+
+.steps.s-touch .strip-bar {
+  width: 42px;
+  height: 34px;
+}
+
+.steps-body {
+  flex: 1;
+  min-height: 0;
+  padding: 0 8px 12px 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  /* up and down scrolls the rows; along a row is the grid's own (painting) */
+  touch-action: pan-y;
+}
+
+.steps-rows {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: var(--gap);
+  outline: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+}
+
+.step-row {
+  display: flex;
+  align-items: stretch;
+  height: var(--row);
+}
+
+/* the beats, over the steps: it stays while the rows scroll under it */
+.step-row.step-ruler {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  height: 22px;
+  background: var(--bg-1);
+}
+
+.step-head {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 1px;
+  width: var(--names);
+  min-width: 0;
+  padding-right: 6px;
+}
+
+.step-page {
+  overflow: hidden;
+  padding-left: 13px;
+  color: var(--text-3);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+/* a pad's name plays it */
+.step-name {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  padding: 0 4px 0 10px;
+  overflow: hidden;
+  border: 0;
+  border-left: 3px solid var(--c);
+  border-radius: 0 6px 6px 0;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+}
+
+.step-name:hover {
+  background: var(--bg-3);
+}
+
+.step-name:active {
+  background: color-mix(in srgb, var(--c) 22%, var(--bg-3));
+}
+
+.step-name-text {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  transform-origin: left center;
+}
+
+.step-more {
+  flex: none;
+  color: var(--text-3);
+}
+
+.step-row:hover .step-more,
+.step-more:focus-visible {
+  color: var(--text);
+}
+
+/* under a finger the names have less room: two lines, and a narrower ⋯ */
+.steps.s-touch .step-head {
+  padding-right: 3px;
+}
+
+.steps.s-touch .step-name {
+  padding: 0 2px 0 8px;
+}
+
+.steps.s-touch .step-name-text {
+  display: -webkit-box;
+  font-size: 12px;
+  line-height: 1.15;
+  white-space: normal;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.steps.s-touch .step-more {
+  width: 26px;
+  min-width: 26px;
+  height: 100%;
+  padding: 0;
+}
+
+.steps.s-touch .step-page {
+  padding-left: 11px;
+}
+
+/* the bars, each a little apart from the last */
+.step-cells {
+  display: flex;
+  flex: 1;
+  gap: 9px;
+  min-width: 0;
+}
+
+.step-bar {
+  display: grid;
+  gap: var(--gap);
+  min-width: 0;
+}
+
+.step-tick {
+  min-width: 0;
+  padding: 0 0 0 2px;
+  overflow: hidden;
+  border: 0;
+  background: transparent;
+  color: var(--text-3);
+  font-family: var(--mono);
+  font-size: 10px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.step-tick.s-beat {
+  box-shadow: inset 1px 0 0 var(--line-3);
+  color: var(--text-2);
+}
+
+.step-tick b {
+  color: var(--text);
+}
+
+.step-tick:hover {
+  color: var(--text);
+}
+
+/* a step: dark until it's lit; every other beat's steps a shade apart, so the eye counts in beats */
+.step {
+  position: relative;
+  min-width: 0;
+  border-radius: 5px;
+  background: var(--bg-3);
+  box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.03);
+  cursor: pointer;
+  /* a note played early or late shows where it is in its step, and stays inside it */
+  overflow: hidden;
+}
+
+.step.s-alt {
+  background: var(--bg-2);
+}
+
+@media (hover: hover) {
+  .step:hover {
+    box-shadow: inset 0 0 0 1px var(--line-3);
+  }
+}
+
+/* lit: as full and as bright as it's hit hard, and where the note really is in its step */
+.step .pip {
+  position: absolute;
+  inset: 1px;
+  display: grid;
+  place-items: center;
+  border-radius: 4px;
+  background: linear-gradient(
+    to top,
+    var(--c) calc(var(--v, 0.8) * 100%),
+    color-mix(in srgb, var(--c) 30%, transparent) calc(var(--v, 0.8) * 100%)
+  );
+  color: rgb(0 0 0 / 0.72);
+  font-size: 9px;
+  font-weight: 800;
+  opacity: calc(0.5 + var(--v, 0.8) * 0.5);
+  transform: translateX(calc(var(--off, 0) * 100%));
+  animation: step-pop 0.17s cubic-bezier(0.2, 1.5, 0.4, 1);
+  pointer-events: none;
+}
+
+.step.lv-accent {
+  box-shadow: 0 0 10px color-mix(in srgb, var(--c) 55%, transparent);
+}
+
+.step.lv-accent .pip {
+  box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.4);
+}
+
+.step.lv-ghost .pip {
+  background: linear-gradient(
+    to top,
+    var(--c) calc(var(--v, 0.3) * 100%),
+    color-mix(in srgb, var(--c) 18%, transparent) calc(var(--v, 0.3) * 100%)
+  );
+}
+
+@keyframes step-pop {
+  from {
+    opacity: 0.2;
+    scale: 0.55;
+  }
+}
+
+.steps-rows:focus-visible .step.s-cur {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* the light that runs along the steps as the song plays; stopped, a thin line where the playhead is */
+.steps-light {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 2;
+  width: 0;
+  border-radius: 6px;
+  background: linear-gradient(to bottom, rgb(255 255 255 / 0.13), rgb(255 255 255 / 0.05));
+  box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.18);
+  opacity: 0;
+  pointer-events: none;
+}
+
+.steps-light.s-idle {
+  border-radius: 0;
+  background: none;
+  box-shadow: inset 2px 0 0 color-mix(in srgb, var(--play) 75%, transparent);
+}
+
+/* a row typed as a line: a character a step */
+.step-typed {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  letter-spacing: 0.32em;
+}
+
+.steps-note {
+  margin: 14px 8px 0 calc(var(--names) + 2px);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.steps-all {
+  margin: 8px 0 0 6px;
+  color: var(--text-2);
+}
+
+/* how hard, while a step is dragged up or down */
+.step-bubble {
+  position: fixed;
+  z-index: var(--z-popover);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  min-width: 52px;
+  padding: 4px 10px 5px;
+  border: 1px solid var(--line-3);
+  border-radius: 9px;
+  background: var(--bg-5);
+  box-shadow: var(--shadow);
+  transform: translate(-50%, calc(-100% - 26px));
+  pointer-events: none;
+}
+
+.step-bubble b {
+  font-family: var(--mono);
+  font-size: 16px;
+}
+
+.step-bubble span {
+  color: var(--text-2);
+  font-size: 10px;
+}
+
+.step-swing.on {
+  color: var(--text);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .step .pip {
+    animation: none;
+  }
+}
+
 /* ---- the Score: Verovio's engraving in the studio's colors, with the playhead over it ---- */
 .score {
   position: relative;

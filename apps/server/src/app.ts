@@ -57,6 +57,7 @@ import { runnerKey } from './agent/keys.ts';
 import type { Notify } from './agent/push.ts';
 import { agentRoutes } from './agent/routes.ts';
 import { convertToWav, sweepAudio, TO_WAV } from './audio-files.ts';
+import { type Backup, backupDatabase } from './backup.ts';
 import type { Config } from './config.ts';
 import { Creations, sessionText } from './creations.ts';
 import { type SongDetails, Store } from './db.ts';
@@ -223,16 +224,41 @@ export async function buildApp(
       return null;
     }
   })();
+  const version = '0.10.1';
   app.get('/api/health', async () => {
     const editor = live.state().state;
     return {
       ok: true,
-      version: '0.10.1',
+      version,
       build,
       // a studio playing or recording, or a bounce the host is making: an update waits for it (tools/update.mjs)
       busy: editor?.playing === true || editor?.recording === true || bounces.busy(),
       engine: { ...studio, label: engineLabel(studio) },
     };
+  });
+
+  // A copy of the songs' database, before a new version starts (tools/update.mjs asks, as this
+  // computer's owner: with the runner key, as `holo pair` does). One is made at a time: asked again
+  // meanwhile, the answer is that copy's.
+  let copying: Promise<Backup> | null = null;
+  app.post('/api/backup', async (req, reply) => {
+    if (!live.isRunnerKey(req.headers['x-holo-runner-key']))
+      return reply.code(403).send({ error: 'That isn’t this HO[LO]’s runner key' });
+    copying ??= backupDatabase(store, config.dataDir, version).finally(() => {
+      copying = null;
+    });
+    try {
+      const made = await copying;
+      if (made.ok) return { file: made.file, size: made.size };
+      return reply.code(507).send({
+        error: 'The data folder’s disk hasn’t room for a copy of the songs’ database',
+        need: made.need,
+        free: made.free,
+      });
+    } catch (err) {
+      req.log.error(err, 'the songs’ database couldn’t be copied');
+      return reply.code(500).send({ error: 'The songs’ database couldn’t be copied' });
+    }
   });
 
   app.get('/api/settings', async () => ({ middleC: store.setting('middleC') ?? 'C3' }));

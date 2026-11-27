@@ -187,7 +187,13 @@ Install sample packs from the studio's Library (**More packs → Install**; brow
 CI with a signed record of what built it: `stable` and the version on each release, `main` on every
 change merged, `sha-<commit>` always. The timer looks every 15 minutes and never restarts HO[LO] while a
 studio is playing or recording; an open studio offers to reload when its host has been updated. Songs
-and packs live in `./data`, outside the image, so an update never touches them. An update also moves this
+and packs live in `./data`, outside the image, so an update never touches them. Before a new version
+starts, the songs' database is copied to `data/backups` (the last three kept; with no room on the disk
+the update says so and goes on), and a version that doesn't answer within three minutes is undone:
+HO[LO] goes back to the one before, and waits for a newer one (`journalctl --user -u holo-update` says
+what happened; `pnpm run update` tries again by hand). A copy is only ever put back by hand: stop
+HO[LO] (`pnpm down`), put it in `data` as `holo.db`, with no `holo.db-wal` or `holo.db-shm` beside it,
+and start it again. An update also moves this
 checkout to the code of the image it started (a release's tag, or main's head), so its compose file, its
 tools and the runner match the server, and starts the runner again. `pnpm run update` takes a checkout on
 main along (it's then on no branch, and follows); a checkout on any other branch, or with changes or

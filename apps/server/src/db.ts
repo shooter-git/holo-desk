@@ -5,7 +5,7 @@
  */
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { DatabaseSync } from 'node:sqlite';
+import { backup, DatabaseSync } from 'node:sqlite';
 import { type Project, parseProject } from '@holo/session';
 
 export interface ProjectRow {
@@ -240,6 +240,14 @@ export class Store {
 
   setSetting(key: string, value: string): void {
     this.db.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)').run(key, value);
+  }
+
+  /**
+   * A copy of the whole database in a file of its own (SQLite's online backup: the copy is as the
+   * database was at one moment, whatever is saved while it's made). The pages copied.
+   */
+  backup(path: string): Promise<number> {
+    return backup(this.db, path);
   }
 
   close(): void {

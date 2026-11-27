@@ -14,7 +14,12 @@ export interface HostBounceAsk {
   name: string;
   /** This device's token, when the agent knows it: the host then tells it when the bounce is done (its notices outside HO[LO]). */
   token?: string;
+  /** The song's stems (a WAV for each track, in one ZIP) instead of its mix. */
+  stems?: boolean;
 }
+
+/** Whether a bounce's file (its name, or the link to it) is a song's stems: a ZIP, where a bounce is a WAV. */
+export const isStems = (file: string | null | undefined): boolean => /\.zip(\?|$)/i.test(file ?? '');
 
 /** A bounce the host took: its job, and when the host began it (by the host's clock, ms). */
 export interface HostBounceStarted {
@@ -35,19 +40,41 @@ type Fetch = typeof fetch;
  * take it: one from before it made bounces, too many waiting already, or out of reach.
  */
 export async function startHostBounce(ask: HostBounceAsk, fetcher: Fetch = fetch): Promise<HostBounceStarted | null> {
+  const asked = await askHostBounce(ask, fetcher);
+  return 'error' in asked ? null : asked;
+}
+
+/**
+ * The same, saying why when the host won't take it (its own words, where it gave any): a song's
+ * stems are made on the host or not at all, so there's something to tell.
+ */
+export async function askHostBounce(
+  ask: HostBounceAsk,
+  fetcher: Fetch = fetch,
+): Promise<HostBounceStarted | { error: string }> {
   try {
     const res = await fetcher(`/api/projects/${ask.project.id}/bounces/host`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', ...(ask.token ? { authorization: `Bearer ${ask.token}` } : {}) },
-      body: JSON.stringify({ doc: ask.project, from: ask.from, to: ask.to, tail: ask.tail, name: ask.name }),
+      body: JSON.stringify({
+        doc: ask.project,
+        from: ask.from,
+        to: ask.to,
+        tail: ask.tail,
+        name: ask.name,
+        ...(ask.stems ? { stems: true } : {}),
+      }),
     });
-    if (res.status !== 202) return null;
+    if (res.status !== 202) {
+      const said = (await res.json().catch(() => null)) as { error?: unknown } | null;
+      return { error: typeof said?.error === 'string' && said.error ? said.error : `The host answered ${res.status}` };
+    }
     const { id, started } = (await res.json()) as { id?: unknown; started?: unknown };
-    if (typeof id !== 'string' || !id) return null;
+    if (typeof id !== 'string' || !id) return { error: 'The host didn’t say which bounce it started' };
     // (a host that doesn't say when: this device's clock, for want of the host's)
     return { id, started: typeof started === 'number' && Number.isFinite(started) ? started : Date.now() };
   } catch {
-    return null;
+    return { error: 'The host couldn’t be reached' };
   }
 }
 
@@ -118,12 +145,14 @@ export async function findBounce(
   name: string,
   started: number,
   fetcher: Fetch = fetch,
+  /** A bounce's file is a WAV; a song's stems, a ZIP. */
+  ext: 'wav' | 'zip' = 'wav',
 ): Promise<{ file: string; url: string; path: string } | null> {
   try {
     const res = await fetcher(`/api/projects/${encodeURIComponent(project)}/bounces`);
     if (!res.ok) return null;
     const list = (await res.json()) as { file?: unknown; url?: unknown }[];
-    const wanted = `${bounceTitle(name)}.wav`;
+    const wanted = `${bounceTitle(name)}.${ext}`;
     const since = stamp(started);
     const found = list
       .filter(
@@ -154,10 +183,12 @@ export interface ListedBounce {
   made: number;
   /** Its length (null: the host couldn't read it). */
   seconds: number | null;
+  /** The song's stems (a ZIP of a WAV for each track), not a bounce of its mix. */
+  stems: boolean;
 }
 
 /** A bounce's file name: "YYYY-MM-DD HH.MM.SS " (UTC) and then what it's of. */
-const STAMPED = /^(\d{4})-(\d\d)-(\d\d) (\d\d)\.(\d\d)\.(\d\d) (.+)\.wav$/i;
+const STAMPED = /^(\d{4})-(\d\d)-(\d\d) (\d\d)\.(\d\d)\.(\d\d) (.+)\.(?:wav|zip)$/i;
 
 /**
  * One of the host's list of a song's bounces, as the studio shows it. Null for what isn't one. A
@@ -174,7 +205,8 @@ export function bounceRow(entry: unknown): ListedBounce | null {
   return {
     file: e.file,
     url: e.url,
-    title: stamped?.[7] ?? e.file.replace(/\.wav$/i, ''),
+    title: stamped?.[7] ?? e.file.replace(/\.(wav|zip)$/i, ''),
+    stems: isStems(e.file),
     bytes: num(e.bytes) ?? 0,
     made: num(e.made) ?? (Number.isFinite(named) ? named : 0),
     seconds: num(e.seconds),
@@ -210,6 +242,8 @@ export interface KeptBounce {
   /** When it was asked for (this device's clock), and when the host began it (the host's). */
   at: number;
   started: number;
+  /** The song's stems, not its mix (its file is a ZIP). */
+  stems?: boolean;
   done?: { url: string; file: string; seconds: number | null };
 }
 
@@ -241,6 +275,7 @@ function read(storage: Pick<Shelf, 'getItem'>, now: number): KeptBounce | null {
       download: kept.download === true,
       at,
       started: typeof kept.started === 'number' ? kept.started : at,
+      ...(kept.stems === true ? { stems: true } : {}),
       ...(done && typeof done.url === 'string' && typeof done.file === 'string'
         ? { done: { url: done.url, file: done.file, seconds: typeof done.seconds === 'number' ? done.seconds : null } }
         : {}),

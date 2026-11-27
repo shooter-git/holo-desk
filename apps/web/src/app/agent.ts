@@ -99,7 +99,15 @@ export function runnerProblem(runner: AgentInfo['runner'] | undefined): string |
 }
 
 export type JobState = 'waiting' | 'running' | 'awaiting' | 'done' | 'failed' | 'cancelled';
-export type PermissionKind = 'install-pack' | 'send-creation' | 'bounce' | 'render' | 'screen' | 'photo' | 'microphone';
+export type PermissionKind =
+  | 'install-pack'
+  | 'send-creation'
+  | 'bounce'
+  | 'stems'
+  | 'render'
+  | 'screen'
+  | 'photo'
+  | 'microphone';
 
 export interface Permission {
   kind: PermissionKind;
@@ -585,6 +593,7 @@ const ALLOW: Record<PermissionKind, string> = {
   'install-pack': 'Install it',
   'send-creation': 'Send it',
   bounce: 'Bounce the song',
+  stems: 'Export the stems',
   render: 'Hear it as the creation plays it',
   screen: 'Share the screen',
   photo: 'Take a photo',

@@ -141,6 +141,11 @@ You think in seconds; music happens in milliseconds. So:
 - **Transport**: `holo play [--from 9]`, `holo stop`, `holo locate 1`, `holo loop off`.
 - **Bounce**: `holo bounce` renders the song (or the cycle) to a WAV in the studio and keeps it with the
   song on the host; the command prints where.
+- **Stems**: `holo stems` has the host make a 24-bit WAV for each track the mix is made of, in one ZIP
+  kept with the song's bounces (the cycle when it's on, unless `--whole`; `--out FILE.zip` saves it here
+  too; no studio need be open). It says first which files there will be, and what would stop them adding
+  up to the mix (the song's finish, a limiter or compressor several tracks share): pass that on.
+  `holo render-audio --stems --out DIR|FILE.zip` renders the same files here, headless.
 - **Audio**: `holo audio FILE.wav --at 9 [--track "Vocal"]` puts a recording or a stem on an audio track
   (a new one unless `--track` names one). Audio regions show in `holo show` with their file, gain,
   fades and stretch; change those with `holo regions` (below) or raw `updateRegion` ops (see reference.md).

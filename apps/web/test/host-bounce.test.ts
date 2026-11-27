@@ -2,10 +2,12 @@ import { newProject } from '@holo/session';
 import { describe, expect, it } from 'vitest';
 import { saveWay } from '../src/app/bounce-save.ts';
 import {
+  askHostBounce,
   bounceRow,
   bounceTitle,
   dropBounce,
   findBounce,
+  isStems,
   type KeptBounce,
   keepBounce,
   keptBounce,
@@ -60,6 +62,32 @@ describe('a bounce asked of the host', () => {
     const body = JSON.parse(String(sent[0]?.init.body));
     expect(body).toMatchObject({ from: 960, to: 7680, tail: 3, name: 'Lantern Sketch (cycle)' });
     expect(body.doc).toMatchObject({ id: 'prj_one', title: 'Lantern Sketch' });
+  });
+
+  it('asks for the song’s stems when those are wanted, and a bounce doesn’t mention them', async () => {
+    const bodies: Record<string, unknown>[] = [];
+    const host = (async (_url: string, init: RequestInit) => {
+      bodies.push(JSON.parse(String(init.body)));
+      return json({ id: 'bnc_abc', started: 5 }, 202);
+    }) as typeof fetch;
+    expect(await askHostBounce({ ...ask(), stems: true }, host)).toEqual({ id: 'bnc_abc', started: 5 });
+    await askHostBounce(ask(), host);
+    expect(bodies[0]?.stems).toBe(true);
+    expect(bodies[1]).not.toHaveProperty('stems');
+  });
+
+  it('says why the host won’t start, in its words where it has any', async () => {
+    const full = (async () => json({ error: 'The host has bounces waiting already' }, 503)) as typeof fetch;
+    expect(await askHostBounce(ask(), full)).toEqual({ error: 'The host has bounces waiting already' });
+    expect(await askHostBounce(ask(), (async () => new Response('', { status: 502 })) as typeof fetch)).toEqual({
+      error: 'The host answered 502',
+    });
+    const down = (async () => {
+      throw new TypeError('Failed to fetch');
+    }) as typeof fetch;
+    expect(await askHostBounce(ask(), down)).toEqual({ error: 'The host couldn’t be reached' });
+    // (a bounce asked the old way: no job, and the device makes it)
+    expect(await startHostBounce(ask(), full)).toBeNull();
   });
 
   it('sends this device’s token when the agent knows it, to be told when it’s done, and none otherwise', async () => {
@@ -212,6 +240,14 @@ describe('a bounce kept: under way through a reload, finished until it’s saved
     expect(keptBounce(s, 2000)).toBeNull();
   });
 
+  it('remembers that it’s the song’s stems', () => {
+    const s = shelf();
+    keepBounce({ ...one, name: 'Song (stems)', stems: true }, s);
+    expect(keptBounce(s, 2000)?.stems).toBe(true);
+    keepBounce(one, s);
+    expect(keptBounce(s, 2000)).not.toHaveProperty('stems');
+  });
+
   it('is marked done with where its file is, and waits there for a week and no longer', () => {
     const s = shelf();
     keepBounce(one, s);
@@ -318,6 +354,17 @@ describe('a bounce the host forgot, found among the song’s bounces', () => {
     );
   });
 
+  it('finds a song’s stems by their ZIP, and never takes a bounce for them', async () => {
+    const files = listed('2026-01-02 03.12.40 Song (stems).wav', '2026-01-02 03.12.41 Song (stems).zip');
+    expect((await findBounce('prj_one', 'Song (stems)', started, files, 'zip'))?.file).toBe(
+      '2026-01-02 03.12.41 Song (stems).zip',
+    );
+    expect((await findBounce('prj_one', 'Song (stems)', started, files))?.file).toBe(
+      '2026-01-02 03.12.40 Song (stems).wav',
+    );
+    expect(await findBounce('prj_one', 'Song', started, listed('2026-01-02 03.12.40 Song.wav'), 'zip')).toBeNull();
+  });
+
   it('is nothing when the host has no such file, or can’t be asked', async () => {
     expect(await findBounce('prj_one', 'Song', started, listed('2026-01-02 03.04.04 Song.wav'))).toBeNull();
     expect(await findBounce('prj_one', 'Song', started, listed())).toBeNull();
@@ -363,6 +410,7 @@ describe('a song’s bounces, as the host lists them', () => {
       file: '2026-01-02 03.04.05 Song.wav',
       url: url('2026-01-02 03.04.05 Song.wav'),
       title: 'Song',
+      stems: false,
       bytes: 71_000_000,
       made,
       seconds: 247.3,
@@ -384,6 +432,20 @@ describe('a song’s bounces, as the host lists them', () => {
     expect(bounceRow(entry('2026-01-02 03.04.05 Song.wav', { made: 'soon', seconds: Number.NaN }))?.seconds).toBeNull();
     expect(bounceRow(entry('2026-01-02 03.04.05 Song.wav', { seconds: 0 }))?.seconds).toBeNull();
     expect(bounceRow({ file: '2026-01-02 03.04.05 Song.wav', url: url('x') })?.bytes).toBe(0);
+  });
+
+  it('lists a song’s stems among them, known by their ZIP', () => {
+    const row = bounceRow(entry('2026-01-02 03.04.05 Song (stems).zip', { bytes: 300_000_000 }));
+    expect(row).toMatchObject({ title: 'Song (stems)', stems: true, seconds: null, bytes: 300_000_000 });
+    expect(row?.made).toBe(Date.UTC(2026, 0, 2, 3, 4, 5));
+    expect(bounceRow(entry('Handed over.zip'))).toMatchObject({ title: 'Handed over', stems: true });
+    expect([isStems('a.zip'), isStems('/b/a.ZIP?as=x'), isStems('a.wav'), isStems('zip.wav'), isStems(null)]).toEqual([
+      true,
+      true,
+      false,
+      false,
+      false,
+    ]);
   });
 
   it('lists a file named some other way under its own name', () => {

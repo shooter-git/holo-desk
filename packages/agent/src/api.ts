@@ -146,7 +146,15 @@ export interface Attachment {
   data?: string;
 }
 
-export type PermissionKind = 'install-pack' | 'send-creation' | 'bounce' | 'render' | 'screen' | 'photo' | 'microphone';
+export type PermissionKind =
+  | 'install-pack'
+  | 'send-creation'
+  | 'bounce'
+  | 'stems'
+  | 'render'
+  | 'screen'
+  | 'photo'
+  | 'microphone';
 
 /** One part of a listen (docs/agent.md: POST …/listen). */
 export interface ListenPart {

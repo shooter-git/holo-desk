@@ -73,6 +73,8 @@ export interface Actions {
   newTrack(): void;
   save(): void;
   bounce(): void;
+  /** Open Export stems (the dialog shows what the host would make before it's asked). */
+  stems(): void;
 }
 
 export interface Command {
@@ -493,6 +495,14 @@ export function commandTable(s: BarState, act: Actions): Command[] {
       also: 'export render mixdown audio',
       available: (x) => x.project !== null && !x.bouncing,
       run: act.bounce,
+    },
+    {
+      id: 'stems',
+      title: 'Export stems (a WAV for each track)',
+      group: 'Project',
+      also: 'bounce render tracks zip multitrack',
+      available: (x) => x.project !== null && !x.bouncing,
+      run: act.stems,
     },
     {
       id: 'songs',

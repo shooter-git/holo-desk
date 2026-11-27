@@ -2,7 +2,7 @@
  * Dialogs: songs (open, new, import, from a creation), settings (in tabs: this device, audio, MIDI, the
  * metronome, View, the agent), key commands.
  */
-import { AudioLines, Download, Plus, Send, Upload, X } from 'lucide-react';
+import { AudioLines, Download, Package, Plus, Send, Upload, X } from 'lucide-react';
 import { type ReactNode, useEffect, useId, useRef, useState, useSyncExternalStore } from 'react';
 import {
   bounceSong,
@@ -34,6 +34,7 @@ import { useFocusInside } from './focus-inside.ts';
 import { useFrame } from './frame.ts';
 import { MetronomeSettings } from './Metronome.tsx';
 import { SongGroups } from './Songs.tsx';
+import { StemsDialog } from './Stems.tsx';
 import { SETTINGS_TABS, tabForKey } from './settings-tabs.ts';
 import { ViewOptions } from './ViewMenu.tsx';
 
@@ -163,6 +164,16 @@ function ProjectsDialog() {
               }}
             >
               <AudioLines /> Bounce to WAV
+            </button>
+          )}
+          {current && (
+            <button
+              type="button"
+              className="btn"
+              title="A WAV for each track, in one ZIP, made on the host"
+              onClick={() => store.set({ dialog: 'stems' })}
+            >
+              <Package /> Export stems…
             </button>
           )}
           <span className="grow" />
@@ -1212,5 +1223,6 @@ export function Dialogs() {
   if (dialog === 'projects') return <ProjectsDialog />;
   if (dialog === 'settings') return <SettingsDialog />;
   if (dialog === 'shortcuts') return <ShortcutsDialog />;
+  if (dialog === 'stems') return <StemsDialog />;
   return null;
 }

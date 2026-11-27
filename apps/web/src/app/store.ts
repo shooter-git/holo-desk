@@ -28,7 +28,7 @@ export type NoteView = 'roll' | 'score';
 /** What the Audio Editor shows of a recording: its waveform or its notes. */
 export type AudioMode = 'wave' | 'notes';
 export type MobileTab = 'tracks' | 'editor' | 'mixer' | 'play' | 'library';
-export type Dialog = null | 'projects' | 'settings' | 'creations' | 'shortcuts' | 'about' | 'remote';
+export type Dialog = null | 'projects' | 'settings' | 'creations' | 'shortcuts' | 'about' | 'remote' | 'stems';
 /** Settings' tabs. */
 export type SettingsTab = 'general' | 'audio' | 'midi' | 'metronome' | 'view' | 'agent';
 
@@ -169,7 +169,7 @@ export interface AppState {
    * downloads by itself): its length when it's known, where it is on the host (null: it never got
    * there), and whether Save can be pressed yet (the file is fetched first where it's shared).
    */
-  bounced: { name: string; seconds: number | null; url: string | null; ready: boolean } | null;
+  bounced: { name: string; seconds: number | null; url: string | null; ready: boolean; stems?: boolean } | null;
   /** Which parts of the studio show (View: the eye's menu, and Settings › View): everything, until you hide some. */
   show: Record<ShowKey, boolean>;
   /**

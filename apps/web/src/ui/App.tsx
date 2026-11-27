@@ -318,13 +318,16 @@ function BounceStatus() {
           <div className="toast with-action bounced">
             <span className="status-dot ok" />
             <span className="bounced-text">
-              Bounced {done.seconds === null ? '' : `${bounceClock(done.seconds)} of `}“{done.name}”
+              {done.stems
+                ? // (said first, so a narrow line that cuts the song's name short still says what it is)
+                  `Exported the stems of “${done.name.replace(/ \(stems\)$/, '')}”`
+                : `Bounced ${done.seconds === null ? '' : `${bounceClock(done.seconds)} of `}“${done.name}”`}
             </span>
             <button
               type="button"
               className="btn"
               disabled={!done.ready}
-              aria-label={`Save the bounce of ${done.name}`}
+              aria-label={done.stems ? `Save ${done.name}` : `Save the bounce of ${done.name}`}
               onClick={() => void saveBounce()}
             >
               {done.ready ? 'Save' : 'Getting the file…'}
@@ -333,7 +336,7 @@ function BounceStatus() {
               type="button"
               className="btn ghost icon"
               title="Put away"
-              aria-label="Put the bounce away: it stays with the song"
+              aria-label={`Put the ${done.stems ? 'stems' : 'bounce'} away: ${done.stems ? 'they stay' : 'it stays'} with the song`}
               onClick={putBounceAway}
             >
               <X aria-hidden="true" />

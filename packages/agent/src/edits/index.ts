@@ -6,4 +6,5 @@
 export * from './chords.ts';
 export * from './pitch.ts';
 export * from './sections.ts';
+export * from './stems.ts';
 export * from './timing.ts';

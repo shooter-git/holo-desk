@@ -2237,6 +2237,7 @@ export const PERMISSION_KINDS: readonly PermissionKind[] = [
   'install-pack',
   'send-creation',
   'bounce',
+  'stems',
   'render',
   'screen',
   'photo',

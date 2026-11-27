@@ -3,6 +3,7 @@
  * bridge to your creations. It has no accounts and no passwords: it listens on this machine only,
  * and your own devices reach it through Tailscale.
  */
+
 import { createHash, randomBytes } from 'node:crypto';
 import {
   copyFileSync,
@@ -22,6 +23,7 @@ import { constants as zlib } from 'node:zlib';
 import fastifyCompress from '@fastify/compress';
 import fastifyStatic from '@fastify/static';
 import fastifyWebsocket from '@fastify/websocket';
+import { stemSongs } from '@holo/agent/edits';
 import {
   describePackChange,
   engineLabel,
@@ -954,7 +956,9 @@ export async function buildApp(
 
   app.addContentTypeParser(['audio/wav', 'audio/x-wav'], (_req, payload, done) => done(null, payload));
   const bounceDir = (id: string) => bounceFolder(config.dataDir, id);
-  const SAFE_FILE = /^[\w .()'-]+\.wav$/;
+  // (a bounce is a WAV; a song's stems are a ZIP of them, kept and listed with its bounces)
+  const SAFE_FILE = /^[\w .()'-]+\.(wav|zip)$/;
+  const isZip = (file: string) => /\.zip$/i.test(file);
 
   /** An upload on its way: a name no list of bounces matches, the file's own once it's whole. */
   const UPLOADING = /^\.up_[a-z0-9]+\.part$/;
@@ -1010,8 +1014,8 @@ export async function buildApp(
       if (!stat) continue;
       let seconds: number | undefined;
       try {
-        const info = audioInfo(path);
-        if (info.frames > 0 && info.rate > 0) seconds = info.frames / info.rate;
+        const info = isZip(f) ? null : audioInfo(path);
+        if (info && info.frames > 0 && info.rate > 0) seconds = info.frames / info.rate;
       } catch {
         // (not a file whose length can be read: listed without it)
       }
@@ -1033,12 +1037,16 @@ export async function buildApp(
       const path = join(bounceDir(req.params.id), file);
       if (!SAFE_FILE.test(file) || !existsSync(path)) return reply.code(404).send({ error: 'No such bounce' });
       // `as`: the name it's saved under on the device (a studio's own bounce is saved under the song's)
+      const ext = isZip(file) ? 'zip' : 'wav';
       const as = `${(req.query.as ?? '')
-        .replace(/\.wav$/i, '')
+        .replace(/\.(wav|zip)$/i, '')
         .trim()
-        .slice(0, 80)}.wav`;
-      reply.header('content-disposition', `attachment; filename="${SAFE_FILE.test(as) && as !== '.wav' ? as : file}"`);
-      return sendFile(reply, path, 'audio/wav', 'no-cache');
+        .slice(0, 80)}.${ext}`;
+      reply.header(
+        'content-disposition',
+        `attachment; filename="${SAFE_FILE.test(as) && as !== `.${ext}` ? as : file}"`,
+      );
+      return sendFile(reply, path, ext === 'zip' ? 'application/zip' : 'audio/wav', 'no-cache');
     },
   );
 
@@ -1059,10 +1067,12 @@ export async function buildApp(
    */
   app.post<{
     Params: { id: string };
-    Body: { doc?: unknown; from?: unknown; to?: unknown; tail?: unknown; name?: unknown };
+    Body: { doc?: unknown; from?: unknown; to?: unknown; tail?: unknown; name?: unknown; stems?: unknown };
   }>('/api/projects/:id/bounces/host', async (req, reply) => {
     if (!store.row(req.params.id)) return reply.code(404).send({ error: 'No such project' });
     const { from, to, tail = 3, name } = req.body ?? {};
+    // `stems: true`: the song's stems (a WAV for each track, in a ZIP) instead of its mix
+    const stems = req.body?.stems === true;
     let song: Project;
     try {
       song = parseProject(req.body?.doc);
@@ -1077,8 +1087,17 @@ export async function buildApp(
     if (!span(tail) || tail > 60) return reply.code(400).send({ error: 'A tail of 0 to 60 seconds' });
     // (the device that asks, when it's one the agent knows: it's told when the bounce is done)
     const device = agent.auth.device(req.headers.authorization)?.id ?? null;
+    if (stems && !stemSongs(song).length)
+      return reply.code(400).send({ error: 'Nothing in the song would be heard: no track has anything to play' });
     const job = bounces.start(
-      { song, from, to, tail, name: typeof name === 'string' && name ? name : song.title },
+      {
+        song,
+        from,
+        to,
+        tail,
+        name: typeof name === 'string' && name ? name : stems ? `${song.title} (stems)` : song.title,
+        ...(stems ? { stems: true } : {}),
+      },
       device,
     );
     if (!job) return reply.code(503).send({ error: 'The host has bounces waiting already' });

@@ -7866,6 +7866,100 @@ html[data-layout^="phone"] .view-item kbd {
   font-weight: 650;
 }
 
+/* ---------- Export stems: what the host would make, before it's asked ---------- */
+
+.dialog.stems {
+  width: min(520px, 100%);
+}
+
+.dialog.stems .content {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.dialog.stems p {
+  margin: 0;
+  line-height: 1.5;
+}
+
+.stems-what {
+  color: var(--text-2);
+}
+
+.stems-range {
+  align-self: flex-start;
+  max-width: 100%;
+}
+
+.stems-count {
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+/* the files, in the song's order, each with its track's colour */
+.stems-list {
+  margin: -6px 0 0;
+  padding: 4px 0;
+  max-height: min(38dvh, 300px);
+  overflow-y: auto;
+  border: 1px solid var(--line-2);
+  border-radius: var(--radius);
+  background: var(--bg-1);
+  list-style: none;
+}
+
+.stems-list li {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-height: 26px;
+  padding: 2px 12px;
+}
+
+.stems-list .stem-dot {
+  flex-shrink: 0;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--text-3);
+}
+
+.stems-list .stem-file {
+  min-width: 0;
+  overflow: hidden;
+  font-family: var(--mono);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.stems-left {
+  font-size: 12px;
+}
+
+.stems-none {
+  color: var(--text-2);
+}
+
+/* why the stems wouldn't add up to the mix exactly: said, never in the way */
+.stems-warning {
+  display: flex;
+  gap: 9px;
+  padding: 9px 11px;
+  border: 1px solid var(--warn-line);
+  border-radius: var(--radius);
+  background: var(--warn-bg);
+  color: var(--warn-text);
+  font-size: 12px;
+}
+
+.stems-warning svg {
+  flex-shrink: 0;
+  margin-top: 2px;
+  color: var(--warn);
+}
+
 /* the open song's bounces, nested under its row: one folded line, and opened, a row for each, set
    in from the songs and quieter than them (the open song's mark runs down beside them) */
 .song-bounces {

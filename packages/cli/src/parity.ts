@@ -96,7 +96,7 @@ export const TOOL_PARITY: Readonly<Record<string, Parity>> = {
   },
   ask_permission: {
     conversation:
-      "asks the user's click in the bar (a pack, sending to the creation, a bounce, a creation's render, a capture) and ends the turn; in a terminal the user is asked directly, and holo bounce, holo send and holo render do those",
+      "asks the user's click in the bar (a pack, sending to the creation, a bounce, the song's stems, a creation's render, a capture) and ends the turn; in a terminal the user is asked directly, and holo bounce, holo stems, holo send and holo render do those",
   },
   hand_off: {
     conversation:

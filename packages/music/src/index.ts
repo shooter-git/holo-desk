@@ -19,3 +19,4 @@ export * from './sync.ts';
 export * from './tar.ts';
 export * from './xz.ts';
 export * from './zip.ts';
+export * from './zip-write.ts';

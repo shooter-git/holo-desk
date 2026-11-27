@@ -37,6 +37,7 @@ export const COMMANDS = [
   'audition',
   'listen',
   'bounce',
+  'stems',
   'open',
   'new',
   'audio',

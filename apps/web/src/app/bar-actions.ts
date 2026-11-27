@@ -65,6 +65,7 @@ export const ACTIONS: Actions = {
   newTrack: () => void addTrack({ type: 'synth', preset: 'Soft Keys' }),
   save: () => void saveNow(),
   bounce: () => void bounceSong(true),
+  stems: () => store.set({ dialog: 'stems' }),
 };
 
 /** What the bar reads of the studio, now. */

@@ -11,6 +11,7 @@ import {
   FileMusic,
   FolderOpen,
   History,
+  Package,
   Pencil,
   Plus,
   Search,
@@ -426,6 +427,18 @@ export function SongGroups({
   );
 }
 
+/** What a song has kept on the host, counted: "2 bounces", "1 set of stems", "3 bounces and 1 set of stems". */
+export function bouncesCount(rows: readonly Pick<ListedBounce, 'stems'>[]): string {
+  const stems = rows.filter((r) => r.stems).length;
+  const mixes = rows.length - stems;
+  return [
+    mixes ? (mixes === 1 ? '1 bounce' : `${mixes} bounces`) : '',
+    stems ? (stems === 1 ? '1 set of stems' : `${stems} sets of stems`) : '',
+  ]
+    .filter(Boolean)
+    .join(' and ');
+}
+
 /** How many of a song's bounces show, once they're opened, before the rest are asked for. */
 const BOUNCES_SHOWN = 3;
 
@@ -476,7 +489,7 @@ function SongBounces({ id, title, when }: { id: string; title: string; when: (is
         onClick={() => setOpen(!open)}
       >
         {open ? <ChevronDown size={14} aria-hidden="true" /> : <ChevronRight size={14} aria-hidden="true" />}
-        <span>{rows.length === 1 ? '1 bounce' : `${rows.length} bounces`}</span>
+        <span>{bouncesCount(rows)}</span>
         <span className="meta">{diskSize(rows.reduce((sum, b) => sum + b.bytes, 0))} on the host</span>
       </button>
       {open &&
@@ -503,7 +516,7 @@ function SongBounces({ id, title, when }: { id: string; title: string; when: (is
             </div>
           ) : (
             <div key={b.file} className="list-item still song-row bounce-row">
-              <AudioLines size={14} className="muted" />
+              {b.stems ? <Package size={14} className="muted" /> : <AudioLines size={14} className="muted" />}
               <span className="song-name">
                 <span>{b.title}</span>
               </span>
@@ -513,7 +526,7 @@ function SongBounces({ id, title, when }: { id: string; title: string; when: (is
                 className={`btn${mine?.ready ? ' primary' : ' ghost'}${mine && !mine.ready ? '' : ' icon'}`}
                 disabled={mine !== null && !mine.ready}
                 title={mine?.ready ? 'Save it now' : 'Save on this device'}
-                aria-label={`Save the bounce “${b.title}”${made ? ` of ${made}` : ''} on this device`}
+                aria-label={`Save ${b.stems ? '' : 'the bounce '}“${b.title}”${made ? ` of ${made}` : ''} on this device`}
                 onClick={() => void saveListedBounce(b)}
               >
                 {mine && !mine.ready ? 'Getting…' : <Download />}
@@ -521,8 +534,8 @@ function SongBounces({ id, title, when }: { id: string; title: string; when: (is
               <button
                 type="button"
                 className="btn ghost icon"
-                title="Delete this bounce"
-                aria-label={`Delete the bounce “${b.title}”${made ? ` of ${made}` : ''}`}
+                title={b.stems ? 'Delete these stems' : 'Delete this bounce'}
+                aria-label={`Delete ${b.stems ? '' : 'the bounce '}“${b.title}”${made ? ` of ${made}` : ''}`}
                 onClick={() => setDeleting(b.file)}
               >
                 <Trash2 />
@@ -532,7 +545,7 @@ function SongBounces({ id, title, when }: { id: string; title: string; when: (is
         })}
       {open && !all && rows.length > BOUNCES_SHOWN && (
         <button type="button" className="list-item muted bounces-all" onClick={() => setAll(true)}>
-          All {rows.length} bounces
+          All {rows.length}
         </button>
       )}
     </div>

@@ -46,7 +46,15 @@ export interface ScanPreset {
   scan: string;
 }
 
-export type PermissionKind = 'install-pack' | 'send-creation' | 'bounce' | 'render' | 'screen' | 'photo' | 'microphone';
+export type PermissionKind =
+  | 'install-pack'
+  | 'send-creation'
+  | 'bounce'
+  | 'stems'
+  | 'render'
+  | 'screen'
+  | 'photo'
+  | 'microphone';
 
 export interface Permission {
   kind: PermissionKind;
@@ -232,6 +240,7 @@ const PERMISSION_WORDS: Record<PermissionKind, string> = {
   'install-pack': 'install a pack',
   'send-creation': 'send the song to its creation',
   bounce: 'bounce the song',
+  stems: 'export the song’s stems',
   render: 'hear the song as its creation renders it',
   screen: 'see their screen',
   photo: 'see a photo',

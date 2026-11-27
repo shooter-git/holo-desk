@@ -6,11 +6,14 @@ import {
   briefWarnings,
   chooseText,
   type Jobs,
+  LIMITS_EVERY_MS,
   LOOK_EVERY_MS,
   parseHarnessEvent,
   parseHarnesses,
   QUEUED,
+  USAGE_DAYS,
 } from '../src/agent/jobs.ts';
+import { AgentStore } from '../src/agent/store.ts';
 import { agentApp, agentWorld, auth, CLAUDE, type Msg, settle, until, waitFor } from './agent-fakes.ts';
 
 let close: (() => Promise<void>) | null = null;
@@ -1211,6 +1214,179 @@ describe('the song’s artist, album and creation', () => {
     expect(state.about).toEqual(['By "Example Artist", on the album "Night “Drives“".']);
     const described = (await tool(job, jobToken, 'GET', '/describe')).json() as { text: string };
     expect(described.text.startsWith('By "Example Artist", on the album "Night “Drives“".\n')).toBe(true);
+  });
+});
+
+const CODEX = { id: 'codex', name: 'Codex', found: true, sealed: true, signedIn: true, version: '0.167.1' };
+
+describe('usage: what the accounts have left, and what the requests used', () => {
+  const settingsOf = async (app: Awaited<ReturnType<typeof setup>>['app'], token: string) =>
+    (await app.inject({ method: 'GET', url: '/api/agent/settings', headers: auth(token) })).json() as {
+      harnesses: Msg[];
+      usage: { days: number; rows: Msg[] };
+    };
+
+  it('keeps what each turn used, as its runner says with the turn’s end, by harness and model', async () => {
+    const { app, token, start, s, run, desk, status, runner, tool } = await setup();
+    expect((await settingsOf(app, token)).usage).toEqual({ days: USAGE_DAYS, rows: [] });
+    await app.inject({
+      method: 'PUT',
+      url: '/api/agent/settings',
+      headers: auth(token),
+      payload: { model: 'opus', effort: 'high' },
+    });
+    const first = await start({ project: s.id, text: 'A bass line' });
+    // only its own runner's word counts
+    runner([CLAUDE], 'other runner').say({
+      type: 'agent-done',
+      job: first.job,
+      usage: { input: 9, cached: 9, output: 9 },
+    });
+    await settle();
+    expect((await settingsOf(app, token)).usage.rows).toEqual([]);
+    run.say({ type: 'agent-done', job: first.job, usage: { input: 1200, cached: 30_000, output: 450 } });
+    await waitFor(() => status(desk, first.job)?.state === 'done');
+    // a turn that failed used what it used
+    const second = await start({ project: s.id, text: 'And a counter-line' });
+    run.say({
+      type: 'agent-failed',
+      job: second.job,
+      error: 'It stopped',
+      usage: { input: 300, cached: 0, output: 20 },
+    });
+    await waitFor(() => status(desk, second.job)?.state === 'failed');
+    // one that says nothing, or nothing that's a count, isn't counted; nor is one stopped from here
+    const third = await start({ project: s.id, text: 'Louder' });
+    run.say({ type: 'agent-done', job: third.job, usage: { input: -5, cached: 'many', output: 1 } });
+    await waitFor(() => status(desk, third.job)?.state === 'done');
+    const fourth = await start({ project: s.id, text: 'Softer' });
+    expect((await tool(fourth.job, fourth.token, 'GET', '/song')).statusCode).toBe(200);
+    await app.inject({ method: 'POST', url: `/api/agent/jobs/${fourth.job}/cancel`, headers: auth(token) });
+    await waitFor(() => status(desk, fourth.job)?.state === 'cancelled');
+    expect((await settingsOf(app, token)).usage.rows).toEqual([
+      { harness: 'claude', model: 'opus', effort: 'high', requests: 2, input: 1500, cached: 30_000, output: 470 },
+    ]);
+    // every allowed device's Settings › Agent hears of it with the settings
+    expect(desk.got('agent-settings').at(-1)).toMatchObject({ usage: { days: USAGE_DAYS } });
+  });
+
+  it('counts a request with no model chosen under the harness’s default, when it names one', async () => {
+    const w = await agentWorld();
+    close = w.close;
+    w.run.say({ type: 'harnesses', list: [{ ...CODEX, defaultModel: 'gpt-6-luna' }] });
+    await settle();
+    const { job } = await w.start({ project: w.s.id, text: 'A bass line' });
+    w.run.say({ type: 'agent-done', job, usage: { input: 10, cached: 20, output: 30 } });
+    await waitFor(() => w.status(w.desk, job)?.state === 'done');
+    expect((await settingsOf(w.app, w.token)).usage.rows).toEqual([
+      { harness: 'codex', model: 'gpt-6-luna', effort: '', requests: 1, input: 10, cached: 20, output: 30 },
+    ]);
+  });
+
+  it('adds up only the last 30 days', async () => {
+    const { services } = await setup();
+    // (the same tables, on HO[LO]'s own database)
+    const store = new AgentStore(services.store.database);
+    const now = Date.now();
+    const row = (job: string, at: number, model = 'opus') => ({
+      job,
+      harness: 'claude' as const,
+      model,
+      effort: 'high',
+      input: 100,
+      cached: 1000,
+      output: 10,
+      at,
+    });
+    store.addUsage(row('agj_000000000001', now - 40 * 86_400_000));
+    store.addUsage(row('agj_000000000002', now - 29 * 86_400_000));
+    store.addUsage(row('agj_000000000003', now, 'sonnet'));
+    store.addUsage(row('agj_000000000004', now));
+    // said twice of one request: once
+    store.addUsage(row('agj_000000000004', now));
+    expect(store.usage(now - USAGE_DAYS * 86_400_000)).toEqual([
+      { harness: 'claude', model: 'opus', effort: 'high', requests: 2, input: 200, cached: 2000, output: 20 },
+      { harness: 'claude', model: 'sonnet', effort: 'high', requests: 1, input: 100, cached: 1000, output: 10 },
+    ]);
+    // what's older than 90 days goes as more comes
+    store.addUsage(row('agj_000000000005', now + 60 * 86_400_000));
+    expect(store.usage(0).reduce((n, r) => n + r.requests, 0)).toBe(4);
+  });
+
+  it('keeps a harness’s plan and limits as they should be, and none for one that isn’t there', () => {
+    const at = Date.now();
+    const limits = {
+      at,
+      note: 'One\nline',
+      groups: [
+        {
+          name: 'Gemini Models',
+          models: ['Gemini 4 Neon', 5],
+          windows: [
+            { minutes: 300, used: 2, resets: at + 3_600_000 },
+            { minutes: 10080, used: 0.4, resets: 'soon' },
+            { minutes: -1, used: 0.4 },
+          ],
+        },
+        { windows: 'nope' },
+      ],
+    };
+    const [claude, codex, cursor] = parseHarnesses([
+      { ...CLAUDE, plan: ' max ', limits },
+      { id: 'codex', name: 'Codex', found: false, sealed: false, plan: 'plus', limits },
+      { id: 'cursor', name: 'Cursor', found: true, sealed: true, plan: 7, limits: { at, groups: [] } },
+    ]);
+    expect(claude).toMatchObject({
+      plan: 'max',
+      limits: {
+        at,
+        note: 'One line',
+        groups: [
+          {
+            name: 'Gemini Models',
+            models: ['Gemini 4 Neon'],
+            windows: [
+              { minutes: 10080, used: 0.4 },
+              { minutes: 300, used: 1, resets: at + 3_600_000 },
+            ],
+          },
+        ],
+      },
+    });
+    expect(codex?.limits).toBeUndefined();
+    expect(cursor?.plan).toBeUndefined();
+    expect(cursor?.limits).toBeUndefined();
+  });
+
+  it('has a runner ask what the accounts have left when Settings › Agent is opened, at most once a minute', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-11-12T10:00:00Z'));
+    const { app, token, run } = await setup();
+    const look = () => app.inject({ method: 'POST', url: '/api/agent/harnesses/look', headers: auth(token) });
+    const asked = () => run.got('agent-limits').length;
+    // it looked a moment ago, and a look reads them too
+    await look();
+    expect(asked()).toBe(0);
+    vi.setSystemTime(Date.now() + LIMITS_EVERY_MS);
+    await look();
+    await look();
+    expect(asked()).toBe(1);
+    expect(run.got('agent-limits')[0]).toEqual({ type: 'agent-limits' });
+    vi.setSystemTime(Date.now() + LIMITS_EVERY_MS - 1);
+    await look();
+    expect(asked()).toBe(1);
+    vi.setSystemTime(Date.now() + 1);
+    await look();
+    expect(asked()).toBe(2);
+    // its answer isn't a look: the hourly one keeps its clock, and reads them itself when it comes
+    run.say({ type: 'harnesses', from: 'run', list: [{ ...CLAUDE, limits: { at: Date.now(), groups: [] } }] });
+    vi.setSystemTime(Date.now() + LOOK_EVERY_MS);
+    await look();
+    expect(run.got('agent-refresh')).toEqual([{ type: 'agent-refresh', light: true }]);
+    expect(asked()).toBe(2);
+    vi.setSystemTime(Date.now() + LIMITS_EVERY_MS - 1);
+    await look();
+    expect(asked()).toBe(2);
   });
 });
 

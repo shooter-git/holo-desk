@@ -170,7 +170,10 @@ export function startAgentRunner(o: AgentRunnerOptions): AgentRunner {
 
   const harnessBusy = (id: HarnessId) => [...running.values()].some((r) => r.run.harness === id);
 
-  /** Say what's known of the harnesses; `from: 'run'` when a run, not a look, changed it (its aliases). */
+  /**
+   * Say what's known of the harnesses; `from: 'run'` when no look was made: a run changed it (its
+   * aliases, what its account has left), or only the limits were read again.
+   */
   function report(list: HarnessInfo[], from?: 'run'): void {
     o.send({ type: 'harnesses', list: list.map((h) => ({ ...h, host })), ...(from ? { from } : {}) });
   }
@@ -244,6 +247,15 @@ export function startAgentRunner(o: AgentRunnerOptions): AgentRunner {
           case 'session':
             o.send({ type: 'agent-session', job: run.job, session: e.session });
             break;
+          case 'limits':
+            // what the account has left after this run (said by it, or asked a moment after it)
+            if (known) {
+              known = known.map((h) =>
+                h.id === run.harness ? { ...h, limits: e.limits, ...(e.plan ? { plan: e.plan } : {}) } : h,
+              );
+              report(known, 'run');
+            }
+            break;
           case 'aliases':
             // the run said what its alias stood for (Claude Code's `opus`): Settings shows it now
             if (known) {
@@ -254,7 +266,12 @@ export function startAgentRunner(o: AgentRunnerOptions): AgentRunner {
           case 'done':
             log(`${tag} done in ${Math.round((Date.now() - started) / 1000)} s`);
             // its last words stand as the reply if it never called finish
-            o.send({ type: 'agent-done', job: run.job, ...(e.reply ? { reply: e.reply.slice(0, 2000) } : {}) });
+            o.send({
+              type: 'agent-done',
+              job: run.job,
+              ...(e.reply ? { reply: e.reply.slice(0, 2000) } : {}),
+              ...(e.usage ? { usage: e.usage } : {}),
+            });
             break;
           case 'failed':
             log(`${tag} failed: ${e.error}${e.fresh ? ' (its next turn starts a new conversation)' : ''}`);
@@ -263,6 +280,7 @@ export function startAgentRunner(o: AgentRunnerOptions): AgentRunner {
               job: run.job,
               error: e.error.slice(0, 500),
               ...(e.fresh ? { fresh: true } : {}),
+              ...(e.usage ? { usage: e.usage } : {}),
             });
             break;
         }
@@ -283,6 +301,38 @@ export function startAgentRunner(o: AgentRunnerOptions): AgentRunner {
       }
       running.delete(run.job);
       startNext();
+    }
+  }
+
+  /** A read of the limits under way (one at a time: a second asked meanwhile waits for none). */
+  let reading = false;
+
+  /**
+   * Settings › Agent was opened: what each account has left is asked again of the harnesses that say
+   * (signed in, and not in the middle of a sign-in or an update), and the list said again. Nothing else
+   * is looked at.
+   */
+  async function readLimits(): Promise<void> {
+    if (reading || detecting || !known) return;
+    reading = true;
+    try {
+      const read = await Promise.all(
+        known
+          .filter((h) => h.found && h.signedIn !== false && !relaying.has(h.id))
+          .map(async (h) => [h.id, await harnesses[h.id].limits().catch(() => null)] as const),
+      );
+      // (a look that came meanwhile has them already)
+      if (!known || detecting) return;
+      let changed = false;
+      known = known.map((h) => {
+        const now = read.find(([id]) => id === h.id)?.[1];
+        if (!now?.limits && !now?.plan) return h;
+        changed = true;
+        return { ...h, ...(now.limits ? { limits: now.limits } : {}), ...(now.plan ? { plan: now.plan } : {}) };
+      });
+      if (changed) report(known, 'run');
+    } finally {
+      reading = false;
     }
   }
 
@@ -448,6 +498,9 @@ export function startAgentRunner(o: AgentRunnerOptions): AgentRunner {
           void detect(false).catch((err: unknown) =>
             log(`Looking for agent harnesses failed: ${err instanceof Error ? err.message : String(err)}`),
           );
+          return true;
+        case 'agent-limits':
+          void readLimits().catch(() => undefined);
           return true;
         case 'agent-refresh':
           if (msg.light === true) {

@@ -12,6 +12,7 @@
  */
 import { rmSync } from 'node:fs';
 import { join } from 'node:path';
+import { checkUsage, type RunUsage, tokens } from '../limits.ts';
 import {
   type AdapterOptions,
   type Context,
@@ -113,6 +114,8 @@ export function cursorReader(): Reader {
         return out;
       }
       if (e.type === 'result') {
+        const usage = cursorUsage(e.usage);
+        if (usage) out.push({ kind: 'usage', usage });
         if (e.is_error === true || (typeof e.subtype === 'string' && e.subtype !== 'success'))
           out.push({
             kind: 'failed',
@@ -123,6 +126,30 @@ export function cursorReader(): Reader {
       return out;
     },
   };
+}
+
+/** What its `result` says the run used: input not from the cache (what it wrote there too), cache reads, output. */
+export function cursorUsage(usage: unknown): RunUsage | null {
+  if (!isObject(usage)) return null;
+  // (one that counts nothing says nothing)
+  return checkUsage({
+    input: tokens(usage.inputTokens) + tokens(usage.cacheWriteTokens),
+    cached: tokens(usage.cacheReadTokens),
+    output: tokens(usage.outputTokens),
+  });
+}
+
+/**
+ * `about --format json`: the account's plan (`subscriptionTier`, "Pro+"). It's all Cursor's CLI says of
+ * the account's usage outside its interactive screen: what's left of the plan isn't reported.
+ */
+export function parseCursorPlan(stdout: string): string | undefined {
+  try {
+    const d = JSON.parse(stdout) as Record<string, unknown>;
+    return typeof d.subscriptionTier === 'string' && d.subscriptionTier.trim() ? d.subscriptionTier.trim() : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 /** `status --format json` (it exits 0 either way). */
@@ -242,8 +269,13 @@ export function cursorSpec(): Spec {
     },
     parseVersion: (out) => /^\s*(\d[\w.-]*)/.exec(out)?.[1] ?? null,
     async auth(ctx) {
-      const out = await capture(ctx.bin, ['status', '--format', 'json'], { ...probe(ctx), timeoutMs: 20_000 });
-      return parseCursorAuth(out.stdout);
+      const [out, about] = await Promise.all([
+        capture(ctx.bin, ['status', '--format', 'json'], { ...probe(ctx), timeoutMs: 20_000 }),
+        capture(ctx.bin, ['about', '--format', 'json'], { ...probe(ctx), timeoutMs: 20_000 }).catch(() => null),
+      ]);
+      const auth = parseCursorAuth(out.stdout);
+      const plan = auth?.signedIn && about?.code === 0 ? parseCursorPlan(about.stdout) : undefined;
+      return auth && plan ? { ...auth, plan } : auth;
     },
     async sealed(ctx) {
       if (ctx.platform !== 'linux')

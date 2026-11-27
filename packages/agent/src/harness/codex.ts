@@ -12,6 +12,7 @@
  */
 import { createHash } from 'node:crypto';
 import { join } from 'node:path';
+import { checkUsage, type LimitGroup, type LimitsRead, type LimitWindow, type RunUsage, tokens } from '../limits.ts';
 import {
   type AdapterOptions,
   type Context,
@@ -24,8 +25,18 @@ import {
   serverFor,
 } from './adapter.ts';
 import { harnessEnv } from './env.ts';
-import { candidates, capture, findBinary, home, plain } from './process.ts';
-import type { Harness, Job } from './types.ts';
+import {
+  candidates,
+  capture,
+  eachLine,
+  findBinary,
+  home,
+  plain,
+  type SpawnOptions,
+  start,
+  stopGroup,
+} from './process.ts';
+import type { Binary, Harness, Job } from './types.ts';
 import { agentsFile, privateDir, TOOL_TIMEOUT_MS } from './workspace.ts';
 
 /** Every feature that would give the model more than HO[LO]'s tools. */
@@ -164,9 +175,12 @@ export function codexReader(): Reader {
           }
           break;
         }
-        case 'turn.completed':
+        case 'turn.completed': {
+          const usage = codexUsage(e.usage);
+          if (usage) out.push({ kind: 'usage', usage });
           out.push({ kind: 'ended' });
           break;
+        }
         case 'turn.failed': {
           const error = isObject(e.error) && typeof e.error.message === 'string' ? e.error.message : 'Codex failed';
           out.push({ kind: 'failed', error }, { kind: 'ended' });
@@ -186,6 +200,113 @@ export function codexReader(): Reader {
       return [];
     },
   };
+}
+
+/**
+ * What `turn.completed` says was used: the conversation's total so far, not the turn's own (a resumed
+ * one carries on from the last: `Spec.usageIsTotal`). Its `input_tokens` counts what was read from the
+ * cache too.
+ */
+export function codexUsage(usage: unknown): RunUsage | null {
+  if (!isObject(usage)) return null;
+  const cached = tokens(usage.cached_input_tokens);
+  // (one that counts nothing says nothing)
+  return checkUsage({
+    input: Math.max(0, tokens(usage.input_tokens) - cached),
+    cached,
+    output: tokens(usage.output_tokens),
+  });
+}
+
+/** One of a limit's windows: `usedPercent` of `windowDurationMins`, starting again at `resetsAt` (seconds). */
+function codexWindow(raw: unknown): LimitWindow | null {
+  if (!isObject(raw) || typeof raw.usedPercent !== 'number' || typeof raw.windowDurationMins !== 'number') return null;
+  return {
+    minutes: raw.windowDurationMins,
+    used: raw.usedPercent / 100,
+    ...(typeof raw.resetsAt === 'number' ? { resets: raw.resetsAt * 1000 } : {}),
+  };
+}
+
+/**
+ * What the app server's `account/rateLimits/read` answers: the account's limits by id (`codex` is the
+ * one every model shares; a model with a limit of its own has another, named by `limitName` or its
+ * id), each with a `primary` and maybe a `secondary` window, the plan, and how many early resets of
+ * the limit the account may still take.
+ */
+export function parseCodexLimits(result: unknown): LimitsRead | null {
+  if (!isObject(result)) return null;
+  const byId = isObject(result.rateLimitsByLimitId) ? Object.values(result.rateLimitsByLimitId) : [];
+  const list = (byId.length ? byId : [result.rateLimits]).filter(isObject);
+  const groups: LimitGroup[] = [];
+  let plan: string | undefined;
+  for (const snap of list) {
+    const windows = [codexWindow(snap.primary), codexWindow(snap.secondary)].filter((w): w is LimitWindow => !!w);
+    if (typeof snap.planType === 'string' && snap.planType) plan ??= snap.planType;
+    if (!windows.length) continue;
+    const shared = snap.limitId === 'codex' || snap.limitId === null || snap.limitId === undefined;
+    const name =
+      typeof snap.limitName === 'string' && snap.limitName
+        ? snap.limitName
+        : !shared && typeof snap.limitId === 'string'
+          ? snap.limitId
+          : undefined;
+    const model = typeof snap.normalModelSlug === 'string' && snap.normalModelSlug ? snap.normalModelSlug : undefined;
+    // the one every model shares comes first
+    const group: LimitGroup = { ...(name ? { name } : {}), ...(model && !shared ? { models: [model] } : {}), windows };
+    if (shared) groups.unshift(group);
+    else groups.push(group);
+  }
+  const credits = isObject(result.rateLimitResetCredits) ? result.rateLimitResetCredits.availableCount : undefined;
+  const note =
+    typeof credits === 'number' && credits >= 1
+      ? `${Math.round(credits)} early reset${Math.round(credits) === 1 ? '' : 's'} of its limit available, in Codex`
+      : undefined;
+  if (!groups.length && !plan && !note) return null;
+  return { ...(plan ? { plan } : {}), ...(note ? { note } : {}), groups };
+}
+
+/**
+ * Ask Codex's app server (`codex app-server`, JSON-RPC a line each way) for the account's limits: it's
+ * started, greeted, asked the one thing, and stopped. No conversation is started and no model called.
+ */
+export function readCodexLimits(bin: Binary, where: SpawnOptions, timeoutMs = 20_000): Promise<LimitsRead | null> {
+  return new Promise((resolve) => {
+    const child = start(bin, ['app-server'], where);
+    let over = false;
+    const end = (found: LimitsRead | null) => {
+      if (over) return;
+      over = true;
+      clearTimeout(limit);
+      stopGroup(child, 500);
+      resolve(found);
+    };
+    const limit = setTimeout(() => end(null), timeoutMs);
+    limit.unref?.();
+    const send = (msg: Record<string, unknown>) => child.stdin?.write(`${JSON.stringify(msg)}\n`);
+    eachLine(child.stdout, (line) => {
+      let msg: unknown;
+      try {
+        msg = JSON.parse(line);
+      } catch {
+        return;
+      }
+      if (!isObject(msg)) return;
+      if (msg.id === 1) {
+        if (!isObject(msg.result)) return end(null);
+        send({ method: 'initialized' });
+        send({ id: 2, method: 'account/rateLimits/read' });
+      } else if (msg.id === 2) end(parseCodexLimits(msg.result));
+    });
+    child.stdin?.on('error', () => undefined);
+    child.on('error', () => end(null));
+    child.on('close', () => end(null));
+    send({
+      id: 1,
+      method: 'initialize',
+      params: { clientInfo: { name: 'holo-desk', title: 'HO[LO] Desk', version: '1' } },
+    });
+  });
 }
 
 /** `codex login status`: on stderr, "Logged in using …" (exit 0) or "Not logged in" (exit 1). */
@@ -388,6 +509,10 @@ export function codexSpec(): Spec {
     async defaults(ctx) {
       return codexDefaults(await models(ctx));
     },
+    limits(ctx) {
+      return readCodexLimits(ctx.bin, { cwd: probeDir(ctx), env: envFor(ctx) });
+    },
+    usageIsTotal: true,
     async latest(ctx) {
       const d = JSON.parse(await ctx.fetchText('https://registry.npmjs.org/@openai/codex/latest')) as {
         version?: string;

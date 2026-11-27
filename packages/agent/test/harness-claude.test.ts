@@ -7,8 +7,10 @@ import {
   claudeArgs,
   claudeEfforts,
   claudeHarness,
+  claudeLimits,
   claudeModels,
   claudeReader,
+  claudeUsage,
   parseClaudeAuth,
 } from '../src/harness/claude.ts';
 import { allowed, GIT_ENV } from '../src/harness/env.ts';
@@ -53,8 +55,21 @@ const SIGNED_IN = JSON.stringify({
   authMethod: 'claude.ai',
   email: 'user@example.com',
   orgName: 'Org',
+  subscriptionType: 'max',
 });
 const SIGNED_OUT = JSON.stringify({ loggedIn: false, authMethod: 'none' });
+
+/** What the recorded run says it used (what it wrote to the cache counts as read anew). */
+const USED = { input: 317, cached: 8636, output: 107 };
+/** What its last `rate_limit_event` says the account has left: the week first. */
+const LEFT = [
+  {
+    windows: [
+      { minutes: 10080, used: 0.71, resets: 1794718800000 },
+      { minutes: 300, used: 0.33, resets: 1794429600000 },
+    ],
+  },
+];
 
 let s: Sandbox;
 afterEach(() => s?.cleanup());
@@ -186,6 +201,7 @@ describe('Claude Code: finding it', () => {
       version: '2.1.322',
       signedIn: true,
       account: 'user@example.com',
+      plan: 'max',
       sealed: true,
       models: ['fable', 'opus', 'sonnet', 'haiku'],
       efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
@@ -214,7 +230,7 @@ describe('Claude Code: finding it', () => {
   });
 
   it('reads auth status', () => {
-    expect(parseClaudeAuth(SIGNED_IN)).toEqual({ signedIn: true, account: 'user@example.com' });
+    expect(parseClaudeAuth(SIGNED_IN)).toEqual({ signedIn: true, account: 'user@example.com', plan: 'max' });
     expect(parseClaudeAuth(SIGNED_OUT)).toEqual({ signedIn: false });
     expect(parseClaudeAuth('garbage')).toBeNull();
     expect(claudeModels(HELP)).toEqual(['fable', 'opus', 'sonnet', 'haiku']);
@@ -255,9 +271,11 @@ describe('Claude Code: a sealed run', () => {
     expect(events).toEqual([
       { type: 'session', session: 'c58564bc-c9a7-4e0d-ad72-6461accd9689' },
       { type: 'progress', line: 'Working' },
+      // what the account has left, as the run said last
+      { type: 'limits', limits: { at: expect.any(Number), groups: LEFT } },
       // what `haiku` stood for, as its init said
       { type: 'aliases', aliases: { haiku: 'claude-haiku-5-5' } },
-      { type: 'done', reply: "Echoed: spike-42. Picture's main colour: blue." },
+      { type: 'done', reply: "Echoed: spike-42. Picture's main colour: blue.", usage: USED },
     ]);
     const r = recorded(s);
     // the prompt and the token never in argv
@@ -340,7 +358,11 @@ describe('Claude Code: a sealed run', () => {
       job(s, { session: 'c58564bc-c9a7-4e0d-ad72-6461accd9689' }),
     );
     expect(recorded(s).argv.at(-1)).toBe('--resume=c58564bc-c9a7-4e0d-ad72-6461accd9689');
-    expect(events.at(-1)).toEqual({ type: 'done', reply: 'Echoed "spike-42"; the picture was blue.' });
+    expect(events.at(-1)).toEqual({
+      type: 'done',
+      reply: 'Echoed "spike-42"; the picture was blue.',
+      usage: { input: 79, cached: 4631, output: 20 },
+    });
   });
 
   it('starts the conversation again when the session is gone', async () => {
@@ -494,7 +516,10 @@ sleep 300`,
       { kind: 'model', model: 'claude-haiku-5-5' },
       { kind: 'tool', name: 'echo' },
       { kind: 'tool', name: 'image' },
+      // (as it said them: the five hours, then the week)
+      { kind: 'limits', limits: { groups: [{ windows: [...(LEFT[0]?.windows ?? [])].reverse() }] } },
       { kind: 'text', text: "Echoed: spike-42. Picture's main colour: blue." },
+      { kind: 'usage', usage: USED },
       { kind: 'ended' },
     ]);
     for (const name of ['claude-resume', 'claude-shell', 'claude-timeout'])
@@ -563,6 +588,77 @@ const SAID = {
     "There's an issue with the selected model (claude-sonnet-4-6). It may not exist or you may not have access to it. Run --model to pick a different model.",
 } as const;
 
+describe('Claude Code: what the account has left', () => {
+  it('reads a run’s rate_limit_event: the windows every model shares, and one model’s own week when it names it', () => {
+    expect(
+      claudeLimits({
+        status: 'allowed',
+        rateLimitType: 'five_hour',
+        unifiedWindows: {
+          five_hour: { utilization: 0.33, resetsAt: 1794429600, status: 'allowed' },
+          seven_day: { utilization: 0.71, resetsAt: 1794718800 },
+          // a window not known here is left out
+          seven_day_overage_included: { utilization: 0.5, resetsAt: 1794718800 },
+        },
+      }),
+    ).toEqual({
+      groups: [
+        {
+          windows: [
+            { minutes: 300, used: 0.33, resets: 1794429600000 },
+            { minutes: 10080, used: 0.71, resets: 1794718800000 },
+          ],
+        },
+      ],
+    });
+    // an older Claude Code names only the window nearest its limit
+    expect(claudeLimits({ rateLimitType: 'seven_day', utilization: 0.9, resetsAt: 1794718800 })).toEqual({
+      groups: [{ windows: [{ minutes: 10080, used: 0.9, resets: 1794718800000 }] }],
+    });
+    expect(
+      claudeLimits({
+        rateLimitType: 'seven_day_opus',
+        utilization: 0.95,
+        resetsAt: 1794718800,
+        unifiedWindows: { seven_day: { utilization: 0.4, resetsAt: 1794718800 } },
+      })?.groups,
+    ).toEqual([
+      { windows: [{ minutes: 10080, used: 0.4, resets: 1794718800000 }] },
+      { name: 'Opus models', models: ['Opus'], windows: [{ minutes: 10080, used: 0.95, resets: 1794718800000 }] },
+    ]);
+    // an API key's run has none
+    expect(claudeLimits({ status: 'allowed' })).toBeNull();
+    expect(claudeLimits(undefined)).toBeNull();
+    expect(
+      claudeUsage({
+        input_tokens: 4,
+        cache_creation_input_tokens: 313,
+        cache_read_input_tokens: 8636,
+        output_tokens: 107,
+      }),
+    ).toEqual(USED);
+  });
+
+  it('shows them from then on: at the next look, and only for the account they were read with', async () => {
+    s = sandbox();
+    const h = fake({ signedIn: true });
+    expect((await h.info()).limits).toBeUndefined();
+    await runToEnd(h, job(s, { model: 'haiku', effort: 'low' }));
+    const kept = (await h.info()).limits;
+    expect(kept).toEqual({ at: expect.any(Number), groups: LEFT });
+    // asked again, there's nothing new to ask Claude Code: what its last run said stands
+    expect((await h.limits())?.limits).toEqual(kept);
+    // another account signed in since: its limits aren't these
+    const notes = join(s.root, '.harnesses.json');
+    const all = JSON.parse(readFileSync(notes, 'utf8')) as Record<string, { account?: string }>;
+    writeFileSync(
+      notes,
+      JSON.stringify({ ...all, 'limits:claude': { ...all['limits:claude'], account: 'someone@example.com' } }),
+    );
+    expect((await h.info(true)).limits).toBeUndefined();
+  });
+});
+
 describe('Claude Code: a conversation its model service refused', () => {
   const OLD = 'c58564bc-c9a7-4e0d-ad72-6461accd9689';
   const runs = () => [0, 1, 2].filter((n) => existsSync(join(s.rec, `argv${n}`))).length;
@@ -597,14 +693,19 @@ describe('Claude Code: a conversation its model service refused', () => {
     expect(recorded(s, 0).argv.at(-1)).toBe(`--resume=${OLD}`);
     expect(recorded(s, 1).argv.some((a) => a.startsWith('--resume'))).toBe(false);
     expect(events[0]).toEqual({ type: 'session', session: '873b99a0-d173-4265-92de-5d8411f641a4' });
-    expect(events.at(-1)).toEqual({ type: 'done', reply: "Echoed: spike-42. Picture's main colour: blue." });
+    expect(events.at(-1)).toEqual({
+      type: 'done',
+      reply: "Echoed: spike-42. Picture's main colour: blue.",
+      usage: USED,
+    });
     expect(events.some((e) => e.type === 'failed')).toBe(false);
   });
 
   it('fails a turn that had called a tool, saying the next starts a new conversation (a broken history, too long)', async () => {
     for (const name of ['claude-refused-history', 'claude-refused-too-long'] as const) {
       s = sandbox();
-      expect(await turn(resumed(name), job(s, { session: OLD })), name).toEqual([
+      // (with what the turn used, when its result counted any)
+      expect(await turn(resumed(name), job(s, { session: OLD })), name).toMatchObject([
         { type: 'session', session: fixtureEvents(name).find((e) => e.subtype === 'init')?.session_id },
         { type: 'progress', line: 'Reading the song' },
         { type: 'failed', error: SAID[name], fresh: true },

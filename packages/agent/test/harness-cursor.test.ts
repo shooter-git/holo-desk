@@ -7,11 +7,13 @@ import {
   cursorFlagsWork,
   cursorHarness,
   cursorReader,
+  cursorUsage,
   cursorWantsSignIn,
   parseCursorAbout,
   parseCursorAuth,
   parseCursorDefault,
   parseCursorModels,
+  parseCursorPlan,
 } from '../src/harness/cursor.ts';
 import { GIT_ENV, harnessEnv, harnessPath } from '../src/harness/env.ts';
 import type { RunEvent } from '../src/harness/types.ts';
@@ -48,6 +50,7 @@ const ABOUT = JSON.stringify({
   latestStatus: 'update_available',
   latestVersion: '2026.11.12-aaaaaaa',
   model: 'Auto',
+  subscriptionTier: 'Pro+',
 });
 const MODELS = `Available models
 
@@ -134,6 +137,8 @@ describe('Cursor: finding it', () => {
       version: '2026.11.11-043ef28',
       signedIn: true,
       account: 'user@example.com',
+      // its plan is all it says of the account's usage: what's left isn't reported, so there are no limits
+      plan: 'Pro+',
       sealed: true,
       models: ['auto', 'composer-2.5', 'composer-2.5[fast=true]', 'claude-opus-5-5-low'],
       // effort is part of the model id
@@ -240,6 +245,16 @@ describe('Cursor: finding it', () => {
     expect(parseCursorDefault('claude-fable-5-2-low - Claude Fable 5.2 1M Low (NO ZDR)\nauto - Auto')).toBeUndefined();
     expect(parseCursorDefault('')).toBeUndefined();
     expect(parseCursorAbout(ABOUT)).toEqual({ latest: '2026.11.12-aaaaaaa', available: true });
+    expect(parseCursorPlan(ABOUT)).toBe('Pro+');
+    expect(parseCursorPlan(JSON.stringify({ subscriptionTier: '' }))).toBeUndefined();
+    expect(parseCursorPlan('nope')).toBeUndefined();
+    // what a run says it used: what it wrote to the cache counts as read anew
+    expect(cursorUsage({ inputTokens: 100, outputTokens: 7, cacheReadTokens: 900, cacheWriteTokens: 50 })).toEqual({
+      input: 150,
+      cached: 900,
+      output: 7,
+    });
+    expect(cursorUsage(undefined)).toBeNull();
     expect(cursorFlagsWork(PROBE)).toBe(true);
     expect(cursorFlagsWork('Invalid --allowed-tools value(s): x. Expected one of: shell_tool_call')).toBe(false);
   });
@@ -316,7 +331,11 @@ describe('Cursor: a sealed run', () => {
     expect(events).toEqual([
       { type: 'session', session: '4da7463b-469a-41bf-86ad-c56bdcee7187' },
       { type: 'progress', line: 'Working' },
-      { type: 'done', reply: '**spike-42** — main colour: **red**.' },
+      {
+        type: 'done',
+        reply: '**spike-42** — main colour: **red**.',
+        usage: { input: 6191, cached: 13440, output: 299 },
+      },
     ]);
     const r = recorded(s);
     expect(r.argv.join(' ')).not.toContain('PROMPT-MARK');
@@ -382,7 +401,11 @@ describe('Cursor: a sealed run', () => {
     const events = await runToEnd(fake(), job(s, { session: '4da7463b-469a-41bf-86ad-c56bdcee7187' }));
     expect(recorded(s).argv.at(-1)).toBe('--resume=4da7463b-469a-41bf-86ad-c56bdcee7187');
     expect(recorded(s).env.HOME).toBe(join(s.root, 'agt_0123456789ab', 'home'));
-    expect(events.at(-1)).toEqual({ type: 'done', reply: '**spike-42**, red.' });
+    expect(events.at(-1)).toEqual({
+      type: 'done',
+      reply: '**spike-42**, red.',
+      usage: { input: 82, cached: 6784, output: 79 },
+    });
     // AGENTS.md is read only when a conversation starts: a resumed one has the rules as they are now first
     expect(recorded(s).stdin).toBe(`# Rules\nWork on the open song only.\n\n${PROMPT_MARK}\n`);
   });

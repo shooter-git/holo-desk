@@ -10,6 +10,7 @@
     "./runner": "./src/runner.ts",
     "./harness": "./src/harness/index.ts",
     "./view": "./src/view.ts",
+    "./limits": "./src/limits.ts",
     "./edits": "./src/edits/index.ts"
   },
   "scripts": {

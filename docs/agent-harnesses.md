@@ -35,6 +35,8 @@ server of ours as its only tools. The adapters in `packages/agent/src/harness/` 
 | Check for an update without installing | the `stable` channel file on downloads.claude.ai | npm registry / GitHub releases | `cursor-agent about --format json` | the manifest `install.sh` reads (`…/manifests/<os>_<arch>.json`) |
 | Official installer (Install) | `curl -fsSL https://claude.ai/install.sh \| bash` | `curl -fsSL https://chatgpt.com/codex/install.sh \| sh` | `curl https://cursor.com/install -fsS \| bash` | `curl -fsSL https://antigravity.google/cli/install.sh \| bash` |
 | Models / efforts from | `--help` (aliases; `--effort`'s choices), per version | `codex debug models`, per version and hourly | `cursor-agent models` at each look; effort is in the model id | `agy models` at each look; a model's `-low`…`-max` variants are one model with those efforts |
+| What the account has left | each run's `rate_limit_event`: a five-hour and a seven-day window | `codex app-server`, `account/rateLimits/read`: each limit's windows, the plan | **not reported** outside its interactive `/usage`; `about` gives the plan only | `agy -p "/usage" --output-format json`: a weekly and a five-hour limit for each group of models |
+| What a run used | its `result`'s `usage` | `turn.completed`'s `usage`: **the conversation's total so far** | its `result`'s `usage` | its `result`'s `usage` |
 | Defaults from | none listed: a run needs both chosen | the same catalog: lowest `priority`, `default_reasoning_level` | `models`' "(default)" | none said (a run without `--model` doesn't name its model); none needed |
 | Updates itself during a run | not with `DISABLE_AUTOUPDATER=1` | not seen | **yes, unless `--disable-auto-update`** | **yes, in the background, unless its home's `last_check.timestamp` is under 15 minutes old** |
 | Startup to first event | 0.3–0.5 s | 0.06–0.5 s | 3–7 s warm, 15–34 s cold | not measured; about 4 s to the first tool call |
@@ -891,6 +893,70 @@ with HO[LO]'s own MCP server had all its tools and called `song_status`.
   is a list, `[{"bus": "Gated Room", "level": -13}]` (an `ArgDef` with `pairs`, which still reads the
   object from a harness that sends one). What's left keyed are ids HO[LO] makes (`knobs`, `params`).
 
+## Limits and usage
+
+Settings › Agent says, under each harness, what its account has left and what the requests through
+HO[LO] used (docs/agent.md, "Usage"). Both are what the harness itself reports: HO[LO] calls no
+vendor's service, reads no sign-in token, and drives no interactive screen. Each was seen with a
+signed-in subscription, on the versions named.
+
+**Claude Code (2.1.322).** A run's stream has `rate_limit_event` lines (a claude.ai sign-in's; a run on
+an API key has none):
+`{"type":"rate_limit_event","rate_limit_info":{"status","rateLimitType":"five_hour","resetsAt",…,"unifiedWindows":{"five_hour":{"utilization":0.33,"resetsAt":…,"status"},"seven_day":{"utilization":0.71,"resetsAt":…}}}}`.
+- `utilization` is the share used, from 0 to 1; `resetsAt` is in seconds. The last one of a run stands.
+- Its schema also names `seven_day_opus` and `seven_day_sonnet` as a `rateLimitType`, with the event's
+  own `utilization` and `resetsAt`: one model's own week. The adapter reads it as a group of that
+  model's when it comes; none was recorded. A window it names that isn't known here
+  (`seven_day_overage_included`) is left out.
+- There's no command that prints them without a run, so they're as of the harness's last run, and a
+  harness that hasn't run yet shows none. They're kept between runs, for the account they were read
+  with.
+- The plan is `claude auth status --json`'s `subscriptionType`.
+- A run's `result` has `usage`: `input_tokens` (not from the cache), `cache_creation_input_tokens`
+  (counted as read anew), `cache_read_input_tokens` and `output_tokens`, the run's own.
+
+**Codex (0.167.1).** `codex exec --json` says nothing of the account's limits. Its app server does:
+`codex app-server` speaks JSON-RPC a line each way on stdin and stdout, and after
+`{"id":1,"method":"initialize","params":{"clientInfo":{…}}}` and `{"method":"initialized"}`,
+`{"id":2,"method":"account/rateLimits/read"}` answers
+`{"rateLimits":{…},"rateLimitsByLimitId":{"codex":{"limitId","limitName","normalModelSlug","planType","primary":{"usedPercent","windowDurationMins","resetsAt"},"secondary":…}},"rateLimitResetCredits":{"availableCount",…}}`.
+- `codex` is the limit every model shares; a model with a limit of its own has another id, shown as a
+  group of its own. A plan has one window or two (a week alone was seen: `windowDurationMins: 10080`,
+  `secondary: null`).
+- `availableCount` is how many early resets of the limit the account may still take: said in a line
+  beside the limits.
+- The adapter starts it, asks that one thing and stops it (about 0.4 s). No conversation is started
+  and no model called; nothing was left running. A Codex without the app server, or signed out, shows
+  no limits.
+- `turn.completed`'s `usage` (`input_tokens`, of which `cached_input_tokens`, and `output_tokens`) is
+  the conversation's total so far, and `exec resume` carries on from the last: a resumed thread's
+  second run said 44,267 in where its first had said 35,230. So a run's own are the difference from
+  the total noted in the workspace after the conversation's last run (`.holo-usage`: the thread and
+  its total). A new conversation's are all its own. A conversation carried on with no total noted for
+  it (it began before this was counted) isn't counted for that run, rather than guessed.
+
+**Cursor (2026.11.11).** Its CLI shows the plan's usage only in its interactive screen (`/usage`), and
+no command prints it. `cursor-agent about --format json` gives `subscriptionTier` ("Pro+"), which is
+all Settings shows of the account, with a link to Cursor's own usage page. Reading the same numbers
+would mean calling Cursor's own service with the user's sign-in or driving the screen in a terminal:
+neither is done. A run's `result` has `usage`: `inputTokens` (not from the cache), `cacheWriteTokens`
+(counted as read anew), `cacheReadTokens`, `outputTokens`, the run's own.
+
+**Antigravity (1.5.18).** `agy -p "/usage" --output-format json` prints the account's quota and exits
+(its changelog gives the command for scripts; it calls no model, and its result has `num_turns: 0`):
+`{"status":"SUCCESS","response":"<the same as tab-separated lines>","command":{"name":"usage","data":{"groups":[{"name":"Gemini Models","description":"Models within this group: …","buckets":[{"window":"weekly","remaining_fraction":0.37,"reset_time":"2026-12-03T07:02:10Z"},{"window":"5h",…}]},{"name":"Claude and GPT models",…}]}}}`.
+- Each group of models shares a weekly and a five-hour limit: its own models in one group, the other
+  vendors' it serves in another. A window never used has a `reset_time` at 1970, shown as no reset.
+- It's run with the private home the other probes use, and only when `agy models` says it's signed in
+  (signed out, a print-mode run waits for a sign-in). With an API key it has no account quota and
+  exits 2: no limits show.
+- A run's `result` has `usage`: `input_tokens` (which counts `cache_read_tokens`), `output_tokens`
+  (thinking included: `total_tokens` is the two added), the run's own.
+
+**When they're read.** At each look; when Settings › Agent opens (at most once a minute, the limits
+alone); and after each of a harness's runs, a moment after the turn's end for the two that are asked,
+so nothing waits for it.
+
 ## A refused conversation
 
 A conversation the model service refused outright isn't carried on (docs/agent.md, "Ending early").
@@ -1116,6 +1182,8 @@ All are in `packages/agent/test/fixtures/`.
 | `codex-model-chatgpt.jsonl` | stand-in API: a 400 `{"detail":…}`, a model a ChatGPT plan doesn't have |
 | `codex-model-missing.jsonl` | stand-in API: a 404 for the model |
 | `codex-rate-limited.jsonl` | stand-in API: a 429, until its retries ran out |
+| `codex-rate-limits.jsonl` | the app server's answer to `account/rateLimits/read`: a week used up, one early reset available (its ids made neutral) |
+| `antigravity-usage.jsonl` | `-p "/usage" --output-format json`, signed in: two groups of models, a week and five hours each |
 | `codex-refused-websocket.jsonl` | stand-in API over a WebSocket: a 400 error event, "No tool output found …" |
 
 The Claude shell fixtures were recorded with an earlier prompt (`ls ~` and `/etc/hostname`, no write). The

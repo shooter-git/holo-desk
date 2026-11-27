@@ -63,6 +63,7 @@ export const COMMANDS = [
   'capture',
   'chords',
   'steps',
+  'stack',
   'details',
   'import',
   'packs',
@@ -114,6 +115,11 @@ ${noteActions('        ')}
   holo chords [--at 9.3 --symbol Dm7 | --at 9.3 --remove | --set "9=Dm7 9.3=G7 10=Cmaj7"]
                                               the song's chord symbols (the Chords lane's, and the Score's):
                                               listed with nothing, set, removed, or several written at once
+  holo stack [ACTION] [STACK] [--tracks "Violins I,Violins II"] [--bus new|NAME|off] [--name N] [--index 3] [--route off]
+        track stacks: tracks kept together under one header (a folder), mixed through a bus when the stack has
+        one. Listed with no action; make NAME --tracks … [--bus new]; add and remove (--tracks); bus; rename
+        (--name); move (--index); unstack. A track's output changes only where the command says it did
+        e.g. holo stack make Strings --tracks "Violins I,Violins II,Violas" --bus new · holo stack unstack Strings
   holo steps [ACTION] TRACK [--bars 9-12] [--grid 1/16] [--row "Snare"] [--lines "Kick: x...x...; Snare: ....X..."] …
         a drum track as the Step Grid shows it, a row a piece (X accent, x hit, o soft, g ghost, . none): shown
         with no action; write (--lines, or --row with --pattern), set, clear (--step N or --steps 1,5,9),

@@ -1299,6 +1299,7 @@ async function main(): Promise<void> {
     case 'capture':
     case 'chords':
     case 'steps':
+    case 'stack':
     case 'details':
     case 'import':
     case 'packs':

@@ -25,6 +25,8 @@ import { audioNoteTools } from './audio-notes.ts';
 import { importTools } from './import.ts';
 // ---- regions ----
 import { regionTools } from './regions.ts';
+// ---- stacks ----
+import { stackTools } from './stacks.ts';
 // ---- steps ----
 import { stepTools } from './steps.ts';
 // ---- timeline ----
@@ -44,6 +46,8 @@ export const TOOLS: readonly Tool[] = [
   ...audioNoteTools,
 
   ...trackTools,
+  // ---- stacks ----
+  ...stackTools,
   ...mixTools,
   ...scoreTools,
   ...packTools,

@@ -164,6 +164,10 @@ holo regions quantize --track Keys --unit 1/16 --strength 80   # quantize (--swi
 holo regions quantize --track Drums --unit 1/8 --swing 67     #   straight grids only), transpose (--semitones),
 holo regions into_key --track Keys                           #   into_key (notes outside the song's key move onto it) and
 holo regions cc rgn_… --lane pb --points "9=0 9.3=4096 10=0"   # controller lanes (mod 1, 11, 64, pb, at)
+holo stack make Strings --tracks "Violins I,Violins II,Violas" --bus new   # a track stack: tracks under one
+holo stack add Strings --tracks Cellos             #   header (a folder); --bus new|NAME mixes them through a bus.
+holo stack unstack Strings                         #   Also remove, bus (--bus off), rename, move (--index); it says
+                                                   #   whenever it changes where a track plays (--route off: never)
 holo steps Drums --bars 9-10                       # a drum track as the Step Grid shows it: a row a piece,
 holo steps write Drums --bars 9-12 --lines "Kick: x...x...x...x...; Snare: ....X.......X..."
 holo steps euclid Drums --bars 9-12 --row "Closed Hat" --hits 11   #   X accent, x hit, o soft, g ghost, . none;

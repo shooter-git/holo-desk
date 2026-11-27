@@ -171,6 +171,7 @@ describe('the tool list', () => {
       'regions',
       'timeline',
       'steps',
+      'stack',
     ])
       expect(names.has(n), n).toBe(true);
   });

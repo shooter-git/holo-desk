@@ -2,6 +2,7 @@
  * Tracks and what plays them: a new track, a track's settings, a synth's or a kit's own knobs, and
  * the list of what can play (the built-in synths and the installed packs' instruments).
  */
+
 import {
   type ChannelPatch,
   type Instrument,
@@ -24,6 +25,7 @@ import {
 } from '@holo/session';
 import type { JobApi, PackSummary } from '../api.ts';
 import { bool, change, knobValues, need, num, obj, plural, str, type Tool, ToolError, trackRef } from './common.ts';
+import { joinOps, leaveOps, stackRef } from './stacks.ts';
 
 /**
  * An instrument as the model names it: "synth:Warm Pad" or a preset's bare name, or "pack/name" for
@@ -73,17 +75,19 @@ export const trackAdd: Tool = {
   name: 'track_add',
   kind: 'change',
   summary:
-    'Add an instrument track. "instrument" is a built-in synth ("synth:Soft Keys", "synth:Warm Pad", "synth:Fat Mono") or an installed pack\'s instrument ("vsco2/violins_pizz"); "sound" is instead a palette\'s ready-made sound ("pack/Sound name", with its effects, room and level). The instruments and packs tools list them. A new track sends a little to the song\'s first reverb bus. Example: {"name": "Counter-melody", "instrument": "synth:Soft Keys"}.',
+    'Add an instrument track. "instrument" is a built-in synth ("synth:Soft Keys", "synth:Warm Pad", "synth:Fat Mono") or an installed pack\'s instrument ("vsco2/violins_pizz"); "sound" is instead a palette\'s ready-made sound ("pack/Sound name", with its effects, room and level). The instruments and packs tools list them. A new track sends a little to the song\'s first reverb bus. "stack" puts it in a track stack (and, when the stack has a bus, plays it through that bus: the reply says so). Example: {"name": "Counter-melody", "instrument": "synth:Soft Keys"}.',
   args: [
     { name: 'name', type: 'string', describe: "The track's name", required: true, maxLength: 60 },
     { name: 'instrument', type: 'string', describe: 'synth:PRESET or pack/name', default: 'synth:Soft Keys' },
     { name: 'sound', type: 'string', describe: "A palette's sound, pack/Sound name (instead of instrument)" },
     { name: 'volume', type: 'number', describe: 'Fader in dB (0 is unity)', min: -60, max: 12 },
     { name: 'pan', type: 'number', describe: '-1 (left) to 1 (right)', min: -1, max: 1 },
+    { name: 'stack', type: 'string', describe: 'A track stack to put it in, by name or id', maxLength: 80 },
   ],
   async run(ctx, args) {
     const project = await ctx.api.song();
     const name = need(args, 'name');
+    const into = str(args, 'stack')?.trim() ? stackRef(project, str(args, 'stack')) : null;
     const color = TRACK_COLORS[project.tracks.length % TRACK_COLORS.length];
     let ops: Op[];
     let what: string;
@@ -113,12 +117,20 @@ export const trackAdd: Tool = {
       const p = num(args, 'pan');
       if (v !== undefined) added.track.channel.volume = v;
       if (p !== undefined) added.track.channel.pan = p;
+      if (into) {
+        // in the stack, after its tracks; through its bus, when it has one (said in the reply)
+        added.track.stack = into.id;
+        if (into.bus) added.track.channel.output = into.bus;
+      }
     }
     const same = project.tracks.some((t) => t.name.toLowerCase() === name.toLowerCase());
-    const label = `New track ${name} (${what})`;
+    const label = `New track ${name} (${what})${into ? `, in the stack "${into.name}"` : ''}`;
     await change(ctx, project, ops, label);
+    const through = into?.bus
+      ? ` It plays through the stack's bus, ${project.buses.find((b) => b.id === into.bus)?.name ?? into.bus}.`
+      : '';
     return {
-      text: `${label}.${same ? ` Another track is also called "${name}": refer to this one by its id from song_show.` : ''}`,
+      text: `${label}.${through}${same ? ` Another track is also called "${name}": refer to this one by its id from song_show.` : ''}`,
       progress: label,
     };
   },
@@ -128,7 +140,7 @@ export const trackSet: Tool = {
   name: 'track_set',
   kind: 'change',
   summary:
-    'Change a track: its name, fader (volume in dB, 0 is unity), pan (-1 left … 1 right), mute, solo, record arm, instrument ("synth:PRESET" or "pack/name"), its place in the track list (1 is the top), its sends to buses ([{"bus": "Reverb", "level": -12}], in dB; -144 or less is off), or whether it\'s inactive (switched off: kept and still editable, but not played, loaded or recorded, which frees its CPU and memory; it\'s disarmed too). Example: {"track": "Strings", "volume": -4, "pan": -0.3}.',
+    'Change a track: its name, fader (volume in dB, 0 is unity), pan (-1 left … 1 right), mute, solo, record arm, instrument ("synth:PRESET" or "pack/name"), its place in the track list (1 is the top), its sends to buses ([{"bus": "Reverb", "level": -12}], in dB; -144 or less is off), the track stack it\'s in ("stack": a stack\'s name, or "none" to take it out; into a stack with a bus it plays through that bus, and out of one back to Stereo Out, which the reply says), or whether it\'s inactive (switched off: kept and still editable, but not played, loaded or recorded, which frees its CPU and memory; it\'s disarmed too). Example: {"track": "Strings", "volume": -4, "pan": -0.3}.',
   args: [
     { name: 'track', type: 'string', describe: 'The track: its name (or the start of it) or id', required: true },
     { name: 'name', type: 'string', describe: 'A new name', maxLength: 60 },
@@ -154,6 +166,12 @@ export const trackSet: Tool = {
       name: 'inactive',
       type: 'boolean',
       describe: 'true switches it off (kept, not heard or loaded); false turns it on again',
+    },
+    {
+      name: 'stack',
+      type: 'string',
+      describe: 'A track stack to put it in, by name or id; "none" takes it out',
+      maxLength: 80,
     },
   ],
   async run(ctx, args) {
@@ -232,6 +250,23 @@ export const trackSet: Tool = {
       done.push(`instrument ${describeInstrument(tp.instrument)}`);
     }
     if (Object.keys(tp).length) ops.push({ op: 'updateTrack', track: track.id, patch: tp });
+    const stackText = str(args, 'stack')?.trim();
+    if (stackText) {
+      const was = project.stacks?.find((s) => s.id === track.stack);
+      if (/^(none|out|off)$/i.test(stackText)) {
+        if (!was) throw new ToolError(`${track.name} isn't in a stack`);
+        const step = leaveOps(project, was, track, true);
+        ops.push(...step.ops);
+        done.push(`out of the stack "${was.name}"${step.routed ? ' (now to Stereo Out)' : ''}`);
+      } else {
+        const into = stackRef(project, stackText);
+        if (was?.id === into.id) throw new ToolError(`${track.name} is in "${into.name}" already`);
+        const step = joinOps(project, into, track, true);
+        ops.push(...step.ops);
+        const bus = project.buses.find((b) => b.id === into.bus)?.name ?? into.bus;
+        done.push(`into the stack "${into.name}"${step.routed ? ` (now through its bus, ${bus})` : ''}`);
+      }
+    }
     const index = num(args, 'index');
     if (index !== undefined) {
       ops.push({ op: 'moveTrack', track: track.id, index: Math.min(project.tracks.length, index) - 1 });
@@ -241,7 +276,7 @@ export const trackSet: Tool = {
       throw new ToolError(
         inactive !== undefined
           ? `${track.name} is ${track.inactive ? 'inactive' : 'active'} already`
-          : 'Say what to change: name, volume, pan, mute, solo, armed, instrument, index, sends or inactive',
+          : 'Say what to change: name, volume, pan, mute, solo, armed, instrument, index, sends, stack or inactive',
       );
     const label = `${track.name}: ${done.join(', ')}`;
     await change(ctx, project, ops, label);

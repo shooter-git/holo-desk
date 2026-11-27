@@ -269,6 +269,7 @@ const TOOL_WORDS: Record<string, string> = {
   capture: 'Keeping what you played',
   chords: 'Writing the chords',
   steps: 'Working on the drum pattern',
+  stack: 'Stacking tracks',
   compare: 'Setting up a comparison',
   scan_show: 'Reading the scan',
   scan_status: 'Marking the scan',

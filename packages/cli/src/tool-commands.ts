@@ -78,6 +78,7 @@ const COMMAND_FOR: Record<string, string> = {
   capture: 'holo capture',
   chords: 'holo chords',
   steps: 'holo steps',
+  stack: 'holo stack',
   listen: 'holo listen',
   audition: 'holo audition',
 };
@@ -414,6 +415,21 @@ export async function toolCommand(ctx: ToolCommandContext): Promise<void> {
       }
       const a = api.measured;
       console.log(a && !a.done ? stillText(r.text) : r.text);
+      return;
+    }
+
+    case 'stack': {
+      const how: Wording = { command: 'holo stack', positional: { field: 'action', say: 'ACTION' } };
+      const tool = toolNamed('stack') as Tool;
+      const args = toolArgs(tool, flags, how);
+      const actions = tool.args.find((d) => d.name === 'action')?.values ?? [];
+      // a first word that isn't an action is the stack to show: holo stack Strings
+      const action = actions.includes(words[0] ?? '') ? (words.shift() as string) : 'show';
+      const named = words.join(' ').trim();
+      // (the word after "make" is the new stack's name; after any other action, the stack it's about)
+      if (named && action === 'make' && args.name === undefined) args.name = named;
+      else if (named && args.stack === undefined) args.stack = named;
+      say(await runTool(env, 'stack', { ...args, action }, how));
       return;
     }
 

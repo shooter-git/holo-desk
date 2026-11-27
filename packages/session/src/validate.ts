@@ -5,6 +5,7 @@
 import { parseAudioNotes } from './audio-notes.ts';
 import { newChannel, TRACK_COLORS } from './defaults.ts';
 import { KEY_MODES, textForKeys } from './keysig.ts';
+import { healStacks } from './stacks.ts';
 import {
   type Bus,
   type Channel,
@@ -24,6 +25,7 @@ import {
   SESSION_FORMAT,
   SESSION_VERSION,
   type Seat,
+  type Stack,
   type Stage,
   type TempoPoint,
   type Track,
@@ -497,6 +499,7 @@ function track(v: unknown, i: number): Track {
     channel: channel(v.channel, `${where}.channel`),
   };
   if (v.inactive === true) t.inactive = true;
+  if (typeof v.stack === 'string' && v.stack) t.stack = v.stack;
   if (isObj(v.audioInput)) {
     t.audioInput = {
       input: Math.max(0, Math.round(num(v.audioInput.input, `${where}.audioInput.input`, 0))),
@@ -553,7 +556,7 @@ export function parseProject(value: unknown): Project {
       channel: channel(b.channel, `buses[${i}].channel`),
     };
   });
-  return {
+  const song: Project = {
     format: SESSION_FORMAT,
     version: SESSION_VERSION,
     id: str(value.id, 'id'),
@@ -644,7 +647,22 @@ export function parseProject(value: unknown): Project {
           }),
         }
       : {}),
+    ...(Array.isArray(value.stacks) && value.stacks.length
+      ? {
+          stacks: value.stacks.map((s, i): Stack => {
+            if (!isObj(s)) throw new SessionError(`stacks[${i}] must be an object`);
+            return {
+              id: str(s.id, `stacks[${i}].id`),
+              name: str(s.name, `stacks[${i}].name`, `Stack ${i + 1}`),
+              ...(typeof s.color === 'string' && s.color ? { color: s.color } : {}),
+              ...(typeof s.bus === 'string' && s.bus ? { bus: s.bus } : {}),
+            };
+          }),
+        }
+      : {}),
   };
+  // (each stack one block of the tracks it has, and nothing pointing at what the song doesn't have)
+  return healStacks(song);
 }
 
 /** Where a session ends: the last region's end, at least one bar. */

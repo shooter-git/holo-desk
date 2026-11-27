@@ -415,6 +415,10 @@ const OPS: Record<Op['op'], Record<string, 'string' | 'number' | 'object' | 'arr
   setCC: { track: 'string', region: 'string', lane: 'string', points: 'array' },
   setAutomation: { target: 'string', param: 'string', points: 'array' },
   addFile: 'Files come from the user (a recording dropped on the studio); no tool adds one',
+  addStack: { stack: 'object', tracks: 'array' },
+  updateStack: { stack: 'string', patch: 'object' },
+  removeStack: { stack: 'string' },
+  moveStack: { stack: 'string', index: 'number' },
 };
 
 const CONFIRM_FIELDS: Record<string, Record<string, 'string'>> = {
@@ -427,7 +431,7 @@ export const opsApply: Tool = {
   name: 'ops_apply',
   kind: 'change',
   summary:
-    'Raw session operations, for what no other tool covers (moving or splitting regions, region names and colors, controller lanes, buses, sends, score marks…). Each is an object {"op": KIND, …} as in HO[LO]\'s session format, with ids from song_show (track ids trk_…, region ids rgn_…, bus ids bus_…); ticks are 960 to a quarter note, and note times are ticks from their region\'s start. Kinds: setProject, addTrack, moveTrack, updateTrack, updateChannel, addPlugin, updatePlugin, removePlugin, movePlugin, addBus, updateBus, addRegion, updateRegion, moveRegion, splitRegion (track, region, at a tick inside it, id for the right half), arrange (edit insert, delete, copy or move; from, to and at in ticks on bar lines), addNotes, setNotesIn (replaces only the notes starting in [from, to)), setMarksIn, setCC, setAutomation; removeTrack, removeRegion, removeBus, and arrange\'s delete and move only with "confirm": true. They\'re tried first and refused, with the reason, if any would fail. Example: {"ops": [{"op": "updateRegion", "track": "trk_…", "region": "rgn_…", "patch": {"name": "Intro"}}], "label": "Named the intro"}.',
+    'Raw session operations, for what no other tool covers (moving or splitting regions, region names and colors, controller lanes, buses, sends, score marks…). Each is an object {"op": KIND, …} as in HO[LO]\'s session format, with ids from song_show (track ids trk_…, region ids rgn_…, bus ids bus_…); ticks are 960 to a quarter note, and note times are ticks from their region\'s start. Kinds: setProject, addTrack, moveTrack, updateTrack, updateChannel, addPlugin, updatePlugin, removePlugin, movePlugin, addBus, updateBus, addRegion, updateRegion, moveRegion, splitRegion (track, region, at a tick inside it, id for the right half), arrange (edit insert, delete, copy or move; from, to and at in ticks on bar lines), addNotes, setNotesIn (replaces only the notes starting in [from, to)), setMarksIn, setCC, setAutomation, and the track stacks\' addStack, updateStack, removeStack, moveStack (the stack tool does these by name); removeTrack, removeRegion, removeBus, and arrange\'s delete and move only with "confirm": true. They\'re tried first and refused, with the reason, if any would fail. Example: {"ops": [{"op": "updateRegion", "track": "trk_…", "region": "rgn_…", "patch": {"name": "Intro"}}], "label": "Named the intro"}.',
   args: [
     {
       name: 'ops',

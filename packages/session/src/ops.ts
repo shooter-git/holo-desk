@@ -6,6 +6,7 @@
 import { arrange } from './arrange.ts';
 import { splitRegionAt } from './audio-region.ts';
 import { keysForText, textForKeys } from './keysig.ts';
+import { settle, stackBlocks } from './stacks.ts';
 import type {
   AudioFile,
   Bus,
@@ -22,6 +23,7 @@ import type {
   Region,
   ScoreSettings,
   Seat,
+  Stack,
   Stage,
   Track,
 } from './types.ts';
@@ -39,7 +41,8 @@ export type ProjectPatch = Partial<
   form?: FormMark[] | null;
   score?: ScoreSettings | null;
 };
-export type TrackPatch = Partial<Omit<Track, 'id' | 'kind' | 'regions' | 'channel'>>;
+/** A track's settings to change. Which stack it's in isn't one: `moveTrack` puts it in a stack or takes it out. */
+export type TrackPatch = Partial<Omit<Track, 'id' | 'kind' | 'regions' | 'channel' | 'stack'>>;
 export type RegionPatch = Partial<Omit<Region, 'id' | 'notes' | 'cc'>>;
 /** A channel's settings to change; `stage: null` takes it off its stage. */
 export type ChannelPatch = Partial<Omit<Channel, 'inserts' | 'stage'>> & { stage?: Stage | null };
@@ -48,7 +51,23 @@ export type Op =
   | { op: 'setProject'; patch: ProjectPatch }
   | { op: 'addTrack'; track: Track; index?: number }
   | { op: 'removeTrack'; track: string }
-  | { op: 'moveTrack'; track: string; index: number }
+  /**
+   * A track to a new place in the list (`index`: where it is once it's there). Left to itself it stays
+   * in the stack it's in, or out of every stack: a place that would break that is moved to the nearest
+   * that doesn't. `stack` puts it in that stack (among its tracks), `null` takes it out of its stack.
+   * Its output is never changed.
+   */
+  | { op: 'moveTrack'; track: string; index: number; stack?: string | null }
+  /**
+   * Track stacks (stacks.ts). `addStack` gathers `tracks` (out of any stack they were in) at the first
+   * one's place, as a new stack; `removeStack` leaves its tracks where they are, in no stack;
+   * `moveStack` moves the block whole (`index`: where its first track is, counted without it). A
+   * stack's `bus` is the bus its header controls: no track is routed by it.
+   */
+  | { op: 'addStack'; stack: Stack; tracks: string[] }
+  | { op: 'updateStack'; stack: string; patch: { name?: string; color?: string | null; bus?: string | null } }
+  | { op: 'removeStack'; stack: string }
+  | { op: 'moveStack'; stack: string; index: number }
   | { op: 'updateTrack'; track: string; patch: TrackPatch }
   /** `target` is a track id, a bus id or "master". */
   | { op: 'updateChannel'; target: string; patch: ChannelPatch }
@@ -159,6 +178,28 @@ function move<T>(list: T[], from: number, to: number): T[] {
   return out;
 }
 
+/** Whether the song has a stack of this id. */
+const inStack = (project: Project, id: string | undefined): boolean =>
+  !!id && (project.stacks?.some((s) => s.id === id) ?? false);
+
+/** A track as it is in no stack. */
+function unstacked(track: Track): Track {
+  if (track.stack === undefined) return track;
+  const { stack: _stack, ...rest } = track;
+  return rest;
+}
+
+/** The song's stacks without those left with no track; no list at all when none is left. */
+function tidyStacks(project: Project): Project {
+  if (!project.stacks) return project;
+  const used = new Set(project.tracks.map((t) => t.stack));
+  const stacks = project.stacks.filter((s) => used.has(s.id));
+  if (stacks.length && stacks.length === project.stacks.length) return project;
+  const next: Project = { ...project, stacks };
+  if (!stacks.length) delete next.stacks;
+  return next;
+}
+
 export function applyOp(project: Project, op: Op): Project {
   switch (op.op) {
     case 'setProject': {
@@ -187,25 +228,93 @@ export function applyOp(project: Project, op: Op): Project {
     }
     case 'addTrack': {
       if (project.tracks.some((t) => t.id === op.track.id)) throw new OpError(`Track "${op.track.id}" exists`);
+      // (a track that says it's in a stack the song doesn't have is in none)
+      const track = inStack(project, op.track.stack) ? op.track : unstacked(op.track);
       const tracks = project.tracks.slice();
-      tracks.splice(op.index ?? tracks.length, 0, op.track);
+      // in a stack: among its tracks (after them, when no place is said); else never inside one
+      const block = track.stack ? stackBlocks(tracks).get(track.stack) : undefined;
+      tracks.splice(settle(tracks, op.index ?? block?.end ?? tracks.length, track.stack), 0, track);
       return { ...project, tracks };
     }
     case 'removeTrack':
       if (!project.tracks.some((t) => t.id === op.track)) throw new OpError(`No track "${op.track}"`);
-      return { ...project, tracks: project.tracks.filter((t) => t.id !== op.track) };
+      // (a stack goes with its last track)
+      return tidyStacks({ ...project, tracks: project.tracks.filter((t) => t.id !== op.track) });
     case 'moveTrack': {
       const from = project.tracks.findIndex((t) => t.id === op.track);
       if (from < 0) throw new OpError(`No track "${op.track}"`);
-      return { ...project, tracks: move(project.tracks, from, op.index) };
+      if (typeof op.stack === 'string' && !inStack(project, op.stack)) throw new OpError(`No stack "${op.stack}"`);
+      let track = project.tracks[from] as Track;
+      if (op.stack === null) track = unstacked(track);
+      else if (op.stack !== undefined && track.stack !== op.stack) track = { ...track, stack: op.stack };
+      const rest = project.tracks.filter((_, i) => i !== from);
+      const tracks = rest.slice();
+      tracks.splice(settle(rest, op.index, track.stack, from), 0, track);
+      return tidyStacks({ ...project, tracks });
     }
     case 'updateTrack':
       return mapTrack(project, op.track, (t) => {
-        const next: Track = { ...t, ...op.patch };
+        // (which stack it's in is `moveTrack`'s to change: a patch that says otherwise is not heard)
+        const { stack: _stack, ...patch } = op.patch as TrackPatch & { stack?: unknown };
+        const next: Track = { ...t, ...patch };
         // active again: the song reads as if it never was switched off
         if (!next.inactive) delete next.inactive;
         return next;
       });
+    case 'addStack': {
+      if (!op.stack?.id || inStack(project, op.stack.id)) throw new OpError(`Stack "${op.stack?.id}" exists`);
+      const wanted = new Set(op.tracks);
+      if (!wanted.size) throw new OpError('A stack needs a track');
+      for (const id of wanted) if (!project.tracks.some((t) => t.id === id)) throw new OpError(`No track "${id}"`);
+      if (op.stack.bus !== undefined && !project.buses.some((b) => b.id === op.stack.bus))
+        throw new OpError(`No bus "${op.stack.bus}"`);
+      const members = project.tracks.filter((t) => wanted.has(t.id)).map((t) => ({ ...t, stack: op.stack.id }));
+      const rest = project.tracks.filter((t) => !wanted.has(t.id));
+      // at its first track's place, counted among the tracks that stay
+      const first = project.tracks.findIndex((t) => wanted.has(t.id));
+      const before = project.tracks.slice(0, first).filter((t) => !wanted.has(t.id)).length;
+      const tracks = rest.slice();
+      tracks.splice(settle(rest, before), 0, ...members);
+      const stack: Stack = { id: op.stack.id, name: op.stack.name || 'Stack' };
+      if (op.stack.color) stack.color = op.stack.color;
+      if (op.stack.bus) stack.bus = op.stack.bus;
+      return tidyStacks({ ...project, tracks, stacks: [...(project.stacks ?? []), stack] });
+    }
+    case 'updateStack': {
+      if (!inStack(project, op.stack)) throw new OpError(`No stack "${op.stack}"`);
+      const { name, color, bus } = op.patch;
+      if (typeof bus === 'string' && !project.buses.some((b) => b.id === bus)) throw new OpError(`No bus "${bus}"`);
+      return {
+        ...project,
+        stacks: (project.stacks ?? []).map((s) => {
+          if (s.id !== op.stack) return s;
+          const next: Stack = { ...s };
+          if (typeof name === 'string' && name) next.name = name;
+          if (color === null) delete next.color;
+          else if (typeof color === 'string' && color) next.color = color;
+          if (bus === null) delete next.bus;
+          else if (typeof bus === 'string') next.bus = bus;
+          return next;
+        }),
+      };
+    }
+    case 'removeStack': {
+      if (!inStack(project, op.stack)) throw new OpError(`No stack "${op.stack}"`);
+      return tidyStacks({
+        ...project,
+        tracks: project.tracks.map((t) => (t.stack === op.stack ? unstacked(t) : t)),
+        stacks: (project.stacks ?? []).filter((s) => s.id !== op.stack),
+      });
+    }
+    case 'moveStack': {
+      if (!inStack(project, op.stack)) throw new OpError(`No stack "${op.stack}"`);
+      const members = project.tracks.filter((t) => t.stack === op.stack);
+      const rest = project.tracks.filter((t) => t.stack !== op.stack);
+      const tracks = rest.slice();
+      const was = project.tracks.findIndex((t) => t.stack === op.stack);
+      tracks.splice(settle(rest, op.index, undefined, was), 0, ...members);
+      return { ...project, tracks };
+    }
     case 'updateChannel':
       return mapChannel(project, op.target, (c) => {
         const { stage, ...rest } = op.patch;
@@ -256,11 +365,19 @@ export function applyOp(project: Project, op: Op): Project {
         output: c.output === op.bus ? 'master' : c.output,
         ...(c.stage ? { stage: { ...c.stage, near: unseat(c.stage.near), far: unseat(c.stage.far) } } : {}),
       });
-      return {
+      const next: Project = {
         ...project,
         buses: project.buses.filter((b) => b.id !== op.bus).map((b) => ({ ...b, channel: unsend(b.channel) })),
         tracks: project.tracks.map((t) => ({ ...t, channel: unsend(t.channel) })),
       };
+      // a stack whose bus it was is a folder again
+      if (project.stacks?.some((s) => s.bus === op.bus))
+        next.stacks = project.stacks.map((s) => {
+          if (s.bus !== op.bus) return s;
+          const { bus: _bus, ...rest } = s;
+          return rest;
+        });
+      return next;
     }
     case 'updateBus':
       return {

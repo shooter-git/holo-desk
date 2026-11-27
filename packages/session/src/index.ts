@@ -36,6 +36,7 @@ export * from './palettes.ts';
 export * from './plugins.ts';
 export * from './prism.ts';
 export * from './realize.ts';
+export * from './stacks.ts';
 export * from './summary.ts';
 export * from './time.ts';
 export * from './types.ts';

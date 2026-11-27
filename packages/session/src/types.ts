@@ -59,6 +59,21 @@ export interface Project {
   form?: FormMark[];
   /** How the song is written out as a score: credits, layout, and how the parts are grouped. */
   score?: ScoreSettings;
+  /** Track stacks: tracks kept together under one header (stacks.ts). None when the song has none. */
+  stacks?: Stack[];
+}
+
+/**
+ * A track stack: the tracks whose `stack` is its id, together in the track list. A folder as it is;
+ * with `bus`, a summing stack, whose header controls that bus (the tracks are routed to it by their
+ * own `output`, which being in the stack never changes).
+ */
+export interface Stack {
+  id: string;
+  name: string;
+  color?: string;
+  /** The bus its header controls. */
+  bus?: string;
 }
 
 /** A key signature from a tick on: sharps (+) or flats (−), and the mode its tonic names. */
@@ -264,6 +279,8 @@ export interface Track {
    * recorded, so its instrument, plugins, sends and recordings cost nothing. Only `true` is kept.
    */
   inactive?: boolean;
+  /** The stack it's in (a `Stack`'s id): its tracks sit together in the list, under the stack's header. */
+  stack?: string;
   /** MIDI effects (arpeggiator, harmonizer…), before the instrument. */
   midiFx: Plugin[];
   regions: Region[];

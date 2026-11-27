@@ -101,6 +101,13 @@ plugin's automation, `automate` with `list` first gives each setting's exact nam
 second EQ's); `fx` with `move` reorders a chain. Who the song is by and its album are set with
 `song_set`, outside undo: say so in the reply.
 
+Tracks that belong together can be kept in a stack (`stack`): a header in the studio that folds them
+away and mutes or solos them together. Give the stack a bus (`"bus": "new"`) when the person wants
+one fader or one chain of effects for the group: the tracks are then mixed through it. Being in a
+stack never changes what's heard by itself; the bus does, by its own fader and effects. Whenever the
+tool moves a track's output it tells you: pass that on in a few words ("the strings now go through
+their own bus"). Taking a stack apart leaves its tracks playing where they were.
+
 A drum part is best read and written as steps: `steps` shows a kit's bars as lines, a row for each
 piece and a character for each step (`X` accent, `x` hit, `o` soft, `g` ghost, `.` none), which is how
 the person sees it in the Step Grid. Write a groove with `action: "write"` and `lines` ("Kick:

@@ -4,8 +4,9 @@
  * like any device, so they play, record and reach the AI the same way.
  */
 import { type Instrument, type MiddleC, noteName } from '@holo/session';
+import { CircleDashed } from 'lucide-react';
 import { Fragment, type PointerEvent as ReactPointerEvent, useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { ensureAudio } from '../app/actions.ts';
+import { captureRecent, ensureAudio } from '../app/actions.ts';
 import { useLayout } from '../app/layout.ts';
 import { sendMidi } from '../app/live.ts';
 import { toast, useApp } from '../app/store.ts';
@@ -60,6 +61,7 @@ export function PlayPad({
 }: PlayPadProps = {}) {
   const [mode, setMode] = useState<'keys' | 'pads'>('keys');
   const [toStudio, setToStudio] = useState(remote);
+  const kept = useApp((s) => s.captureReady);
   const others = useApp((s) => Math.max(0, s.peers.filter((p) => p.role === 'editor').length - 1));
   const [octave, setOctave] = useState(4);
   /** The upper row's octave, once it's given one (until then, an octave above the lower row). */
@@ -187,6 +189,21 @@ export function PlayPad({
     },
   };
 
+  // What was just played here can be kept (Capture): said where it was played, in the room there is
+  // (the bar, or beside the octave where the keyboard's rows fill the bar).
+  const keepChip = kept && !toStudio && (
+    <button
+      type="button"
+      className="btn capture-chip"
+      title="Keep what you just played as a region (Capture)"
+      aria-label="Keep what I played"
+      onClick={captureRecent}
+    >
+      <CircleDashed />
+      <span className="words">Keep</span>
+    </button>
+  );
+
   return (
     <div className="playpad" ref={pad} style={{ ['--pad-color' as string]: color }}>
       <div className="pane-bar">
@@ -230,6 +247,7 @@ export function PlayPad({
             {toStudio ? `To the studio${others ? ` (${others})` : ''}` : 'On this device'}
           </button>
         )}
+        {!(mode === 'keys' && stacking) && keepChip}
         {mode === 'keys' && stacking ? (
           <div className="seg rows" role="radiogroup" aria-label="Rows of keys">
             {/* biome-ignore lint/a11y/useSemanticElements: the studio's segmented buttons, as a radio group */}
@@ -321,10 +339,11 @@ export function PlayPad({
         </div>
       ) : (
         <div ref={box} className="keyboards">
-          {rows.map((row) => (
+          {rows.map((row, i) => (
             <Fragment key={row.id}>
               {stacking && (
                 <div className="key-strip">
+                  {i === 0 && keepChip}
                   {two && <span className="label">{row.id === 'upper' ? 'Upper row' : 'Lower row'}</span>}
                   <span className="grow" />
                   <Octave

@@ -99,6 +99,8 @@ export interface AppState {
   positionTime: boolean;
   /** Play (or Record) pressed while the song's sounds were still on their way: it starts once they're in. */
   playWaiting: 'play' | 'record' | null;
+  /** Something was played that Capture can keep. */
+  captureReady: boolean;
 
   tool: Tool;
   grid: keyof typeof DIVISIONS;
@@ -190,6 +192,7 @@ export const SHOW_DEFAULTS = {
   barTime: true,
   barSig: true,
   barKey: true,
+  barCapture: true,
   barMetronome: true,
   barTyping: true,
   barMidi: true,
@@ -266,6 +269,7 @@ const initial: AppState = {
   mobileTab: 'tracks',
   positionTime: false,
   playWaiting: null,
+  captureReady: false,
   tool: 'pointer',
   grid: '1/16',
   quantStrength: 100,

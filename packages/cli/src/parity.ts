@@ -67,6 +67,7 @@ export const TOOL_PARITY: Readonly<Record<string, Parity>> = {
   audition: { commands: ['audition'] },
   listen: { commands: ['listen'], asTool: false },
   played: { commands: ['played'] },
+  capture: { commands: ['capture'] },
   analyze_played: { commands: ['played', 'listen'] },
   compare: {
     conversation:

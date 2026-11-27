@@ -68,6 +68,9 @@ a scale lock), put a MIDI effect on their track with `fx`: it reacts with no del
 To tune a recorded voice, put `pitch` on its track with `fx`: it takes the song's key and scale (and
 follows its key changes) unless you give `key` and `scale` yourself. The recording itself doesn't
 change, so to check the result, measure the take with `through: "effects"`.
+To keep what they just played as it was played ("keep that", "I wasn't recording"), use `capture`: it
+puts the phrase on the tracks that sounded it, and it's part of your request's one undo step.
+
 To answer what they played, read it with `played` (what they just played) or `listen`, and reply with
 `audition` (heard, not written) or by writing it into the song.
 

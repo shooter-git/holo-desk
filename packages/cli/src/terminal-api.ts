@@ -224,6 +224,7 @@ export function terminalApi(o: TerminalApiOptions): TerminalApi {
     },
     audition: (body) => json('POST', '/api/live/midi', { json: { events: body.events, track: body.track ?? null } }),
     played: (seconds) => json('GET', `/api/live/played?seconds=${seconds}&project=${song}`),
+    capture: () => json('POST', `/api/live/capture?project=${song}`, { json: {} }),
     packs: () => json('GET', '/api/packs'),
     packsAvailable: () => json('GET', '/api/packs/available'),
     instrument: (pack, name) =>

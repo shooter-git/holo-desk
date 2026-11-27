@@ -277,6 +277,7 @@ describe('allowed devices', () => {
       ['POST', `${J}/audition`],
       ['POST', `${J}/listen`],
       ['GET', `${J}/played?seconds=5`],
+      ['POST', `${J}/capture`],
       ['POST', `${J}/compare`],
       ['GET', `${J}/packs`],
       ['GET', `${J}/packs/available`],

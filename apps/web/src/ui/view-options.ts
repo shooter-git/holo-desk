@@ -60,6 +60,7 @@ export const GROUPS: [string, [ShowKey, string][]][] = [
     [
       ['barUndo', 'Undo and redo'],
       ['barNav', 'Back and forward buttons'],
+      ['barCapture', 'Capture'],
       ['barTime', 'Time'],
       ['barSig', 'Time signature'],
       ['barKey', 'Key'],

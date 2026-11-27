@@ -187,6 +187,8 @@ describe('what was just played, for the command line', () => {
       expect(none.json().error).toMatch(/No studio is open/);
       const other = await app.inject({ method: 'GET', url: '/api/live/played?project=prj_x' });
       expect(other.json().error).toMatch(/No studio has this song open/);
+      const keep = await app.inject({ method: 'POST', url: '/api/live/capture', payload: {} });
+      expect([keep.statusCode, keep.json().error]).toEqual([409, 'No studio is open']);
     } finally {
       await app.close();
     }

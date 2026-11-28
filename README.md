@@ -444,6 +444,11 @@ to do next with its work, composed in the studio's own buttons, switches, slider
 original against its change, try the versions it made and keep one, set how much, or go to the bars it
 means. Nothing plays or moves until you click, unless you asked to see or hear something.
 
+You can send the next request while one is still working: it waits its turn under the conversation
+(up to five a song), and starts by itself when the one before it is done. After a request that failed
+or that you stopped, what waits is held until you press Send on the first. You can reword or remove a
+waiting request.
+
 A request runs as long as the agent keeps working, up to 2 hours (3 for reading a scan); it ends if it
 goes quiet for 15 minutes, and Stop on the bar ends it at any time. When one fails, the reply is what
 its harness said, with **Try again** under it: the request carries on in the same conversation from

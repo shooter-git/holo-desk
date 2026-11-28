@@ -125,14 +125,17 @@ Turning the agent off cancels every job, so the job-scoped routes answer 403.
 | `POST /api/agent/harnesses/:id/login/code` | `{code}` (printable, ≤ 200) | `{ok}`, for a sign-in that asks for a pasted code. |
 | `POST /api/agent/harnesses/:id/update` | | `{ok}`. 409 `no-harness` or `busy`. |
 | `POST /api/agent/harnesses/:id/install` | | `{ok}`. Sent as `agent-install {harness}` to a runner that reported the harness not found, with an `installer`; progress arrives as `agent-harness` with `kind:'install'`. 404 for an unknown harness; 409 `no-runner`, `busy` (a job runs on it), or no reason when a runner has it already (Update is for that) or none can install it (a Windows host). The body is empty: the runner runs its own fixed command. |
-| `POST /api/agent/requests` | `{project, text, attachments?:[id], context?, preset?}` | `{job}`. `text` is 1 to 4000 characters (empty with a preset). At most 10 attachments, each this device's for this song (400 otherwise). 404 for no such song, or a preset's scan that isn't the song's; 409 `not-open`, `busy`, `no-runner`, `no-harness`, `not-sealed`, `signed-out`. |
+| `POST /api/agent/requests` | `{project, text, attachments?:[id], context?, preset?, queue?}` | `{job}`; or, with `queue: true` while a request works on the song or others already wait on it, `{queued}`: it waits its turn (below, "The queue"; 409 `queue-full` past five; a preset never waits). `text` is 1 to 4000 characters (empty with a preset). At most 10 attachments, each this device's for this song (400 otherwise). 404 for no such song, or a preset's scan that isn't the song's; 409 `not-open`, `busy`, `no-runner`, `no-harness`, `not-sealed`, `signed-out`. |
 | `POST /api/agent/jobs/:job/continue` | `{}`, or `{harness, model?, effort?}` | `{job}`: **Try again**, or **Continue with…**. The request whose last go failed is carried on in the same conversation, as a new job that continues it (below, "Why a request failed, and Try again"). With a `harness` it's carried on with that one and its `model` and `effort` (each empty: the harness's own), which becomes the song's own choice; `harness: null` carries it on with what Settings › Agent says, the song following it again (below, "A song's own choice"). 400 for a harness, model or effort that isn't one. Only the device that asked (403); 404 for no such request; 409 when it didn't fail, a later request was made on the song since, or the conversation was started over; and refused as a request is (`not-open`, `busy`, `no-runner`, `no-harness`, `not-sealed`, `signed-out`, `choose`). |
 | `POST /api/agent/jobs/:job/wait` | | `{until}`: **Carry on when it resets**. The request, whose last go its harness's limit refused, is carried on by the host itself once that limit has started again: at `until` (ms), 15 s after the time the harness said (below, "Why a request failed, and Try again"). Only the device that asked (403); 404 for no such request; 409 when it didn't fail, a later request was made since, the conversation was started over, or (`no-reset`) the harness didn't say when its limit starts again. `DELETE` calls it off: `{ok}`. |
 | `POST /api/agent/jobs/:job/cancel` | | `{ok}`. Any allowed device may stop a job; one waiting for a click is dismissed (`cancelled`). 404; 409 once it has ended. |
 | `POST /api/agent/jobs/:job/permission` | `{grant:boolean, result?, attachments?:[id]}` | `{ok, job?}`, `job` being the follow-up's id. Only the device that asked may answer (403), only while the job is `awaiting` (409). `result` is at most 1000 characters; `attachments` as in a request (a screenshot, a photo, a recording). Granting can be refused as a request is (`not-open`, `busy`, `no-harness`), and with 409 when the conversation was started over since the job asked. With a job token, the same path is the tools' (below). |
 | `POST /api/agent/jobs/:job/done-listening` | | `{ok}`. The user pressed Done. Only the device that asked (403); 409 once the job has ended. |
-| `GET /api/agent/threads/:project` | | `{thread, job, choice, runsWith, now}`. `thread` is `{id, harness, turns:[{job, request, reply, label, state, at, permission?, brief?, briefWarnings?, view?, go?, error?, harness?, model?, effort?, stop?, continues?, wait?}]}`, or null. `choice` is the song's own `{harness, model, effort}`, or null while it follows Settings › Agent; `runsWith`, what its next request runs with either way: its `harness` is the one named (the song's, or Settings'), even when no runner has it now, or the one the host picks when none is named (null: there's none to pick). `job` is the song's job that's running or waiting for a click (a `JobView`), or null: after a reload, its button comes back. `now` is the host's time (ms). |
+| `GET /api/agent/threads/:project` | | `{thread, job, choice, runsWith, queue, held, now}`. `thread` is `{id, harness, turns:[{job, request, reply, label, state, at, permission?, brief?, briefWarnings?, view?, go?, error?, harness?, model?, effort?, stop?, continues?, wait?}]}`, or null. `queue` is the requests that wait on the song, in order (`[{id, text, device, at}]`), and `held` whether they wait for Send (below, "The queue"). `choice` is the song's own `{harness, model, effort}`, or null while it follows Settings › Agent; `runsWith`, what its next request runs with either way: its `harness` is the one named (the song's, or Settings'), even when no runner has it now, or the one the host picks when none is named (null: there's none to pick). `job` is the song's job that's running or waiting for a click (a `JobView`), or null: after a reload, its button comes back. `now` is the host's time (ms). |
 | `GET /api/agent/away/:project` | `?from=` (a revision) | `{away}`: what this device's studio, back on the song at revision `from`, picks up of the changes its job saved on the server while it was away (below): `{job, label, running, base, head, batches:[{batch}], song}`, the batches after `from` by id, `head` the revision they bring the song to and `song` the song then, read together (no save comes between them), `label` the job's once it has finished (its last batch's before). From a revision before the run (a save of the studio's got there, its answer lost), the whole run, `base` its first revision; otherwise `base` is `from`. `away` is null when there's nothing to pick up from `from`: no such run of the song's latest job of this device's, `from` past its first revision but not one of its own, or the song saved since by someone else. 400 for a `from` that isn't a revision. |
+| `PUT /api/agent/queue/:id` | `{text}` | `{ok}`. A waiting request's words, changed: only by the device that sent it (403). 404 for none such (or one just starting); 400 for an id or words that aren't. |
+| `DELETE /api/agent/queue/:id` | | `{ok}`. A waiting request, taken out: any allowed device may. 404 for none such. |
+| `POST /api/agent/queue/:id/send` | | `{job}`: **Send**. A held queue's first request starts now. 409 `not-first` for any other, `busy` while a request works on the song, and refused as a request is (`no-runner`, `no-harness`, `not-sealed`, `signed-out`, `choose`): it then stays first. |
 | `PUT /api/agent/threads/:project/choice` | `{harness, model?, effort?}`, or `{harness: null}` | The song's conversation as `GET` answers it. What the song's requests run with from here on: its own choice (below, "A song's own choice"), or with `harness: null` what Settings › Agent says again. 404 for no such song; 400 for a harness, model or effort that isn't one; 409 `busy` while a job runs on the song, and for a choice a request couldn't run with now, refused as that request would be (`no-runner`, `no-harness`, `signed-out`, `not-sealed`, `choose`), so a song is never set to what can't run. The studios with the song open hear `agent-thread`. |
 | `POST /api/agent/threads/:project/reset` | | `{ok}`. The next request starts a new thread, which follows Settings › Agent: a song's own choice goes with its conversation, and the studios with the song open hear `agent-thread`. 409 `busy` while a job runs on the song. |
 | `GET /api/agent/push` | `?key=1` (subscribing) | `{key, mode:'off'|'long'|'every', endpoint?, unseen}`: this device's notices outside HO[LO] (below). `key` is the host's VAPID public key (base64url, 65 bytes uncompressed), or null while none has been made: only `?key=1` makes it, as a device subscribes. `endpoint` is the subscription's, when on; `unseen` how many replies this device asked for no device has seen (its badge). Answers with the agent off. |
@@ -644,8 +647,9 @@ taken only from the runner it was handed to, while it runs.
 - `agent-removed {}`, to a device that was just removed.
 - `agent-devices {}`, to allowed devices: the device list, or the requests waiting, changed.
 - `agent-thread {project}`, to the allowed devices with that song open: what its conversation runs
-  with changed (its own choice set or taken back, or the conversation started over). They read the
-  conversation again.
+  with changed (its own choice set or taken back, or the conversation started over), a failed
+  request waits to carry on or no longer does, or what waits on the song changed (a request queued,
+  reworded, taken out or started; the queue held). They read the conversation again.
 - `saved {project, revision}`, when a job's batch was saved on the server (its studio away), to the
   studios with the song open.
 
@@ -900,6 +904,34 @@ apps/web/src/ui/agent-chooser.ts). It opens the chooser under the reply (below, 
 choice"); Continue is the same route with the harness, model and effort picked, so the request carries
 on there as Try again does: one exchange, one step to undo, the new harness told the conversation so
 far.
+
+## The queue
+
+A request sent while another works on its song waits its turn instead of being refused (`Jobs.ask`
+with `queue`, which the studio's field always sends: the host decides). Only a queue: a waiting
+request doesn't steer the one that works, and that one isn't told of it.
+
+- **Kept** in `agent_queue(id, project, device, text, context, attachments, at)`: its words, the device
+  that sent it, what its studio showed and the files that went with it, in the order sent. Five a song
+  at most (`QUEUE_MOST`). A restart of HO[LO] keeps it. A scan's preset never waits (it's for the scan
+  open now): it's refused as before while the song is busy.
+- **Its turn.** When the request before it is done, the first that waits starts by itself
+  (`queueNext`), as its device's request, with the harness the song runs with then. Its studio needn't
+  still have the song open: its changes are then saved here for that studio to pick up, as for a
+  request whose studio went away. A request sent while others wait joins them: it doesn't jump them.
+- **Held.** After a request that failed or was stopped, what waits behind it doesn't start by itself
+  (`held` in the conversation's answer): **Send** on the first lets it go, and the rest follow as each
+  is done. So does carrying the failed request on to its end (Try again, Continue with…, by itself
+  after a restart or at its limit's reset). One that can't start when its turn comes (its harness
+  signed out) is held the same way, and Send says why.
+- **While a reply waits for the user's OK**, what's behind it waits too: for the follow-up when it's
+  allowed, or to go on at once when it's "not now".
+- **Reworded** by the device that sent it, **taken out** by any allowed device. It goes with its
+  conversation started over, with the agent turned off, and with its device let go.
+- **On the page** (`Queue` in apps/web/src/ui/AgentQueue.tsx), under the conversation: "Then", a row
+  each with its words, Reword (this device's own) and Take it out; held, "Waiting: Send lets them go
+  on", and Send on the first. A request the field sends while one works shows there, not as an
+  exchange; one that can't join (five wait already) is said under the field.
 
 ## A song's own choice
 

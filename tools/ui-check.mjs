@@ -15,6 +15,8 @@
 //   - a desktop's dock, in a window wide enough for the studio to give it the room, is over the studio
 //     (or the studio hasn't taken the room back once it's closed);
 //   - a request's working line, its time and Stop don't fit beside each other;
+//   - the requests that wait on the song behind the one that works aren't listed whole, each with a
+//     way out, this device's own with Reword, and a held queue's first with Send;
 //   - a reply out of usage doesn't offer to carry on when its limit starts again, or one that waits
 //     for that doesn't say when it carries on, with a way to call it off;
 //   - the page's line (what the song's conversation runs with, and what's left of its usage) or the
@@ -922,8 +924,41 @@ function waitOffered() {
   return out;
 }
 
+/**
+ * The requests that wait on the song, under its conversation: a row each, whole and inside the page,
+ * each with a way out; this device's own can be reworded; a held queue's first has Send, and no other.
+ */
+function queueFits() {
+  const out = [];
+  const page = document.querySelector('.talk-page');
+  const queue = page?.querySelector('.talk-queue');
+  if (!page || !queue) return ['the page doesn’t list the requests that wait'];
+  const box = page.getBoundingClientRect();
+  const rows = [...queue.querySelectorAll('.talk-queued')];
+  if (rows.length !== 2) out.push(`the page lists ${rows.length} waiting requests, not 2`);
+  const held = /^Waiting/.test(queue.querySelector('.talk-queue-title')?.textContent ?? '');
+  rows.forEach((row, i) => {
+    const what = `the waiting request “${row.querySelector('.you')?.textContent.trim().slice(0, 24)}”`;
+    for (const el of row.querySelectorAll('.you, button')) {
+      const r = el.getBoundingClientRect();
+      if (!r.width || !r.height) out.push(`${what} has a part that doesn’t show`);
+      if (r.left < box.left - 1 || r.right > box.right + 1) out.push(`${what} runs past the page`);
+    }
+    const buttons = [...row.querySelectorAll('button')].map(
+      (b) => b.getAttribute('aria-label') ?? b.textContent.trim(),
+    );
+    if (!buttons.includes('Take it out')) out.push(`${what} can’t be taken out`);
+    if (buttons.includes('Reword it') !== (i === 0))
+      out.push(`${what}: Reword shows for ${i === 0 ? 'no one' : 'another device’s'}`);
+    if (buttons.includes('Send') !== (held && i === 0))
+      out.push(`${what}: Send ${buttons.includes('Send') ? 'shows' : 'is missing'}`);
+  });
+  return out;
+}
+
 const CHECKS = {
   runsFit,
+  queueFits,
   waitOffered,
   chooserFromLine,
   chooserFits,
@@ -1146,6 +1181,15 @@ const NEWEST = {
       };
     },
   },
+  // the same, with requests that wait behind it: held, the first of them has Send
+  held: {
+    what: 'a reply that failed, with requests held behind it',
+    shows: '.btns .btn',
+    held: true,
+    turn(doc, now) {
+      return NEWEST.again.turn(doc, now);
+    },
+  },
   // a request its harness's limit refused: what it said, then what HO[LO] knows of it, and no Try again
   usage: {
     what: 'a reply that ran out of usage',
@@ -1279,7 +1323,28 @@ function conversation(doc, id, running, newest) {
   if (job)
     turns.push({ job: job.id, request: job.request, reply: null, label: null, state: 'running', at: job.started });
   if (newest) turns.push(NEWEST[newest].turn(doc, now));
-  return { thread: { id: 'agt_uicheck', harness: 'claude', turns }, job, choice: null, now };
+  // what waits on the song behind a request that works (one of this device's, one of another's), or,
+  // held, behind one that failed
+  const waits = running || NEWEST[newest]?.held;
+  const queue = waits
+    ? [
+        {
+          id: 'agq_00000000000a',
+          text: 'Then write a counter-melody for the second verse, an octave above the lead, and keep it sparse',
+          device: 'dev_uicheck0000',
+          at: now - 30_000,
+        },
+        { id: 'agq_00000000000b', text: 'Bounce it when that’s done', device: 'dev_another000', at: now - 10_000 },
+      ]
+    : [];
+  return {
+    thread: { id: 'agt_uicheck', harness: 'claude', turns },
+    job,
+    choice: null,
+    queue,
+    held: queue.length > 0 && !running,
+    now,
+  };
 }
 
 /**
@@ -1611,7 +1676,7 @@ function agentViews(page, layout, finger, running) {
       ]
     : [['No tray', read, null, ['noTray']]];
   return running
-    ? [[`${where}: working turn`, open, shut, [...checks, 'workingFits', 'threadRoom']]]
+    ? [[`${where}: working turn`, open, shut, [...checks, 'workingFits', 'threadRoom', 'queueFits']]]
     : [
         settings,
         usage,
@@ -1660,7 +1725,11 @@ function replyViews(page, layout, finger, newest) {
       shut,
       // (a reply with no view of the agent's has none to fit)
       NEWEST[newest].shows
-        ? [...checks, ...(newest === 'usage' || newest === 'waiting' ? ['waitOffered'] : [])]
+        ? [
+            ...checks,
+            ...(newest === 'usage' || newest === 'waiting' ? ['waitOffered'] : []),
+            ...(newest === 'held' ? ['queueFits'] : []),
+          ]
         : [...checks, 'viewFits'],
     ],
     // out of usage: Continue with… opens the chooser under it

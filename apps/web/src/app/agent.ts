@@ -173,6 +173,15 @@ export interface JobView {
   wait?: number;
 }
 
+/** A request sent while another worked on its song: it waits its turn. */
+export interface Queued {
+  id: string;
+  text: string;
+  /** The device that sent it: it may reword it (any allowed device may take it out). */
+  device: string;
+  at: number;
+}
+
 /** A harness with the model and effort it's given (each empty: the harness's own). */
 export interface Choice {
   harness: HarnessId;
@@ -241,9 +250,11 @@ export interface AgentState {
   jobs: Record<string, JobView>;
   /**
    * The open song's conversation as the host keeps it (read when the bar opens), with the song's own
-   * choice of what it runs with (null: it follows Settings › Agent).
+   * choice of what it runs with (null: it follows Settings › Agent), and the requests that wait on it
+   * behind the one that works (`held`: they wait for Send, the one before them having failed or been
+   * stopped).
    */
-  thread: { project: string; turns: Turn[]; choice: Choice | null } | null;
+  thread: { project: string; turns: Turn[]; choice: Choice | null; queue: Queued[]; held: boolean } | null;
   /** The song whose page shows the chooser ("Continue this conversation with…"), opened from a command or the header's line. */
   choosing: string | null;
   /** A request on its way to the host (it has no job yet); `continues`: an earlier go it carries on. */
@@ -299,7 +310,8 @@ export type AgentEvent =
   | { type: 'harness'; event: HarnessEvent }
   | { type: 'status'; job: JobView; barOpen: boolean }
   | { type: 'listen'; job: string; on: boolean }
-  | { type: 'thread'; project: string; turns: Turn[]; choice?: Choice | null }
+  | { type: 'thread'; project: string; turns: Turn[]; choice?: Choice | null; queue?: Queued[]; held?: boolean }
+  | { type: 'unsent'; project: string }
   | { type: 'choosing'; project: string | null }
   | { type: 'sending'; project: string; request: string; at: number; continues?: string }
   | { type: 'sent'; job: JobView }
@@ -365,8 +377,21 @@ export function reduce(a: AgentState, e: AgentEvent): AgentState {
         const { wait: _was, ...rest } = held;
         jobs = { ...jobs, [t.job]: t.wait === undefined ? rest : { ...rest, wait: t.wait } };
       }
-      return { ...a, jobs, thread: { project: e.project, turns: e.turns, choice: e.choice ?? null } };
+      return {
+        ...a,
+        jobs,
+        thread: {
+          project: e.project,
+          turns: e.turns,
+          choice: e.choice ?? null,
+          queue: e.queue ?? [],
+          held: e.held ?? false,
+        },
+      };
     }
+    case 'unsent':
+      // (a request on its way joined the song's queue instead of starting: it shows there)
+      return a.sending?.project === e.project ? { ...a, sending: null } : a;
     case 'choosing':
       return a.choosing === e.project ? a : { ...a, choosing: e.project };
     case 'sending':
@@ -400,7 +425,10 @@ export function reduce(a: AgentState, e: AgentEvent): AgentState {
         ...a,
         jobs,
         // (its own choice of harness went with the conversation)
-        thread: a.thread?.project === e.project ? { project: e.project, turns: [], choice: null } : a.thread,
+        thread:
+          a.thread?.project === e.project
+            ? { project: e.project, turns: [], choice: null, queue: [], held: false }
+            : a.thread,
         refused: a.refused?.project === e.project ? null : a.refused,
         unseen: a.unseen.includes(e.project) ? a.unseen.filter((p) => p !== e.project) : a.unseen,
       };
@@ -1399,6 +1427,8 @@ interface ThreadAnswer {
   thread: { turns: Turn[] } | null;
   job?: JobView | null;
   choice?: Choice | null;
+  queue?: Queued[];
+  held?: boolean;
   now?: number;
 }
 
@@ -1431,7 +1461,14 @@ function showThread(project: string, r: ThreadAnswer, asked: number): boolean {
   if ((open && open !== project) || asked < threadShown) return false;
   threadShown = asked;
   heardClock(r.now);
-  agent.dispatch({ type: 'thread', project, turns: r.thread?.turns ?? [], choice: r.choice ?? null });
+  agent.dispatch({
+    type: 'thread',
+    project,
+    turns: r.thread?.turns ?? [],
+    choice: r.choice ?? null,
+    queue: r.queue ?? [],
+    held: r.held ?? false,
+  });
   return true;
 }
 
@@ -1553,34 +1590,69 @@ export async function attachmentData(id: string): Promise<Blob> {
 
 /**
  * Send a request about the open song, with the files that go with it (made ready while it was typed):
- * the bar shows it, then the reply.
+ * the bar shows it, then the reply. Sent while another works on the song (or others already wait on
+ * it), it joins the song's queue instead and starts when its turn comes: the page lists it under the
+ * conversation. Answers why it couldn't join the queue (it's full, say), for the field to say; null
+ * otherwise.
  */
 export async function ask(
   text: string,
   project: string,
   context: RequestContext,
   files: readonly Promise<Ready>[] = [],
-): Promise<void> {
+): Promise<string | null> {
   const request = text.trim();
-  if (!request || !isOn(state)) return;
+  if (!request || !isOn(state)) return null;
   // (on the host's clock, as the job's own times are: the page orders the conversation by them)
   const at = serverNow();
-  agent.dispatch({ type: 'sending', project, request, at });
+  const waits =
+    Object.values(state.jobs).some((j) => j.project === project && isLive(j.state)) ||
+    (state.thread?.project === project && state.thread.queue.length > 0);
+  if (!waits) agent.dispatch({ type: 'sending', project, request, at });
   try {
     const attachments: string[] = [];
     for (const f of files) attachments.push(await upload(await f, project));
-    const { job } = await call<{ job: string }>('POST', '/api/agent/requests', {
+    const answer = await call<{ job?: string; queued?: string }>('POST', '/api/agent/requests', {
       project,
       text: request,
       context,
+      // (the host decides: it starts at once when nothing works on the song)
+      queue: true,
       ...(attachments.length ? { attachments } : {}),
     });
-    agent.dispatch({
-      type: 'sent',
-      job: { id: job, project, device: state.me ?? '', state: 'waiting', request, started: at },
-    });
+    if (answer.job) {
+      agent.dispatch({
+        type: 'sent',
+        job: { id: answer.job, project, device: state.me ?? '', state: 'waiting', request, started: at },
+      });
+      return null;
+    }
+    agent.dispatch({ type: 'unsent', project });
+    await loadThread(project, barShows(project));
+    return null;
   } catch (err) {
+    if (waits) return (err as Error).message;
     agent.dispatch({ type: 'refused', project, request, error: (err as Error).message, at });
+    return null;
+  }
+}
+
+/**
+ * A request that waits on a song: sent now (`send`: a held queue's first), reworded (by the device that
+ * sent it), or taken out. The song's conversation is read again after, as the host has it.
+ */
+export async function queued(
+  project: string,
+  id: string,
+  what: { send: true } | { text: string } | { remove: true },
+): Promise<void> {
+  const path = `/api/agent/queue/${encodeURIComponent(id)}`;
+  try {
+    if ('send' in what) await call('POST', `${path}/send`);
+    else if ('text' in what) await call('PUT', path, { text: what.text });
+    else await call('DELETE', path);
+  } finally {
+    await loadThread(project, barShows(project));
   }
 }
 

@@ -178,12 +178,13 @@ export function useCommandField({ mode }: { mode: FieldMode }): CommandFieldStat
             keys: '↵',
             keepOpen: true,
             run: () => {
+              // (why it couldn't join the song's queue, when it couldn't: said under the field)
               void ask(
                 text,
                 project,
                 context(),
                 chips.map((c) => c.ready),
-              );
+              ).then((why) => why && setNote(why));
               setChips([]);
               setNote('');
             },

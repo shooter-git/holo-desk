@@ -43,6 +43,7 @@ import { pageCovers, windowOpened } from '../app/page-layout.ts';
 import { closeBar, store, useApp } from '../app/store.ts';
 import { markSeen } from '../app/tray.ts';
 import { Chooser, RunsLine } from './AgentChooser.tsx';
+import { Queue } from './AgentQueue.tsx';
 import { movedLine } from './agent-chooser.ts';
 import { atEnd, useShownRoom } from './bar-swipe.ts';
 import { CommandField, CommandList, useCommandField } from './command-field.tsx';
@@ -413,6 +414,8 @@ export function TalkPage({ docks = false, leaving = false }: { docks?: boolean; 
                   <TalkBody ex={newest} project={project} busy={busy} elapsed last choosing={choosing} />
                   {choosing && <Chooser project={project} ex={carries} />}
                 </div>
+                {/* what waits on the song behind it, in the order it'll start */}
+                <Queue project={project} />
               </>
             )}
           </div>

@@ -1196,3 +1196,39 @@ against a stand-in for the model API ("A refused conversation"), with a one-tool
 (`song_status`); their paths are made neutral. A Codex run refused after one of HO[LO]'s calls is the recorded
 refusal with the recorded normal run's call put first, and one refused as `unexpected status 400 Bad Request: …`
 is a recorded run with its error written in that form.
+
+## The stand-in harness
+
+`packages/agent/stand-in/` is one program that answers as Claude Code and as Codex, for HO[LO]'s own
+checks: the look at a harness (its version, its sign-in, its models and efforts, its seal, what its
+account has left) and a run, in each one's own argv and stream, as recorded above. A run calls no model.
+It does what the request's script says through HO[LO]'s real MCP server, started from the config the
+adapter gave it, so the runner, the adapters and their tripwires, the tools, the job's routes and the
+studio's undo step all run as with the real thing.
+
+A request that starts with `standin:` is a script, its steps separated by `;` (`stand-in/script.ts`):
+
+    standin: track_add {"name": "Bass"}; wait 500; finish Added a bass track
+
+| Step | Does |
+|---|---|
+| `TOOL {…}` | calls one of HO[LO]'s tools, its arguments as JSON (or none) |
+| `finish WORDS` | `finish` with those words as the reply (`finish {…}` gives its arguments whole) |
+| `wait MS` | nothing, for that long |
+| `say WORDS` | writes in the harness's own chat, which HO[LO] doesn't show |
+| `fail WORDS` | ends the turn as that harness ends one that failed, those words its error |
+
+Any other request reads the song and finishes, changing nothing: so does the go a turn is carried on
+with when it ended without `finish`.
+
+The runner reaches it through the overrides it already has: `HOLO_CLAUDE` and `HOLO_CODEX` name a
+launcher (`stand-in/launcher.ts` writes them: a few lines of sh that start `main.ts` as that harness).
+Nothing else starts it, and a runner without those variables never sees it.
+
+- `packages/agent/test/stand-in.test.ts` runs both adapters against it (in `pnpm test`).
+- `pnpm agent:check` (`tools/agent-check.mjs`; after `pnpm build`, with Playwright) starts a studio of
+  its own, the real runner with the stand-in, pairs as a device, and asks in a browser: a request that
+  adds a track (the reply, the track, one Undo), and a request whose studio goes while it works (its
+  change saved on the host, the reply waiting on return). CI runs it as the `agent` job. The runner it
+  starts has a home and a cache of its own and only Node's and the system's folders on its PATH, so the
+  harnesses installed on the computer aren't signed in to or run.

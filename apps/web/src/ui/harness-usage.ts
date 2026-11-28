@@ -1,7 +1,8 @@
 /**
  * What a harness's row in Settings › Agent says of its account's usage: how much of each of its
  * vendor's limits is left and when it starts again, and what the requests made through HO[LO] used.
- * One place for the words and the numbers, tried on its own in a test.
+ * One place for the words and the numbers, tried on its own in a test. A row folded says the one thing
+ * that matters at its end (`brief`); opened, it says all of it.
  *
  * Only what a vendor reports is shown, as it reports it: a limit that has started again since it was
  * read isn't taken as full (the account may have been used elsewhere), and a harness that doesn't say
@@ -9,7 +10,7 @@
  */
 import { groupFor, type LimitGroup, type LimitWindow } from '@holo/agent/limits';
 import type { HarnessId, HarnessInfo, UsageSum } from '../app/agent.ts';
-import { modelSaid, shown } from './harness-row.ts';
+import { type HarnessRowView, modelSaid, shown } from './harness-row.ts';
 
 /** One window of a limit, as a line: its name, a bar of what's left, and when it starts again. */
 export interface MeterView {
@@ -50,32 +51,22 @@ export interface ThroughRow {
 }
 
 export interface UsageView {
-  /** The longest limit of the group in use (the first group otherwise): what a row can't do without. */
+  /** The longest limit of the group in use (the first group otherwise): what a row says folded. */
   summary: MeterView | null;
-  /**
-   * The lines that show folded: that limit alone, or, for the harness the agent runs with, every limit
-   * of the group its model counts against.
-   */
-  lead: MeterView[];
-  /** That group's name, when the harness has several. */
-  summaryOf: string | null;
+  /** Every limit, by the groups of models that share one: the group in use first. */
   groups: GroupView[];
   /** "Max plan". */
   plan: string | null;
   /** Something the vendor says beside its limits. */
   note: string | null;
-  /** That, when it's worth saying folded too: a limit is low or used up. */
-  noteNow: string | null;
   /** "Read 3 h ago", once that's a while. */
   read: string | null;
   /** Why no limit shows, when none does. */
   none: string | null;
   /** The vendor's own page for what's left, for a harness that doesn't report it. */
   link: { href: string; text: string } | null;
-  /** What the requests through HO[LO] used: in a line, and by model. */
-  through: { days: number; line: string; rows: ThroughRow[] } | null;
-  /** There's more than the folded line shows. */
-  more: boolean;
+  /** What the requests through HO[LO] used, by model. */
+  through: { days: number; rows: ThroughRow[] } | null;
 }
 
 const MINUTE = 60_000;
@@ -184,8 +175,6 @@ export function tokenCount(n: number): string {
   return short(n / 1e9, 'B');
 }
 
-const plural = (n: number, word: string) => `${n.toLocaleString('en-US')} ${word}${n === 1 ? '' : 's'}`;
-
 /** How long ago the limits were read, once that's ten minutes or more. */
 function readAgo(at: number, now: number): string | null {
   const age = now - at;
@@ -258,14 +247,9 @@ export function usageView(h: HarnessInfo, o: UsageOptions): UsageView | null {
           ? `${h.name} says what’s left with each request: it shows after the next one`
           : null;
 
-  const total = mine.reduce(
-    (t, r) => ({ requests: t.requests + r.requests, read: t.read + r.input + r.cached, written: t.written + r.output }),
-    { requests: 0, read: 0, written: 0 },
-  );
   const through = mine.length
     ? {
         days: o.usage?.days ?? 30,
-        line: `${plural(total.requests, 'request')} · ${tokenCount(total.read)} tokens in, ${tokenCount(total.written)} out`,
         rows: mine.map((r) => ({
           key: `${r.model}|${r.effort}`,
           label: modelLabel(r.model, r.effort),
@@ -281,21 +265,23 @@ export function usageView(h: HarnessInfo, o: UsageOptions): UsageView | null {
   const read = limits && summary ? readAgo(limits.at, o.now) : null;
   const link = !summary && page && !signedOut ? { href: page, text: `${h.name}’s usage page` } : null;
   if (!summary && !none && !through && !plan && !note) return null;
-  const meters = groups.reduce((n, g) => n + g.meters.length, 0);
-  const lead = summary ? (o.current ? (first?.meters ?? []) : [summary]) : [];
-  return {
-    summary,
-    lead,
-    summaryOf: several ? (first?.name ?? null) : null,
-    groups: ordered,
-    plan,
-    note,
-    noteNow: note && lead.some((m) => m.level === 'low' || m.level === 'out') ? note : null,
-    read,
-    none,
-    link,
-    through,
-    // (folded, a harness with a limit shows it alone; one without shows its plan, why, and its counts in a line)
-    more: summary ? meters > lead.length || !!through || !!plan || !!note || !!read : !!through,
-  };
+  return { summary, groups: ordered, plan, note, read, none, link, through };
+}
+
+/** What a folded row says at its end: a limit (its name, a small bar, its words), or a few words. */
+export type Brief = { meter: MeterView } | { text: string };
+
+/**
+ * A harness's row folded, in the one thing that matters: what it lacks before it can be used (it isn't
+ * installed, or it's signed out), else the limit that counts (`summary`), else its plan; null when
+ * there's nothing to say.
+ */
+export function brief(
+  row: Pick<HarnessRowView, 'label' | 'signIn' | 'version'>,
+  usage: UsageView | null,
+): Brief | null {
+  if (!row.version && row.label) return { text: row.label };
+  if (row.signIn && row.signIn !== 'signed-in') return { text: 'Signed out' };
+  if (usage?.summary) return { meter: usage.summary };
+  return usage?.plan ? { text: usage.plan } : null;
 }

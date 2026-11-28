@@ -194,8 +194,17 @@ step. That isn't an agent route.
 
 ### Settings › Agent
 
-An allowed device's Settings › Agent lists Claude Code, Codex, Cursor and Antigravity as the host has them, a row
-each (`apps/web/src/ui/harness-row.ts`), through a harness's whole life:
+An allowed device's Settings › Agent lists Claude Code, Codex, Cursor and Antigravity as the host has
+them, a line each (`apps/web/src/ui/harness-row.ts`), to pick one from. A line has what picks its
+harness (a radio button: the one the agent runs with is picked, its row lit, and it says **In use**),
+its name, and at its end the one thing that matters while it's folded (`brief` in `harness-usage.ts`:
+the limit that counts with a small bar, else its plan, or **Signed out** or **Not installed**), what
+can be done about it (**Install**, **Sign in**, **Update**), and an arrow that opens it. Opened (the
+one in use starts so), a row says its states in a line under its name (its version, **Signed in** or
+**Signed out**, **Up to date** or "*x.y* is out") and its usage in full (below). On a phone a folded
+line says what's left in words alone, and one with a button shows the button alone. A question, a
+sign-in, an update or an install under way, and why a harness can't be used yet, show under its line
+whether it's opened or not. Through a harness's whole life:
 
 1. **Not installed**, with **Install** when the runner gave an `installer`. Install asks first: "This
    downloads and runs *Harness*'s official installer on *host* (*command*)", then **Install** or **Not
@@ -207,51 +216,53 @@ each (`apps/web/src/ui/harness-row.ts`), through a harness's whole life:
 3. **Signed out**: **Sign in**, whatever the seal (a harness that can't be sealed keeps Sign in, and says
    why it can't be used). The sign-in is each harness's own relay: Claude Code's page and a pasted code,
    Codex's page and a one-time code, Cursor's page while it waits, Google's page and a pasted code for
-   Antigravity. A harness signed out isn't offered as **Use**.
-4. **Signed in**: **Use**, or **In use** for the one the agent runs with: the one chosen, or with none
-   chosen the first that can be limited to HO[LO]'s tools, as the server picks it (never Antigravity).
+   Antigravity. A harness signed out can't be picked.
+4. **Signed in**: it can be picked, and the one the agent runs with is (**In use**): the one chosen,
+   or with none chosen the first that can be limited to HO[LO]'s tools, as the server picks it (never
+   Antigravity).
 
-For Antigravity, **Sign in** and **Use** ask first (`caution` in `harness-row.ts`): Google's FAQ says
+For Antigravity, **Sign in** and picking it ask first (`caution` in `harness-row.ts`): Google's FAQ says
 running `agy` inside another app "is not supported under consumer plans", and that third-party software
 with an Antigravity sign-in can get the account suspended, Gemini CLI included; it links the FAQ, then
 **Sign in anyway** or **Use it anyway**, or **Not now**. The server never picks it on the user's behalf.
-5. **Update to x.y** when a newer version is out; it asks first ("This updates the *Harness* your
-   terminal uses too"), then shows its lines. The runner looks again before it says `done`, so the new
+5. **Update** when a newer version is out; it asks first ("This updates the *Harness* your terminal
+   uses too, to *x.y*"), then shows its lines. The runner looks again before it says `done`, so the new
    version's models and efforts show with it. **Up to date** otherwise.
 
-**Look again**, under the list, asks every runner for a fresh look (`POST …/harnesses/refresh`).
+**Look again**, over the list at its end, asks every runner for a fresh look (`POST …/harnesses/refresh`).
 
 **Opening Settings › Agent** asks the host to have its runners look again if their last look is an
 hour old or more (`POST …/harnesses/look`): the lists show at once as they were, and change when the
 new `harnesses` report comes (as `agent-settings`). Nothing is asked while nobody opens it, and nothing
 is polled.
 
-**Usage**, under each harness's row (`apps/web/src/ui/harness-usage.ts`, drawn by `HarnessUsage.tsx`),
+**Usage**, in each harness's row (`apps/web/src/ui/harness-usage.ts`, drawn by `HarnessUsage.tsx`),
 says what its account has left and what the requests through HO[LO] used:
 
 - A limit is a line: its name by its length ("Weekly", "5-hour"), a bar of what's left, and the words
   ("37% left", "Used up", then "resets in 2 h 10 min" under a day away, "resets Thu 3 Dec, 07:02"
   otherwise). The bar is the studio's blue, the warning colour when a fifth or less is left, and empty
   with a red outline when nothing is.
-- Folded, a row shows its longest limit alone. The harness the agent runs with shows every limit its
-  model counts against. Where a vendor's limits go by groups of models (Antigravity: its own models,
-  and the others it serves), the group is named over its limits, and the group of the model in use
-  leads (`groupFor` in `@holo/agent/limits`: a group lists its models by the vendor's names, matched to
-  the harness's ids by their letters and digits).
-- **More** unfolds the rest: every limit of every group with the models in it, the plan, anything the
-  vendor says beside its limits, how long ago they were read once that's ten minutes or more, and the
-  requests of the last 30 days by model and effort (requests, tokens in, tokens out). **Less** folds
-  it again.
+- Folded, a row says its longest limit alone at its line's end: for the harness the agent runs with,
+  the longest of the group its model counts against.
+- Opened, it says the rest: every limit, the plan, anything the vendor says beside its limits, how
+  long ago they were read once that's ten minutes or more, and the requests of the last 30 days by
+  model and effort (requests, tokens in, tokens out). Where a vendor's limits go by groups of models
+  (Antigravity: its own models, and the others it serves), each group is named over its limits with
+  the models in it, and the group of the model in use leads and says so (`groupFor` in
+  `@holo/agent/limits`: a group lists its models by the vendor's names, matched to the harness's ids
+  by their letters and digits).
 - A limit that has started again since it was read is never shown as full: the account may have been
   used elsewhere. Its bar is an outline, and it says "Reset 4 h ago · not read since".
-- A harness that doesn't report what's left says so, with its plan, a link to its vendor's own usage
-  page, and the requests through HO[LO] in a line: "Pro+ plan · Cursor doesn't report what's left of
-  its plan: see Cursor's usage page".
+- A harness that doesn't report what's left says its plan folded, and opened says so, with a link to
+  its vendor's own usage page and the requests through HO[LO]: "Pro+ plan · Cursor doesn't report
+  what's left of its plan: see Cursor's usage page".
 - Every harness that says what's left is asked as Settings › Agent opens, Claude Code as it starts
   (its handshake: docs/agent-harnesses.md). Where Claude Code can't be asked so (an older version),
-  it says what's left only with a request, and before its first one its row says it shows after the
-  next.
-- A harness that isn't installed says nothing; one signed out, only what was counted.
+  it says what's left only with a request, and before its first one its row, opened, says it shows
+  after the next.
+- A harness that isn't installed says only that; one signed out says so, and opened, only what was
+  counted.
 
 Outside Settings › Agent, one place says anything of it: the line under the agent's page's header
 (below, "The page"), with what's left for the model the song's conversation runs with. No bar, badge

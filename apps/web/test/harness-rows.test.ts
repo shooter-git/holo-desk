@@ -1,7 +1,7 @@
 /**
  * Settings › Agent's harness rows through a harness's whole life, for each of the four: not installed
  * → Install (asked first) → installing → installed and signed out → Sign in (each one's own relay) →
- * signed in → Use / In use → Update to x.y (asked first) → updating → up to date.
+ * signed in → it can be picked / it's the one in use → Update (asked first) → updating → up to date.
  */
 import { beforeAll, describe, expect, it, vi } from 'vitest';
 import type * as AgentModule from '../src/app/agent.ts';
@@ -16,6 +16,7 @@ import {
   inUse,
   modelName,
   modelSaid,
+  rowStates,
   runsWith,
   runsWithText,
   toChoose,
@@ -320,6 +321,28 @@ describe('a harness’s row, through its whole life', () => {
       install: null,
       note: 'Install it on win-box, then Look again',
     });
+  });
+
+  it('says its states in a line once opened: its version, its sign-in, its update', () => {
+    const h: HarnessInfo = {
+      id: 'codex',
+      name: 'Codex',
+      found: true,
+      sealed: true,
+      signedIn: true,
+      version: '0.167.1',
+      update: { available: false },
+    };
+    const line = (x: HarnessInfo) => rowStates(harnessRow(x, undefined, false)).map((s) => s.text);
+    expect(line(h)).toEqual(['0.167.1', 'Signed in', 'Up to date']);
+    expect(line({ ...h, signedIn: false, update: { available: true, latest: '0.170.0' } })).toEqual([
+      '0.167.1',
+      'Signed out',
+      '0.170.0 is out',
+    ]);
+    // what the host hasn't said isn't guessed
+    expect(line({ ...h, signedIn: undefined, update: undefined })).toEqual(['0.167.1']);
+    expect(rowStates(harnessRow(h, undefined, true))[1]).toEqual({ key: 'signin', text: 'Signed in' });
   });
 });
 

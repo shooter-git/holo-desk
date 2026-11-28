@@ -35,9 +35,10 @@
 //   - a reply's view is measured and laid out again while one of its sliders moves (it's laid out when
 //     what it shows changes, or its width: not each time the page renders again);
 //   - Settings › Agent's Tell me outside HO[LO] isn't whole: its three choices side by side, in the dialog;
-//   - Settings › Agent's harnesses don't say their usage whole, folded or unfolded: a limit without its
-//     name, its bar and its words, one running past its row, bars of different widths in one harness, or
-//     the requests' numbers not in their columns;
+//   - Settings › Agent's harnesses aren't a line each, whole: not exactly one picked, what picks or opens
+//     one not level with its name, a folded line with nothing at its end, something past its row; or,
+//     opened, don't say their usage whole: a limit without its name, its bar and its words, bars of
+//     different widths in one harness, or the requests' numbers not in their columns;
 //   - with a reply that has a dock read and the page closed, a phone shows no tray, or one that isn't a
 //     row of its own (or × leaves it there); a tablet or a desktop shows one;
 //   - Songs' open song's bounces, folded under its row or opened with a delete asked, aren't whole, or Keep
@@ -555,29 +556,48 @@ function noticesFit() {
 }
 
 /**
- * Settings › Agent's harnesses, each with its usage under its row: every limit whole (its name, its bar,
- * its words, none cut off or past its row), one harness's bars the same width, and, unfolded, the
- * requests' numbers in their columns. The four of `harnesses()` are there: two with limits, one whose
- * limits go by groups of models, one that reports none.
+ * Settings › Agent's harnesses, a line each: every line whole (what picks it level with its name, its
+ * end's words and buttons none cut off or past its row), the one in use picked and no other, a folded
+ * line saying something at its end; opened, every limit whole (its name, its bar, its words), one
+ * harness's bars the same width, and the requests' numbers in their columns. The four of `harnesses()`
+ * are there: two with limits, one whose limits go by groups of models, one that reports none.
  */
 function usageFits() {
   const out = [];
   const rows = [...document.querySelectorAll('.agent-harness')];
   if (rows.length !== 4) return [`Settings › Agent lists ${rows.length} harnesses, not 4`];
+  const picked = rows.filter((row) => row.querySelector('.harness-radio')?.checked);
+  if (picked.length !== 1 || !picked[0].classList.contains('current'))
+    out.push(`${picked.length} harnesses show as the one in use, not 1`);
   for (const row of rows) {
-    const name = row.querySelector('.strong')?.textContent.trim() ?? 'A harness';
-    const usage = row.querySelector('.agent-usage');
+    const name = row.querySelector('.harness-name')?.textContent.trim() ?? 'A harness';
+    const box = row.getBoundingClientRect();
+    for (const el of row.querySelectorAll('span, a, button, div, input')) {
+      const r = el.getBoundingClientRect();
+      if (!r.width) continue;
+      const what = `${name}: “${(el.textContent.trim() || el.getAttribute('aria-label') || '').slice(0, 30)}”`;
+      if (r.left < box.left - 1 || r.right > box.right + 1) out.push(`${what} runs past its row`);
+      if (!el.children.length && el.scrollWidth > el.clientWidth + 1) out.push(`${what} is cut off`);
+    }
+    const middle = (el) => {
+      const r = el?.getBoundingClientRect();
+      return r ? r.top + r.height / 2 : Number.NaN;
+    };
+    const level = middle(row.querySelector('.harness-name'));
+    for (const [what, el] of [
+      ['what picks it', row.querySelector('.harness-radio')],
+      ['what opens it', row.querySelector('.harness-more')],
+    ])
+      if (!(Math.abs(middle(el) - level) <= 2)) out.push(`${name}: ${what} isn’t level with its name`);
+    if (!row.classList.contains('open')) {
+      if (!row.querySelector('.harness-end')?.textContent.trim()) out.push(`${name} says nothing at its line’s end`);
+      continue;
+    }
+    const usage = row.querySelector('.harness-usage');
+    if (!row.querySelector('.harness-states')?.textContent.trim()) out.push(`${name}, opened, doesn’t say its states`);
     if (!usage) {
       out.push(`${name} says nothing of its usage`);
       continue;
-    }
-    const box = row.getBoundingClientRect();
-    for (const el of usage.querySelectorAll('span, a, button, div')) {
-      const r = el.getBoundingClientRect();
-      if (!r.width) continue;
-      const what = `${name}: “${el.textContent.trim().slice(0, 30)}”`;
-      if (r.left < box.left - 1 || r.right > box.right + 1) out.push(`${what} runs past its row`);
-      if (!el.children.length && el.scrollWidth > el.clientWidth + 1) out.push(`${what} is cut off`);
     }
     const meters = [...usage.querySelectorAll('.usage-meter')];
     for (const m of meters) {
@@ -594,7 +614,7 @@ function usageFits() {
     if (widths.size > 1) out.push(`${name}: its bars aren’t the same width (${[...widths].join(', ')})`);
     if (name === 'Cursor' && meters.length) out.push('Cursor shows a limit, though it reports none');
     if (name !== 'Cursor' && !meters.length) out.push(`${name} shows none of its limits`);
-    // unfolded: each row of the requests' numbers under its heading
+    // each row of the requests' numbers under its heading
     const head = [...(usage.querySelector('.usage-head')?.children ?? [])];
     for (const line of usage.querySelectorAll('.usage-row:not(.usage-head)')) {
       [...line.children].slice(1).forEach((cell, i) => {
@@ -1645,20 +1665,20 @@ function agentViews(page, layout, finger, running) {
     () => page.keyboard.press('Escape'),
     ['noticesFit', 'usageFits'],
   ];
-  // the same, each harness's usage unfolded with More: every limit, its plan, the requests by model
+  // the same, every harness opened: its states, every limit, its plan, the requests by model
   const usage = [
     'Settings › Agent, usage unfolded',
     async () => {
       await press(control(page, 'Settings'));
       await press(page.getByRole('tab', { name: 'Agent' }));
-      await page.locator('.agent-usage').first().waitFor();
+      await page.locator('.harness-usage').first().waitFor();
       for (let i = 0; i < 4; i++) {
-        const more = page.locator('.usage-toggle[aria-expanded="false"]').first();
+        const more = page.locator('.harness-more[aria-expanded="false"]').first();
         if (!(await more.count())) break;
         await more.scrollIntoViewIfNeeded();
         await press(more);
       }
-      await page.locator('.usage-through').first().waitFor();
+      await page.locator('.usage-through').nth(3).waitFor();
     },
     () => page.keyboard.press('Escape'),
     ['usageFits'],

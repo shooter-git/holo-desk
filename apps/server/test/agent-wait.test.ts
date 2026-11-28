@@ -110,8 +110,10 @@ describe('carry on when it resets', () => {
     expect((await wait(w.t, w.token, 'agj_000000000000')).statusCode).toBe(404);
     expect(waiting(w.t)).toEqual([]);
     // a limit that has started again already: carried on a moment from now
-    const past = await failed(w, 'Four', { error: 'Limit', why: 'usage', resets: Date.now() + 50 });
-    await new Promise((ok) => setTimeout(ok, 60));
+    const past = await failed(w, 'Four', { error: 'Limit', why: 'usage', resets: Date.now() + HOUR });
+    w.t.services.store.database
+      .prepare('UPDATE agent_turns SET extra = ? WHERE job = ?')
+      .run(JSON.stringify({ ...extraOf(w.t, past), stop: { why: 'usage', resets: Date.now() - 1000 } }), past);
     const before = Date.now();
     const res = (await wait(w.t, w.token, past)).json() as { until: number };
     expect(res.until).toBeGreaterThanOrEqual(before + 15_000);

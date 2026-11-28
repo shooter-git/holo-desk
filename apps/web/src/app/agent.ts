@@ -355,8 +355,18 @@ export function reduce(a: AgentState, e: AgentEvent): AgentState {
     }
     case 'listen':
       return { ...a, listening: e.on ? e.job : a.listening === e.job ? null : a.listening };
-    case 'thread':
-      return { ...a, thread: { project: e.project, turns: e.turns, choice: e.choice ?? null } };
+    case 'thread': {
+      // whether a request that failed waits to be carried on at a time is its turn's to say: a job
+      // that's over is told of no more, and what's kept of one here would say what it said last
+      let jobs = a.jobs;
+      for (const t of e.turns) {
+        const held = jobs[t.job];
+        if (!held || isLive(held.state) || held.project !== e.project || held.wait === t.wait) continue;
+        const { wait: _was, ...rest } = held;
+        jobs = { ...jobs, [t.job]: t.wait === undefined ? rest : { ...rest, wait: t.wait } };
+      }
+      return { ...a, jobs, thread: { project: e.project, turns: e.turns, choice: e.choice ?? null } };
+    }
     case 'choosing':
       return a.choosing === e.project ? a : { ...a, choosing: e.project };
     case 'sending':
@@ -1628,10 +1638,16 @@ export async function tryAgain(
 
 /**
  * "Carry on when it resets": the host carries the failed request on by itself once its harness's limit
- * has started again, or (`on` false) no longer does. The host tells the studios that show it.
+ * has started again, or (`on` false) no longer does. The conversation is read again after, and the
+ * host tells the other studios with the song open to.
  */
-export async function waitForReset(job: string, on: boolean): Promise<void> {
-  await call(on ? 'POST' : 'DELETE', `/api/agent/jobs/${encodeURIComponent(job)}/wait`);
+export async function waitForReset(job: string, on: boolean, project: string): Promise<void> {
+  try {
+    await call(on ? 'POST' : 'DELETE', `/api/agent/jobs/${encodeURIComponent(job)}/wait`);
+  } finally {
+    // (as the host has it now, whether it took it or refused: the conversation has moved on, say)
+    await loadThread(project, barShows(project));
+  }
 }
 
 export async function stopJob(job: string): Promise<void> {

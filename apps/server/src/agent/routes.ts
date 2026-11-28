@@ -602,8 +602,9 @@ export function agentRoutes(
       if (theJobs.running(project))
         return reply.code(409).send({ error: 'Still working on this song', reason: 'busy' });
       threads.reset(project);
-      // (its own choice went with it: the studios with the song open read it again)
-      theJobs.toldThread(project);
+      // (its own choice went with it, and what waited to carry on at a time doesn't: the studios with
+      // the song open read it again)
+      theJobs.startedOver(project);
       return { ok: true };
     }),
   );

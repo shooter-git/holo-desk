@@ -248,7 +248,23 @@ interface Pending {
   device: string;
   since: number;
   until?: number;
+  /** How many times it was refused as it began (one that waits for its limit is tried again a while). */
+  tries?: number;
 }
+
+/** What refuses a request for now and may pass: one that waited for its limit is tried again past these. */
+const MAY_PASS: ReadonlySet<string> = new Set([
+  'busy',
+  'no-runner',
+  'no-harness',
+  'signed-out',
+  'not-sealed',
+  'choose',
+]);
+/** How many times, at most (a look every 2 s: a minute's worth of a refusal the look before didn't foresee). */
+const WAIT_TRIES = 30;
+/** Why a request asked to carry on at a time doesn't begin: it was called off as it began (`Refusal.reason`). */
+const CALLED_OFF = 'called-off';
 
 /** Why a request that carries on by itself doesn't begin yet: its studio holds changes it hasn't saved (`Refusal.reason`). */
 const UNSAVED = 'unsaved';
@@ -650,10 +666,14 @@ export class Jobs implements AgentHooks {
       this.jobs.set(kept.view.id, kept);
     }
     // what was asked to carry on once its limit has started again still is
+    // (its conversation's last turn, with nothing cut short on the song: any other is from before the
+    // conversation moved on, and waits for nothing)
     for (const row of this.o.agentStore.waitingTurns()) {
       const until = parseExtra(row.extra).wait;
-      if (row.project && row.device && typeof until === 'number' && !this.carrying.has(row.project))
+      const last = this.o.agentStore.turns(row.thread).at(-1)?.job === row.job;
+      if (last && row.project && row.device && typeof until === 'number' && !this.carrying.has(row.project))
         this.pend(row.project, { job: row.job, device: row.device, since: Date.now(), until });
+      else this.setWait(row.job, null);
     }
   }
 
@@ -1026,6 +1046,8 @@ export class Jobs implements AgentHooks {
       auto?: boolean;
       /** Its studio holds changes that may not be in the song here: it doesn't begin unless that studio saved. */
       mustSave?: boolean;
+      /** Asked to carry on at a time: whether that still stands once its studio has saved (it may be called off meanwhile). */
+      wanted?: () => boolean;
     } | null = null,
   ): Promise<string> {
     this.starting.add(project);
@@ -1034,6 +1056,7 @@ export class Jobs implements AgentHooks {
     try {
       const saved = await this.flush(device, project);
       if (carry?.mustSave && !saved) throw new Refusal(409, 'Its studio hasn’t saved the song yet', UNSAVED);
+      if (carry?.wanted && !carry.wanted()) throw new Refusal(409, 'It was called off', CALLED_OFF);
       const now = this.o.store.get(project);
       if (!now) throw new Refusal(404, 'No such song');
       // a restore point, whatever the agent does (and the reply's "before"); the previous request's is "previous"
@@ -1110,6 +1133,8 @@ export class Jobs implements AgentHooks {
       this.assigned.set(job, runner);
       // nothing refuses the request from here on: the thread is its harness's now (when another ran last)
       const current = this.o.threads.use(thread);
+      // (the conversation has moved on: a request that waited on this song to carry on at a time doesn't)
+      this.callOff(project);
       // the folder this harness works in, in this conversation: the runner knows a job's conversation
       // by it (and runs one job at a time in each)
       const workspace = this.o.threads.leg(current).workspace;
@@ -1284,6 +1309,10 @@ export class Jobs implements AgentHooks {
         runs: { model: runs.model, effort: runs.effort },
         // (by itself, after a go whose changes went into its studio: only on the song with them in it)
         ...(by === 'itself' ? { auto: true, mustSave: extra.live === true } : {}),
+        // (asked for at a time: called off while its studio saves, it doesn't begin)
+        ...(by === 'reset'
+          ? { wanted: () => parseExtra(this.o.agentStore.turn(row.job)?.extra ?? null).wait === extra.wait }
+          : {}),
       },
     );
     // what was picked is the song's own only now that the request has gone ahead with it: a refusal
@@ -1309,8 +1338,8 @@ export class Jobs implements AgentHooks {
 
   /** A go was cut short (HO[LO] restarted under it, or its runner went): it's to carry on by itself. */
   private toCarryOn(job: string, project: string, device: string, since = Date.now()): void {
-    // (a request the user asked to have carried on at a time keeps that)
-    if (this.carrying.get(project)?.until !== undefined) return;
+    // (the newest go on the song: one before it that waited to carry on at a time no longer does)
+    this.callOff(project);
     this.pend(project, { job, device, since });
   }
 
@@ -1338,9 +1367,23 @@ export class Jobs implements AgentHooks {
 
   /** Called off: the request stays as it failed, with what its reply offers. */
   cancelWait(device: string, id: string): void {
-    const { row, project } = this.failedLast(device, id);
-    if (this.carrying.get(project)?.job === row.job) this.carrying.delete(project);
+    const { row } = this.failedLast(device, id);
     this.setWait(row.job, null);
+  }
+
+  /**
+   * A song's request no longer waits to carry on at a time: the conversation moved on (a later
+   * request, the request carried on another way, a go cut short since), or was started over.
+   */
+  private callOff(project: string): void {
+    const p = this.carrying.get(project);
+    if (p?.until !== undefined) this.setWait(p.job, null);
+  }
+
+  /** A song's conversation was started over: what waited on it doesn't, and its studios read it again. */
+  startedOver(project: string): void {
+    this.callOff(project);
+    this.toldThread(project);
   }
 
   /** A failed turn that can still be carried on by the device that asked: its conversation's last (else a refusal). */
@@ -1357,14 +1400,17 @@ export class Jobs implements AgentHooks {
     return { row, project: thread.project, extra: parseExtra(row.extra) };
   }
 
-  /** A turn's wait, set or taken away: kept with the turn, and told to the studios that show it. */
+  /**
+   * A turn's wait, set or taken away: kept with the turn (and gone from what waits here, when taken
+   * away), and the studios with its song open read the conversation again (`agent-thread`: a job long
+   * over isn't told of as news).
+   */
   private setWait(id: string, until: number | null): void {
     const job = this.jobs.get(id);
     if (job) {
       if (until === null) delete job.view.wait;
       else job.view.wait = until;
       this.saveTurn(job);
-      this.tell(job);
     } else {
       const row = this.o.agentStore.turn(id);
       if (!row) return;
@@ -1372,7 +1418,10 @@ export class Jobs implements AgentHooks {
       this.o.agentStore.updateTurn(id, { extra: JSON.stringify(until === null ? extra : { ...extra, wait: until }) });
     }
     const project = this.o.threads.get(this.o.agentStore.turn(id)?.thread ?? '')?.project;
-    if (project) this.toldThread(project);
+    if (!project) return;
+    const waits = this.carrying.get(project);
+    if (until === null && waits?.until !== undefined && waits.job === id) this.carrying.delete(project);
+    this.toldThread(project);
   }
 
   /**
@@ -1417,7 +1466,8 @@ export class Jobs implements AgentHooks {
     } catch {
       return 'wait';
     }
-    // (asked for hours ahead: its studio has long saved what it held, and is there or not)
+    // (asked for at a time, often hours ahead: its studio is there or not; when it is, it saves as the
+    // request begins)
     if (reset || this.studioOf(p.device, thread.project)) return 'go';
     // Cut short, without its studio: never when what it changed went in there (it may not be in the
     // song here yet: that studio saves first, as the request begins). With none of that, it carries
@@ -1445,17 +1495,28 @@ export class Jobs implements AgentHooks {
           this.setWait(p.job, null);
         continue;
       }
-      // whatever a runner may still run of the go before it stops first (one whose connection dropped
-      // and came back still has it; after a restart it was told as it came back, and is again)
-      for (const runner of this.o.live.agentRunners()) this.o.live.sendTo(runner, { type: 'agent-cancel', job: p.job });
+      // cut short: whatever a runner may still run of the go before it stops first (one whose
+      // connection dropped and came back still has it; after a restart it was told as it came back,
+      // and is again)
+      if (p.until === undefined)
+        for (const runner of this.o.live.agentRunners())
+          this.o.live.sendTo(runner, { type: 'agent-cancel', job: p.job });
       begun.push(
         this.carryOn(p.device, p.job, undefined, p.until === undefined ? 'itself' : 'reset').catch((err: unknown) => {
           if (this.carrying.has(project)) return;
-          // cut short, its studio didn't save what it holds of the go before: it's asked again while
-          // there's time. Refused otherwise, as a request can be: it stays as it was, with Try again
-          if (p.until === undefined && err instanceof Refusal && err.reason === UNSAVED) this.pend(project, p);
-          // (one that waited for its limit is tried again while its time lasts: its turn says it waits)
-          else if (p.until !== undefined) this.pend(project, p);
+          const refused = err instanceof Refusal ? err.reason : undefined;
+          if (p.until === undefined) {
+            // its studio didn't save what it holds of the go before: it's asked again while there's
+            // time. Refused otherwise, as a request can be: it stays as it was, with Try again
+            if (refused === UNSAVED) this.pend(project, p);
+            return;
+          }
+          // One that waited for its limit: refused for now by what the look before it didn't foresee
+          // (the runner gone as it began), it's tried again, a few times. Anything else (called off as
+          // it began, or what wouldn't pass) ends the wait: the reply is as it failed
+          const tries = (p.tries ?? 0) + 1;
+          if (refused !== undefined && MAY_PASS.has(refused) && tries < WAIT_TRIES) this.pend(project, { ...p, tries });
+          else this.setWait(p.job, null);
         }),
       );
     }
@@ -1531,8 +1592,9 @@ export class Jobs implements AgentHooks {
     return next;
   }
 
-  /** A device was removed: its jobs stop at once. */
+  /** A device was removed: its jobs stop at once, and what it asked to have carried on at a time isn't. */
   deviceRemoved(device: string): void {
+    for (const [project, p] of [...this.carrying]) if (p.device === device) this.callOff(project);
     for (const job of this.jobs.values()) {
       if (job.view.device !== device) continue;
       if (isLive(job)) this.end(job, 'cancelled', 'This device was removed', true);
@@ -1546,6 +1608,8 @@ export class Jobs implements AgentHooks {
 
   /** The agent was turned off: every job stops. */
   stopAll(why: string): void {
+    // (and nothing waits to carry on at a time)
+    for (const project of [...this.carrying.keys()]) this.callOff(project);
     for (const job of this.jobs.values()) {
       if (isLive(job)) this.end(job, 'cancelled', why, true);
       else if (job.view.state === 'awaiting') {

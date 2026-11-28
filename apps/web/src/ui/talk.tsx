@@ -314,7 +314,7 @@ export function TalkBody({
         key="wait"
         type="button"
         className="btn"
-        onClick={() => void waitForReset(job, true).catch(() => undefined)}
+        onClick={() => void waitForReset(job, true, project).catch(() => undefined)}
       >
         Carry on {atClock(reset.at, { now })}
       </button>
@@ -324,7 +324,7 @@ export function TalkBody({
         key="no-wait"
         type="button"
         className="btn ghost"
-        onClick={() => void waitForReset(job, false).catch(() => undefined)}
+        onClick={() => void waitForReset(job, false, project).catch(() => undefined)}
       >
         Don’t carry on
       </button>
@@ -358,7 +358,10 @@ export function TalkBody({
         ex.reply && <div className="reply">{ex.reply}</div>
       )}
       {!ex.working && after?.say && <div className="reply-after">{after.say}</div>}
-      {!ex.working && waits && <div className="reply-after">It carries on by itself {atClock(waits, { now })}.</div>}
+      {/* (the time its limit starts again, as the button said it: it's carried on a moment after) */}
+      {!ex.working && waits && (
+        <div className="reply-after">It carries on by itself {atClock(ex.stop?.resets ?? waits, { now })}.</div>
+      )}
       {!ex.working && ex.view && ex.job && <AgentView view={ex.view} job={ex.job} busy={busy} />}
       {ex.brief && <Brief text={ex.brief} flagged={ex.flagged} />}
       {buttons.length > 0 && <div className="btns">{buttons}</div>}

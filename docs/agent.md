@@ -882,12 +882,15 @@ to undo.
   host's aren't the same to the second). Its studio needn't be there: its changes are then saved on
   the host for the studio to pick up, as for a request whose studio went away, and its notice is
   sent as any reply's is.
-- It's kept with its turn (`wait`, also in the job's view and the conversation's turn), so a restart
-  of HO[LO] keeps it (`Jobs.recover`).
+- It's kept with its turn (`wait`, in the conversation's turn), so a restart of HO[LO] keeps it
+  (`Jobs.recover`, for a conversation's last turn only). The studios with the song open are told to
+  read the conversation again (`agent-thread`), and take whether a failed request waits from its turn.
 - When the host can't carry it on at that time (it's off, its runner away, the harness not ready), it
-  does as soon as it can, for a day (`waitWindowMs`); past that the reply is as it failed.
-- Called off by the conversation moving on: a later request, Continue with… or Try again on that
-  request, a conversation started over; and with the agent turned off or the device let go.
+  does as soon as it can, for a day (`waitWindowMs`); past that the reply is as it failed. Refused as
+  it begins for a reason that won't pass, the wait ends there too.
+- Called off, at once, by the conversation moving on: a later request, Continue with… or Try again on
+  that request, a go cut short since, a conversation started over; and with the agent turned off or
+  the device let go. Called off while its studio saves as it begins, it doesn't begin.
 - Once the limit's time has passed, a reply that wasn't asked to wait offers Try again instead, and
   says "was out of usage: its limit has started again since".
 

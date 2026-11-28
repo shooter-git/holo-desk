@@ -76,8 +76,8 @@ describe('carry on when it resets', () => {
     expect(until).toBe(resets + 15_000);
     expect(extraOf(w.t, job)).toMatchObject({ wait: until });
     expect(await lastTurn(w.t, w.token, w.s.id)).toMatchObject({ job, state: 'failed', wait: until });
-    // the studios that show it hear so
-    expect(told(w.desk).wait).toBe(until);
+    // the studios with the song open read its conversation again (a job long over isn't told of as news)
+    expect(told(w.desk).wait).toBeUndefined();
     expect(w.desk.got('agent-thread').at(-1)).toEqual({ type: 'agent-thread', project: w.s.id });
     expect(waiting(w.t)).toEqual([w.s.id]);
     await look(w.t, until - 1);
@@ -124,13 +124,13 @@ describe('carry on when it resets', () => {
     expect((await wait(w.t, w.token, job, 'DELETE')).statusCode).toBe(200);
     expect(extraOf(w.t, job).wait).toBeUndefined();
     expect((await lastTurn(w.t, w.token, w.s.id)).wait).toBeUndefined();
-    expect(told(w.desk).wait).toBeUndefined();
+    expect(w.t.services.jobs.get(job)?.view.wait).toBeUndefined();
     expect(waiting(w.t)).toEqual([]);
     await look(w.t, until + 1);
     expect(runs(w.run)).toHaveLength(1);
   });
 
-  it('is called off by the conversation moving on: a later request, or the request carried on another way', async () => {
+  it('is called off by the conversation moving on: the request carried on another way, or started over', async () => {
     const w = await world();
     const { job, until } = await asked(w);
     // Continue with… (here: Try again, as the song runs now) carries it on at once
@@ -142,6 +142,7 @@ describe('carry on when it resets', () => {
     });
     expect(res.statusCode, res.body).toBe(200);
     expect(extraOf(w.t, job).wait).toBeUndefined();
+    expect(waiting(w.t)).toEqual([]);
     const second = (res.json() as { job: string }).job;
     w.run.say({ type: 'agent-failed', job: second, error: 'Overloaded' });
     await waitFor(() => w.t.services.jobs.get(second)?.view.state === 'failed');
@@ -156,9 +157,129 @@ describe('carry on when it resets', () => {
       url: `/api/agent/threads/${other.s.id}/reset`,
       headers: auth(other.token),
     });
+    expect(waiting(other.t)).toEqual([]);
+    expect(extraOf(other.t, b.job).wait).toBeUndefined();
     await look(other.t, b.until + 1);
     expect(runs(other.run)).toHaveLength(1);
-    expect(waiting(other.t)).toEqual([]);
+  });
+
+  it('is called off by a later request, whose own go still carries on by itself when it’s cut short', async () => {
+    const w = await world();
+    const { job } = await asked(w);
+    // a later request: the one before it waits for nothing any more
+    const res = await w.t.app.inject({
+      method: 'POST',
+      url: '/api/agent/requests',
+      headers: auth(w.token),
+      payload: { project: w.s.id, text: 'Something else' },
+    });
+    expect(res.statusCode, res.body).toBe(200);
+    const later = (res.json() as { job: string }).job;
+    expect(extraOf(w.t, job).wait).toBeUndefined();
+    expect(waiting(w.t)).toEqual([]);
+    // its runner goes: it's cut short, and carries on by itself when one is back (nothing stale in its way)
+    w.t.services.jobs.limits.droppedMs = 30;
+    w.run.close();
+    await waitFor(() => w.t.services.jobs.get(later)?.view.state === 'failed');
+    const back = w.t.runner();
+    await waitFor(() => runs(back).length === 1);
+    expect(w.t.services.jobs.get(runs(back)[0]?.job as string)?.view).toMatchObject({ continues: later });
+  });
+
+  it('after a restart only the conversation’s last turn waits, whatever an earlier one still said', async () => {
+    const w = await world();
+    const a = await asked(w);
+    const c = await failed(w, 'Something else', { error: 'Limit', why: 'usage', resets: Date.now() + HOUR / 2 });
+    const until = ((await wait(w.t, w.token, c)).json() as { until: number }).until;
+    // (as a version that didn't clear the earlier one would have left it)
+    const db = w.t.services.store.database;
+    db.prepare('UPDATE agent_turns SET extra = ? WHERE job = ?').run(
+      JSON.stringify({ ...extraOf(w.t, a.job), wait: a.until }),
+      a.job,
+    );
+    await w.t.stop();
+    open.splice(open.indexOf(w.t), 1);
+    const t = await agentApp(w.t.work);
+    open.push(t);
+    expect(extraOf(t, a.job).wait).toBeUndefined();
+    expect(extraOf(t, c).wait).toBe(until);
+    const run = t.runner();
+    await look(t, until);
+    expect(runs(run)).toHaveLength(1);
+    expect(t.services.jobs.get(runs(run)[0]?.job as string)?.view).toMatchObject({ continues: c });
+    await look(t, a.until + 1);
+    expect(runs(run)).toHaveLength(1);
+  });
+
+  it('is called off with the agent turned off, or the device let go', async () => {
+    const off = await world();
+    const a = await asked(off);
+    const settings = (enabled: boolean) =>
+      off.t.app.inject({ method: 'PUT', url: '/api/agent/settings', headers: auth(off.token), payload: { enabled } });
+    await settings(false);
+    expect(waiting(off.t)).toEqual([]);
+    expect(extraOf(off.t, a.job).wait).toBeUndefined();
+    // (on again before the time: it was called off, and stays so)
+    await settings(true);
+    await look(off.t, a.until + 1);
+    expect(runs(off.run)).toHaveLength(1);
+
+    const gone = await world();
+    const b = await asked(gone);
+    const removed = await gone.t.app.inject({
+      method: 'DELETE',
+      url: `/api/agent/devices/${gone.device.id}`,
+      headers: auth(gone.token),
+    });
+    expect(removed.statusCode, removed.body).toBe(200);
+    expect(waiting(gone.t)).toEqual([]);
+    expect(extraOf(gone.t, b.job).wait).toBeUndefined();
+  });
+
+  it('called off while its studio saves as it begins, it doesn’t begin', async () => {
+    const w = await world();
+    const { job, until } = await asked(w);
+    const saves = w.desk.answer;
+    let release: () => void = () => undefined;
+    const held = new Promise<void>((ok) => {
+      release = ok;
+    });
+    w.desk.answer = (msg) =>
+      msg.type === 'agent-flush' ? held.then((): Msg => ({ ok: true, revision: 0 })) : (saves?.(msg) ?? null);
+    const began = look(w.t, until);
+    await waitFor(() => w.desk.got('agent-flush').length === 2);
+    expect((await wait(w.t, w.token, job, 'DELETE')).statusCode).toBe(200);
+    release();
+    await began;
+    expect(runs(w.run)).toHaveLength(1);
+    expect(waiting(w.t)).toEqual([]);
+    expect(extraOf(w.t, job).wait).toBeUndefined();
+  });
+
+  it('ends the wait when the request can’t begin for a reason that won’t pass, and doesn’t ask again', async () => {
+    const w = await world();
+    const { job, until } = await asked(w);
+    const store = w.t.services.store;
+    const snapshot = store.snapshotNow.bind(store);
+    store.snapshotNow = () => {
+      throw new Error('The disk is full');
+    };
+    // (a go that carries one on keeps its restore point: the song itself can't be read, say)
+    const get = store.get.bind(store);
+    let fails = true;
+    store.get = (id: string) => {
+      if (fails) throw new Error('The song can’t be read');
+      return get(id);
+    };
+    await look(w.t, until);
+    fails = false;
+    store.snapshotNow = snapshot;
+    expect(runs(w.run)).toHaveLength(1);
+    expect(waiting(w.t)).toEqual([]);
+    expect(extraOf(w.t, job).wait).toBeUndefined();
+    const flushes = w.desk.got('agent-flush').length;
+    await look(w.t, until + 10_000);
+    expect(w.desk.got('agent-flush')).toHaveLength(flushes);
   });
 
   it('is kept across a restart of HO[LO], and carried on without its studio when that isn’t there', async () => {

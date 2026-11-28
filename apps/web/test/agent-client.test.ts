@@ -1100,6 +1100,32 @@ describe('the song’s whole conversation, for the page', () => {
     expect(exchange(a, 'prj_a')?.wait).toBeNull();
   });
 
+  it('takes whether a failed request waits from its turn, over what’s kept here of a job that’s over', () => {
+    const failed = job({ state: 'failed', error: 'Limit', stop: { why: 'usage', resets: 500 } });
+    const turnOf = (wait?: number) => ({
+      job: failed.id,
+      request: failed.request,
+      reply: null,
+      label: null,
+      state: 'failed',
+      at: failed.started,
+      error: 'Limit',
+      stop: { why: 'usage' as const, resets: 500 },
+      ...(wait === undefined ? {} : { wait }),
+    });
+    // asked for on the host after it restarted (it tells of the conversation, not of the job)
+    let a = A.reduce(on(), { type: 'status', job: failed, barOpen: true });
+    a = A.reduce(a, { type: 'thread', project: 'prj_a', turns: [turnOf(515)] });
+    expect(exchange(a, 'prj_a')).toMatchObject({ failed: true, wait: 515 });
+    // called off there
+    a = A.reduce(a, { type: 'thread', project: 'prj_a', turns: [turnOf()] });
+    expect(exchange(a, 'prj_a')?.wait).toBeNull();
+    expect(a.jobs[failed.id]).not.toHaveProperty('wait');
+    // a job at work is the host's to tell of
+    const live = A.reduce(on(), { type: 'status', job: job({ state: 'running' }), barOpen: true });
+    expect(A.reduce(live, { type: 'thread', project: 'prj_a', turns: [turnOf(515)] }).jobs).toBe(live.jobs);
+  });
+
   it('has the host’s news of a job stand for its turn, kept where the turn was', () => {
     let a = on();
     a = A.reduce(a, {

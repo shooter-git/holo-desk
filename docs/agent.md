@@ -247,8 +247,10 @@ says what its account has left and what the requests through HO[LO] used:
 - A harness that doesn't report what's left says so, with its plan, a link to its vendor's own usage
   page, and the requests through HO[LO] in a line: "Pro+ plan · Cursor doesn't report what's left of
   its plan: see Cursor's usage page".
-- Claude Code says what's left only with a request, so before its first one its row says it shows
-  after the next. The others are asked as Settings › Agent opens.
+- Every harness that says what's left is asked as Settings › Agent opens, Claude Code as it starts
+  (its handshake: docs/agent-harnesses.md). Where Claude Code can't be asked so (an older version),
+  it says what's left only with a request, and before its first one its row says it shows after the
+  next.
 - A harness that isn't installed says nothing; one signed out, only what was counted.
 
 Outside Settings › Agent, one place says anything of it: the line under the agent's page's header
@@ -267,9 +269,10 @@ Effort the default of the model a run uses. Claude Code has no defaults to name,
 empty choice: "Choose a model" and "Choose an effort" until both are chosen, and one it no longer offers
 says to choose another. **Requests use**, under them, says what a run with these settings uses, as the
 adapter decides it, in the menus' names: "Gpt-6.1-sol at low effort", "Auto: Cursor chooses the model",
-"Opus at high effort (last ran as Opus <its version>)" for Claude Code once a run has said what the
-alias stands for (Claude Code lists only aliases, so its Model menu adds each one's version then:
-"Opus (<its version>)"), or, in the warning color, what's left to choose ("Choose an effort first").
+"Opus at high effort (now Opus <its version>)" for Claude Code, whose aliases move on with each new
+model (it lists what each stands for as it starts, and a run says it too: its Model menu adds each
+one's version, "Opus (<its version>)"), or, in the warning color, what's left to choose ("Choose an
+effort first").
 The choice is the host's, shared by every allowed device, so a request from a phone runs as one from
 the desktop. A song can have its own instead (below, "A song's own choice"). A run that says something new of an alias sends the harness list again at once (the runner's
 `harnesses` message), so the row follows without a look.
@@ -1209,7 +1212,7 @@ button and the swipe down all bring it; a second press of the slash button puts 
   harness's own word: its last request here refused for it, till a time still ahead, or with no time
   said). A share read an hour ago or more says so ("63% left, read 3 h ago"): the account may have
   been used since. Nothing is said of usage where nothing is known: a harness that reports none,
-  Claude Code before its first request, a limit that has started again since it was read. The harness
+  an older Claude Code before its first request, a limit that has started again since it was read. The harness
   is the one a request would run with, as the host decides it: one named that no runner has now is
   still named, with "not on the host now". As the page opens the host is asked to look at
   its harnesses' limits again, as Settings › Agent asks it (`…/harnesses/look`: the host sees to how

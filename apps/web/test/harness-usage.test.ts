@@ -178,6 +178,34 @@ describe('a harness’s usage, for its row', () => {
     expect(unknown?.groups.some((g) => g.inUse)).toBe(false);
   });
 
+  it('names the limits every model shares beside a family’s own, which a model of that family leads with', () => {
+    // (as Claude Code says them as it starts: the session and the week, and one family's own week,
+    // with the ids a run of that family is given)
+    const families = base('claude', 'Claude Code', {
+      limits: {
+        at: NOW - 60_000,
+        groups: [
+          { windows: [{ minutes: 10080, used: 0.71, resets: NOW + 51 * H }] },
+          {
+            name: 'Fable models',
+            models: ['Fable'],
+            ids: ['fable', 'claude-fable-9-2'],
+            windows: [{ minutes: 10080, used: 0.83, resets: NOW + 51 * H }],
+          },
+        ],
+      },
+    });
+    const view = usageView(families, { ...clock, current: true, chosen: 'claude-fable-9-2', runs: 'claude-fable-9-2' });
+    expect(view?.groups.map((g) => [g.name, g.models, g.inUse])).toEqual([
+      ['Fable models', 'Fable', true],
+      ['Every model', null, false],
+    ]);
+    expect(view?.summary?.text).toBe('17% left');
+    // a model of no family: the shared ones lead
+    const other = usageView(families, { ...clock, current: true, chosen: 'opus', runs: 'claude-opus-9-1' });
+    expect(other?.groups[0]?.name).toBe('Every model');
+  });
+
   it('adds up the requests through HO[LO], by model', () => {
     const v = usageView(claude, { ...clock, current: true, usage: { days: 30, rows } });
     expect(v?.through).toEqual({

@@ -238,6 +238,10 @@ describe('where a conversation changed hands', () => {
     expect(movedLine(a, { harness: 'claude', model: 'sonnet', effort: 'high' })).toBe(
       'Continued with Claude Code, Sonnet at high',
     );
+    // a Claude model by its full name, as people say it
+    expect(movedLine(a, { harness: 'claude', model: 'claude-fable-9-1', effort: 'high' })).toBe(
+      'Continued with Claude Code, Fable 9.1 at high',
+    );
     // the same harness and model (another effort is Settings' everyday business): nothing
     expect(movedLine(a, { harness: 'claude', model: 'opus', effort: 'low' })).toBeNull();
     // one of them not known (a request on its way, a turn from before this was kept)
@@ -293,7 +297,7 @@ describe('what the chooser offers', () => {
     expect(o.notes).toEqual(['Cursor is signed out']);
     expect(o.settings).toEqual({
       id: 'claude',
-      text: 'Claude Code, Opus at high effort (last ran as Opus 9.1)',
+      text: 'Claude Code, Opus at high effort (now Opus 9.1)',
       asks: false,
     });
     // the song follows Settings: that's what's picked as it opens

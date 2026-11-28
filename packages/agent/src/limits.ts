@@ -24,6 +24,11 @@ export interface LimitGroup {
   name?: string;
   /** The models in it, by the vendor's own names for them ("Gemini 4 Neon"). */
   models?: string[];
+  /**
+   * The harness's own ids for those models, when its names for them aren't theirs ("Fable" is
+   * `fable` and `claude-fable-5-2`): what a run's model is matched against too. Not shown.
+   */
+  ids?: string[];
   windows: LimitWindow[];
 }
 
@@ -120,6 +125,14 @@ export function checkGroups(raw: unknown): LimitGroup[] {
         .slice(0, 40);
       if (models.length) group.models = models;
     }
+    if (group.models && Array.isArray(g.ids)) {
+      const ids = g.ids
+        .slice(0, 80)
+        .map((m) => line(m, 80))
+        .filter((m): m is string => !!m)
+        .slice(0, 40);
+      if (ids.length) group.ids = ids;
+    }
     out.push(group);
   }
   return out;
@@ -184,8 +197,12 @@ export function groupFor(groups: readonly LimitGroup[], model: string | null | u
   if (!model) return null;
   const wanted = bare(model);
   if (!wanted) return null;
-  return groups.find((g) => g.models?.some((m) => bare(m) === wanted)) ?? null;
+  return groups.find((g) => lists(g, wanted)) ?? null;
 }
+
+/** Whether a group lists a model (its name made bare): by the vendor's name for it, or the harness's id. */
+const lists = (g: LimitGroup, wanted: string): boolean =>
+  !!g.models?.length && [...g.models, ...(g.ids ?? [])].some((m) => bare(m) === wanted);
 
 /**
  * Whether a model's requests are out of usage now, going by limits just read: a window they count
@@ -201,7 +218,7 @@ export function usedUp(
 ): { resets?: number } | null {
   const wanted = model ? bare(model) : '';
   const shared = groups.filter((g) => !g.models?.length);
-  const own = wanted ? groups.filter((g) => g.models?.some((m) => bare(m) === wanted)) : [];
+  const own = wanted ? groups.filter((g) => lists(g, wanted)) : [];
   // (limits by model only, and this model in none of them: which it counts against isn't known)
   if (!own.length && !shared.length) return null;
   const out = [...shared, ...own]

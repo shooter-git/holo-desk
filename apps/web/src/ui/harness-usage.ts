@@ -9,7 +9,7 @@
  */
 import { groupFor, type LimitGroup, type LimitWindow } from '@holo/agent/limits';
 import type { HarnessId, HarnessInfo, UsageSum } from '../app/agent.ts';
-import { shown } from './harness-row.ts';
+import { modelSaid, shown } from './harness-row.ts';
 
 /** One window of a limit, as a line: its name, a bar of what's left, and when it starts again. */
 export interface MeterView {
@@ -204,7 +204,7 @@ function planText(plan: string | undefined): string | null {
 
 /** A model and effort as a requests' row names them. */
 function modelLabel(model: string, effort: string): string {
-  const name = model ? shown(model) : 'Its default model';
+  const name = model ? modelSaid(model) : 'Its default model';
   return effort ? `${name} · ${effort}` : name;
 }
 
@@ -234,7 +234,8 @@ export function usageView(h: HarnessInfo, o: UsageOptions): UsageView | null {
   const several = listed.length > 1;
   const groups: GroupView[] = listed.map((g, i) => ({
     key: `${i}:${g.name ?? ''}`,
-    name: several || g.name ? (g.name ?? 'Every other model') : null,
+    // (a group that lists no models is every model's: a family's own, beside it, counts as well)
+    name: several || g.name ? (g.name ?? 'Every model') : null,
     models: g.models?.length ? g.models.join(', ') : null,
     inUse: several && g === own,
     meters: g.windows.map((w, k) => meter(w, `${i}:${w.minutes}:${k}`, o)),

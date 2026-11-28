@@ -9,6 +9,12 @@
 //                          a timer (systemd, as you) that runs `tick` every 15 minutes
 //   tick                   one look: when following a channel and no studio is playing or recording, pull;
 //                          a new image is started, the same one changes nothing (the engines' too)
+//
+// A new version is started with care. The songs' database is copied first (the server makes the copy,
+// in the data folder's `backups`, the last few kept; with no room for one, the update says so and goes
+// on). The version that was running is kept at hand (holo-desk:previous), and when the new one doesn't
+// answer within a few minutes it's started again: HO[LO] is then back on it, the log says so, and each
+// look waits for a newer version than the one that didn't start. A copy is only put back by hand.
 //   runner-service on|off|status
 //                          the runner (`pnpm runner`: creations' renders, and the agent's harness when the
 //                          agent is on) as a service (systemd, as you), started again after each update
@@ -21,13 +27,29 @@
 // forward. A branch is someone's work: automatic updates never move one, and `pnpm run update` only takes
 // a checkout on main along (once; after that it's on no branch and follows).
 import { execFileSync, spawnSync } from 'node:child_process';
-import { accessSync, constants, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  accessSync,
+  chmodSync,
+  chownSync,
+  constants,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  statfsSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
+import { request } from 'node:http';
 import { homedir, userInfo } from 'node:os';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 
 const root = resolve(import.meta.dirname, '..');
 const envFile = join(root, '.env');
 const LOCAL = 'holo-desk:local';
+/** The version that ran before the one started last: what HO[LO] goes back to when that one doesn't answer. */
+export const PREVIOUS = 'holo-desk:previous';
 export const REPO = process.env.HOLO_IMAGE_REPO ?? 'ghcr.io/shooter-git/holo-desk';
 const [command = 'update', arg] = process.argv.slice(2);
 
@@ -122,11 +144,24 @@ function followOmr(channel) {
   if (values.HOLO_OMR_URL === '' && values.HOLO_OMR_REPLICAS === undefined) setEnv('HOLO_OMR_REPLICAS', '0');
 }
 
+/**
+ * A value as .env has it, without what compose allows around it: quotes, and a comment after it.
+ * (`HOLO_PORT="47800"` and `HOLO_PORT=47800 # the studio` are both 47800.)
+ */
+export const plainValue = (v) =>
+  String(v ?? '')
+    .replace(/\s+#.*$/, '')
+    .trim()
+    .replace(/^(["'])(.*)\1$/, '$2');
+
+const portOf = (values) => plainValue(values.HOLO_PORT) || '47800';
+
 /** What the server says of itself (/api/health), or null when it doesn't answer. */
 async function health() {
-  const port = readEnv().values.HOLO_PORT || '47800';
   try {
-    const res = await fetch(`http://127.0.0.1:${port}/api/health`, { signal: AbortSignal.timeout(5000) });
+    const res = await fetch(`http://127.0.0.1:${portOf(readEnv().values)}/api/health`, {
+      signal: AbortSignal.timeout(5000),
+    });
     return await res.json();
   } catch {
     return null;
@@ -136,6 +171,285 @@ async function health() {
 /** A studio playing or recording right now (the server says): an update waits for the next look. */
 async function busy() {
   return (await health())?.busy === true; // not running: nothing to interrupt
+}
+
+/** The image the studio's container runs now (its id), or null when there's none. */
+function runningImage() {
+  const ps = spawnSync(
+    'docker',
+    ['compose', '--project-directory', '.', '-f', 'deploy/compose.yml', '--env-file', '.env', 'ps', '-q', 'holo'],
+    { cwd: root, encoding: 'utf8' },
+  );
+  const container = ps.status === 0 ? ps.stdout.trim().split('\n')[0] : '';
+  if (!container) return null;
+  try {
+    return (
+      execFileSync('docker', ['inspect', '--format', '{{.Image}}', container], { encoding: 'utf8' }).trim() || null
+    );
+  } catch {
+    return null;
+  }
+}
+
+/** A size as people say it. */
+const sizeText = (bytes) =>
+  bytes >= 1024 ** 3
+    ? `${(bytes / 1024 ** 3).toFixed(1)} GB`
+    : bytes >= 1024 ** 2
+      ? `${Math.round(bytes / 1024 ** 2)} MB`
+      : `${Math.max(1, Math.round(bytes / 1024))} KB`;
+
+/** What became of the copy the server was asked for (POST /api/backup), as the update's log says it. */
+export function copyNote(status, body) {
+  if (status === 200 && typeof body?.file === 'string')
+    return `The songs’ database was copied first: ${body.file}${typeof body.size === 'number' ? ` (${sizeText(body.size)})` : ''}`;
+  if (status === 507)
+    return `No room for a copy of the songs’ database${
+      typeof body?.need === 'number' && typeof body?.free === 'number'
+        ? ` (it needs ${sizeText(body.need)}, ${sizeText(body.free)} are free)`
+        : ''
+    }: updating without one`;
+  // a version from before copies: the one that starts now makes them
+  if (status === 404) return 'The version running can’t copy its database yet: the next update is copied first';
+  if (status === 403) return 'No copy of the songs’ database: the runner key in the data folder isn’t this HO[LO]’s';
+  return `No copy of the songs’ database (the server answered ${status}): updating without one`;
+}
+
+/** Room left over once a copy is made, at least (as the server asks: apps/server/src/backup.ts). */
+const SPARE_BYTES = 64 * 1024 * 1024;
+
+/**
+ * The copy made from here, for a server that doesn't answer: SQLite's own backup of `holo.db` into the
+ * data folder's `backups`. What it did, as a line for the log; null when there's no database yet.
+ */
+export async function copyHere(dataDir, now = new Date(), free = null) {
+  const db = join(dataDir, 'holo.db');
+  if (!existsSync(db)) return null;
+  const size = (f) => (existsSync(f) ? statSync(f).size : 0);
+  const need = size(db) + size(`${db}-wal`) + SPARE_BYTES;
+  const left = free ?? Number(statfsSync(dataDir).bavail) * Number(statfsSync(dataDir).bsize);
+  if (left < need) return copyNote(507, { need, free: left });
+  const stamp = now
+    .toISOString()
+    .replace(/[-:]/g, '')
+    .replace(/\.\d+Z$/, 'Z');
+  const dir = join(dataDir, 'backups');
+  const file = join(dir, `holo-before-update-${stamp}.db`);
+  const part = `${file}.part`;
+  let source;
+  try {
+    // (Node's own SQLite, as the server's: nothing to install; an older Node hasn't its backup)
+    const { DatabaseSync, backup } = await import('node:sqlite');
+    if (typeof backup !== 'function') return 'No copy of the songs’ database: this Node can’t make one from here';
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
+    rmSync(part, { force: true });
+    source = new DatabaseSync(db, { readOnly: true });
+    await backup(source, part);
+    chmodSync(part, 0o600);
+    renameSync(part, file);
+    // (run as root, what it made is given to the data folder's owner, who the server runs as)
+    if (process.getuid?.() === 0) {
+      const owner = statSync(dataDir);
+      for (const made of [dir, file]) chownSync(made, owner.uid, owner.gid);
+    }
+    return copyNote(200, { file: join('backups', `holo-before-update-${stamp}.db`), size: size(file) });
+  } catch (err) {
+    rmSync(part, { force: true });
+    return `No copy of the songs’ database (${err instanceof Error ? err.message : err}): updating without one`;
+  } finally {
+    try {
+      source?.close();
+    } catch {
+      // closed already
+    }
+  }
+}
+
+/** The data folder, as the server and the runner find it. */
+const dataDirOf = (values) => resolve(root, plainValue(values.HOLO_DATA_DIR) || './data');
+
+/** Whether this Node can copy the database itself (its own SQLite, with a backup: 22.16 or later). */
+async function canCopyHere() {
+  try {
+    return typeof (await import('node:sqlite')).backup === 'function';
+  } catch {
+    return false;
+  }
+}
+
+/** POST with no body, however long the answer takes up to `timeoutMs` (fetch gives up on a slow one after five minutes). */
+function post(url, headers, timeoutMs) {
+  return new Promise((done, fail) => {
+    const req = request(url, { method: 'POST', headers }, (res) => {
+      let text = '';
+      res.setEncoding('utf8');
+      res.on('data', (c) => {
+        text += c;
+      });
+      res.on('end', () => {
+        let body = null;
+        try {
+          body = JSON.parse(text);
+        } catch {
+          // not JSON: the status says enough
+        }
+        done({ status: res.statusCode ?? 0, body });
+      });
+      res.on('error', fail);
+    });
+    req.setTimeout(timeoutMs, () => req.destroy(new Error('no answer in time')));
+    req.on('error', fail);
+    req.end();
+  });
+}
+
+/**
+ * A copy of the songs' database before a new version starts. A server that answers is asked for it (as
+ * this computer's owner, with the runner key), and is never stopped for it. One that doesn't answer is
+ * stopped first when `stop` (the new version is about to take its place) and copied from here. Never
+ * fatal: an update goes on without a copy, saying so.
+ */
+async function copyFirst(stop = true) {
+  const { values } = readEnv();
+  const dataDir = dataDirOf(values);
+  const none = (why) => console.log(`No copy of the songs’ database (${why}): updating without one`);
+  if ((await health())?.ok === true) {
+    let key = process.env.HOLO_RUNNER_KEY?.trim() || '';
+    try {
+      key ||= readFileSync(join(dataDir, 'runner.key'), 'utf8').trim();
+    } catch {
+      // none: a data folder this user can't read, or HOLO_DATA_DIR isn't where the server's is
+    }
+    if (!key) return none(`the runner key couldn’t be read in ${dataDir}`);
+    try {
+      // (a big database takes a while: the copy is made before the answer comes)
+      const res = await post(
+        `http://127.0.0.1:${portOf(values)}/api/backup`,
+        { 'x-holo-runner-key': key },
+        30 * 60_000,
+      );
+      console.log(copyNote(res.status, res.body));
+    } catch (err) {
+      none(`the server didn’t answer for it: ${err instanceof Error ? err.message : err}`);
+    }
+    return;
+  }
+  try {
+    const there = runningImage() !== null;
+    if (!existsSync(join(dataDir, 'holo.db'))) {
+      // (nothing yet on a first install; with a container there, the data folder is somewhere else)
+      if (there) none(`there’s no holo.db in ${dataDir}`);
+      return;
+    }
+    if (!(await canCopyHere())) return none('the server isn’t answering, and this Node can’t make one from here');
+    if (there) {
+      if (!stop) return none('the server isn’t answering');
+      // (the new version is about to take its place: the database is copied with nobody else at it)
+      compose('stop', 'holo');
+    }
+    const note = await copyHere(dataDir);
+    if (note) console.log(note);
+  } catch (err) {
+    none(err instanceof Error ? err.message : err);
+  }
+}
+
+/**
+ * How long a version that was just started has to answer: HOLO_UPDATE_WAIT_S (seconds), from the
+ * environment or .env; three minutes.
+ */
+const answerMs = () => {
+  const s = Number(process.env.HOLO_UPDATE_WAIT_S ?? plainValue(readEnv().values.HOLO_UPDATE_WAIT_S));
+  return (Number.isFinite(s) && s > 0 ? s : 180) * 1000;
+};
+
+/** Whether the server answers, running `image` (when its id is known), before the time is up. */
+async function answers(image) {
+  const end = Date.now() + answerMs();
+  for (;;) {
+    if ((await health())?.ok === true && (!image || runningImage() === image)) return true;
+    if (Date.now() >= end) return false;
+    await new Promise((ok) => setTimeout(ok, 2000));
+  }
+}
+
+/** What starting a version really does, here: `startNew` is given these (its tests, others). */
+const HERE = {
+  heard: async () => (await health())?.ok === true,
+  copy: copyFirst,
+  tag: (id) => spawnSync('docker', ['tag', id, PREVIOUS], { stdio: 'inherit' }).status === 0,
+  up: () => compose('up', '-d', '--no-build', 'holo'),
+  answers,
+  imageId,
+  setEnv,
+  log: (line) => console.log(line),
+};
+
+const said = (err) => (err instanceof Error ? err.message : String(err));
+
+/**
+ * A new version started with care: the songs' database copied first, the version that was running
+ * (`previous`, its image's id; null when there's none) kept at hand, and gone back to when the new one
+ * can't be started, or doesn't answer in time. Says how it went:
+ *
+ * - `started`;
+ * - `waiting`: HO[LO] became busy while the copy was made (`d.busy`), and nothing was started;
+ * - `back`: HO[LO] runs the version before again, and .env says which image didn't start;
+ * - `down`: it isn't running, and there's nothing to go back to, or that didn't start either.
+ *
+ * Silence from the new version means it didn't start only when the version before could be heard from
+ * here (`d.heard`). Where it couldn't (the port isn't reachable from where this runs, HO[LO] was
+ * stopped), the new one is started as it always was, saying that it wasn't checked: an update is never
+ * undone on a guess.
+ */
+export async function startNew(d, image, previous) {
+  const heard = await d.heard();
+  await d.copy();
+  if (d.busy && (await d.busy())) return 'waiting';
+  const kept = previous ? d.tag(previous) : false;
+  d.before?.();
+  let failed = null;
+  let came = false;
+  try {
+    d.up();
+    came = heard ? await d.answers(d.imageId(image)) : true;
+  } catch (err) {
+    failed = err;
+  }
+  // (said only when a version was running: with none, there was nothing to hear)
+  if (came && !heard && previous)
+    d.log('HO[LO] couldn’t be heard from here before this update, so whether the new version answers wasn’t checked');
+  if (came) return 'started';
+  const why = failed ? `couldn’t be started (${said(failed)})` : 'didn’t answer in time';
+  if (!kept) {
+    d.log(`The new version ${why}, and there’s no version before it to go back to: look at \`docker logs\``);
+    return 'down';
+  }
+  d.log(`The new version ${why}: going back to the one before`);
+  d.setEnv('HOLO_ROLLED_BACK_IMAGE', image);
+  d.setEnv('HOLO_ROLLED_BACK_FROM', d.imageId(image) ?? 'unknown');
+  d.setEnv('HOLO_IMAGE', PREVIOUS);
+  try {
+    d.up();
+    if (!heard || (await d.answers(previous))) {
+      d.log(
+        'HO[LO] is back on the version before. It stays there until a newer one is out (each look checks), or `pnpm run update` is run by hand.',
+      );
+      return 'back';
+    }
+    d.log('The version before isn’t answering either: look at `docker logs`');
+  } catch (err) {
+    d.log(`The version before couldn’t be started either (${said(err)}): look at \`docker logs\``);
+  }
+  return 'down';
+}
+
+/**
+ * Gone back to the version before (above): whether what the channel has now is a version to go
+ * forward to (not the one that didn't start).
+ */
+export function goesForward(values, id) {
+  return !!id && id !== values.HOLO_ROLLED_BACK_FROM;
 }
 
 /** The version the server runs, once it answers (a minute at most, as a new image starts). */
@@ -205,28 +519,90 @@ async function update(channel) {
   const ch = channel ?? values.HOLO_CHANNEL ?? 'stable';
   if (ch !== 'main' && ch !== 'stable') throw new Error('The channel is main (every merge) or stable (each release)');
   const image = `${REPO}:${ch}`;
+  // what runs now, to go back to
+  const running = runningImage();
+  // gone back to the version before: asked for by hand, the channel's is tried again, once it's fetched
+  // (offline, nothing changes: HO[LO] stays on the version before, and .env still says why)
+  if (values.HOLO_IMAGE === PREVIOUS && spawnSync('docker', ['pull', image], { stdio: 'inherit' }).status !== 0)
+    throw new Error(`${image} couldn’t be fetched: HO[LO] stays on the version before`);
   setEnv('HOLO_CHANNEL', ch);
   setEnv('HOLO_IMAGE', image);
+  unsetEnv('HOLO_ROLLED_BACK_FROM');
+  unsetEnv('HOLO_ROLLED_BACK_IMAGE');
   followOmr(ch);
   console.log(`Following ${image}`);
   compose('pull', 'holo');
-  compose('up', '-d', '--no-build', 'holo');
+  const next = imageId(image);
+  let how = 'started';
+  // (the version already running: started as it is, which changes nothing)
+  if (running && next === running) compose('up', '-d', '--no-build', 'holo');
+  else how = await startNew(HERE, image, running);
   startEngines();
+  if (how !== 'started') throw new Error('The new version didn’t start (above)');
   await follow(image, true);
 }
 
-function source() {
+async function source() {
   execFileSync(process.execPath, [join(root, 'tools/engine-stamp.mjs')], { cwd: root, stdio: 'inherit' });
+  // (a build of your own is a new version too; a server that isn't answering is left running meanwhile)
+  await copyFirst(false);
   setEnv('HOLO_IMAGE', LOCAL);
+  unsetEnv('HOLO_ROLLED_BACK_FROM');
+  unsetEnv('HOLO_ROLLED_BACK_IMAGE');
   console.log(`Building ${LOCAL} from this checkout (auto-update waits until \`pnpm run update\`)`);
   compose('up', '-d', '--build', 'holo');
   // the engines as they are (fetched the first time)
   startEngines(false);
 }
 
+/**
+ * A look while HO[LO] runs the version before one that didn't start: the image it was following is
+ * fetched, and started when it's another version than that one.
+ */
+async function tickAfterGoingBack(values) {
+  const was = plainValue(values.HOLO_ROLLED_BACK_IMAGE);
+  const image = was.startsWith(`${REPO}:`) ? was : `${REPO}:${plainValue(values.HOLO_CHANNEL) || 'stable'}`;
+  if (await busy()) {
+    console.log('A studio is busy: next time');
+    return;
+  }
+  if (spawnSync('docker', ['pull', '--quiet', image], { stdio: 'inherit' }).status !== 0) {
+    console.log(`${image} couldn’t be fetched: next time`);
+    return;
+  }
+  if (!goesForward(values, imageId(image))) {
+    console.log(`HO[LO] stays on the version before: ${image} is still the one that didn’t start`);
+    return;
+  }
+  console.log(`A newer ${image}: starting it`);
+  const how = await startNew(
+    {
+      ...HERE,
+      busy,
+      // (only once it's really about to start is .env moved on from the version before)
+      before: () => {
+        setEnv('HOLO_IMAGE', image);
+        unsetEnv('HOLO_ROLLED_BACK_FROM');
+        unsetEnv('HOLO_ROLLED_BACK_IMAGE');
+      },
+    },
+    image,
+    // (the version before is what runs; should Docker not say so now, it's still at hand under its name)
+    runningImage() ?? imageId(PREVIOUS),
+  );
+  if (how === 'waiting') {
+    console.log('A studio is busy: it starts at the next look');
+    return;
+  }
+  startEngines(true, true);
+  if (how === 'started') await follow(image);
+  else process.exitCode = 1;
+}
+
 async function tick() {
   const { values } = readEnv();
   const image = values.HOLO_IMAGE;
+  if (image === PREVIOUS && values.HOLO_ROLLED_BACK_FROM) return tickAfterGoingBack(values);
   if (!image || image === LOCAL || !image.startsWith(`${REPO}:`)) {
     console.log('Built from this checkout: auto-update waits (`pnpm run update` to follow a channel again)');
     return;
@@ -238,11 +614,24 @@ async function tick() {
   // (a host set up before the engines were on by default gets them on its first look)
   const channel = image.slice(REPO.length + 1);
   if (channel === 'main' || channel === 'stable') followOmr(channel);
-  const before = imageId(image);
+  // what runs now: a version fetched at an earlier look, and kept waiting by a busy studio, starts at this one
+  const running = runningImage() ?? imageId(image);
   compose('pull', '--quiet', 'holo');
-  if (imageId(image) !== before) {
+  const next = imageId(image);
+  if (next && next !== running) {
     console.log(`New ${image}: starting it`);
-    compose('up', '-d', '--no-build', 'holo');
+    // (the fetch and the copy take a while: a studio may have started playing since, so it's asked again)
+    const how = await startNew({ ...HERE, busy }, image, running);
+    if (how === 'waiting') {
+      console.log(`New ${image}, and a studio is busy: it starts at the next look`);
+      return;
+    }
+    if (how !== 'started') {
+      // (this checkout and the runner stay with the version that runs)
+      startEngines(true, true);
+      process.exitCode = 1;
+      return;
+    }
   }
   startEngines(true, true);
   // (each look: a checkout that fell behind catches up, the same image or not)
@@ -387,7 +776,7 @@ function runnerService(what) {
 if (import.meta.main) {
   try {
     if (command === 'update') await update(arg);
-    else if (command === 'source') source();
+    else if (command === 'source') await source();
     else if (command === 'tick') await tick();
     else if (command === 'autoupdate') autoupdate(arg ?? 'status');
     else if (command === 'runner-service') runnerService(arg ?? 'status');

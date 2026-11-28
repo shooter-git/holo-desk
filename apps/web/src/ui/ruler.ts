@@ -11,7 +11,8 @@ const EDGE_FINGER = 16;
 /**
  * The ruler's top half is the cycle's strip and its bottom half moves the playhead. A finger on a
  * phone moves the playhead anywhere on it, as half of a ruler that short is too thin to aim at: only
- * the cycle's two edges, in its strip, still take the finger, to resize the cycle.
+ * the cycle's two edges, in its strip, still take the finger, to resize the cycle. (A new cycle is
+ * the finger held still, then drawn along: the tracks area times the hold, and `drawnCycle` is the range.)
  */
 export function rulerHold(
   x: number,
@@ -30,6 +31,14 @@ export function rulerHold(
   if (toStart < EDGE) return 'start';
   if (toEnd < EDGE) return 'end';
   return x > cycle.x0 && x < cycle.x1 ? 'move' : 'new';
+}
+
+/**
+ * The cycle a drag draws, from where it began to where it has got to: whichever way it went, and a
+ * grid step long at the least.
+ */
+export function drawnCycle(anchor: number, tick: number, snap: number): { start: number; end: number } {
+  return { start: Math.max(0, Math.min(anchor, tick)), end: Math.max(anchor + snap, tick) };
 }
 
 /** How far a drag on the position display goes for each bar it moves the playhead. */

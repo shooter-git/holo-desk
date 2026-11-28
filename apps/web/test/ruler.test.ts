@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { JOG_PX, jog, rulerHold } from '../src/ui/ruler.ts';
+import { drawnCycle, JOG_PX, jog, rulerHold } from '../src/ui/ruler.ts';
 
 describe('a press on the tracks ruler', () => {
   // a ruler 40 px tall; the cycle drawn from 100 to 300 px
@@ -34,6 +34,19 @@ describe('a press on the tracks ruler', () => {
     const narrow = { x0: 100, x1: 110 };
     expect(rulerHold(102, top, 40, narrow, true)).toBe('start');
     expect(rulerHold(108, top, 40, narrow, true)).toBe('end');
+  });
+});
+
+describe('a cycle drawn on the ruler', () => {
+  it('runs from where the drag began to where it is, whichever way it went', () => {
+    expect(drawnCycle(960, 2880, 480)).toEqual({ start: 960, end: 2880 });
+    expect(drawnCycle(2880, 960, 480)).toEqual({ start: 960, end: 3360 });
+  });
+
+  it('is a grid step long at the least, and never starts before the song does', () => {
+    expect(drawnCycle(960, 960, 480)).toEqual({ start: 960, end: 1440 });
+    expect(drawnCycle(960, 1000, 480)).toEqual({ start: 960, end: 1440 });
+    expect(drawnCycle(0, -480, 480)).toEqual({ start: 0, end: 480 });
   });
 });
 

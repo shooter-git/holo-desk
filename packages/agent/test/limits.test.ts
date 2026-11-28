@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   addUsage,
   checkFailureKind,
+  checkGroups,
   checkLimits,
   checkRead,
   checkUsage,
@@ -91,6 +92,24 @@ describe('limits: the group a model counts against', () => {
     expect(groupFor(groups, 'claude-opus-5-5')?.name).toBe('Claude and GPT models');
     expect(groupFor(groups, 'gpt-oss-120b')?.name).toBe('Claude and GPT models');
     expect(groupFor(groups, 'Gemini 3.8 Flash')?.name).toBe('Gemini Models');
+  });
+
+  it('is also the one that lists the model by the harness’s own id for it, where its names aren’t theirs', () => {
+    const shared = { windows: week };
+    const fable = { name: 'Fable models', models: ['Fable'], ids: ['fable', 'claude-fable-9-2'], windows: week };
+    expect(groupFor([shared, fable], 'claude-fable-9-2')).toBe(fable);
+    expect(groupFor([shared, fable], 'fable')).toBe(fable);
+    expect(groupFor([shared, fable], 'claude-opus-9-1')).toBeNull();
+    // a model's own week used up stops only that model
+    const out = { ...fable, windows: [{ minutes: 10080, used: 1, resets: NOW + 3_600_000 }] };
+    expect(usedUp([shared, out], 'claude-fable-9-2', NOW)).toEqual({ resets: NOW + 3_600_000 });
+    expect(usedUp([shared, out], 'opus', NOW)).toBeNull();
+    // ids are kept as checked (names of a sensible length), and never without the names they stand for
+    expect(checkGroups([{ ...fable, ids: ['fable', 7, 'x'.repeat(200), ''] }])[0]?.ids).toEqual([
+      'fable',
+      'x'.repeat(80),
+    ]);
+    expect(checkGroups([{ windows: week, ids: ['fable'] }])[0]).not.toHaveProperty('ids');
   });
 
   it('is the only group when it lists no models, and unknown when that can’t be told', () => {

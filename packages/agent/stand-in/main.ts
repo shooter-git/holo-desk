@@ -226,6 +226,7 @@ const CLAUDE_HELP = `Usage: claude [options] [command] [prompt]
   --append-system-prompt <prompt>       Append a system prompt
   --disable-slash-commands
   --effort <level>                      Effort level for the current session (low, medium, high)
+  --input-format <format>               Input format (only works with --print)
   --mcp-config <configs...>
   --model <model>                       Model for the current session. Provide
                                         an alias for the latest model (e.g.
@@ -239,6 +240,64 @@ const CLAUDE_HELP = `Usage: claude [options] [command] [prompt]
   --tools <tools...>`;
 
 const PREFIX = 'mcp__holo__';
+
+/** The models the stand-in's account may run, as Claude Code lists them at `initialize`. */
+const CLAUDE_MODELS = ['opus', 'sonnet'].map((alias) => ({
+  value: alias,
+  resolvedModel: `claude-${alias}-stand-in`,
+  displayName: `${alias.charAt(0).toUpperCase()}${alias.slice(1)} (stand-in)`,
+  supportsEffort: true,
+  supportedEffortLevels: ['low', 'medium', 'high'],
+}));
+
+/**
+ * Claude Code's answers as it starts, over its control channel: `initialize` (its models) and
+ * `get_usage` (what its account has left: the same as its runs say, some to spare). Anything else it's
+ * asked is an error, and it ends when its input does.
+ */
+function claudeHandshake(): Promise<number> {
+  return new Promise((done) => {
+    const lines = createInterface({ input: process.stdin });
+    const answer = (id: unknown, response: Record<string, unknown> | null) =>
+      say({
+        type: 'control_response',
+        response: response
+          ? { subtype: 'success', request_id: id, response }
+          : { subtype: 'error', request_id: id, error: 'Unknown request' },
+      });
+    const at = (minutes: number) => new Date(resets(minutes) * 1000).toISOString();
+    lines.on('line', (line) => {
+      let msg: unknown;
+      try {
+        msg = JSON.parse(line);
+      } catch {
+        return;
+      }
+      if (!isObject(msg) || msg.type !== 'control_request' || !isObject(msg.request)) return;
+      if (msg.request.subtype === 'initialize')
+        answer(msg.request_id, {
+          models: [{ ...CLAUDE_MODELS[0], value: 'default', displayName: 'Default (recommended)' }, ...CLAUDE_MODELS],
+          account: { email: 'stand-in@example.com', subscriptionType: 'Claude Max' },
+          claude_code_version: CLAUDE_VERSION,
+        });
+      else if (msg.request.subtype === 'get_usage')
+        answer(msg.request_id, {
+          subscription_type: 'max',
+          rate_limits_available: true,
+          rate_limits: {
+            five_hour: { utilization: 12, resets_at: at(300) },
+            seven_day: { utilization: 37, resets_at: at(10080) },
+            limits: [
+              { kind: 'session', group: 'session', percent: 12, resets_at: at(300), scope: null },
+              { kind: 'weekly_all', group: 'weekly', percent: 37, resets_at: at(10080), scope: null },
+            ],
+          },
+        });
+      else answer(msg.request_id, null);
+    });
+    lines.on('close', () => done(0));
+  });
+}
 
 async function claude(argv: readonly string[]): Promise<number> {
   if (argv.includes('--version')) {
@@ -268,6 +327,8 @@ async function claude(argv: readonly string[]): Promise<number> {
     console.error('The stand-in for Claude Code runs only as HO[LO] runs it (-p).');
     return 2;
   }
+  // asked of itself as it starts (a stream of JSON on stdin, no prompt): its models, and its account's limits
+  if (argv.includes('--input-format=stream-json')) return claudeHandshake();
   const prompt = await stdin();
   const session = option(argv, '--resume') ?? randomUUID();
   const alias = option(argv, '--model') ?? 'sonnet';

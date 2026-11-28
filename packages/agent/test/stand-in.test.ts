@@ -199,6 +199,33 @@ const HARNESSES: [string, (sb: Sandbox) => Harness, { model: string; effort: str
   ],
 ];
 
+describe('the stand-in as Claude Code, asked of itself as it starts', () => {
+  it('says its models, what each alias stands for and its account’s limits, with no request made', async () => {
+    s = sandbox();
+    const h = (HARNESSES[0] as (typeof HARNESSES)[number])[1](s);
+    const info = await h.info();
+    expect(info).toMatchObject({
+      found: true,
+      sealed: true,
+      signedIn: true,
+      models: ['opus', 'sonnet'],
+      efforts: ['low', 'medium', 'high'],
+      aliases: { opus: 'claude-opus-stand-in', sonnet: 'claude-sonnet-stand-in' },
+      mustChoose: true,
+      limits: {
+        groups: [
+          {
+            windows: [
+              { minutes: 10080, used: 0.37 },
+              { minutes: 300, used: 0.12 },
+            ],
+          },
+        ],
+      },
+    });
+  });
+});
+
 describe.each(HARNESSES)('the stand-in as %s', (_name, make, runsWith) => {
   const request = (text: string, over: { session?: string } = {}) =>
     anyJob(s, { ...runsWith, ...over, base, prompt: `## The request\n${text}\n` });

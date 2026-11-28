@@ -108,7 +108,7 @@ each harness lists its own on the host, the runner reports the result (`HarnessI
 
 | Harness | Models | Efforts | Read again |
 |---|---|---|---|
-| Claude Code | the aliases `--help` names for `--model`, plus `sonnet`, `opus`, `haiku` | the choices `--help` lists for `--effort` (`low…max` if it lists none) | with each new version (`--help` is read once per version) |
+| Claude Code | what it lists as it starts (its handshake, below: the account's aliases, then the older models by their full names); else the aliases `--help` names for `--model`, plus `sonnet`, `opus`, `haiku` | per model, from the same list; else the choices `--help` lists for `--effort` (`low…max` if it lists none) | at every look (one handshake); `--help` once per version |
 | Codex | `codex debug models` (visible ones; `--bundled` offline) | per model, from the same catalog (`ultra` left out) | with each new version, and when the catalog is an hour old |
 | Cursor | `cursor-agent models` | none: the model id carries it (`…-low`, `…[fast=true]`) | at every look |
 | Antigravity | `agy models`, each model's effort variants as one model | per model: its variants' endings (`low`, `medium`, `high`, `xhigh`, `max`) | at every look |
@@ -908,9 +908,45 @@ an API key has none):
   own `utilization` and `resetsAt`: one model's own week. The adapter reads it as a group of that
   model's when it comes; none was recorded. A window it names that isn't known here
   (`seven_day_overage_included`) is left out.
-- There's no command that prints them without a run, so they're as of the harness's last run, and a
-  harness that hasn't run yet shows none. They're kept between runs, for the account they were read
-  with.
+- They're also asked as it starts, without a run (its handshake, below), so a harness that hasn't
+  run yet shows them. Where that says nothing (an older Claude Code, an API key's account), they're as
+  of the harness's last run. They're kept between looks and runs, for the account they were read with.
+
+**Claude Code's handshake (2.1.322).** Started as a run is (`CLAUDE_HANDSHAKE_ARGS`: the same seal, in
+its probe folder) with `--input-format=stream-json`, Claude Code answers control requests on that
+stream, the channel its own Agent SDK uses, before any prompt. The adapter writes two, and never a
+prompt, so no request is made of a model (`readClaudeHandshake`); both answered in about a quarter of a
+second here.
+- `{"type":"control_request","request_id":…,"request":{"subtype":"initialize"}}` is answered with
+  `models`: `[{value, resolvedModel, displayName, supportsEffort?, supportedEffortLevels?}]`. `value` is
+  what `--model` takes: `default` (left out: a run is always given a model), the aliases (`opus`,
+  `fable`, `sonnet`, `haiku`), then older models by their full names. `resolvedModel` is what an alias
+  stands for now, so the Model menu says "Opus (9.1)" before any run (`HarnessInfo.aliases`, over what
+  runs said). `supportedEffortLevels` are that model's efforts (`modelEfforts`); one that lists none is
+  given what's chosen, as before. It also says the account (`email`, `subscriptionType`), which isn't
+  read: `claude auth status` says it.
+- `{…"request":{"subtype":"get_usage","skip_behaviors":true}}` is answered with
+  `rate_limits_available` and `rate_limits`. Its `limits` list is what's read:
+  `{kind:"session"|"weekly_all"|"weekly_scoped", percent, resets_at, scope}`, `percent` from 0 to 100
+  and `resets_at` an ISO time. `session` and `weekly_all` are the five hours and the week every model
+  shares; `weekly_scoped` is one model family's own week, named by `scope.model.display_name`
+  ("Fable"), kept as a group with the ids a run of that family is given (`LimitGroup.ids`: its alias,
+  and each listed model its vendor names for it), so the page's line and the chooser know which limit
+  a model counts against. Without that list, `five_hour` and `seven_day` (`utilization`, in percent
+  here). An API key's account says `rate_limits_available: false`.
+- **This request is its vendor's own, and marked experimental** (its SDK names the call
+  `usage_EXPERIMENTAL_MAY_CHANGE_…`). So everything is read as it may not be: a share that isn't 0 to
+  100, a kind that isn't known, a family with no name say nothing; `get_usage` refused or unanswered
+  leaves the models as listed and the limits as the runs say them.
+- **Should it ever do what a turn does** (an `assistant`, `stream_event`, `result` or `user` line: it
+  never has), it's stopped at once and nothing it said is kept.
+- **The fallback is what was there before.** A Claude Code whose `--help` doesn't name
+  `--input-format` is never started for it; one that doesn't answer `initialize` in 15 s isn't asked
+  again for ten minutes. Either way the models and efforts are `--help`'s and the limits its runs'.
+- One handshake answers everything a look asks (models, efforts, aliases, limits). It isn't made
+  after each run: the run's own `rate_limit_event` says what's left then.
+- It still lists no default model or effort that HO[LO] takes, so a request is still given both
+  (`mustChoose`).
 - The plan is `claude auth status --json`'s `subscriptionType`.
 - A run's `result` has `usage`: `input_tokens` (not from the cache), `cache_creation_input_tokens`
   (counted as read anew), `cache_read_input_tokens` and `output_tokens`, the run's own.
@@ -1260,6 +1296,7 @@ Nothing else starts it, and a runner without those variables never sees it.
   host's unchanged, and back to Settings' from the bar's command), a request out of usage for a
   few seconds, asked to carry on when its limit starts again (it does, by itself, as one exchange),
   and requests sent while one works (they wait, start in order, and are held behind one that fails
-  until Send). CI runs it as the `agent` job. The runner it
+  until Send). The stand-in answers Claude Code's handshake too, so the page's line has its limits
+  before any request. CI runs it as the `agent` job. The runner it
   starts has a home and a cache of its own and only Node's and the system's folders on its PATH, so the
   harnesses installed on the computer aren't signed in to or run.

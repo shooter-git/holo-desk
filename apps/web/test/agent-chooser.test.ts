@@ -238,6 +238,10 @@ describe('where a conversation changed hands', () => {
     expect(movedLine(a, { harness: 'claude', model: 'sonnet', effort: 'high' })).toBe(
       'Continued with Claude Code, Sonnet at high',
     );
+    // a Claude model by its full name, as people say it
+    expect(movedLine(a, { harness: 'claude', model: 'claude-fable-9-1', effort: 'high' })).toBe(
+      'Continued with Claude Code, Fable 9.1 at high',
+    );
     // the same harness and model (another effort is Settings' everyday business): nothing
     expect(movedLine(a, { harness: 'claude', model: 'opus', effort: 'low' })).toBeNull();
     // one of them not known (a request on its way, a turn from before this was kept)

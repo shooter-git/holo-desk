@@ -22,7 +22,7 @@ import {
   type HarnessId,
   type HarnessInfo,
 } from '../app/agent.ts';
-import { caution, effortsFor, inUse, runsWith, runsWithText, shown, toChoose } from './harness-row.ts';
+import { caution, effortsFor, inUse, modelSaid, runsWith, runsWithText, toChoose } from './harness-row.ts';
 import { type Clock, meter, startsAgain } from './harness-usage.ts';
 
 type Told = Pick<AgentState, 'settings' | 'thread' | 'harness'>;
@@ -140,11 +140,11 @@ function leftFor(h: HarnessInfo, model: string, effort: string, c: Clock): Left 
 
 /** The model and effort a run uses, in the menus' own names: what's chosen, else the harness's default when it says. */
 function named(h: HarnessInfo | null, model: string, effort: string): { model: string; effort: string } {
-  if (!h) return { model: model ? shown(model) : '', effort };
+  if (!h) return { model: model ? modelSaid(model) : '', effort };
   const r = runsWith(h, model, effort);
   // (an alias keeps its own name: "Opus", not what it last stood for)
   const name = r.defaultModel ? (r.model ?? '') : model;
-  return { model: name ? shown(name) : '', effort: r.effort ?? '' };
+  return { model: name ? modelSaid(name) : '', effort: r.effort ?? '' };
 }
 
 /** The header's line: what the conversation runs with, then what's left (in the warning colour when `warn`). */
@@ -192,7 +192,7 @@ export function movedLine(
 ): string | null {
   if (!before.harness || !ex.harness) return null;
   if (before.harness === ex.harness && before.model === ex.model) return null;
-  const model = ex.model ? `, ${shown(ex.model)}` : '';
+  const model = ex.model ? `, ${modelSaid(ex.model)}` : '';
   return `Continued with ${HARNESS_NAME[ex.harness]}${model}${ex.effort ? ` at ${ex.effort}` : ''}`;
 }
 

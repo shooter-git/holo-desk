@@ -106,9 +106,12 @@ export interface Spec {
   efforts(ctx: Context, model?: string): Promise<string[]>;
   /**
    * What a run uses when it's given no model or no effort, as the harness lists it: its default model,
-   * and each model's own effort.
+   * and each model's own effort; and what its aliases stand for now, when it says (`aliases`: over
+   * what its runs said of them).
    */
-  defaults?(ctx: Context): Promise<{ model?: string; efforts?: Record<string, string> }>;
+  defaults?(
+    ctx: Context,
+  ): Promise<{ model?: string; efforts?: Record<string, string>; aliases?: Record<string, string> } | null>;
   /**
    * It lists no defaults (Claude Code): a job without a model and an effort is refused, rather than run
    * with whatever the harness picks (`HarnessInfo.mustChoose`).
@@ -120,6 +123,8 @@ export interface Spec {
    * harness without it has only what its runs say (`Seen`'s `limits`), or nothing.
    */
   limits?(ctx: Context): Promise<LimitsRead | null>;
+  /** Its runs say what the account has left themselves (Claude Code): it isn't asked again after each one. */
+  limitsFromRuns?: boolean;
   /**
    * What the error in the harness's own result means, where its words are plain and fixed: the account
    * is out of usage, or the harness is signed out. Null for anything else, a rate limit that passes
@@ -459,7 +464,7 @@ export function defineHarness(spec: Spec, o: AdapterOptions): Harness {
     if (cached && cached.sealed !== true) memory.set(sealKey, undefined);
   };
   /** The defaults the last look listed (`spec.defaults`), and the account it was signed in with. */
-  let listed: { model?: string; efforts?: Record<string, string> } | null = null;
+  let listed: { model?: string; efforts?: Record<string, string>; aliases?: Record<string, string> } | null = null;
   let account: string | undefined;
   const saidKey = `aliases:${spec.id}`;
 
@@ -509,7 +514,13 @@ export function defineHarness(spec: Spec, o: AdapterOptions): Harness {
       Object.entries(listed?.efforts ?? {}).filter(([m, e]) => MODEL.test(m) && MODEL.test(e)),
     );
     if (Object.keys(efforts).length) out.defaultEfforts = efforts;
-    const aliases = aliasesSaid();
+    // (what the harness lists now, over what its runs said: an alias moves on with a new model)
+    const aliases = {
+      ...aliasesSaid(),
+      ...Object.fromEntries(
+        Object.entries(listed?.aliases ?? {}).filter(([name, model]) => MODEL.test(name) && MODEL.test(model)),
+      ),
+    };
     if (Object.keys(aliases).length) out.aliases = aliases;
     return out;
   }
@@ -857,7 +868,7 @@ export function defineHarness(spec: Spec, o: AdapterOptions): Harness {
       /** A failure had them asked already (to say why it failed): they aren't asked again a moment later. */
       let askedLimits = false;
       const limitsAfter = (ctx: Context) => {
-        if (!spec.limits || cancelled || askedLimits) return;
+        if (!spec.limits || spec.limitsFromRuns || cancelled || askedLimits) return;
         void spec
           .limits(ctx)
           .then((read) => {

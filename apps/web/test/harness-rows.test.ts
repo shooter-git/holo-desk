@@ -15,6 +15,7 @@ import {
   installQuestion,
   inUse,
   modelName,
+  modelSaid,
   runsWith,
   runsWithText,
   toChoose,
@@ -129,7 +130,8 @@ describe('a harness its vendor doesn’t support HO[LO] running', () => {
     expect(runsWithText(h, 'gemini-3.8-flash', 'high')).toBe('Gemini-3.8-flash at high effort');
     // its effort comes with it: none is said, whatever was saved
     expect(runsWith(h, 'claude-sonnet-4-6', 'high')).toMatchObject({ effort: null, effortInModel: true });
-    expect(runsWithText(h, 'claude-sonnet-4-6', 'high')).toBe('Claude-sonnet-4-6');
+    // (a Claude model's full name, as people say it)
+    expect(runsWithText(h, 'claude-sonnet-4-6', 'high')).toBe('Sonnet 4.6');
     // one it doesn't take: its own default
     expect(runsWithText(h, 'gpt-oss-120b', 'low')).toBe('Gpt-oss-120b at Antigravity’s default effort');
   });
@@ -349,6 +351,20 @@ describe('the model and effort pickers', () => {
     ]);
     expect(modelName('claude-fable-9-12')).toBe('Fable 9.12');
     expect(modelName('gpt-6.1-sol')).toBe('gpt-6.1-sol');
+  });
+
+  it('name a Claude model’s full id as people say it, where the harness lists those beside its aliases', () => {
+    // (as Claude Code lists what an account may run: its aliases, then older models by their full names)
+    const aliases = { opus: 'claude-opus-9-1', fable: 'claude-fable-9-2' };
+    expect(choices(['opus', 'fable', 'claude-fable-9-1', 'claude-haiku-8-5-20990101'], '', aliases)).toEqual([
+      { value: 'opus', label: 'Opus (9.1)' },
+      { value: 'fable', label: 'Fable (9.2)' },
+      { value: 'claude-fable-9-1', label: 'Fable 9.1' },
+      { value: 'claude-haiku-8-5-20990101', label: 'Haiku 8.5' },
+    ]);
+    expect(modelSaid('claude-fable-9-1')).toBe('Fable 9.1');
+    expect(modelSaid('opus')).toBe('Opus');
+    expect(modelSaid('gpt-6.1-sol')).toBe('Gpt-6.1-sol');
   });
 });
 

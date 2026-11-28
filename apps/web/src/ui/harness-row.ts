@@ -137,6 +137,15 @@ export function modelName(full: string): string {
   return m?.[1] && m[2] ? `${shown(m[1])} ${m[2]}${m[3] ? `.${m[3]}` : ''}` : full;
 }
 
+/**
+ * A model as a menu or a line names it: an alias or any other name as it is, capitalised ("Opus",
+ * "Gpt-6.1-sol"), and a Claude model's full name as people say it ("claude-fable-9-1" is "Fable 9.1").
+ */
+export function modelSaid(name: string): string {
+  const said = modelName(name);
+  return said !== name ? said : shown(name);
+}
+
 /** An alias in its menu once a run has said what it stands for: "Opus (9.1)", its version alone when it's its own family. */
 function aliasLabel(alias: string, full: string): string {
   const name = shown(alias);
@@ -210,7 +219,7 @@ export function runsWithText(h: HarnessInfo, model: string, effort: string): str
   if (r.effortInModel && r.model.toLowerCase() === 'auto') return `Auto: ${h.name} chooses the model`;
   // an alias moves on with each new model (Claude Code's opus): what it last ran as
   const alias = !r.defaultModel && r.model !== model;
-  const name = shown(alias ? model : r.model);
+  const name = modelSaid(alias ? model : r.model);
   const said = r.effortInModel
     ? name
     : r.effort
@@ -221,7 +230,7 @@ export function runsWithText(h: HarnessInfo, model: string, effort: string): str
 
 /** The label of a picker's empty choice: what the harness's default is when that's known, then whose. */
 export function defaultLabel(h: HarnessInfo, value: string | null): string {
-  return value ? `${shown(value)} (${h.name}’s default)` : `${h.name}’s default`;
+  return value ? `${modelSaid(value)} (${h.name}’s default)` : `${h.name}’s default`;
 }
 
 /**
@@ -236,7 +245,7 @@ export function choices(
 ): { value: string; label: string; gone?: true }[] {
   const out: { value: string; label: string; gone?: true }[] = list.map((v) => {
     const full = aliases[v];
-    return { value: v, label: full && full !== v ? aliasLabel(v, full) : shown(v) };
+    return { value: v, label: full && full !== v ? aliasLabel(v, full) : modelSaid(v) };
   });
   if (saved && !list.includes(saved))
     out.push({ value: saved, label: `${shown(saved)} (no longer offered)`, gone: true });

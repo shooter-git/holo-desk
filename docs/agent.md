@@ -247,8 +247,10 @@ says what its account has left and what the requests through HO[LO] used:
 - A harness that doesn't report what's left says so, with its plan, a link to its vendor's own usage
   page, and the requests through HO[LO] in a line: "Pro+ plan · Cursor doesn't report what's left of
   its plan: see Cursor's usage page".
-- Claude Code says what's left only with a request, so before its first one its row says it shows
-  after the next. The others are asked as Settings › Agent opens.
+- Every harness that says what's left is asked as Settings › Agent opens, Claude Code as it starts
+  (its handshake: docs/agent-harnesses.md). Where Claude Code can't be asked so (an older version),
+  it says what's left only with a request, and before its first one its row says it shows after the
+  next.
 - A harness that isn't installed says nothing; one signed out, only what was counted.
 
 Outside Settings › Agent, one place says anything of it: the line under the agent's page's header
@@ -1209,7 +1211,7 @@ button and the swipe down all bring it; a second press of the slash button puts 
   harness's own word: its last request here refused for it, till a time still ahead, or with no time
   said). A share read an hour ago or more says so ("63% left, read 3 h ago"): the account may have
   been used since. Nothing is said of usage where nothing is known: a harness that reports none,
-  Claude Code before its first request, a limit that has started again since it was read. The harness
+  an older Claude Code before its first request, a limit that has started again since it was read. The harness
   is the one a request would run with, as the host decides it: one named that no runner has now is
   still named, with "not on the host now". As the page opens the host is asked to look at
   its harnesses' limits again, as Settings › Agent asks it (`…/harnesses/look`: the host sees to how

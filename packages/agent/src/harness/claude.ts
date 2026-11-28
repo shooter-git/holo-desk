@@ -29,12 +29,27 @@ import {
   serverFor,
 } from './adapter.ts';
 import { CLAUDE_ENV, harnessEnv } from './env.ts';
-import { candidates, capture, findBinary, home, plain } from './process.ts';
-import { type Harness, type Job, MODEL } from './types.ts';
+import {
+  candidates,
+  capture,
+  eachLine,
+  findBinary,
+  home,
+  plain,
+  type SpawnOptions,
+  start,
+  stopGroup,
+} from './process.ts';
+import { type Binary, type Harness, type Job, MODEL } from './types.ts';
 import { claudeFiles, privateDir } from './workspace.ts';
 
 /** The efforts when `--help` doesn't list them (it does: "--effort <level> … (low, medium, …)"). */
 export const CLAUDE_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
+
+/** How long one handshake answers for (a look asks its models, efforts, aliases and limits at once). */
+const HANDSHAKE_FRESH_MS = 20_000;
+/** How long a version that didn't answer isn't asked again. */
+const HANDSHAKE_QUIET_MS = 10 * 60_000;
 
 /** The aliases every recent Claude Code takes; `--help` may name newer ones. */
 const ALIASES = ['sonnet', 'opus', 'haiku'];
@@ -259,6 +274,185 @@ export function parseClaudeAuth(stdout: string): { signedIn: boolean; account?: 
   }
 }
 
+// ---- the handshake: what Claude Code says of itself as it starts, with no request made ----
+//
+// Started as a run is (the same seal), with its input a stream of JSON it's never given a prompt on,
+// Claude Code answers two questions over that stream (the control channel its own SDK uses): at
+// `initialize`, the models the account may run, what each alias stands for and the efforts each takes;
+// at `get_usage`, what the account has left. Neither calls a model. `get_usage` is marked
+// experimental by its vendor, so everything here is read as it may not be: anything unexpected is no
+// answer, and the adapter goes on as it did before (the models and efforts `--help` names, the limits
+// its runs say).
+
+/** The argv of the handshake: sealed as a run, reading JSON on stdin (on which no prompt is ever written). */
+export const CLAUDE_HANDSHAKE_ARGS: readonly string[] = [
+  '-p',
+  '--input-format=stream-json',
+  '--output-format=stream-json',
+  '--verbose',
+  '--tools=',
+  '--strict-mcp-config',
+  '--mcp-config={"mcpServers":{}}',
+  '--permission-mode=dontAsk',
+  '--setting-sources=project',
+  '--disable-slash-commands',
+  '--no-chrome',
+];
+
+/** A model as `initialize` lists it: its name for `--model`, what it stands for, its efforts, its vendor's name. */
+export interface ClaudeModel {
+  value: string;
+  resolved?: string;
+  efforts?: string[];
+  display?: string;
+}
+
+/** What a handshake answered: its models (none: `initialize` said none it could read), and the account's limits. */
+export interface ClaudeHandshake {
+  models: ClaudeModel[];
+  limits: LimitsRead | null;
+}
+
+/** The models `initialize` lists, as they should be: names a run can be given (`default` isn't one), at most 60. */
+export function parseClaudeModels(response: unknown): ClaudeModel[] {
+  if (!isObject(response) || !Array.isArray(response.models)) return [];
+  const out: ClaudeModel[] = [];
+  for (const m of response.models.slice(0, 120)) {
+    if (!isObject(m) || typeof m.value !== 'string' || !MODEL.test(m.value) || m.value === 'default') continue;
+    if (out.some((o) => o.value === m.value)) continue;
+    const model: ClaudeModel = { value: m.value };
+    if (typeof m.resolvedModel === 'string' && MODEL.test(m.resolvedModel)) model.resolved = m.resolvedModel;
+    if (Array.isArray(m.supportedEffortLevels)) {
+      const efforts = m.supportedEffortLevels.filter(
+        (e): e is string => typeof e === 'string' && /^[a-z][a-z0-9-]{0,19}$/.test(e),
+      );
+      if (efforts.length) model.efforts = [...new Set(efforts)].slice(0, 12);
+    }
+    if (typeof m.displayName === 'string' && m.displayName.length <= 60) model.display = m.displayName;
+    out.push(model);
+    if (out.length === 60) break;
+  }
+  return out;
+}
+
+/** A time as `get_usage` writes it (ISO 8601), in ms; undefined when it isn't one. */
+function isoTime(raw: unknown): number | undefined {
+  const at = typeof raw === 'string' ? Date.parse(raw) : Number.NaN;
+  return Number.isFinite(at) ? at : undefined;
+}
+
+/** A share `get_usage` gives in percent (0 to 100), as a window. */
+function percentWindow(minutes: number, percent: unknown, resets: unknown): LimitWindow | null {
+  if (typeof percent !== 'number' || !Number.isFinite(percent) || percent < 0 || percent > 100) return null;
+  const at = isoTime(resets);
+  return { minutes, used: percent / 100, ...(at === undefined ? {} : { resets: at }) };
+}
+
+/**
+ * What `get_usage` says the account has left (a claude.ai sign-in's; an API key has none:
+ * `rate_limits_available` false). Its `limits` list is read where it's there: the session's five hours
+ * and the week every model shares, and each week that's one model family's own (`weekly_scoped`, named
+ * by `scope.model.display_name`: "Fable"), with the ids of `models` that family's are run by. Without
+ * that list, its `five_hour` and `seven_day` (`utilization` in percent). Null when it says none of it
+ * as expected.
+ */
+export function parseClaudeUsage(response: unknown, models: readonly ClaudeModel[] = []): LimitsRead | null {
+  if (!isObject(response) || response.rate_limits_available !== true || !isObject(response.rate_limits)) return null;
+  const rl = response.rate_limits;
+  const shared: LimitWindow[] = [];
+  const groups: LimitGroup[] = [];
+  const listed = Array.isArray(rl.limits) ? rl.limits.filter(isObject) : [];
+  for (const l of listed.slice(0, 24)) {
+    if (l.kind === 'session' || l.kind === 'weekly_all') {
+      const minutes = l.kind === 'session' ? 300 : 10080;
+      const w = shared.some((s) => s.minutes === minutes) ? null : percentWindow(minutes, l.percent, l.resets_at);
+      if (w) shared.push(w);
+    } else if (l.kind === 'weekly_scoped') {
+      const scope = isObject(l.scope) && isObject(l.scope.model) ? l.scope.model : null;
+      const name = scope && typeof scope.display_name === 'string' ? scope.display_name.trim().slice(0, 40) : '';
+      const w = name ? percentWindow(10080, l.percent, l.resets_at) : null;
+      if (!w || groups.some((g) => g.models?.[0] === name)) continue;
+      // the ids a run of that family is given: its alias, and each model its vendor names for it
+      const family = name.toLowerCase();
+      const ids = models
+        .filter((m) => m.value.toLowerCase() === family || m.display?.toLowerCase().startsWith(`${family} `))
+        .flatMap((m) => [m.value, ...(m.resolved ? [m.resolved] : [])]);
+      groups.push({
+        name: `${name} models`,
+        models: [name],
+        ...(ids.length ? { ids: [...new Set(ids)] } : {}),
+        windows: [w],
+      });
+    }
+  }
+  if (!listed.length)
+    for (const [key, minutes] of Object.entries(CLAUDE_WINDOWS)) {
+      const raw = rl[key];
+      const w = isObject(raw) ? percentWindow(minutes, raw.utilization, raw.resets_at) : null;
+      if (w) shared.push(w);
+    }
+  if (shared.length) groups.unshift({ windows: shared });
+  return groups.length ? { groups } : null;
+}
+
+/** What Claude Code writes when a model is at work, or a turn was taken: never expected of a handshake. */
+const MODEL_AT_WORK: ReadonlySet<string> = new Set(['assistant', 'stream_event', 'result', 'user']);
+
+/**
+ * The handshake: Claude Code is started sealed, asked `initialize` and then `get_usage`, and stopped.
+ * Nothing else is ever written to it, so no request is made of a model; should it write anything a
+ * turn would (it never has), it's stopped at once and nothing it said is kept. Null when it didn't
+ * answer `initialize` in time; its limits are null when only `get_usage` didn't.
+ */
+export function readClaudeHandshake(
+  bin: Binary,
+  where: SpawnOptions,
+  timeoutMs = 15_000,
+): Promise<ClaudeHandshake | null> {
+  return new Promise((resolve) => {
+    const child = start(bin, [...CLAUDE_HANDSHAKE_ARGS], where);
+    let over = false;
+    let models: ClaudeModel[] | null = null;
+    const end = (found: ClaudeHandshake | null) => {
+      if (over) return;
+      over = true;
+      clearTimeout(limit);
+      child.stdin?.end();
+      stopGroup(child, 500);
+      resolve(found);
+    };
+    // (out of time: what `initialize` said stands, without limits)
+    const limit = setTimeout(() => end(models ? { models, limits: null } : null), timeoutMs);
+    limit.unref?.();
+    const ask = (id: string, subtype: string, more: Record<string, unknown> = {}) =>
+      child.stdin?.write(
+        `${JSON.stringify({ type: 'control_request', request_id: id, request: { subtype, ...more } })}\n`,
+      );
+    eachLine(child.stdout, (line) => {
+      let msg: unknown;
+      try {
+        msg = JSON.parse(line);
+      } catch {
+        return;
+      }
+      if (!isObject(msg)) return;
+      if (typeof msg.type === 'string' && MODEL_AT_WORK.has(msg.type)) return end(null);
+      if (msg.type !== 'control_response' || !isObject(msg.response)) return;
+      const { request_id: id, subtype, response } = msg.response;
+      if (id === 'holo_init') {
+        if (subtype !== 'success') return end(null);
+        models = parseClaudeModels(response);
+        ask('holo_usage', 'get_usage', { skip_behaviors: true });
+      } else if (id === 'holo_usage' && models)
+        end({ models, limits: subtype === 'success' ? parseClaudeUsage(response, models) : null });
+    });
+    child.stdin?.on('error', () => undefined);
+    child.on('error', () => end(null));
+    child.on('close', () => end(models ? { models, limits: null } : null));
+    ask('holo_init', 'initialize');
+  });
+}
+
 /** The model aliases `--help` names ("e.g. 'fable', 'opus', or 'sonnet'"), with the usual ones. */
 export function claudeModels(help: string): string[] {
   const line = /--model <model>[\s\S]{0,400}?\)/.exec(help)?.[0] ?? '';
@@ -302,6 +496,38 @@ export function claudeSpec(): Spec {
   };
   const envFor = (ctx: Context, extra: Readonly<Record<string, string>> = CLAUDE_ENV) =>
     harnessEnv('claude', extra, ctx.env, ctx.platform);
+  // The handshake (above): one answers every question of a look (models, efforts, aliases, limits),
+  // and a later one is made when the limits are asked again. What a version's last good one said of
+  // its models stands until the next; a version that didn't answer isn't asked again for a while, and
+  // the adapter goes on as it did before it (`--help`'s lists, the limits its runs say).
+  let shake: { version: string | null; at: number; value: Promise<ClaudeHandshake | null> } | null = null;
+  let good: { version: string | null; models: ClaudeModel[] } | null = null;
+  let silent: { version: string | null; at: number } | null = null;
+  const handshake = (ctx: Context): Promise<ClaudeHandshake | null> => {
+    const now = Date.now();
+    if (shake && shake.version === ctx.version && now - shake.at < HANDSHAKE_FRESH_MS) return shake.value;
+    if (silent && silent.version === ctx.version && now - silent.at < HANDSHAKE_QUIET_MS) return Promise.resolve(null);
+    // (kept at once, before anything is waited for: what's asked meanwhile shares this one)
+    const value = helpText(ctx)
+      // a Claude Code from before the stream of JSON it's asked on has nothing to ask
+      .then((help) => (/--input-format\b/.test(help) ? readClaudeHandshake(ctx.bin, probe(ctx)) : null))
+      .then(
+        (found) => {
+          if (found?.models.length) good = { version: ctx.version, models: found.models };
+          if (!found) silent = { version: ctx.version, at: Date.now() };
+          return found;
+        },
+        () => null,
+      );
+    shake = { version: ctx.version, at: now, value };
+    return value;
+  };
+  /** The models the handshake listed for this version (the last good one's, when this one said none). */
+  const listed = async (ctx: Context): Promise<ClaudeModel[]> => {
+    const found = await handshake(ctx).catch(() => null);
+    if (found?.models.length) return found.models;
+    return good && good.version === ctx.version ? good.models : [];
+  };
   return {
     id: 'claude',
     name: 'Claude Code',
@@ -348,11 +574,37 @@ export function claudeSpec(): Spec {
         : { sealed: true };
     },
     async models(ctx) {
-      return claudeModels(await helpText(ctx));
+      // what the account may run, as Claude Code lists it as it starts; else the aliases `--help` names
+      const models = await listed(ctx);
+      return models.length ? models.map((m) => m.value) : claudeModels(await helpText(ctx));
     },
-    async efforts(ctx) {
-      return claudeEfforts(await helpText(ctx));
+    async efforts(ctx, model) {
+      const models = await listed(ctx);
+      const all = claudeEfforts(await helpText(ctx));
+      if (!models.length) return all;
+      // a model's own, where it lists them; else every effort any of them takes (one that lists none
+      // is given what's chosen, as before: Claude Code takes or leaves it)
+      const own = model ? models.find((m) => m.value === model)?.efforts : undefined;
+      if (own?.length) return own;
+      const any = [...new Set(models.flatMap((m) => m.efforts ?? []))];
+      return any.length ? any : all;
     },
+    // what each alias stands for now ("opus" is claude-opus-…), as it lists them: no default model or
+    // effort (below)
+    async defaults(ctx) {
+      const aliases = Object.fromEntries(
+        (await listed(ctx))
+          .filter((m) => m.resolved && m.resolved !== m.value)
+          .map((m) => [m.value, m.resolved as string]),
+      );
+      return Object.keys(aliases).length ? { aliases } : null;
+    },
+    // what the account has left, asked as it starts (a claude.ai sign-in's): its runs say it too, so
+    // it's asked at a look, not after each of them
+    async limits(ctx) {
+      return (await handshake(ctx).catch(() => null))?.limits ?? null;
+    },
+    limitsFromRuns: true,
     // it lists no defaults (they follow the account, and Anthropic's own list): a run is given both,
     // and each run's `init` says what its alias stood for
     mustChoose: true,

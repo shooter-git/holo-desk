@@ -718,19 +718,34 @@ A new version is started with care (`startNew` in tools/update.mjs):
   server makes the copy from its open database with SQLite's online backup (`Store.backup`,
   apps/server/src/backup.ts), so it's whole whatever is being saved meanwhile: `backups/holo-<version>-<UTC
   time>.db` in the data folder, written under another name until it's whole, readable by its owner
-  only, the newest three kept. It answers 507, having written nothing, when the disk hasn't room for
-  the database, its write-ahead log and 64 MB to spare; the update says so and goes on without a copy.
-  A server that doesn't answer is stopped (the new version is about to take its place) and the copy is
-  made from the host, the same way. A server from before copies answers 404: the update says the next
+  only. It answers 507, having written nothing, when the disk hasn't room for the database, its
+  write-ahead log and 64 MB to spare; the update says so and goes on without a copy. Only files named
+  that way are ever let go (the newest three are kept, and what a copy cut short left): anything else
+  someone keeps in the folder stays. A server from before copies answers 404: the update says the next
   one is copied first.
+- **A server that answers is never stopped for a copy.** If the runner key can't be read, or the copy
+  doesn't come, the update says so and goes on without one. Only a server that isn't answering
+  `/api/health` at all is stopped (the new version is about to take its place), and the copy made from
+  the host with the same backup: `backups/holo-before-update-<UTC time>.db`, when the host's Node has
+  it (22.16 or later). `pnpm run update` with HO[LO] stopped copies that way too, and `pnpm run up`
+  asks for a copy before it builds.
 - **The version before is kept at hand.** The image the container runs is tagged `holo-desk:previous`
   before the new one starts.
-- **A version that doesn't answer is undone.** The updater waits three minutes (`HOLO_UPDATE_WAIT_S`)
-  for `/api/health` from a container running the new image. Without it, `.env` is set to
-  `HOLO_IMAGE=holo-desk:previous` and `HOLO_ROLLED_BACK_FROM=<the image's id>`, and the version before
-  is started again; the look ends as failed, the checkout and the runner stay where they were. From
-  then on each look fetches the channel's image and goes forward only to another one than that id;
-  `pnpm run update`, by hand, tries the channel's image again whatever it is. This relies on a database
-  a newer version has opened still being one the version before reads: changes to its tables are
-  additions (a new table, a new column that may be empty), never a change to what's there.
+- **A version that can't be started, or doesn't answer, is undone.** The updater waits three minutes
+  (`HOLO_UPDATE_WAIT_S`, in seconds, in the environment or `.env`) for `/api/health` from a container
+  running the new image. Without it, or when Docker couldn't start the container at all, `.env` is set
+  to `HOLO_IMAGE=holo-desk:previous`, with `HOLO_ROLLED_BACK_FROM` (that image's id) and
+  `HOLO_ROLLED_BACK_IMAGE` (the image it was following), and the version before is started again; the
+  look ends as failed, the checkout and the runner stay where they were. From then on each look
+  fetches the image it was following and goes forward only to another one than that id; `pnpm run
+  update`, by hand, tries the channel's image again whatever it is, once it could be fetched.
+- **Never on a guess.** Silence counts as "didn't start" only when the version before could be heard
+  on `/api/health` just before the update. Where it couldn't (HO[LO]'s port isn't reachable from where
+  the updater runs, HO[LO] was stopped), the new version is started as it always was, and the update
+  says it wasn't checked.
+- A look asks whether HO[LO] is busy before it fetches, and again after the copy, just before it starts
+  the new version.
+- Going back relies on a database a newer version has opened still being one the version before reads:
+  changes to its tables are additions (a new table, a new column that may be empty), never a change to
+  what's there.
 - A copy is never put back by itself: that's done by hand (the README says how).

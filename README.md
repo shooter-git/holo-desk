@@ -189,8 +189,9 @@ change merged, `sha-<commit>` always. The timer looks every 15 minutes and never
 studio is playing or recording, the host is making a bounce, or the agent is working on a request; an
 open studio offers to reload when its host has been updated. Songs
 and packs live in `./data`, outside the image, so an update never touches them. Before a new version
-starts, the songs' database is copied to `data/backups` (the last three kept; with no room on the disk
-the update says so and goes on), and a version that doesn't answer within three minutes is undone:
+starts, the songs' database is copied to `data/backups` (the last three kept, and nothing else you keep
+there is touched; with no room on the disk the update says so and goes on), and a version that doesn't
+start, or doesn't answer within three minutes, is undone:
 HO[LO] goes back to the one before, and waits for a newer one (`journalctl --user -u holo-update` says
 what happened; `pnpm run update` tries again by hand). A copy is only ever put back by hand: stop
 HO[LO] (`pnpm down`), put it in `data` as `holo.db`, with no `holo.db-wal` or `holo.db-shm` beside it,

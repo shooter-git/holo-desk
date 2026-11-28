@@ -15,6 +15,7 @@ import {
   omrImage,
   omrOn,
   PREVIOUS,
+  plainValue,
   runnerPath,
   runnerUnit,
   startNew,
@@ -191,16 +192,23 @@ describe('the recognition engines', () => {
 });
 
 /** What `startNew` is given, with what it did written down: the version started answers or not, as told. */
-function starting(o: { answers: boolean[]; tags?: boolean }) {
+function starting(o: { answers: boolean[]; tags?: boolean; heard?: boolean; busy?: boolean; up?: (string | null)[] }) {
   const did: string[] = [];
   const env: Record<string, string> = {};
   const answers = [...o.answers];
+  // (each start in turn: null goes well, words are what Docker said of one that didn't)
+  const ups = [...(o.up ?? [])];
   return {
     did,
     env,
     d: {
+      heard: async () => o.heard ?? true,
       copy: async () => {
         did.push('copy');
+      },
+      ...(o.busy === undefined ? {} : { busy: async () => o.busy as boolean }),
+      before: () => {
+        did.push('before');
       },
       tag: (id: string) => {
         did.push(`tag ${id}`);
@@ -208,6 +216,8 @@ function starting(o: { answers: boolean[]; tags?: boolean }) {
       },
       up: () => {
         did.push(`up ${env.HOLO_IMAGE ?? 'new'}`);
+        const wrong = ups.shift();
+        if (wrong) throw new Error(wrong);
       },
       answers: async (image: string | null) => {
         did.push(`answers? ${image}`);
@@ -228,17 +238,22 @@ describe('starting a new version', () => {
   it('copies the database, keeps the version before at hand, then starts it', async () => {
     const s = starting({ answers: [true] });
     expect(await startNew(s.d, 'repo:stable', 'sha256:old')).toBe('started');
-    expect(s.did).toEqual(['copy', 'tag sha256:old', 'up new', 'answers? sha256:new']);
+    expect(s.did).toEqual(['copy', 'tag sha256:old', 'before', 'up new', 'answers? sha256:new']);
     expect(s.env).toEqual({});
   });
 
   it('goes back to the version before when the new one doesn’t answer, and notes which didn’t start', async () => {
     const s = starting({ answers: [false, true] });
     expect(await startNew(s.d, 'repo:stable', 'sha256:old')).toBe('back');
-    expect(s.env).toEqual({ HOLO_IMAGE: PREVIOUS, HOLO_ROLLED_BACK_FROM: 'sha256:new' });
+    expect(s.env).toEqual({
+      HOLO_IMAGE: PREVIOUS,
+      HOLO_ROLLED_BACK_FROM: 'sha256:new',
+      HOLO_ROLLED_BACK_IMAGE: 'repo:stable',
+    });
     expect(s.did.filter((l) => !l.startsWith('log '))).toEqual([
       'copy',
       'tag sha256:old',
+      'before',
       'up new',
       'answers? sha256:new',
       `up ${PREVIOUS}`,
@@ -262,6 +277,49 @@ describe('starting a new version', () => {
     expect(await startNew(kept.d, 'repo:stable', 'sha256:old')).toBe('down');
     expect(kept.env).toEqual({});
     expect(kept.did.filter((l) => l.startsWith('up '))).toEqual(['up new']);
+  });
+
+  it('never undoes a version on a guess: where HO[LO] couldn’t be heard before, the new one isn’t judged by its silence', async () => {
+    const s = starting({ answers: [false], heard: false });
+    expect(await startNew(s.d, 'repo:stable', 'sha256:old')).toBe('started');
+    expect(s.env).toEqual({});
+    expect(s.did.some((l) => l.startsWith('answers?'))).toBe(false);
+    expect(s.did.at(-1)).toMatch(/^log HO\[LO\] couldn’t be heard from here before this update/);
+    // (a first start, or HO[LO] stopped on purpose: nothing was running to be heard, and nothing is said)
+    const first = starting({ answers: [], heard: false });
+    expect(await startNew(first.d, 'repo:stable', null)).toBe('started');
+    expect(first.did.some((l) => l.startsWith('log '))).toBe(false);
+  });
+
+  it('goes back when the new version can’t be started at all, heard before or not', async () => {
+    for (const heard of [true, false]) {
+      const s = starting({ answers: [true], heard, up: ['exec format error'] });
+      expect(await startNew(s.d, 'repo:stable', 'sha256:old')).toBe('back');
+      expect(s.env).toMatchObject({ HOLO_IMAGE: PREVIOUS, HOLO_ROLLED_BACK_FROM: 'sha256:new' });
+      expect(s.did.some((l) => /^log The new version couldn’t be started \(exec format error\)/.test(l))).toBe(true);
+      expect(s.did.filter((l) => l.startsWith('up '))).toEqual(['up new', `up ${PREVIOUS}`]);
+    }
+    const stuck = starting({ answers: [], up: ['no such image', 'no such image'] });
+    expect(await startNew(stuck.d, 'repo:stable', 'sha256:old')).toBe('down');
+    const none = starting({ answers: [], up: ['exec format error'] });
+    expect(await startNew(none.d, 'repo:stable', null)).toBe('down');
+    expect(none.env).toEqual({});
+  });
+
+  it('starts nothing when HO[LO] became busy while the copy was made', async () => {
+    const s = starting({ answers: [true], busy: true });
+    expect(await startNew(s.d, 'repo:stable', 'sha256:old')).toBe('waiting');
+    expect(s.did).toEqual(['copy']);
+    const free = starting({ answers: [true], busy: false });
+    expect(await startNew(free.d, 'repo:stable', 'sha256:old')).toBe('started');
+  });
+
+  it('reads .env’s values as compose does: without their quotes or a comment after them', () => {
+    expect(plainValue('"47800"')).toBe('47800');
+    expect(plainValue("'/srv/holo data'")).toBe('/srv/holo data');
+    expect(plainValue('47800 # the studio')).toBe('47800');
+    expect(plainValue('  ./data  ')).toBe('./data');
+    expect(plainValue(undefined)).toBe('');
   });
 
   it('goes forward again only to another version than the one that didn’t start', () => {

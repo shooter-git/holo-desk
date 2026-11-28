@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs';
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -64,6 +64,10 @@ describe('a copy of the songs’ database', () => {
     // a song made after it isn't in it, and is in the next
     await app.inject({ method: 'POST', url: '/api/projects', payload: { title: 'Second Light' } });
     expect(titlesIn(file)).toEqual(['Lantern Sketch']);
+    await new Promise((ok) => setTimeout(ok, 1100));
+    const next = (await ask({ 'x-holo-runner-key': key() })).json() as { file: string };
+    expect(next.file).not.toBe(made.file);
+    expect(titlesIn(join(data, next.file))).toEqual(['Lantern Sketch', 'Second Light']);
     expect(song.title).toBe('Lantern Sketch');
     // nothing is left half made
     expect(readdirSync(join(data, 'backups')).filter((f) => f.endsWith('.part'))).toEqual([]);
@@ -87,6 +91,23 @@ describe('backupDatabase', () => {
         .reverse()
         .map((f) => f.replace(/^backups[\\/]/, '')),
     );
+  });
+
+  it('lets go only of copies named as it names them: a file someone keeps there stays', async () => {
+    const dir = join(work, 'own');
+    const store = new Store(dir);
+    await backupDatabase(store, dir, '1.0.0', { now: () => new Date(Date.UTC(2031, 0, 1)) });
+    const own = ['holo-before-my-big-edit.db', 'my-songs.db', 'holo-1.0.0-20300101T000000Z.db.bak'];
+    for (const f of own) writeFileSync(join(dir, 'backups', f), 'mine');
+    // (and one a copy cut short left behind)
+    writeFileSync(join(dir, 'backups', 'holo-0.9.0-20290101T000000Z.db.part'), 'half');
+    for (let i = 1; i <= KEEP_BACKUPS + 1; i++)
+      await backupDatabase(store, dir, '1.0.0', { now: () => new Date(Date.UTC(2031, 0, 1 + i)) });
+    store.close();
+    const left = readdirSync(join(dir, 'backups')).sort();
+    for (const f of own) expect(left).toContain(f);
+    expect(left.filter((f) => f.endsWith('.part'))).toEqual([]);
+    expect(backups(dir)).toHaveLength(KEEP_BACKUPS);
   });
 
   it('never lets go of the copy it just made, whatever the others’ names say', async () => {

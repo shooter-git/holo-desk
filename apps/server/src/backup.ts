@@ -15,7 +15,11 @@ export const KEEP_BACKUPS = 3;
 /** Room left over once the copy is made, at least: the database goes on growing as it's used. */
 const SPARE_BYTES = 64 * 1024 * 1024;
 
-const NAME = /^holo-[\w.+-]+\.db$/;
+/**
+ * A copy made here or by the updater: `holo-<what>-<UTC time>.db`. Only these are ever let go: another
+ * file someone keeps in the folder (a copy of their own, whatever it's called) is left alone.
+ */
+const NAME = /^holo-[\w.+-]+-\d{8}T\d{6}Z\.db$/;
 
 export type Backup =
   | { ok: true; file: string; size: number }
@@ -77,7 +81,8 @@ export async function backupDatabase(
   const name = `holo-${named(version)}-${stamp}.db`;
   // under another name until it's whole: a copy cut short is never taken for one
   const part = join(dir, `${name}.part`);
-  rmSync(part, { force: true });
+  // (and what a copy cut short before left: one is made at a time, so none of these is being written)
+  for (const f of readdirSync(dir)) if (/^holo-.*\.db\.part$/.test(f)) rmSync(join(dir, f), { force: true });
   try {
     await store.backup(part);
     chmodSync(part, 0o600);

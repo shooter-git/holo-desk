@@ -16,6 +16,10 @@
  *    (styles/app.css). It stays out while the studio is worked in: its field has the keys only while
  *    they're in it (app/keys.ts).
  *
+ * Under its header one quiet line says what the song's conversation runs with (the harness, its model
+ * and effort) and what's left of that account's usage; a press opens the chooser under the conversation
+ * (ui/AgentChooser.tsx). Where the conversation changed hands, a line between two turns says so.
+ *
  * Earlier turns are a line each, opened with a tap; the newest is whole. A conversation shorter than
  * the page gives the room it leaves to its earlier turns, which show more lines of themselves
  * (ui/turn-room.ts). While a request works its turn says what it's on, how long it has worked, and Stop. A window opened after it (a plugin's, an
@@ -31,13 +35,15 @@
  * upright, and a reply's go or command does where it covers the studio. The song plays on.
  */
 import { ChevronRight, PanelRightClose } from 'lucide-react';
-import { type RefObject, useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { conversation, type Exchange, useAgent } from '../app/agent.ts';
+import { Fragment, type RefObject, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { conversation, type Exchange, showChooser, useAgent } from '../app/agent.ts';
 import { type Layout, useLayout } from '../app/layout.ts';
 import { useSeenOnHost } from '../app/notify.ts';
 import { pageCovers, windowOpened } from '../app/page-layout.ts';
 import { closeBar, store, useApp } from '../app/store.ts';
 import { markSeen } from '../app/tray.ts';
+import { Chooser, RunsLine } from './AgentChooser.tsx';
+import { movedLine } from './agent-chooser.ts';
 import { atEnd, useShownRoom } from './bar-swipe.ts';
 import { CommandField, CommandList, useCommandField } from './command-field.tsx';
 import { useHoldToSeeThrough, useSwipeToClose } from './page-swipe.ts';
@@ -213,6 +219,7 @@ export function TalkPage({ docks = false, leaving = false }: { docks?: boolean; 
     useAgent((a) => a),
     f.project,
   );
+  const choosingFor = useAgent((a) => a.choosing);
   const turn = useApp((s) => s.barTurn);
   // a dialog over the studio is over the page too, and so is Print: it takes no keys or taps from behind
   // them (Scan is under it: the page opens over the review, from the Commands button in its header)
@@ -242,9 +249,20 @@ export function TalkPage({ docks = false, leaving = false }: { docks?: boolean; 
   const newest = talk[talk.length - 1];
   const earlier = talk.slice(0, -1);
   const newestKey = newest ? keyOf(newest) : '';
+  const before = earlier[earlier.length - 1];
+  const movedHere = newest && before ? movedLine(before, newest) : null;
   // seen as it opens, and as a reply ends while it's open: the badge of notices counts it no more
   useSeenOnHost(project, newest && !newest.working ? newestKey : null);
 
+  // the chooser, under the conversation: opened from the header's line, a failed reply's Continue
+  // with…, or the bar's command. It carries the newest request on when that failed and was asked here.
+  // Not while a request works on the song; and it's put away as the page closes.
+  const choosing = !!project && choosingFor === project && !busy && !wide;
+  const carries = choosing && newest?.failed && newest.mine && newest.job ? newest : null;
+  useEffect(() => {
+    if (busy && choosingFor) showChooser(null);
+  }, [busy, choosingFor]);
+  useEffect(() => () => showChooser(null), []);
   // the newest reply, shown here with a dock: once the page closes a phone keeps that row at hand
   const docked = newest && !newest.working && newest.view?.dock?.length ? newest.job : null;
   useEffect(() => {
@@ -296,6 +314,13 @@ export function TalkPage({ docks = false, leaving = false }: { docks?: boolean; 
     stuck.current = true;
     el.scrollTop = el.scrollHeight;
   }, [newestKey]);
+  // the chooser opened: it's at the foot, so to the foot
+  useLayoutEffect(() => {
+    const el = thread.current;
+    if (!choosing || !el) return;
+    stuck.current = true;
+    el.scrollTop = el.scrollHeight;
+  }, [choosing]);
   // the turn it was opened for, in sight (once the conversation is read, when it wasn't yet)
   // biome-ignore lint/correctness/useExhaustiveDependencies: run again as turns come, read from the page
   useLayoutEffect(() => {
@@ -349,34 +374,42 @@ export function TalkPage({ docks = false, leaving = false }: { docks?: boolean; 
             </button>
           )}
         </div>
+        {/* what the song's conversation runs with, and what's left of its usage: a press opens the chooser */}
+        {f.on && project && !wide && <RunsLine project={project} busy={busy} />}
         <div ref={thread} className="talk-thread">
           <div className="talk-body">
             {!newest || !project ? (
-              !f.typed && (
-                <p className="talk-empty">
-                  {f.on ? 'Ask the agent about this song, or find a command.' : 'Find a command, a track or a marker.'}
-                </p>
+              choosing && project ? (
+                <Chooser project={project} ex={null} />
+              ) : (
+                !f.typed && (
+                  <p className="talk-empty">
+                    {f.on
+                      ? 'Ask the agent about this song, or find a command.'
+                      : 'Find a command, a track or a marker.'}
+                  </p>
+                )
               )
             ) : wide ? (
               <Turn ex={newest} open={false} onToggle={() => toggle(newestKey)} project={project} busy={busy} />
             ) : (
               <>
                 {earlier.length > 0 && <div className="talk-earlier">Earlier in this song</div>}
-                {earlier.map((ex) => {
+                {earlier.map((ex, i) => {
                   const key = keyOf(ex);
+                  const moved = i > 0 ? movedLine(earlier[i - 1] as Exchange, ex) : null;
                   return (
-                    <Turn
-                      key={key}
-                      ex={ex}
-                      open={opened.has(key)}
-                      onToggle={() => toggle(key)}
-                      project={project}
-                      busy={busy}
-                    />
+                    <Fragment key={key}>
+                      {moved && <div className="talk-moved">{moved}</div>}
+                      <Turn ex={ex} open={opened.has(key)} onToggle={() => toggle(key)} project={project} busy={busy} />
+                    </Fragment>
                   );
                 })}
+                {/* (where the conversation changed hands: one quiet line) */}
+                {movedHere && <div className="talk-moved">{movedHere}</div>}
                 <div className="talk newest" aria-live="polite" data-turn={newest.job ?? undefined}>
-                  <TalkBody ex={newest} project={project} busy={busy} elapsed last />
+                  <TalkBody ex={newest} project={project} busy={busy} elapsed last choosing={choosing} />
+                  {choosing && <Chooser project={project} ex={carries} />}
                 </div>
               </>
             )}

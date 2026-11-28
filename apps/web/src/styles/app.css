@@ -4752,6 +4752,117 @@ html[data-layout="phone-portrait"] .talk-head:has(.talk-done:focus-visible) {
   display: none;
 }
 
+/* under the header, one quiet line: what the song's conversation runs with and what's left of its
+   account's usage (in the warning colour at a fifth or less). A press opens the chooser */
+.talk-runs {
+  flex: none;
+  display: block;
+  width: 100%;
+  min-height: 30px;
+  padding: 6px 16px;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  background: none;
+  color: var(--text-3);
+  font: inherit;
+  font-size: 12px;
+  line-height: 1.5;
+  text-align: left;
+  overflow-wrap: anywhere;
+  cursor: pointer;
+}
+
+.talk-runs:disabled {
+  cursor: default;
+}
+
+.talk-runs:not(:disabled):hover,
+.talk-runs[aria-expanded="true"] {
+  color: var(--text-2);
+}
+
+.talk-runs:focus-visible {
+  outline-offset: -2px;
+}
+
+.talk-runs .warn,
+.talk-choose-note.warn {
+  color: var(--warn);
+}
+
+/* where the conversation changed hands: a line between two turns */
+.talk-moved {
+  padding: 12px 16px 2px;
+  color: var(--text-3);
+  font-size: 12px;
+  line-height: 1.5;
+  text-align: center;
+}
+
+/* the chooser, under the conversation: the harnesses that are ready as buttons, the model and effort
+   of the one picked side by side, why the others aren't offered, then Continue */
+.talk-choose {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 2px 16px 0;
+}
+
+.talk-choose-title,
+.talk-choose-note,
+.talk-choose-ask {
+  color: var(--text-3);
+  font-size: 12.5px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+/* (more harnesses than fit a line, on a phone: they go onto a second, each line filled) */
+.talk-choose-seg {
+  align-self: flex-start;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1px;
+  max-width: 100%;
+  background: var(--line);
+}
+
+.talk-choose-seg .btn {
+  flex: 1 1 auto;
+}
+
+.talk-choose-seg .btn + .btn {
+  border-left: 0;
+}
+
+.talk-choose-run {
+  display: grid;
+  grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
+  gap: 8px;
+}
+
+.talk-choose-run > :only-child {
+  grid-column: 1 / -1;
+}
+
+.talk-choose-run .select,
+.talk-choose-run .input {
+  width: 100%;
+  min-width: 0;
+}
+
+.talk-choose-ask {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  color: var(--text-2);
+}
+
+.talk-choose .btns {
+  padding: 0 0 14px;
+  margin: 0 -2px;
+}
+
 /* the conversation, from the top down; it has what the list and the field leave, and one longer than
    that scrolls, kept at its newest turn (ui/TalkPage.tsx) */
 .talk-thread {

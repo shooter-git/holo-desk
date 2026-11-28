@@ -49,6 +49,12 @@ describe('a stand-in script', () => {
       { do: 'limit', seconds: 90 },
     ]);
     expect(parseScript('standin: limit never')).toMatch(/seconds/);
+    // one harness's account alone
+    expect(parseScript('standin: limit 90 claude; finish Done')).toMatchObject([
+      { do: 'limit', seconds: 90, only: 'claude' },
+      { do: 'call', tool: 'finish' },
+    ]);
+    expect(parseScript('standin: limit 90 cursor')).toMatch(/claude or codex/);
   });
 
   it('finds the script in a request carried on: from its last line that starts with standin:', () => {
@@ -248,6 +254,19 @@ describe.each(HARNESSES)('the stand-in as %s', (_name, make, runsWith) => {
       expect(resets).toBeGreaterThan(before + 590_000);
       expect(resets).toBeLessThan(Date.now() + 610_000);
     }
+  });
+
+  it('goes on past a limit that is only the other harness’s account’s', async () => {
+    s = sandbox();
+    const mine = _name === 'Claude Code' ? 'claude' : 'codex';
+    const other = mine === 'claude' ? 'codex' : 'claude';
+    expect(ended(await runToEnd(make(s), request(`standin: limit 600 ${other}; finish Went on`)))).toMatchObject({
+      type: 'done',
+    });
+    expect(ended(await runToEnd(make(s), request(`standin: limit 600 ${mine}; finish Went on`)))).toMatchObject({
+      type: 'failed',
+      why: 'usage',
+    });
   });
 
   it('carries a conversation on under the session it was given', async () => {

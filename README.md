@@ -451,6 +451,14 @@ where it was, and stays one step to undo. There's no Try again where it wouldn't
 says why instead: the harness's account is out of usage (and when its limit starts again), or the
 harness is signed out or no longer installed.
 
+Where another harness is ready, a failed reply also offers **Continue with…**: pick the harness, its
+model and its effort, and the request carries on there, told everything asked and answered in the
+conversation so far. From then on that song's conversation runs with what you picked; your other
+songs keep following Settings › Agent. One quiet line at the top of the agent's page always says what
+the open song's conversation runs with and how much of that account's usage is left ("Codex ·
+Gpt-6.1-sol · high · 63% left"); press it, or run "Continue this conversation with…" from the bar, to
+change it at any time or to go back to "As in Settings".
+
 **On a desktop**
 
 With the agent on, Ctrl / (or the slash button) slides a dock out down the right side of the studio,

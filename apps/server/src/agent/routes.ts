@@ -488,12 +488,37 @@ export function agentRoutes(
     }),
   );
 
-  // Try again: a request whose last go failed, carried on in the same conversation
+  /** A choice of harness, model and effort as a body gives it (the model and effort empty: the harness's own). */
+  const choiceIn = (b: Record<string, unknown>) => {
+    const text = (key: 'model' | 'effort') => {
+      const v = b[key] ?? '';
+      if (typeof v !== 'string' || (v !== '' && !MODEL.test(v)))
+        throw bad(`${key} is a name of letters, digits and . : - _ [ ] =, or empty for the harness's own`);
+      return v;
+    };
+    return { harness: harnessIdOr400(b.harness), model: text('model'), effort: text('effort') };
+  };
+
+  // Try again: a request whose last go failed, carried on in the same conversation; with a harness
+  // (and its model and effort), carried on with that one, which becomes the song's own choice
   app.post(
     '/api/agent/jobs/:job/continue',
-    forDevice(async (req, _reply, device) => ({
-      job: await theJobs.carryOn(device, (req.params as Params).job ?? ''),
-    })),
+    forDevice(async (req, _reply, device) => {
+      const b = body(req);
+      // (no harness named: as the song's requests run now; null: as Settings › Agent says, from here on)
+      const choice = b.harness === undefined ? undefined : b.harness === null ? null : choiceIn(b);
+      return { job: await theJobs.carryOn(device, (req.params as Params).job ?? '', choice) };
+    }),
+  );
+  // the song's own choice of what its conversation runs with; `harness: null`: as Settings › Agent says again
+  app.put(
+    '/api/agent/threads/:project/choice',
+    forDevice(async (req) => {
+      const b = body(req);
+      const project = (req.params as Params).project ?? '';
+      theJobs.choose(project, b.harness === null ? null : choiceIn(b));
+      return { ...theJobs.threadView(project), now: Date.now() };
+    }),
   );
 
   const askPermission = async (req: FastifyRequest, job: AgentJob) => {

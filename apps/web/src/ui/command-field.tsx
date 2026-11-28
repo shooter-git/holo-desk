@@ -33,6 +33,7 @@ import {
   loadThread,
   newConversation,
   requestContext,
+  showChooser,
   songRequests,
   useAgent,
 } from '../app/agent.ts';
@@ -160,6 +161,7 @@ export function useCommandField({ mode }: { mode: FieldMode }): CommandFieldStat
       scan: (task, scan) => project && void askScan(task, scan, project, context()),
       reset: () => project && void newConversation(project).catch(() => undefined),
       open: (r) => openTurn(r.project, r.job),
+      choose: () => project && showChooser(project),
     },
   );
   const extra: Extra =

@@ -160,10 +160,22 @@ export interface JobView {
   finished?: number;
   /** Its song's title as it was asked: how the bar names it while another song is open. */
   title?: string;
-  /** The harness it runs with, why it didn't go on (when the host knows), and the earlier go it carries on. */
+  /**
+   * The harness it runs with (and the model and effort given it: none, the harness's own), why it
+   * didn't go on (when the host knows), and the earlier go it carries on.
+   */
   harness?: HarnessId;
+  model?: string;
+  effort?: string;
   stop?: TurnStop;
   continues?: string;
+}
+
+/** A harness with the model and effort it's given (each empty: the harness's own). */
+export interface Choice {
+  harness: HarnessId;
+  model: string;
+  effort: string;
 }
 
 /**
@@ -191,6 +203,8 @@ export interface Turn {
   go?: Go;
   error?: string;
   harness?: HarnessId;
+  model?: string;
+  effort?: string;
   stop?: TurnStop;
   continues?: string;
 }
@@ -222,8 +236,13 @@ export interface AgentState {
   harness: Partial<Record<HarnessId, HarnessEvent>>;
   /** The jobs the host has told of, by id. */
   jobs: Record<string, JobView>;
-  /** The open song's conversation as the host keeps it (read when the bar opens). */
-  thread: { project: string; turns: Turn[] } | null;
+  /**
+   * The open song's conversation as the host keeps it (read when the bar opens), with the song's own
+   * choice of what it runs with (null: it follows Settings › Agent).
+   */
+  thread: { project: string; turns: Turn[]; choice: Choice | null } | null;
+  /** The song whose page shows the chooser ("Continue this conversation with…"), opened from a command or the header's line. */
+  choosing: string | null;
   /** A request on its way to the host (it has no job yet); `continues`: an earlier go it carries on. */
   sending: { project: string; request: string; at: number; continues?: string } | null;
   /** A request the host turned down: what was asked, and why (shown as the reply). */
@@ -250,6 +269,7 @@ export const EMPTY: AgentState = {
   harness: {},
   jobs: {},
   thread: null,
+  choosing: null,
   sending: null,
   refused: null,
   listening: null,
@@ -276,7 +296,8 @@ export type AgentEvent =
   | { type: 'harness'; event: HarnessEvent }
   | { type: 'status'; job: JobView; barOpen: boolean }
   | { type: 'listen'; job: string; on: boolean }
-  | { type: 'thread'; project: string; turns: Turn[] }
+  | { type: 'thread'; project: string; turns: Turn[]; choice?: Choice | null }
+  | { type: 'choosing'; project: string | null }
   | { type: 'sending'; project: string; request: string; at: number; continues?: string }
   | { type: 'sent'; job: JobView }
   | { type: 'refused'; project: string; request: string; error: string; at: number }
@@ -332,7 +353,9 @@ export function reduce(a: AgentState, e: AgentEvent): AgentState {
     case 'listen':
       return { ...a, listening: e.on ? e.job : a.listening === e.job ? null : a.listening };
     case 'thread':
-      return { ...a, thread: { project: e.project, turns: e.turns } };
+      return { ...a, thread: { project: e.project, turns: e.turns, choice: e.choice ?? null } };
+    case 'choosing':
+      return a.choosing === e.project ? a : { ...a, choosing: e.project };
     case 'sending':
       return {
         ...a,
@@ -363,7 +386,8 @@ export function reduce(a: AgentState, e: AgentEvent): AgentState {
       return {
         ...a,
         jobs,
-        thread: a.thread?.project === e.project ? { project: e.project, turns: [] } : a.thread,
+        // (its own choice of harness went with the conversation)
+        thread: a.thread?.project === e.project ? { project: e.project, turns: [], choice: null } : a.thread,
         refused: a.refused?.project === e.project ? null : a.refused,
         unseen: a.unseen.includes(e.project) ? a.unseen.filter((p) => p !== e.project) : a.unseen,
       };
@@ -442,9 +466,11 @@ export interface Exchange {
   view: View | null;
   /** It failed (not stopped by someone, not turned down): the conversation's last such can be tried again. */
   failed: boolean;
-  /** Why it didn't go on, where the host knows, and the harness it ran with. */
+  /** Why it didn't go on, where the host knows, and the harness it ran with (and the model and effort given it). */
   stop: TurnStop | null;
   harness: HarnessId | null;
+  model: string;
+  effort: string;
   /** The request's first go, when this one carries it on: the page shows only the latest go of a request. */
   continues: string | null;
 }
@@ -476,6 +502,8 @@ function told(a: AgentState, project: string, turns: readonly Turn[]): Seen[] {
     failed: false,
     stop: null,
     harness: null,
+    model: '',
+    effort: '',
     continues: null,
   };
   if (a.sending?.project === project) {
@@ -535,6 +563,8 @@ function told(a: AgentState, project: string, turns: readonly Turn[]): Seen[] {
         failed: j.state === 'failed',
         stop: j.state === 'failed' ? (j.stop ?? null) : null,
         harness: j.harness ?? null,
+        model: j.model ?? '',
+        effort: j.effort ?? '',
         continues: j.continues ?? null,
       }),
     });
@@ -562,6 +592,8 @@ function told(a: AgentState, project: string, turns: readonly Turn[]): Seen[] {
         failed: t.state === 'failed',
         stop: t.state === 'failed' ? (t.stop ?? null) : null,
         harness: t.harness ?? null,
+        model: t.model ?? '',
+        effort: t.effort ?? '',
         continues: t.continues ?? null,
       }),
     });
@@ -606,7 +638,7 @@ export function conversation(a: AgentState, project: string | null): Exchange[] 
   });
 }
 
-const HARNESS_NAME: Record<HarnessId, string> = {
+export const HARNESS_NAME: Record<HarnessId, string> = {
   claude: 'Claude Code',
   codex: 'Codex',
   cursor: 'Cursor',
@@ -800,14 +832,19 @@ export type ScanTask = 'read' | 'check' | 'fix';
 /**
  * What the bar offers of the agent's besides asking (only while it's on for this device): with a scan
  * open, its three tasks (read it in, check what was written, fix what was flagged); starting a new
- * conversation on the song when nothing runs on it; and this device's requests on other songs
+ * conversation on the song, or choosing what it runs with, when nothing runs on it; and this device's requests on other songs
  * (`elsewhere`), each a row that opens its song at it. One that has replied and hasn't been read is
  * offered with nothing typed (it's what the button's dot is for); one still at work is found by name,
  * so a song at work elsewhere adds nothing to the bar.
  */
 export function agentCommands(
   o: { on: boolean; project: string | null; scan: string | null; busy: boolean; elsewhere?: readonly SongRequest[] },
-  run: { scan: (task: ScanTask, scan: string) => void; reset: () => void; open?: (r: SongRequest) => void },
+  run: {
+    scan: (task: ScanTask, scan: string) => void;
+    reset: () => void;
+    open?: (r: SongRequest) => void;
+    choose?: () => void;
+  },
 ): { suggest: Command[]; commands: Command[] } {
   if (!o.on || !o.project) return { suggest: [], commands: [] };
   const others: Command[] = (o.elsewhere ?? []).map((r) => ({
@@ -843,8 +880,21 @@ export function agentCommands(
     available: () => !o.busy,
     run: run.reset,
   };
+  // what this song's conversation runs with, chosen on the agent's page (and how it follows Settings again)
+  const choose: Command = {
+    id: 'agent-continue',
+    title: 'Continue this conversation with…',
+    group: 'Agent',
+    also: 'agent harness model effort switch change move claude codex cursor antigravity usage limit settings',
+    keepOpen: true,
+    available: () => !o.busy,
+    run: () => run.choose?.(),
+  };
   const replied = others.filter((_, i) => !o.elsewhere?.[i]?.working);
-  return { suggest: [...(o.busy ? [] : scanRows), ...replied], commands: [...scanRows, reset, ...others] };
+  return {
+    suggest: [...(o.busy ? [] : scanRows), ...replied],
+    commands: [...scanRows, reset, ...(run.choose ? [choose] : []), ...others],
+  };
 }
 
 /** How the bar names a request on another song: its song, and whether it's at work or has replied. */
@@ -1294,12 +1344,9 @@ export async function lookAtHarnesses(): Promise<void> {
 export async function loadThread(project: string, barOpen = true): Promise<void> {
   if (!isOn(state)) return;
   try {
-    const r = await call<{ thread: { turns: Turn[] } | null; job?: JobView | null; now?: number }>(
-      'GET',
-      `/api/agent/threads/${encodeURIComponent(project)}`,
-    );
+    const r = await call<ThreadAnswer>('GET', `/api/agent/threads/${encodeURIComponent(project)}`);
     heardClock(r.now);
-    agent.dispatch({ type: 'thread', project, turns: r.thread?.turns ?? [] });
+    agent.dispatch({ type: 'thread', project, turns: r.thread?.turns ?? [], choice: r.choice ?? null });
     // the song's job that's working, or waiting for a click (after a reload, its button comes back);
     // seen only if the song is still the open one (another may have opened before the answer came)
     const open = studio.get().project?.id;
@@ -1307,6 +1354,34 @@ export async function loadThread(project: string, barOpen = true): Promise<void>
   } catch {
     // the bar shows what it has
   }
+}
+
+/** A song's conversation as the host answers it: its turns, its job at work or waiting, its own choice. */
+interface ThreadAnswer {
+  thread: { turns: Turn[] } | null;
+  job?: JobView | null;
+  choice?: Choice | null;
+  now?: number;
+}
+
+/**
+ * What the song's conversation runs with from here on: a harness with its model and effort, the
+ * song's own (it lasts until it's changed, or the conversation is started over), or null for what
+ * Settings › Agent says again. The other songs aren't touched.
+ */
+export async function setChoice(project: string, choice: Choice | null): Promise<void> {
+  const r = await call<ThreadAnswer>(
+    'PUT',
+    `/api/agent/threads/${encodeURIComponent(project)}/choice`,
+    choice ?? { harness: null },
+  );
+  heardClock(r.now);
+  agent.dispatch({ type: 'thread', project, turns: r.thread?.turns ?? [], choice: r.choice ?? null });
+}
+
+/** The chooser on a song's page: shown, or put away. */
+export function showChooser(project: string | null): void {
+  agent.dispatch({ type: 'choosing', project });
 }
 
 /**
@@ -1477,15 +1552,25 @@ export async function askScan(task: ScanTask, scan: string, project: string, con
 
 /**
  * Try again: a request whose last go failed, carried on in the same conversation (the host starts a
- * job that continues it). The bar shows it on its way, then working, as a request.
+ * job that continues it). The bar shows it on its way, then working, as a request. With a `choice` it's
+ * carried on with that harness, model and effort, the song's own from then on (null: what Settings ›
+ * Agent says, again); the host tells the song's studios, which read its conversation again.
  */
-export async function tryAgain(ex: Pick<Exchange, 'job' | 'request' | 'continues'>, project: string): Promise<void> {
+export async function tryAgain(
+  ex: Pick<Exchange, 'job' | 'request' | 'continues'>,
+  project: string,
+  choice?: Choice | null,
+): Promise<void> {
   if (!ex.job || !isOn(state)) return;
   const at = serverNow();
   const continues = ex.continues ?? ex.job;
   agent.dispatch({ type: 'sending', project, request: ex.request, at, continues });
   try {
-    const { job } = await call<{ job: string }>('POST', `/api/agent/jobs/${encodeURIComponent(ex.job)}/continue`, {});
+    const { job } = await call<{ job: string }>(
+      'POST',
+      `/api/agent/jobs/${encodeURIComponent(ex.job)}/continue`,
+      choice === undefined ? {} : (choice ?? { harness: null }),
+    );
     agent.dispatch({
       type: 'sent',
       job: { id: job, project, device: state.me ?? '', state: 'waiting', request: ex.request, started: at, continues },
@@ -1518,6 +1603,7 @@ export async function doneListening(job: string): Promise<void> {
 export async function newConversation(project: string): Promise<void> {
   await call('POST', `/api/agent/threads/${encodeURIComponent(project)}/reset`);
   agent.dispatch({ type: 'reset', project });
+  agent.dispatch({ type: 'choosing', project: null });
 }
 
 /** This device was removed: its token goes, and so does everything of the agent's. */
@@ -1567,6 +1653,11 @@ export function agentMessage(msg: Record<string, unknown>): { handled: boolean; 
     }
     case 'agent-devices':
       if (isOn(state) || state.info?.allowed) void loadDevices().catch(() => undefined);
+      return { handled: true };
+    case 'agent-thread':
+      // what a song's conversation runs with changed (on this device or another): it's read again
+      if (typeof msg.project === 'string' && state.thread?.project === msg.project)
+        void loadThread(msg.project, barShows(msg.project));
       return { handled: true };
     case 'agent-removed':
       deviceRemoved();

@@ -9,7 +9,15 @@
  * on any other tool used or any permission refused.
  */
 import { join } from 'node:path';
-import { checkUsage, type LimitGroup, type LimitsRead, type LimitWindow, type RunUsage, tokens } from '../limits.ts';
+import {
+  checkUsage,
+  type FailureKind,
+  type LimitGroup,
+  type LimitsRead,
+  type LimitWindow,
+  type RunUsage,
+  tokens,
+} from '../limits.ts';
 import {
   type AdapterOptions,
   type Context,
@@ -139,6 +147,8 @@ export function claudeReader(): Reader {
       if (e.type === 'rate_limit_event') {
         const limits = claudeLimits(e.rate_limit_info);
         if (limits) out.push({ kind: 'limits', limits });
+        const refused = claudeRefused(e.rate_limit_info);
+        if (refused) out.push({ kind: 'limited', ...refused });
         return out;
       }
       if (e.type === 'result') {
@@ -200,6 +210,25 @@ export function claudeLimits(info: unknown): LimitsRead | null {
     groups.push({ name: `${name} models`, models: [name], windows: [own] });
   }
   return groups.length ? { groups } : null;
+}
+
+/**
+ * Whether a `rate_limit_event` says the account's limit refused the request (`status: "rejected"`, and
+ * no extra usage taking it instead), with when that limit starts again.
+ */
+export function claudeRefused(info: unknown): { resets?: number } | null {
+  if (!isObject(info) || info.status !== 'rejected' || info.isUsingOverage === true) return null;
+  return typeof info.resetsAt === 'number' && info.resetsAt > 0 ? { resets: info.resetsAt * 1000 } : {};
+}
+
+/**
+ * What its own error means, where its words are fixed (docs/agent-harnesses.md, "A refused
+ * conversation", has them as recorded): signed out, or an API key's credit used up.
+ */
+export function claudeClassify(error: string): FailureKind | null {
+  if (/^(?:Not logged in\b|Invalid API key\b|Failed to authenticate\b)/.test(error)) return { why: 'signed-out' };
+  if (/^Credit balance is too low\b/.test(error)) return { why: 'usage' };
+  return null;
 }
 
 /** What its `result` says the run used: input not from the cache (what it wrote there too), cache reads, output. */
@@ -358,6 +387,7 @@ export function claudeSpec(): Spec {
       return { args: claudeArgs(job, files), env: { ...CLAUDE_ENV } };
     },
     reader: claudeReader,
+    classify: claudeClassify,
   };
 }
 

@@ -13,7 +13,11 @@
 //     on the host, the reply waits, and the studio that comes back has both;
 //   - a restart of HO[LO]: while a request works HO[LO] says it's busy (an update waits for it); stopped
 //     under it and started again, the request reads as cut short, saying why; a reply that was waiting
-//     for the user's OK still shows its button.
+//     for the user's OK still shows its button;
+//   - Try again: a request that fails in passing shows Try again; pressed, the request carries on from
+//     where it was, the page shows it as one exchange, and one Undo takes the whole request back;
+//   - out of usage: a request its harness's limit refused says so, with when the limit starts again, and
+//     doesn't offer Try again.
 //
 //   pnpm build && pnpm agent:check
 //
@@ -179,6 +183,43 @@ const SCENARIOS = {
     await back.locator('.cb-bar').first().click();
     await back.locator('.talk-page', { hasText: 'Added strings while you were away' }).waitFor();
     await back.close();
+  },
+
+  /** A request that fails in passing is tried again: it carries on, as one exchange and one undo step. */
+  async again({ ctx, id }) {
+    const page = await open(ctx, id);
+    await ask(
+      page,
+      'standin: track_add {"name": "Bass"}; fail-once The service is overloaded; track_add {"name": "Strings"}; finish Added a bass and strings',
+    );
+    await page.locator('.talk-page .reply', { hasText: 'The service is overloaded' }).waitFor();
+    await track(page, 'Bass').waitFor();
+    await page.locator('.talk-page button', { hasText: 'Try again' }).click();
+    await page.locator('.talk-page .reply', { hasText: 'Added a bass and strings' }).waitFor();
+    await track(page, 'Strings').waitFor();
+    if (await page.locator('.talk-page .reply', { hasText: 'The service is overloaded' }).count())
+      throw new Error('the go that failed still shows beside the one that carried it on');
+    if (await page.locator('.talk-page button', { hasText: 'Try again' }).count())
+      throw new Error('Try again is still offered after the request finished');
+    // the whole request is one step: what both goes changed goes with one Undo
+    await page.locator('button[aria-label="Undo"]').first().click();
+    await track(page, 'Strings').waitFor({ state: 'detached' });
+    await track(page, 'Bass').waitFor({ state: 'detached' });
+    await page.close();
+  },
+
+  /** A request its harness's limit refused says so, with when it starts again, and isn't offered again as it is. */
+  async usage({ ctx, id }) {
+    const page = await open(ctx, id);
+    await ask(page, 'standin: limit 7200');
+    await page
+      .locator('.talk-page .reply-after', {
+        hasText: /Claude Code is out of usage: its limit starts again in (2 h|1 h 5\d min)\./,
+      })
+      .waitFor();
+    if (await page.locator('.talk-page button', { hasText: 'Try again' }).count())
+      throw new Error('Try again is offered for a request that’s out of usage');
+    await page.close();
   },
 
   /** HO[LO] restarts under a working request, and under a reply that waits for an OK. */

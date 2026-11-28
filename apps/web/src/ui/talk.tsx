@@ -7,6 +7,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { bounceSong, exportStems, renderForAgent, sendToCreation } from '../app/actions.ts';
 import {
+  afterFailure,
   allowLabel,
   type BriefWarning,
   doneListening,
@@ -15,7 +16,9 @@ import {
   elapsedMs,
   type Permission,
   permit,
+  serverNow,
   stopJob,
+  tryAgain,
   upload,
   useAgent,
 } from '../app/agent.ts';
@@ -23,6 +26,7 @@ import { canCaptureScreen, grabScreen, type Ready, record, redraw } from '../app
 import { useApp } from '../app/store.ts';
 import { installs, useInstalls } from '../audio/installs.ts';
 import { AgentView } from './AgentView.tsx';
+import { startsAgain } from './harness-usage.ts';
 
 /** "0:07": how long a recording has run. */
 export const clock = (ms: number) =>
@@ -273,16 +277,26 @@ export function TalkBody({
   project,
   busy,
   elapsed = false,
+  last = false,
 }: {
   ex: Exchange;
   project: string;
   busy: boolean;
   elapsed?: boolean;
+  /** The conversation's last exchange: one that failed can be tried again from here. */
+  last?: boolean;
 }) {
   const job = ex.job;
+  // (what a failure that won't pass by itself needs, and Try again when it might)
+  const after = last && ex.mine ? afterFailure(ex, (resets) => startsAgain(resets, { now: serverNow() })) : null;
   const buttons = [
     ex.permission && job && ex.mine && (
       <PermissionButton key="allow" job={job} permission={ex.permission} project={project} />
+    ),
+    after?.again && job && (
+      <button key="again" type="button" className="btn" onClick={() => void tryAgain(ex, project)}>
+        Try again
+      </button>
     ),
     ex.brief && <CopyBrief key="brief" text={ex.brief} />,
   ].filter(Boolean);
@@ -310,6 +324,7 @@ export function TalkBody({
       ) : (
         ex.reply && <div className="reply">{ex.reply}</div>
       )}
+      {!ex.working && after?.say && <div className="reply-after">{after.say}</div>}
       {!ex.working && ex.view && ex.job && <AgentView view={ex.view} job={ex.job} busy={busy} />}
       {ex.brief && <Brief text={ex.brief} flagged={ex.flagged} />}
       {buttons.length > 0 && <div className="btns">{buttons}</div>}
@@ -343,7 +358,7 @@ function Elapsed({ started }: { started: number }) {
 export function Talk({ ex, project, busy }: { ex: Exchange; project: string; busy: boolean }) {
   return (
     <div className="talk" aria-live="polite">
-      <TalkBody ex={ex} project={project} busy={busy} />
+      <TalkBody ex={ex} project={project} busy={busy} last />
     </div>
   );
 }

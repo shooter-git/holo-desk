@@ -4,7 +4,7 @@
  * docs/agent-harnesses.md records why each adapter does what it does.
  */
 
-import type { HarnessLimits, RunUsage } from '../limits.ts';
+import type { HarnessLimits, RunUsage, StopWhy } from '../limits.ts';
 
 export type HarnessId = 'claude' | 'codex' | 'cursor' | 'antigravity';
 
@@ -118,6 +118,9 @@ export interface Job {
  * itself, so the next turn starts a new conversation. The end carries the tokens the turn used
  * (`usage`), when the harness said. `limits` is what the account has left now: before the end when the
  * run itself said (Claude Code), or a moment after it when the harness is asked (Codex, Antigravity).
+ * A failure says `why` when that's known for sure (the account is out of usage, with `resets` when the
+ * limit starts again is known; the harness is signed out, or not installed): trying again as it is
+ * wouldn't help. Without it, the failure may have been a passing one.
  */
 export type RunEvent =
   | { type: 'progress'; line: string }
@@ -125,7 +128,7 @@ export type RunEvent =
   | { type: 'aliases'; aliases: Record<string, string> }
   | { type: 'limits'; limits: HarnessLimits; plan?: string }
   | { type: 'done'; reply?: string; usage?: RunUsage }
-  | { type: 'failed'; error: string; fresh?: true; usage?: RunUsage };
+  | { type: 'failed'; error: string; fresh?: true; usage?: RunUsage; why?: StopWhy; resets?: number };
 
 export interface Run {
   /** Settles once the harness and everything it started are gone. */

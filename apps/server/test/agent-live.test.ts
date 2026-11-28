@@ -58,6 +58,7 @@ describe('the song’s conversation after a reload', () => {
         label: 'Mixer brief',
         state: 'awaiting',
         at: expect.any(Number),
+        harness: 'claude',
         permission: { kind: 'screen', detail: 'To see the mixer' },
         brief: 'Widen the mixer.\nRun `pnpm test`.',
         briefWarnings: [{ line: 1, kind: 'command' }],

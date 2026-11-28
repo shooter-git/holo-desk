@@ -1015,6 +1015,62 @@ describe('the song’s whole conversation, for the page', () => {
     expect(A.conversation(a, null)).toEqual([]);
   });
 
+  it('shows a request tried again as one exchange: its latest go', () => {
+    let a = on();
+    a = A.reduce(a, {
+      type: 'thread',
+      project: 'prj_a',
+      turns: [
+        turn('agj_00000000000a', 10),
+        turn('agj_00000000000b', 20, { state: 'failed', reply: null, error: 'Overloaded' }),
+        turn('agj_00000000000c', 30, {
+          state: 'failed',
+          reply: null,
+          error: 'Overloaded',
+          continues: 'agj_00000000000b',
+        }),
+        turn('agj_00000000000d', 40, { continues: 'agj_00000000000b', reply: 'Done at last' }),
+      ],
+    });
+    expect(A.conversation(a, 'prj_a').map((x) => [x.job, x.reply])).toEqual([
+      ['agj_00000000000a', 'Reply a'],
+      ['agj_00000000000d', 'Done at last'],
+    ]);
+    // while the next go is on its way, the failed one it carries on is already out of sight
+    let b = on();
+    b = A.reduce(b, {
+      type: 'thread',
+      project: 'prj_a',
+      turns: [turn('agj_00000000000b', 20, { state: 'failed', reply: null, error: 'Overloaded' })],
+    });
+    expect(A.conversation(b, 'prj_a')[0]).toMatchObject({ failed: true, reply: 'Overloaded' });
+    b = A.reduce(b, { type: 'sending', project: 'prj_a', request: 'Request b', at: 50, continues: 'agj_00000000000b' });
+    expect(A.conversation(b, 'prj_a')).toHaveLength(1);
+    expect(A.conversation(b, 'prj_a')[0]).toMatchObject({ job: null, working: true });
+  });
+
+  it('says what a failure needs, and offers to try again only when that might help', () => {
+    const at = (resets: number) => `at ${resets}`;
+    const failed = { failed: true, harness: 'codex' as const };
+    expect(A.afterFailure({ failed: false, stop: null, harness: 'codex' }, at)).toBeNull();
+    expect(A.afterFailure({ ...failed, stop: null }, at)).toEqual({ say: null, again: true });
+    expect(A.afterFailure({ ...failed, stop: { why: 'interrupted' } }, at)).toEqual({ say: null, again: true });
+    expect(A.afterFailure({ ...failed, stop: { why: 'usage', resets: 99 } }, at)).toEqual({
+      say: 'Codex is out of usage: its limit starts again at 99.',
+      again: false,
+    });
+    expect(A.afterFailure({ ...failed, stop: { why: 'usage' } }, at)).toEqual({
+      say: 'Codex is out of usage.',
+      again: false,
+    });
+    expect(A.afterFailure({ ...failed, stop: { why: 'signed-out' } }, at)?.say).toBe(
+      'Codex is signed out: sign it in again in Settings › Agent.',
+    );
+    expect(A.afterFailure({ ...failed, harness: null, stop: { why: 'not-installed' } }, at)).toMatchObject({
+      again: false,
+    });
+  });
+
   it('has the host’s news of a job stand for its turn, kept where the turn was', () => {
     let a = on();
     a = A.reduce(a, {

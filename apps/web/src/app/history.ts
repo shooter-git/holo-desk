@@ -25,6 +25,10 @@ export function push(h: History, step: Step): History {
  * A batch of the agent's changes, made to the song `before`. While its job runs and the job's step
  * is still on top, the batch joins that step, which keeps the song from before the job. Otherwise
  * (the user edited meanwhile, or the job had finished) it opens a step of its own.
+ *
+ * A job that carries an earlier go at the same request on (`continues`: Try again) joins that go's
+ * step while it's still on top: the request stays one step, which keeps the song from before the
+ * request, and is this job's from then on (undoing it stops this one).
  */
 export function pushOrMergeJob(
   h: History,
@@ -33,10 +37,14 @@ export function pushOrMergeJob(
   job: string,
   running: boolean,
   at = Date.now(),
+  continues: string | null = null,
 ): History {
   const top = h.undo[h.undo.length - 1];
   // (a redo step would bring back a song without this batch)
   if (running && top?.job === job) return h.redo.length ? { undo: h.undo, redo: [] } : h;
+  // (by the request's first go, which the step remembers through every go that follows)
+  if (running && continues && top && (top.job === continues || top.first === continues))
+    return { undo: [...h.undo.slice(0, -1), { ...top, job, first: continues }], redo: [] };
   return push(h, { project: before, label, job, at });
 }
 
@@ -114,7 +122,8 @@ export function jobSteps(h: History, job: string): Step[] {
 /** The same step the other way: the song it takes you to, under the same name, job and time. */
 function across(step: Step, project: Project): Step {
   const { label, at } = step;
-  return step.job === undefined ? { project, label, at } : { project, label, job: step.job, at };
+  if (step.job === undefined) return { project, label, at };
+  return { project, label, job: step.job, ...(step.first === undefined ? {} : { first: step.first }), at };
 }
 
 /** Undo from the song as it is now: the step undone (its song is the one to go back to), and the history after. */

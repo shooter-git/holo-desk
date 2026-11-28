@@ -16,6 +16,8 @@ export interface Step {
   label: string;
   /** The agent's job whose changes this step holds (they merge into one step while it runs). */
   job?: string;
+  /** The first go of the request that job carries on, when it was tried again: later goes join by it. */
+  first?: string;
   /** When the change was made (ms since the epoch), undone or not: the history menu says how long ago. */
   at: number;
 }

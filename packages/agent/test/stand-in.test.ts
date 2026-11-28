@@ -14,7 +14,7 @@ import type { Harness, RunEvent } from '../src/harness/types.ts';
 import { mcpServer } from '../src/harness/workspace.ts';
 import { claudeServer, codexServer } from '../stand-in/config.ts';
 import { writeLaunchers } from '../stand-in/launcher.ts';
-import { DEFAULT_STEPS, parseScript, requestOf, splitSteps } from '../stand-in/script.ts';
+import { DEFAULT_STEPS, parseScript, requestOf, scriptOf, splitSteps } from '../stand-in/script.ts';
 import { job as anyJob, REPO, runToEnd, type Sandbox, sandbox, TOKEN } from './fakes.ts';
 
 describe('a stand-in script', () => {
@@ -40,6 +40,22 @@ describe('a stand-in script', () => {
       { do: 'call', tool: 'song_status', args: {} },
       { do: 'call', tool: 'finish', args: { label: 'L', reply: 'R' } },
     ]);
+  });
+
+  it('reads a failure that happens once, and an account out of usage', () => {
+    expect(parseScript('standin: fail-once Overloaded; limit; limit 90')).toEqual([
+      { do: 'fail', error: 'Overloaded', once: true },
+      { do: 'limit', seconds: 3600 },
+      { do: 'limit', seconds: 90 },
+    ]);
+    expect(parseScript('standin: limit never')).toMatch(/seconds/);
+  });
+
+  it('finds the script in a request carried on: from its last line that starts with standin:', () => {
+    const wrapped = 'Your last go at this request didn’t finish.\nThen carry on with the request:\nstandin: finish Hi';
+    expect(scriptOf(wrapped)).toBe('standin: finish Hi');
+    expect(parseScript(wrapped)).toEqual([{ do: 'call', tool: 'finish', args: { label: 'Stand-in', reply: 'Hi' } }]);
+    expect(scriptOf('Make the chorus bigger, standin: or not')).toBeNull();
   });
 
   it('reads the song and finishes when the request isn’t a script', () => {
@@ -187,6 +203,39 @@ describe.each(HARNESSES)('the stand-in as %s', (_name, make, runsWith) => {
     const events = await runToEnd(make(s), request('standin: fail Quota exceeded.'));
     expect(ended(events)).toMatchObject({ type: 'failed', error: 'Quota exceeded.' });
     expect(posted('/finish')).toEqual([]);
+  });
+
+  it('fails once, and carries on after that step at the next go, as a request tried again does', async () => {
+    s = sandbox();
+    const h = make(s);
+    const script =
+      'standin: track_add {"name": "Bass"}; fail-once Overloaded; track_add {"name": "Strings"}; finish Both';
+    const first = await runToEnd(h, request(script));
+    expect(ended(first)).toMatchObject({ type: 'failed', error: 'Overloaded' });
+    expect(ended(first)).not.toHaveProperty('why');
+    expect(song.tracks.map((t) => t.name)).toEqual(expect.arrayContaining(['Bass']));
+    expect(song.tracks.map((t) => t.name)).not.toContain('Strings');
+    // (as HO[LO] words a request it carries on, in the same conversation)
+    const again = await runToEnd(
+      h,
+      request(`Your last go at this request didn’t finish.\n${script}`, { session: sessionOf(first) as string }),
+    );
+    expect(ended(again)).toMatchObject({ type: 'done' });
+    expect(song.tracks.filter((t) => t.name === 'Bass')).toHaveLength(1);
+    expect(song.tracks.map((t) => t.name)).toContain('Strings');
+  });
+
+  it('runs out of usage as its harness says it: no reason is guessed, the harness’s own signal is read', async () => {
+    s = sandbox();
+    const before = Date.now();
+    const events = await runToEnd(make(s), request('standin: limit 600'));
+    expect(ended(events)).toMatchObject({ type: 'failed', why: 'usage' });
+    const resets = (ended(events) as { resets?: number }).resets;
+    // (Claude Code says when the limit starts again; an API key's quota, as Codex words it, doesn't)
+    if (resets !== undefined) {
+      expect(resets).toBeGreaterThan(before + 590_000);
+      expect(resets).toBeLessThan(Date.now() + 610_000);
+    }
   });
 
   it('carries a conversation on under the session it was given', async () => {

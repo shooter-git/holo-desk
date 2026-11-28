@@ -488,6 +488,14 @@ export function agentRoutes(
     }),
   );
 
+  // Try again: a request whose last go failed, carried on in the same conversation
+  app.post(
+    '/api/agent/jobs/:job/continue',
+    forDevice(async (req, _reply, device) => ({
+      job: await theJobs.carryOn(device, (req.params as Params).job ?? ''),
+    })),
+  );
+
   const askPermission = async (req: FastifyRequest, job: AgentJob) => {
     const b = body(req);
     if (!PERMISSION_KINDS.includes(b.kind as PermissionKind))

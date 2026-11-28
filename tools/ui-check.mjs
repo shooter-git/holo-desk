@@ -22,6 +22,8 @@
 //     three long-ish labels, each with a row of three buttons) and one with everything at once (a
 //     choice of six, five long buttons, a table of six columns, long-named sliders, toggles, a list, a
 //     chart, notes, a waveform, a group in a group);
+//   - a reply that failed isn't whole: its harness's words, then Try again; or, out of usage, what HO[LO]
+//     says of it (which harness, when its limit starts again);
 //   - a reply's view is measured and laid out again while one of its sliders moves (it's laid out when
 //     what it shows changes, or its width: not each time the page renders again);
 //   - Settings › Agent's Tell me outside HO[LO] isn't whole: its three choices side by side, in the dialog;
@@ -1009,6 +1011,42 @@ const NEWEST = {
       };
     },
   },
+  // a request that failed in passing: its harness's own words, then Try again
+  again: {
+    what: 'a reply that failed, with Try again',
+    shows: '.btns .btn',
+    turn(_doc, now) {
+      return {
+        job: 'agj_00000000000e',
+        request: 'Double the keys an octave up in the last chorus, and open the filter over its last two bars',
+        reply: null,
+        label: null,
+        state: 'failed',
+        at: now - 100_000,
+        harness: 'claude',
+        error: 'API Error: 529 Overloaded. This is a server-side issue, usually temporary — try again in a moment.',
+      };
+    },
+  },
+  // a request its harness's limit refused: what it said, then what HO[LO] knows of it, and no Try again
+  usage: {
+    what: 'a reply that ran out of usage',
+    shows: '.reply-after',
+    turn(_doc, now) {
+      return {
+        job: 'agj_00000000000e',
+        request: 'Double the keys an octave up in the last chorus',
+        reply: null,
+        label: null,
+        state: 'failed',
+        at: now - 100_000,
+        harness: 'antigravity',
+        error:
+          'RESOURCE_EXHAUSTED (code 429): You have exhausted your capacity on this model. Your quota will reset after 51h7m.',
+        stop: { why: 'usage', resets: now + 51 * 3_600_000 + 7 * 60_000 },
+      };
+    },
+  },
 };
 
 /**
@@ -1466,10 +1504,12 @@ function replyViews(page, layout, finger, newest) {
       `${where}: ${NEWEST[newest].what}`,
       async () => {
         await open();
-        await page.locator('.talk.newest .agent-view, .bar .talk .agent-view').first().waitFor();
+        const shows = NEWEST[newest].shows ?? '.agent-view';
+        await page.locator(`.talk.newest ${shows}, .bar .talk ${shows}`).first().waitFor();
       },
       shut,
-      [...checks, 'viewFits'],
+      // (a reply with no view of the agent's has none to fit)
+      NEWEST[newest].shows ? checks : [...checks, 'viewFits'],
     ],
   ];
 }

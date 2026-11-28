@@ -1460,6 +1460,8 @@ describe('since your last reply', () => {
             label: 'Counter-line',
             state: 'done',
             at: expect.any(Number),
+            // (the harness it ran with)
+            harness: 'claude',
           },
         ],
       },

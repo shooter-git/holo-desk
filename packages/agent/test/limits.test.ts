@@ -1,5 +1,14 @@
 import { describe, expect, it } from 'vitest';
-import { addUsage, checkLimits, checkRead, checkUsage, groupFor, type LimitGroup } from '../src/limits.ts';
+import {
+  addUsage,
+  checkFailureKind,
+  checkLimits,
+  checkRead,
+  checkUsage,
+  groupFor,
+  type LimitGroup,
+  usedUp,
+} from '../src/limits.ts';
 
 const NOW = Date.UTC(2099, 0, 5);
 
@@ -91,5 +100,62 @@ describe('limits: the group a model counts against', () => {
     expect(groupFor(groups, '')).toBeNull();
     expect(groupFor(groups, null)).toBeNull();
     expect(groupFor([], 'gemini-4-neon')).toBeNull();
+  });
+});
+
+describe('limits: whether a model is out of usage now', () => {
+  const HOUR = 3_600_000;
+  const shared: LimitGroup = {
+    windows: [
+      { minutes: 10080, used: 0.4, resets: NOW + 48 * HOUR },
+      { minutes: 300, used: 1, resets: NOW + 2 * HOUR },
+    ],
+  };
+  const opus: LimitGroup = {
+    name: 'Opus models',
+    models: ['Opus'],
+    windows: [{ minutes: 10080, used: 1, resets: NOW + 72 * HOUR }],
+  };
+
+  it('is when a window its requests count against is used up and hasn’t started again', () => {
+    expect(usedUp([shared], 'sonnet', NOW)).toEqual({ resets: NOW + 2 * HOUR });
+    expect(usedUp([shared], '', NOW)).toEqual({ resets: NOW + 2 * HOUR });
+    // (the reset has come since they were read: not known to be used up any more)
+    expect(usedUp([shared], 'sonnet', NOW + 3 * HOUR)).toBeNull();
+    expect(usedUp([{ windows: [{ minutes: 300, used: 0.99 }] }], 'sonnet', NOW)).toBeNull();
+    // a window with no word of when it starts again: used up, till when isn't said
+    expect(usedUp([{ windows: [{ minutes: 300, used: 1 }] }], 'sonnet', NOW)).toEqual({});
+  });
+
+  it('counts the limits every model shares and the model’s own, and waits for the last of them', () => {
+    expect(usedUp([shared, opus], 'opus', NOW)).toEqual({ resets: NOW + 72 * HOUR });
+    // another model's own limit says nothing of this one
+    expect(usedUp([{ windows: [{ minutes: 300, used: 0.2 }] }, opus], 'sonnet', NOW)).toBeNull();
+    expect(usedUp([shared, opus], 'sonnet', NOW)).toEqual({ resets: NOW + 2 * HOUR });
+  });
+
+  it('says nothing when the limits go by model and this one is in none of them', () => {
+    const gemini: LimitGroup = {
+      name: 'Gemini Models',
+      models: ['Gemini 4 Neon'],
+      windows: [{ minutes: 300, used: 1 }],
+    };
+    expect(usedUp([gemini], '', NOW)).toBeNull();
+    expect(usedUp([gemini], 'claude-opus-5-5', NOW)).toBeNull();
+    expect(usedUp([gemini], 'gemini-4-neon', NOW)).toEqual({});
+    expect(usedUp([], 'anything', NOW)).toBeNull();
+  });
+});
+
+describe('why a request stopped, as a runner says it', () => {
+  it('is one of the reasons known, with a reset only for usage, ahead and within reason', () => {
+    expect(checkFailureKind('usage', NOW + 1000, NOW)).toEqual({ why: 'usage', resets: NOW + 1000 });
+    expect(checkFailureKind('usage', NOW - 1000, NOW)).toEqual({ why: 'usage' });
+    expect(checkFailureKind('usage', NOW + 400 * 24 * 3_600_000, NOW)).toEqual({ why: 'usage' });
+    expect(checkFailureKind('usage', 'soon', NOW)).toEqual({ why: 'usage' });
+    expect(checkFailureKind('signed-out', NOW + 1000, NOW)).toEqual({ why: 'signed-out' });
+    expect(checkFailureKind('not-installed', undefined, NOW)).toEqual({ why: 'not-installed' });
+    expect(checkFailureKind('tired', undefined, NOW)).toBeNull();
+    expect(checkFailureKind(undefined, NOW + 1000, NOW)).toBeNull();
   });
 });

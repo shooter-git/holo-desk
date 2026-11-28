@@ -13,7 +13,7 @@
  * them). It's for HO[LO]'s own checks: nothing starts it otherwise.
  */
 import { type ChildProcess, spawn } from 'node:child_process';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { createInterface } from 'node:readline';
 import { claudeServer, codexServer, type Server } from './config.ts';
@@ -136,6 +136,8 @@ interface Outcome {
   last: string;
   /** Why the turn failed, if it did. */
   error: string | null;
+  /** The account's limit refused it: starting again this many seconds from now. */
+  limited?: number;
   output: number;
 }
 
@@ -148,7 +150,11 @@ async function play(steps: readonly Step[], tools: Tools, dialect: Dialect): Pro
       last = step.text;
       output += tokensOf(step.text);
       dialect.text(step.text);
-    } else if (step.do === 'fail') return { last, error: step.error, output };
+    } else if (step.do === 'fail') {
+      if (step.once) failedOnce(steps);
+      return { last, error: step.error, output };
+    } else if (step.do === 'limit')
+      return { last, error: 'The account’s limit refused the request', limited: step.seconds, output };
     else {
       output += tokensOf(JSON.stringify(step.args)) + 8;
       dialect.tool(step.tool, step.args);
@@ -158,10 +164,37 @@ async function play(steps: readonly Step[], tools: Tools, dialect: Dialect): Pro
   return { last, error: null, output };
 }
 
+/** The scripts that have failed their one time, kept beside the conversation (a go carries on in its folder). */
+const ONCE_FILE = '.stand-in-once.json';
+const keyOf = (steps: readonly Step[]) => createHash('sha256').update(JSON.stringify(steps)).digest('hex').slice(0, 16);
+
+function failedBefore(): string[] {
+  try {
+    const list = JSON.parse(readFileSync(ONCE_FILE, 'utf8')) as unknown;
+    return Array.isArray(list) ? list.filter((k): k is string => typeof k === 'string') : [];
+  } catch {
+    return [];
+  }
+}
+
+/** A script's `fail-once` has failed: the next go at it carries on after that step. */
+function failedOnce(steps: readonly Step[]): void {
+  try {
+    writeFileSync(ONCE_FILE, JSON.stringify([...failedBefore(), keyOf(steps)].slice(-50)), { mode: 0o600 });
+  } catch {
+    // a folder it can't write in: it fails every time
+  }
+}
+
 /** A turn's steps from its prompt; a script that can't be read is a turn that fails saying why. */
 function stepsOf(prompt: string): Step[] {
   const steps = parseScript(requestOf(prompt));
-  return typeof steps === 'string' ? [{ do: 'fail', error: `The stand-in couldn’t read its script: ${steps}` }] : steps;
+  if (typeof steps === 'string') return [{ do: 'fail', error: `The stand-in couldn’t read its script: ${steps}` }];
+  // (a script whose `fail-once` has failed: this go carries on from the step after it; the script it
+  // was given is what's remembered, so what's left of it doesn't count as another)
+  const once = steps.findIndex((s) => s.do === 'fail' && s.once);
+  if (once < 0 || !failedBefore().includes(keyOf(steps))) return steps;
+  return steps.slice(once + 1);
 }
 
 /** `--name=value` in an argv. */
@@ -262,13 +295,20 @@ async function claude(argv: readonly string[]): Promise<number> {
     text: (text) => say({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text }] } }),
   });
   tools.stop();
+  // what the account has left: some to spare, or (the script's `limit`) the five hours used up, the
+  // request refused by them, as Claude Code says it
+  const until = outcome.limited === undefined ? null : Math.floor(Date.now() / 1000) + outcome.limited;
   say({
     type: 'rate_limit_event',
     rate_limit_info: {
-      status: 'allowed',
+      status: until === null ? 'allowed' : 'rejected',
       rateLimitType: 'five_hour',
+      ...(until === null ? {} : { resetsAt: until, isUsingOverage: false }),
       unifiedWindows: {
-        five_hour: { utilization: 0.12, resetsAt: resets(300), status: 'allowed' },
+        five_hour:
+          until === null
+            ? { utilization: 0.12, resetsAt: resets(300), status: 'allowed' }
+            : { utilization: 1, resetsAt: until, status: 'rejected' },
         seven_day: { utilization: 0.37, resetsAt: resets(10080), status: 'allowed' },
       },
     },
@@ -441,7 +481,10 @@ async function codex(argv: readonly string[]): Promise<number> {
   const total = { input: before.input + tokensOf(prompt), output: before.output + outcome.output };
   keepUsed(session, total);
   if (outcome.error !== null) {
-    say({ type: 'turn.failed', error: { message: outcome.error } });
+    // (an account out of usage, in the words Codex has for an API key's: its limits aren't told in a run)
+    const message =
+      outcome.limited === undefined ? outcome.error : 'Quota exceeded. Check your plan and billing details.';
+    say({ type: 'turn.failed', error: { message } });
     return 1;
   }
   say({

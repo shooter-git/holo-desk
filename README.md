@@ -444,7 +444,11 @@ original against its change, try the versions it made and keep one, set how much
 means. Nothing plays or moves until you click, unless you asked to see or hear something.
 
 A request runs as long as the agent keeps working, up to 2 hours (3 for reading a scan); it ends if it
-goes quiet for 15 minutes, and Stop on the bar ends it at any time.
+goes quiet for 15 minutes, and Stop on the bar ends it at any time. When one fails, the reply is what
+its harness said, with **Try again** under it: the request carries on in the same conversation from
+where it was, and stays one step to undo. There's no Try again where it wouldn't help, and the reply
+says why instead: the harness's account is out of usage (and when its limit starts again), or the
+harness is signed out or no longer installed.
 
 **On a desktop**
 

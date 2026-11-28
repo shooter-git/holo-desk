@@ -196,6 +196,8 @@ interface JobBatch {
   job: string;
   batch: string;
   label: string;
+  /** The earlier go at the same request its job carries on: the batch joins that go's undo step. */
+  continues?: string;
   /** Changes it saved on the host instead, picked up (pickUpAgent): this takes them in. */
   take?: () => history.JobResult;
 }
@@ -217,12 +219,25 @@ const HOLD_LIMIT_MS = 15_000;
  * (not saved yet), or with why it was refused, the song unchanged. No toast: the bar says what the
  * agent is doing.
  */
-export function applyJob(ops: Op[], job: string, batch: string, label: string): Promise<history.JobResult> {
+export function applyJob(
+  ops: Op[],
+  job: string,
+  batch: string,
+  label: string,
+  continues: string | null = null,
+): Promise<history.JobResult> {
   const s = store.get();
   if (!s.project) return Promise.resolve({ ok: false, error: 'No song is open in the studio' });
   // (a job is running from its first batch until the host says otherwise)
   if (!Object.hasOwn(s.agentJobs, job)) setJobRunning(job, true);
-  return submitJob({ project: s.project.id, ops, job, batch, label: `Agent: ${label}` });
+  return submitJob({
+    project: s.project.id,
+    ops,
+    job,
+    batch,
+    label: `Agent: ${label}`,
+    ...(continues ? { continues } : {}),
+  });
 }
 
 /** Into the agent's queue: held by a gesture at most HOLD_LIMIT_MS, then let through. */
@@ -251,7 +266,15 @@ function runJob(b: JobBatch): history.JobResult {
     return { ok: false, error: err instanceof Error ? err.message : String(err) };
   }
   const running = Object.hasOwn(s.agentJobs, b.job) ? s.agentJobs[b.job] === true : true;
-  const h = history.pushOrMergeJob(gestureFirst(s, s.project), s.project, b.label, b.job, running);
+  const h = history.pushOrMergeJob(
+    gestureFirst(s, s.project),
+    s.project,
+    b.label,
+    b.job,
+    running,
+    undefined,
+    b.continues ?? null,
+  );
   gestureFrom(next);
   arrived(b.batch, s.project, next);
   // only the history's own fields: `h` may still be the whole state (a batch merged into the job's

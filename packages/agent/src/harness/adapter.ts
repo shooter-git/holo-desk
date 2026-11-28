@@ -14,9 +14,11 @@ import {
   checkPlan,
   checkRead,
   checkUsage,
+  type FailureKind,
   type HarnessLimits,
   type LimitsRead,
   type RunUsage,
+  usedUp,
 } from '../limits.ts';
 import { harnessEnv } from './env.ts';
 import {
@@ -35,6 +37,12 @@ import { MODEL } from './types.ts';
 import { FAILED_ONCE_FILE, FINISHED_FILE, mcpServer, privateDir, USAGE_FILE, writePrivate } from './workspace.ts';
 
 /** What reading one event (or one line of stderr) found. */
+/** How long a failure waits for the account's limits, asked to say why it failed. */
+const LIMITS_WAIT_MS = 10_000;
+
+/** An error that may be about the account's limits: the limits are then read, and they say whether it is. */
+const LIKE_A_LIMIT = /\b429\b|rate.?limit|quota|usage|limit reached|exhausted|capacity|too many requests/i;
+
 export type Seen =
   | { kind: 'session'; id: string }
   /** The model the harness says the run uses (Claude Code's `init`). */
@@ -53,6 +61,11 @@ export type Seen =
   | { kind: 'usage'; usage: RunUsage }
   /** What the account has left, when the run itself says (Claude Code): the last said stands. */
   | { kind: 'limits'; limits: LimitsRead }
+  /**
+   * The harness says the account's limit refused this run's request (Claude Code's `rate_limit_event`
+   * with the status `rejected`): if the turn then fails, that's why.
+   */
+  | { kind: 'limited'; resets?: number }
   /** The turn is over. */
   | { kind: 'ended' };
 
@@ -107,6 +120,12 @@ export interface Spec {
    * harness without it has only what its runs say (`Seen`'s `limits`), or nothing.
    */
   limits?(ctx: Context): Promise<LimitsRead | null>;
+  /**
+   * What the error in the harness's own result means, where its words are plain and fixed: the account
+   * is out of usage, or the harness is signed out. Null for anything else, a rate limit that passes
+   * included: nothing is guessed (a failure with no reason keeps Try again).
+   */
+  classify?(error: string): FailureKind | null;
   /**
    * Its runs count the tokens of the whole conversation so far, not their own (Codex): a run's own
    * are what was added since the conversation's last run, noted in the workspace.
@@ -835,8 +854,10 @@ export function defineHarness(spec: Spec, o: AdapterOptions): Harness {
        * Once the turn is over, a harness that can be asked says what the account has left now; it
        * comes a moment after the end, and holds nothing up.
        */
+      /** A failure had them asked already (to say why it failed): they aren't asked again a moment later. */
+      let askedLimits = false;
       const limitsAfter = (ctx: Context) => {
-        if (!spec.limits || cancelled) return;
+        if (!spec.limits || cancelled || askedLimits) return;
         void spec
           .limits(ctx)
           .then((read) => {
@@ -848,7 +869,12 @@ export function defineHarness(spec: Spec, o: AdapterOptions): Harness {
       };
       const done = (async () => {
         const ctx = await found();
-        if (!ctx) return report({ type: 'failed', error: `${spec.name} isn’t installed on this computer` });
+        if (!ctx)
+          return report({
+            type: 'failed',
+            error: `${spec.name} isn’t installed on this computer`,
+            why: 'not-installed',
+          });
         const checked = await checkJob(spec, ctx, job, offered?.version === ctx.version ? offered.models : null);
         if ('error' in checked) return report({ type: 'failed', error: checked.error });
         const given = checked.job;
@@ -869,6 +895,9 @@ export function defineHarness(spec: Spec, o: AdapterOptions): Harness {
             asked,
             deadline,
             used,
+            () => {
+              askedLimits = true;
+            },
           );
           if (outcome.again === 'finish' && !asked) {
             // the same conversation, asked only for finish (not a retry: it doesn't count as one)
@@ -979,6 +1008,7 @@ export function defineHarness(spec: Spec, o: AdapterOptions): Harness {
     asked: { said: string } | null,
     deadline: { at: number; ms: number },
     used: (u: RunUsage) => void,
+    limitsAsked: () => void,
   ): Promise<{ again?: 'fresh' | 'same' } | { again: 'finish'; session: string; said?: string }> {
     return new Promise((resolve) => {
       const { args, env: extra } = spec.prepare(ctx, job);
@@ -1005,6 +1035,8 @@ export function defineHarness(spec: Spec, o: AdapterOptions): Harness {
       /** The tokens this go used, and what the account has left, as the harness said them last. */
       let runUsage: RunUsage | null = null;
       let saidLimits: LimitsRead | null = null;
+      /** The harness said the account's limit refused this run's request. */
+      let limited: { resets?: number } | null = null;
       // written by HO[LO]'s MCP server when a finish goes through: this run's own, from nothing
       const finishedFile = join(job.workspace, FINISHED_FILE);
       rmSync(finishedFile, { force: true });
@@ -1052,6 +1084,9 @@ export function defineHarness(spec: Spec, o: AdapterOptions): Harness {
               break;
             case 'limits':
               saidLimits = s.limits;
+              break;
+            case 'limited':
+              limited = s.resets === undefined ? {} : { resets: s.resets };
               break;
             case 'ended':
               ended = true;
@@ -1156,9 +1191,43 @@ export function defineHarness(spec: Spec, o: AdapterOptions): Harness {
         const refused = !timedOut && harnessError !== null && (refusedRequest(spec.id, harnessError) || again);
         if (refused && job.session && !busy) return resolve({ again: 'fresh' });
         const fresh = refused ? { fresh: true as const } : {};
+        /**
+         * Why it failed, when the harness made that plain: its own error's fixed words, its word that
+         * the limit refused the request, or the account's limits as they are now (said by the run, else
+         * asked of the harness: a few seconds at most) with the model's window used up. Nothing else
+         * counts, so a failure that may pass is never taken for one that won't.
+         */
+        const kindOf = async (): Promise<Partial<FailureKind>> => {
+          if (timedOut || refused || harnessError === null) return {};
+          const said = spec.classify?.(harnessError.trim()) ?? null;
+          if (said) return said;
+          if (limited) return { why: 'usage', ...limited };
+          let read: LimitsRead | null = saidLimits;
+          // (asked only for an error that reads like a limit: what it says is never taken as why, only
+          // what the limits then show)
+          if (!read && spec.limits && LIKE_A_LIMIT.test(harnessError)) {
+            limitsAsked();
+            read = await Promise.race([
+              spec.limits(ctx).catch(() => null),
+              new Promise<null>((ok) => setTimeout(() => ok(null), LIMITS_WAIT_MS).unref?.()),
+            ]);
+            const limits = keepLimits(read);
+            if (read && limits) report({ type: 'limits', limits });
+          }
+          // (by the name the job gave the model, else the one the run said it used)
+          const groups = read ? (checkRead(read)?.groups ?? []) : [];
+          const out = usedUp(groups, job.model, now()) ?? (model ? usedUp(groups, model, now()) : null);
+          return out ? { why: 'usage', ...out } : {};
+        };
         if (failure) {
-          report({ type: 'failed', error: cleanError(failure, secrets), ...fresh });
-          return resolve({});
+          const error = cleanError(failure, secrets);
+          void kindOf()
+            .catch(() => ({}))
+            .then((kind) => {
+              report({ type: 'failed', error, ...fresh, ...kind });
+              resolve({});
+            });
+          return;
         }
         if (succeeded) {
           if (!asked && !busy && spec.toolsStarted && !spec.toolsStarted(job)) {

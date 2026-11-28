@@ -43,6 +43,19 @@ export interface LimitsRead {
   groups: LimitGroup[];
 }
 
+/**
+ * Why a request couldn't go on, where that's known for sure: the account is out of usage until a
+ * limit starts again, the harness is signed out, or it's no longer installed. Trying again as it is
+ * wouldn't help with any of them.
+ */
+export type StopWhy = 'usage' | 'signed-out' | 'not-installed';
+
+export interface FailureKind {
+  why: StopWhy;
+  /** When the limit that stopped it starts again (ms since 1970), when that's known. */
+  resets?: number;
+}
+
 /** The tokens one request used. */
 export interface RunUsage {
   /** Read by the model, and not from the vendor's cache. */
@@ -172,4 +185,39 @@ export function groupFor(groups: readonly LimitGroup[], model: string | null | u
   const wanted = bare(model);
   if (!wanted) return null;
   return groups.find((g) => g.models?.some((m) => bare(m) === wanted)) ?? null;
+}
+
+/**
+ * Whether a model's requests are out of usage now, going by limits just read: a window they count
+ * against is used up, and hasn't started again. They count against every group that lists no models
+ * (the ones every model shares) and each group that lists this one. `resets` is when the last of the
+ * used-up windows starts again (all of them must), when the vendor says for each. Null when none is
+ * used up, or when it can't be told which groups the model counts against: nothing is guessed.
+ */
+export function usedUp(
+  groups: readonly LimitGroup[],
+  model: string | null | undefined,
+  now: number,
+): { resets?: number } | null {
+  const wanted = model ? bare(model) : '';
+  const shared = groups.filter((g) => !g.models?.length);
+  const own = wanted ? groups.filter((g) => g.models?.some((m) => bare(m) === wanted)) : [];
+  // (limits by model only, and this model in none of them: which it counts against isn't known)
+  if (!own.length && !shared.length) return null;
+  const out = [...shared, ...own]
+    .flatMap((g) => g.windows)
+    .filter((w) => w.used >= 1 && (w.resets === undefined || w.resets > now));
+  if (!out.length) return null;
+  const all = out.map((w) => w.resets);
+  return all.every((r): r is number => r !== undefined) ? { resets: Math.max(...all) } : {};
+}
+
+/** The longest ahead a limit is believed to start again: a little over a month. */
+const RESETS_MOST_MS = 35 * 24 * 3_600_000;
+
+/** Why a request stopped, as a runner said it, checked: one of the known reasons, a reset within reason. */
+export function checkFailureKind(why: unknown, resets: unknown, now: number): FailureKind | null {
+  if (why !== 'usage' && why !== 'signed-out' && why !== 'not-installed') return null;
+  const at = typeof resets === 'number' && Number.isFinite(resets) ? Math.round(resets) : null;
+  return at !== null && why === 'usage' && at > now && at - now <= RESETS_MOST_MS ? { why, resets: at } : { why };
 }

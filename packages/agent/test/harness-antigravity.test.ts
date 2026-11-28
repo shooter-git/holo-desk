@@ -6,6 +6,7 @@ import {
   ANTIGRAVITY_MANIFESTS,
   ANTIGRAVITY_SETTINGS,
   antigravityArgs,
+  antigravityClassify,
   antigravityFamilies,
   antigravityHarness,
   antigravityInput,
@@ -16,6 +17,7 @@ import {
   antigravityReader,
   antigravityUsage,
   antigravityWantsSignIn,
+  goDuration,
   parseAntigravityAuth,
   parseAntigravityModels,
   parseAntigravityUsage,
@@ -440,6 +442,51 @@ describe('Antigravity: what the account has left', () => {
   });
 });
 
+describe('Antigravity: why a turn failed', () => {
+  const NOW = Date.UTC(2031, 0, 1);
+  it('knows a quota used up by the service’s own fields, with when it starts again', () => {
+    const head = 'RESOURCE_EXHAUSTED (code 429): You have exhausted your capacity on this model.';
+    expect(
+      antigravityClassify(
+        `${head} Your quota will reset after 4m42s. [reason:QUOTA_EXHAUSTED quotaResetDelay:4m42.5s]`,
+        NOW,
+      ),
+    ).toEqual({
+      why: 'usage',
+      resets: NOW + 282_500,
+    });
+    expect(
+      antigravityClassify(`${head} [quotaResetTimeStamp:2031-01-03T07:02:10Z reason:QUOTA_EXHAUSTED]`, NOW),
+    ).toEqual({
+      why: 'usage',
+      resets: Date.UTC(2031, 0, 3, 7, 2, 10),
+    });
+    expect(antigravityClassify(`${head} Resets in 1h0m3s.`, NOW)).toEqual({ why: 'usage', resets: NOW + 3_603_000 });
+    expect(antigravityClassify(`${head} [reason:QUOTA_EXHAUSTED]`, NOW)).toEqual({ why: 'usage' });
+    // (a time that has passed says no more than that it's used up)
+    expect(antigravityClassify(`${head} [quotaResetTimeStamp:2030-12-31T00:00:00Z]`, NOW)).toEqual({ why: 'usage' });
+  });
+
+  it('says nothing of a rate limit that may pass, or of anything else', () => {
+    for (const said of [
+      'RESOURCE_EXHAUSTED (code 429): You have exhausted your capacity on this model.',
+      'RESOURCE_EXHAUSTED (code 429): Resource has been exhausted (e.g. check quota).',
+      'INVALID_ARGUMENT (code 400): Request contains an invalid argument.',
+      'The tool said: RESOURCE_EXHAUSTED (code 429) [reason:QUOTA_EXHAUSTED]',
+      'FAILED_PRECONDITION (code 400): User location is not supported for the API use.',
+    ])
+      expect(antigravityClassify(said, NOW), said).toBeNull();
+  });
+
+  it('reads a Go duration', () => {
+    expect(goDuration('4m42s')).toBe(282_000);
+    expect(goDuration('1h0m3.5s')).toBe(3_603_500);
+    expect(goDuration('250ms')).toBe(250);
+    expect(goDuration('soon')).toBeNull();
+    expect(goDuration('')).toBeNull();
+  });
+});
+
 describe('Antigravity: a sealed run', () => {
   it('passes the prompt on stdin as one stream-json line, runs as HO[LO]’s agent with its tools only, in a private home', async () => {
     s = sandbox();
@@ -693,8 +740,11 @@ describe('Antigravity: a sealed run', () => {
       s = sandbox();
       const limit = 'RESOURCE_EXHAUSTED (code 429): You have exhausted your capacity on this model.';
       const h = fake({ signedIn: true, run: counted(resumeRefused(refusedStream([], limit))) });
+      // (a bare one may pass: the account's limits are read, and with usage to spare, or no telling
+      // which group the model counts against, the failure has no reason)
       expect(await runToEnd(h, job(s, { session: OLD }))).toEqual([
         { type: 'session', session: OLD },
+        { type: 'limits', limits: expect.objectContaining({ groups: expect.any(Array) }) },
         { type: 'failed', error: limit },
       ]);
       expect(runs()).toBe(1);

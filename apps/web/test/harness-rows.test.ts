@@ -337,7 +337,7 @@ describe('the model and effort pickers', () => {
     expect(choices(['low', 'high'], '')).toHaveLength(2);
   });
 
-  it('show the version an alias last ran as, once a run has said', () => {
+  it('show the version an alias stands for now', () => {
     const aliases = { opus: 'claude-opus-9-1', sonnet: 'claude-sonnet-9-20990101', best: 'claude-opus-9-1' };
     expect(choices(['opus', 'sonnet', 'haiku', 'best'], '', aliases)).toEqual([
       { value: 'opus', label: 'Opus (9.1)' },
@@ -439,10 +439,10 @@ describe('what a run uses, as Settings › Agent says it', () => {
     expect(toChoose(cursor, '', '')).toBeNull();
   });
 
-  it('says what an alias last ran as (opus moves on with each new Opus)', () => {
-    expect(runsWithText(ranClaude, 'opus', 'high')).toBe('Opus at high effort (last ran as claude-opus-test)');
+  it('says what an alias stands for now (opus moves on with each new Opus)', () => {
+    expect(runsWithText(ranClaude, 'opus', 'high')).toBe('Opus at high effort (now claude-opus-test)');
     const versioned: HarnessInfo = { ...claude, aliases: { opus: 'claude-opus-9-1' } };
-    expect(runsWithText(versioned, 'opus', 'high')).toBe('Opus at high effort (last ran as Opus 9.1)');
+    expect(runsWithText(versioned, 'opus', 'high')).toBe('Opus at high effort (now Opus 9.1)');
     // a name not run yet: nothing from a run
     expect(runsWithText(ranClaude, 'sonnet', 'high')).toBe('Sonnet at high effort');
   });

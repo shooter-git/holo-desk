@@ -207,7 +207,7 @@ export function toChoose(h: HarnessInfo, model: string, effort: string): string 
 
 /**
  * What Settings › Agent says a request uses, in the menus' own names: "Gpt-6.1-sol at low effort",
- * "Opus at high effort (last ran as Opus 9.1)", "Auto: Cursor chooses the model", the harness's
+ * "Opus at high effort (now Opus 9.1)", "Auto: Cursor chooses the model", the harness's
  * default when it doesn't say what that is, or what's left to choose when it has no defaults.
  */
 export function runsWithText(h: HarnessInfo, model: string, effort: string): string {
@@ -217,7 +217,8 @@ export function runsWithText(h: HarnessInfo, model: string, effort: string): str
   if (!r.model) return `${h.name}’s ${r.effortInModel ? 'default model' : 'default model and effort'}`;
   // a model that's the harness choosing for itself (Cursor's auto), its effort too
   if (r.effortInModel && r.model.toLowerCase() === 'auto') return `Auto: ${h.name} chooses the model`;
-  // an alias moves on with each new model (Claude Code's opus): what it last ran as
+  // an alias moves on with each new model (Claude Code's opus): what it stands for now, as the harness
+  // lists it or its last run said
   const alias = !r.defaultModel && r.model !== model;
   const name = modelSaid(alias ? model : r.model);
   const said = r.effortInModel
@@ -225,7 +226,7 @@ export function runsWithText(h: HarnessInfo, model: string, effort: string): str
     : r.effort
       ? `${name} at ${r.effort} effort`
       : `${name} at ${h.name}’s default effort`;
-  return alias ? `${said} (last ran as ${modelName(r.model)})` : said;
+  return alias ? `${said} (now ${modelName(r.model)})` : said;
 }
 
 /** The label of a picker's empty choice: what the harness's default is when that's known, then whose. */
@@ -234,7 +235,7 @@ export function defaultLabel(h: HarnessInfo, value: string | null): string {
 }
 
 /**
- * A picker's choices: the harness's own, each alias with the version it last ran as, and the one saved
+ * A picker's choices: the harness's own, each alias with the version it stands for now, and the one saved
  * when it's no longer among them (it's kept as it is, said so; a run uses the harness's default
  * instead, or doesn't run when it lists none).
  */
@@ -248,6 +249,6 @@ export function choices(
     return { value: v, label: full && full !== v ? aliasLabel(v, full) : modelSaid(v) };
   });
   if (saved && !list.includes(saved))
-    out.push({ value: saved, label: `${shown(saved)} (no longer offered)`, gone: true });
+    out.push({ value: saved, label: `${modelSaid(saved)} (no longer offered)`, gone: true });
   return out;
 }

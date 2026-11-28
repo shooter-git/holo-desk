@@ -158,12 +158,14 @@ Settings › Agent says what a run uses when Model or Effort is left empty (`Har
   list Anthropic serves, so neither can be read before a run, and nothing it prints says the effort
   (only its private transcript does). So it has none here (`mustChoose`): Settings asks for both, and a
   request without them, or with one `--help` no longer lists, is refused (409 `choose`) by the server
-  and again by the adapter. The names it offers are its own aliases (`opus`, `sonnet`, `haiku`, and
-  what `--help` names), each the latest model of its kind the account has, so the list follows new
-  models and plans without a change here. Every alias takes every effort `--help` lists (checked
-  2026-11-17 with 2.1.322: `haiku` at `max` runs). A run's `init` names the full model (`model`); the
-  adapter keeps what each alias stood for in the runner's notes (`.harnesses.json`, `aliases:claude`),
-  forgotten when another account signs in, and Settings shows it.
+  and again by the adapter. The names it offers are what it lists as it starts (its handshake, "Limits
+  and usage" below): its aliases (`opus`, `fable`, `sonnet`, `haiku`), each the latest model of its
+  kind the account has, then older models by their full names, each with its own efforts, so the list
+  follows new models and plans without a change here. Where it can't be asked so, they're its aliases
+  as `--help` names them, and every alias takes every effort `--help` lists (checked 2026-11-17 with
+  2.1.322: `haiku` at `max` runs). What each alias stands for is as it lists it; a run's `init` names
+  the full model too (`model`), and the adapter keeps that in the runner's notes (`.harnesses.json`,
+  `aliases:claude`), forgotten when another account signs in. Settings shows it.
 
 ## Claude Code
 
@@ -912,8 +914,9 @@ an API key has none):
   run yet shows them. Where that says nothing (an older Claude Code, an API key's account), they're as
   of the harness's last run. They're kept between looks and runs, for the account they were read with.
 
-**Claude Code's handshake (2.1.322).** Started as a run is (`CLAUDE_HANDSHAKE_ARGS`: the same seal, in
-its probe folder) with `--input-format=stream-json`, Claude Code answers control requests on that
+**Claude Code's handshake (2.1.322).** Started as a run is (`CLAUDE_HANDSHAKE_ARGS`: no tools, no
+MCP servers, nothing asked of the user, no settings but a run's own (given inline), in its probe
+folder with the allowlisted environment) with `--input-format=stream-json`, Claude Code answers control requests on that
 stream, the channel its own Agent SDK uses, before any prompt. The adapter writes two, and never a
 prompt, so no request is made of a model (`readClaudeHandshake`); both answered in about a quarter of a
 second here.
@@ -938,13 +941,20 @@ second here.
   `usage_EXPERIMENTAL_MAY_CHANGE_…`). So everything is read as it may not be: a share that isn't 0 to
   100, a kind that isn't known, a family with no name say nothing; `get_usage` refused or unanswered
   leaves the models as listed and the limits as the runs say them.
-- **Should it ever do what a turn does** (an `assistant`, `stream_event`, `result` or `user` line: it
-  never has), it's stopped at once and nothing it said is kept.
+- **Should it ever do what a turn does** before it has answered (an `assistant`, `stream_event`,
+  `result` or `user` line: it never has), it's stopped at once and nothing it said is kept. It's
+  stopped as soon as it has answered either way.
 - **The fallback is what was there before.** A Claude Code whose `--help` doesn't name
-  `--input-format` is never started for it; one that doesn't answer `initialize` in 15 s isn't asked
-  again for ten minutes. Either way the models and efforts are `--help`'s and the limits its runs'.
-- One handshake answers everything a look asks (models, efforts, aliases, limits). It isn't made
-  after each run: the run's own `rate_limit_event` says what's left then.
+  `--input-format`, or lacks an option of the seal, is never started for it; one that doesn't answer
+  `initialize` in 15 s isn't asked again for ten minutes, and one that answers it but not `get_usage`
+  (8 s) is asked only for its models meanwhile. Look again, and a sign-in, ask afresh. With no answer
+  the models and efforts are `--help`'s (or what this version last listed, while the runner runs) and
+  the limits its runs'.
+- One handshake answers everything a look asks (models, efforts, aliases, limits). None is made for a
+  run: a run is checked against what the last look listed, and its own `rate_limit_event` says what's
+  left then. What a run says is the session's and the week's; a family's own week stands as last read.
+- A model its vendor lists as `disabled` (shown, not to be chosen: left out for the account's
+  organisation, say) isn't offered.
 - It still lists no default model or effort that HO[LO] takes, so a request is still given both
   (`mustChoose`).
 - The plan is `claude auth status --json`'s `subscriptionType`.

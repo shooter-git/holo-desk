@@ -96,7 +96,13 @@ const HELP_ASKED = `${HELP}
 /** The fixture's two answers: to `initialize`, then to `get_usage`. */
 const SHAKE = join(REPO, 'packages/agent/test/fixtures/claude-handshake.jsonl');
 /** A handshake as Claude Code answers it: each question kept as it came, and answered from the fixture. */
-const answers = (sb: Sandbox, more = '') => `while IFS= read -r line; do
+const answers = (
+  sb: Sandbox,
+  more = '',
+) => `for a in "$@"; do printf '%s\\n' "$a"; done > ${q(join(sb.rec, 'shake-argv'))}
+env > ${q(join(sb.rec, 'shake-env'))}
+pwd > ${q(join(sb.rec, 'shake-cwd'))}
+while IFS= read -r line; do
   printf '%s\\n' "$line" >> ${q(join(sb.rec, 'asked'))}
   case "$line" in
     *'"initialize"'*) sed -n 1p ${q(SHAKE)} ;;
@@ -246,6 +252,10 @@ describe('Claude Code: what it says of itself as it starts', () => {
         models: [{ value: 'opus' }, { value: 'opus' }, { value: 'a model; rm -rf' }, { value: 7 }, 'opus', null],
       }),
     ).toEqual([{ value: 'opus' }]);
+    // one its vendor shows but doesn't let be chosen (left out for the account's organisation)
+    expect(parseClaudeModels({ models: [{ value: 'opus', disabled: true }, { value: 'sonnet' }] })).toEqual([
+      { value: 'sonnet' },
+    ]);
     expect(parseClaudeModels({ models: 'opus' })).toEqual([]);
     expect(parseClaudeModels(null)).toEqual([]);
   });
@@ -321,9 +331,25 @@ describe('Claude Code: what it says of itself as it starts', () => {
       { type: 'control_request', request_id: 'holo_init', request: { subtype: 'initialize' } },
       { type: 'control_request', request_id: 'holo_usage', request: { subtype: 'get_usage', skip_behaviors: true } },
     ]);
-    expect(CLAUDE_HANDSHAKE_ARGS).toEqual(
-      expect.arrayContaining(['--tools=', '--strict-mcp-config', '--permission-mode=dontAsk']),
+    // started as a run is: no tools, no servers but none, nothing asked, no settings of the user's,
+    // in its own folder, with the allowlisted environment
+    const argv = readFileSync(join(s.rec, 'shake-argv'), 'utf8').trim().split('\n');
+    expect(argv).toEqual([...CLAUDE_HANDSHAKE_ARGS]);
+    expect(argv).toEqual(
+      expect.arrayContaining([
+        '--tools=',
+        '--strict-mcp-config',
+        '--mcp-config={"mcpServers":{}}',
+        '--permission-mode=dontAsk',
+        '--setting-sources=project',
+        '--settings={"disableAllHooks":true,"autoMemoryEnabled":false,"disableClaudeAiConnectors":true}',
+        '--disable-slash-commands',
+      ]),
     );
+    expect(readFileSync(join(s.rec, 'shake-cwd'), 'utf8').trim()).toBe(join(s.root, '.probe'));
+    const env = readFileSync(join(s.rec, 'shake-env'), 'utf8');
+    expect(env).toContain('DISABLE_AUTOUPDATER=1');
+    expect(env).not.toContain('OPENAI_API_KEY');
     expect(info).toMatchObject({
       found: true,
       sealed: true,
@@ -351,6 +377,64 @@ describe('Claude Code: what it says of itself as it starts', () => {
       },
     });
     expect(info).not.toHaveProperty('defaultModel');
+  });
+
+  it('isn’t made again for a run: a run is checked against what the look listed, and doesn’t wait on one', async () => {
+    s = sandbox();
+    const h = fake({ signedIn: true, help: HELP_ASKED, handshake: answers(s) });
+    await h.info();
+    const asked = () => readFileSync(join(s.rec, 'asked'), 'utf8').trim().split('\n').length;
+    expect(asked()).toBe(2);
+    // (one of the full names it listed, which `--help` doesn't name)
+    const events = await runToEnd(h, job(s, { model: 'claude-fable-9-1', effort: 'max' }));
+    expect(events.at(-1)?.type).toBe('done');
+    expect(recorded(s).argv).toEqual(expect.arrayContaining(['--model=claude-fable-9-1', '--effort=max']));
+    await runToEnd(h, job(s));
+    expect(asked()).toBe(2);
+    // what a run says of the limits is the session's and the week's: the family's own week stands as read
+    const limits = events.find((e) => e.type === 'limits') as { limits: { groups: { name?: string }[] } };
+    expect(limits.limits.groups).toMatchObject([{ windows: LEFT[0]?.windows }, { name: 'Fable models' }]);
+    expect((await h.info()).limits?.groups.map((g) => g.name)).toEqual([undefined, 'Fable models']);
+  });
+
+  it('says its aliases whole when a run learns one anew', async () => {
+    s = sandbox();
+    // (it doesn't say what haiku stands for: the run is the first to)
+    const noHaiku = `while IFS= read -r line; do case "$line" in
+  *'"initialize"'*) sed -n 1p ${q(SHAKE)} | sed 's/"value":"haiku","resolvedModel":"claude-haiku-9-1"/"value":"haiku"/' ;;
+  *'"get_usage"'*) sed -n 2p ${q(SHAKE)} ;;
+esac; done; exit 0`;
+    const h = fake({ signedIn: true, help: HELP_ASKED, handshake: noHaiku, run: `${replay('claude-normal')}; exit 0` });
+    expect((await h.info()).aliases).not.toHaveProperty('haiku');
+    // (the recorded run says its model was claude-haiku-5-5: news for that alias)
+    const events = await runToEnd(h, job(s));
+    expect(events.filter((e) => e.type === 'aliases')).toEqual([
+      {
+        type: 'aliases',
+        aliases: expect.objectContaining({
+          haiku: 'claude-haiku-5-5',
+          fable: 'claude-fable-9-2',
+          sonnet: 'claude-sonnet-9-1',
+        }),
+      },
+    ]);
+  });
+
+  it('isn’t asked again for a while once it didn’t answer, until Look again', async () => {
+    s = sandbox();
+    const count = q(join(s.rec, 'shakes'));
+    const failed = `echo x >> ${count}; read -r line; echo '{"type":"control_response","response":{"subtype":"error","request_id":"holo_init","error":"no"}}'; exit 0`;
+    const h = fake({ signedIn: true, help: HELP_ASKED, handshake: failed });
+    const started = () => readFileSync(join(s.rec, 'shakes'), 'utf8').trim().split('\n').length;
+    await h.info();
+    expect(started()).toBe(1);
+    await h.info();
+    await runToEnd(h, job(s));
+    expect(started()).toBe(1);
+    // Look again asks afresh
+    h.recheck();
+    await h.info();
+    expect(started()).toBe(2);
   });
 
   it('goes on as before with a Claude Code that can’t be asked, or doesn’t answer', async () => {
@@ -423,6 +507,31 @@ describe('Claude Code: what it says of itself as it starts', () => {
     );
     expect(late?.limits).toBeNull();
     expect(late?.models).toHaveLength(7);
+    // (said so, for it not to be waited for again for a while: then only its models are asked)
+    expect(late?.usage).toBe('silent');
+    expect(kept?.usage).toBe('answered');
+    writeFileSync(join(s.rec, 'asked'), '');
+    const unasked = await readClaudeHandshake(
+      { path: silent, prefix: [] },
+      { cwd: s.dir, env: s.env as Record<string, string> },
+      2000,
+      false,
+    );
+    expect(unasked).toMatchObject({ limits: null, usage: 'unasked' });
+    expect(readFileSync(join(s.rec, 'asked'), 'utf8').trim().split('\n')).toHaveLength(1);
+    // what it writes beside its answers is never waited on
+    const noisy = fakeBinary(
+      s,
+      'claude-noisy',
+      [{ when: '*', run: `head -c 400000 /dev/zero | tr '\\0' 'x' >&2\n${answers(s)}` }],
+      'exit 0',
+    );
+    const heard = await readClaudeHandshake(
+      { path: noisy, prefix: [] },
+      { cwd: s.dir, env: s.env as Record<string, string> },
+      3000,
+    );
+    expect(heard?.models).toHaveLength(7);
     // nothing at all in time
     const dumb = fakeBinary(s, 'claude-dumb', [{ when: '*', run: 'sleep 5; exit 0' }], 'exit 0');
     expect(

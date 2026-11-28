@@ -297,7 +297,7 @@ describe('what the chooser offers', () => {
     expect(o.notes).toEqual(['Cursor is signed out']);
     expect(o.settings).toEqual({
       id: 'claude',
-      text: 'Claude Code, Opus at high effort (last ran as Opus 9.1)',
+      text: 'Claude Code, Opus at high effort (now Opus 9.1)',
       asks: false,
     });
     // the song follows Settings: that's what's picked as it opens

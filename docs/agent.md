@@ -269,9 +269,10 @@ Effort the default of the model a run uses. Claude Code has no defaults to name,
 empty choice: "Choose a model" and "Choose an effort" until both are chosen, and one it no longer offers
 says to choose another. **Requests use**, under them, says what a run with these settings uses, as the
 adapter decides it, in the menus' names: "Gpt-6.1-sol at low effort", "Auto: Cursor chooses the model",
-"Opus at high effort (last ran as Opus <its version>)" for Claude Code once a run has said what the
-alias stands for (Claude Code lists only aliases, so its Model menu adds each one's version then:
-"Opus (<its version>)"), or, in the warning color, what's left to choose ("Choose an effort first").
+"Opus at high effort (now Opus <its version>)" for Claude Code, whose aliases move on with each new
+model (it lists what each stands for as it starts, and a run says it too: its Model menu adds each
+one's version, "Opus (<its version>)"), or, in the warning color, what's left to choose ("Choose an
+effort first").
 The choice is the host's, shared by every allowed device, so a request from a phone runs as one from
 the desktop. A song can have its own instead (below, "A song's own choice"). A run that says something new of an alias sends the harness list again at once (the runner's
 `harnesses` message), so the row follows without a look.

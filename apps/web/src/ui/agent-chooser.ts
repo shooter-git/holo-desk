@@ -130,7 +130,7 @@ function readAgo(at: number | undefined, now: number): string | null {
 
 /**
  * What's left for a harness run with this model and effort. A share read an hour ago or more says so
- * (the account may have been used since, here or elsewhere: Claude Code reports only with a request).
+ * (the account may have been used since, here or elsewhere, and a harness is asked only now and then).
  */
 function leftFor(h: HarnessInfo, model: string, effort: string, c: Clock): Left | null {
   const left = leftOf(groupsOf(h), [model, runsWith(h, model, effort).model], c);

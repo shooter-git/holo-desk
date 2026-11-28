@@ -126,6 +126,11 @@ export interface Spec {
   /** Its runs say what the account has left themselves (Claude Code): it isn't asked again after each one. */
   limitsFromRuns?: boolean;
   /**
+   * What it keeps of itself between looks is let go (what it listed, a question it stopped asking): at
+   * Look again, and once it's signed in (another account's may differ).
+   */
+  forget?(): void;
+  /**
    * What the error in the harness's own result means, where its words are plain and fixed: the account
    * is out of usage, or the harness is signed out. Null for anything else, a rate limit that passes
    * included: nothing is guessed (a failure with no reason keeps Try again).
@@ -462,6 +467,8 @@ export function defineHarness(spec: Spec, o: AdapterOptions): Harness {
   const forgetFailedSeal = () => {
     const cached = memory.get<{ sealed?: boolean }>(sealKey);
     if (cached && cached.sealed !== true) memory.set(sealKey, undefined);
+    // (and what the harness itself kept between looks: asked afresh)
+    spec.forget?.();
   };
   /** The defaults the last look listed (`spec.defaults`), and the account it was signed in with. */
   let listed: { model?: string; efforts?: Record<string, string>; aliases?: Record<string, string> } | null = null;
@@ -506,6 +513,28 @@ export function defineHarness(spec: Spec, o: AdapterOptions): Harness {
     return limits;
   }
 
+  /** What its aliases stand for: as the harness lists them now, over what its runs said (an alias moves on with a new model). */
+  function aliasesNow(): Record<string, string> {
+    return {
+      ...aliasesSaid(),
+      ...Object.fromEntries(
+        Object.entries(listed?.aliases ?? {}).filter(([name, model]) => MODEL.test(name) && MODEL.test(model)),
+      ),
+    };
+  }
+
+  /**
+   * What a run said of the limits, with the model families' own that it doesn't speak of kept as last
+   * read: a run names the limits its own model counts against, not every family's.
+   */
+  function withFamilies(said: LimitsRead): LimitsRead {
+    const known = limitsKnown();
+    if (!known) return said;
+    const named = new Set(said.groups.map((g) => g.name ?? ''));
+    const kept = known.groups.filter((g) => g.models?.length && !named.has(g.name ?? ''));
+    return kept.length ? { ...said, groups: [...said.groups, ...kept] } : said;
+  }
+
   /** The harness's defaults as it lists them, and what its aliases stood for. */
   function defaults(): Pick<HarnessInfo, 'defaultModel' | 'defaultEfforts' | 'aliases'> {
     const out: Pick<HarnessInfo, 'defaultModel' | 'defaultEfforts' | 'aliases'> = {};
@@ -514,13 +543,7 @@ export function defineHarness(spec: Spec, o: AdapterOptions): Harness {
       Object.entries(listed?.efforts ?? {}).filter(([m, e]) => MODEL.test(m) && MODEL.test(e)),
     );
     if (Object.keys(efforts).length) out.defaultEfforts = efforts;
-    // (what the harness lists now, over what its runs said: an alias moves on with a new model)
-    const aliases = {
-      ...aliasesSaid(),
-      ...Object.fromEntries(
-        Object.entries(listed?.aliases ?? {}).filter(([name, model]) => MODEL.test(name) && MODEL.test(model)),
-      ),
-    };
+    const aliases = aliasesNow();
     if (Object.keys(aliases).length) out.aliases = aliases;
     return out;
   }
@@ -654,6 +677,9 @@ export function defineHarness(spec: Spec, o: AdapterOptions): Harness {
         }
         const info: HarnessInfo = { ...base, found: true };
         if (ctx.version) info.version = ctx.version;
+        // (the limits are asked first: a harness that answers a whole look in one go starts it here,
+        // and what's asked below shares it)
+        const limitsRead = spec.limits ? spec.limits(ctx).catch(() => null) : null;
         const [auth, sealed, models, efforts, update, given, read] = await Promise.all([
           spec.auth(ctx).catch(() => null),
           spec.sealed(ctx).catch(
@@ -666,7 +692,7 @@ export function defineHarness(spec: Spec, o: AdapterOptions): Harness {
           spec.efforts(ctx).catch(() => []),
           checkUpdate(ctx),
           spec.defaults ? spec.defaults(ctx).catch(() => null) : null,
-          spec.limits ? spec.limits(ctx).catch(() => null) : null,
+          limitsRead,
         ]);
         if (auth) {
           info.signedIn = auth.signedIn;
@@ -1171,7 +1197,7 @@ export function defineHarness(spec: Spec, o: AdapterOptions): Harness {
           if (own) used(own);
         }
         if (saidLimits) {
-          const limits = keepLimits(saidLimits);
+          const limits = keepLimits(withFamilies(saidLimits));
           if (limits) report({ type: 'limits', limits });
         }
         // whether it failed, again, in the same conversation, with an error that counts only then
@@ -1190,7 +1216,7 @@ export function defineHarness(spec: Spec, o: AdapterOptions): Harness {
           return resolve({});
         }
         // the model its alias stood for, when that's news (Settings shows it)
-        if (model && learn(job.model, model)) report({ type: 'aliases', aliases: aliasesSaid() });
+        if (model && learn(job.model, model)) report({ type: 'aliases', aliases: aliasesNow() });
         const said = [...output, ...stderrTail].join('\n');
         const early = code !== 0 && !timedOut && !session && !busy;
         if (early && spec.retry?.(ctx, job, said)) return resolve({ again: 'same' });

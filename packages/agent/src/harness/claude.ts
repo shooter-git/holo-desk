@@ -295,9 +295,14 @@ export const CLAUDE_HANDSHAKE_ARGS: readonly string[] = [
   '--mcp-config={"mcpServers":{}}',
   '--permission-mode=dontAsk',
   '--setting-sources=project',
+  // (what a run's own settings file says: no hooks, no memory of its own, no claude.ai connectors)
+  '--settings={"disableAllHooks":true,"autoMemoryEnabled":false,"disableClaudeAiConnectors":true}',
   '--disable-slash-commands',
   '--no-chrome',
 ];
+
+/** How long `get_usage` is waited for, once `initialize` has answered. */
+const USAGE_WAIT_MS = 8_000;
 
 /** A model as `initialize` lists it: its name for `--model`, what it stands for, its efforts, its vendor's name. */
 export interface ClaudeModel {
@@ -311,6 +316,8 @@ export interface ClaudeModel {
 export interface ClaudeHandshake {
   models: ClaudeModel[];
   limits: LimitsRead | null;
+  /** How `get_usage` went: answered (its limits, or that it has none), not answered in time, or not asked. */
+  usage: 'answered' | 'silent' | 'unasked';
 }
 
 /** The models `initialize` lists, as they should be: names a run can be given (`default` isn't one), at most 60. */
@@ -319,6 +326,8 @@ export function parseClaudeModels(response: unknown): ClaudeModel[] {
   const out: ClaudeModel[] = [];
   for (const m of response.models.slice(0, 120)) {
     if (!isObject(m) || typeof m.value !== 'string' || !MODEL.test(m.value) || m.value === 'default') continue;
+    // (shown by its vendor but not to be chosen: the account's organisation leaves it out, say)
+    if (m.disabled) continue;
     if (out.some((o) => o.value === m.value)) continue;
     const model: ClaudeModel = { value: m.value };
     if (typeof m.resolvedModel === 'string' && MODEL.test(m.resolvedModel)) model.resolved = m.resolvedModel;
@@ -408,27 +417,33 @@ export function readClaudeHandshake(
   bin: Binary,
   where: SpawnOptions,
   timeoutMs = 15_000,
+  /** Whether `get_usage` is asked at all (not for a while after it didn't answer). */
+  askUsage = true,
 ): Promise<ClaudeHandshake | null> {
   return new Promise((resolve) => {
     const child = start(bin, [...CLAUDE_HANDSHAKE_ARGS], where);
     let over = false;
     let models: ClaudeModel[] | null = null;
+    let usageLimit: ReturnType<typeof setTimeout> | null = null;
     const end = (found: ClaudeHandshake | null) => {
       if (over) return;
       over = true;
       clearTimeout(limit);
+      if (usageLimit) clearTimeout(usageLimit);
       child.stdin?.end();
       stopGroup(child, 500);
       resolve(found);
     };
     // (out of time: what `initialize` said stands, without limits)
-    const limit = setTimeout(() => end(models ? { models, limits: null } : null), timeoutMs);
+    const late = () => end(models ? { models, limits: null, usage: 'silent' } : null);
+    const limit = setTimeout(late, timeoutMs);
     limit.unref?.();
     const ask = (id: string, subtype: string, more: Record<string, unknown> = {}) =>
       child.stdin?.write(
         `${JSON.stringify({ type: 'control_request', request_id: id, request: { subtype, ...more } })}\n`,
       );
     eachLine(child.stdout, (line) => {
+      if (over) return;
       let msg: unknown;
       try {
         msg = JSON.parse(line);
@@ -439,16 +454,26 @@ export function readClaudeHandshake(
       if (typeof msg.type === 'string' && MODEL_AT_WORK.has(msg.type)) return end(null);
       if (msg.type !== 'control_response' || !isObject(msg.response)) return;
       const { request_id: id, subtype, response } = msg.response;
-      if (id === 'holo_init') {
+      if (id === 'holo_init' && !models) {
         if (subtype !== 'success') return end(null);
         models = parseClaudeModels(response);
+        if (!askUsage) return end({ models, limits: null, usage: 'unasked' });
+        // (its limits have a shorter wait of their own: its models are known already)
+        usageLimit = setTimeout(late, Math.min(timeoutMs, USAGE_WAIT_MS));
+        usageLimit.unref?.();
         ask('holo_usage', 'get_usage', { skip_behaviors: true });
       } else if (id === 'holo_usage' && models)
-        end({ models, limits: subtype === 'success' ? parseClaudeUsage(response, models) : null });
+        end({
+          models,
+          limits: subtype === 'success' ? parseClaudeUsage(response, models) : null,
+          usage: 'answered',
+        });
     });
+    // (what it says there is never read: it mustn't fill up and hold the answers back)
+    child.stderr?.resume();
     child.stdin?.on('error', () => undefined);
     child.on('error', () => end(null));
-    child.on('close', () => end(models ? { models, limits: null } : null));
+    child.on('close', () => end(models ? { models, limits: null, usage: 'silent' } : null));
     ask('holo_init', 'initialize');
   });
 }
@@ -496,37 +521,75 @@ export function claudeSpec(): Spec {
   };
   const envFor = (ctx: Context, extra: Readonly<Record<string, string>> = CLAUDE_ENV) =>
     harnessEnv('claude', extra, ctx.env, ctx.platform);
-  // The handshake (above): one answers every question of a look (models, efforts, aliases, limits),
-  // and a later one is made when the limits are asked again. What a version's last good one said of
-  // its models stands until the next; a version that didn't answer isn't asked again for a while, and
-  // the adapter goes on as it did before it (`--help`'s lists, the limits its runs say).
-  let shake: { version: string | null; at: number; value: Promise<ClaudeHandshake | null> } | null = null;
+  // The handshake (above). A look asks the limits first, which makes one, and what else it asks
+  // (models, efforts, aliases) shares it. Between looks, what the version's last one listed stands: a
+  // run is checked against that, and never waits on a handshake of its own. One that didn't answer
+  // isn't asked again for a while (`initialize`: not at all; `get_usage`: only that isn't), and the
+  // adapter goes on as it did before it (`--help`'s lists, the limits its runs say). Look again, and a
+  // sign-in, start afresh (`forget`).
+  let shake: { version: string | null; at: number; done: boolean; value: Promise<ClaudeHandshake | null> } | null =
+    null;
   let good: { version: string | null; models: ClaudeModel[] } | null = null;
   let silent: { version: string | null; at: number } | null = null;
+  let usageSilent: { version: string | null; at: number } | null = null;
+  const quiet = (q: typeof silent, ctx: Context, now: number) =>
+    !!q && q.version === ctx.version && now - q.at < HANDSHAKE_QUIET_MS;
+  /** The handshake under way, or one answered a moment ago. */
+  const recent = (ctx: Context, now: number) =>
+    shake && shake.version === ctx.version && (!shake.done || now - shake.at < HANDSHAKE_FRESH_MS) ? shake : null;
+  /** Whether this Claude Code can be asked: it reads the stream it's asked on, and takes every option of the seal. */
+  const canAsk = (help: string) =>
+    /--input-format\b/.test(help) && CLAUDE_NEEDS.every((o) => new RegExp(`${o}\\b`).test(help));
   const handshake = (ctx: Context): Promise<ClaudeHandshake | null> => {
     const now = Date.now();
-    if (shake && shake.version === ctx.version && now - shake.at < HANDSHAKE_FRESH_MS) return shake.value;
-    if (silent && silent.version === ctx.version && now - silent.at < HANDSHAKE_QUIET_MS) return Promise.resolve(null);
+    const made = recent(ctx, now);
+    if (made) return made.value;
+    if (quiet(silent, ctx, now)) return Promise.resolve(null);
+    const askUsage = !quiet(usageSilent, ctx, now);
     // (kept at once, before anything is waited for: what's asked meanwhile shares this one)
-    const value = helpText(ctx)
-      // a Claude Code from before the stream of JSON it's asked on has nothing to ask
-      .then((help) => (/--input-format\b/.test(help) ? readClaudeHandshake(ctx.bin, probe(ctx)) : null))
+    const mine: NonNullable<typeof shake> = {
+      version: ctx.version,
+      at: now,
+      done: false,
+      value: Promise.resolve(null),
+    };
+    mine.value = helpText(ctx)
+      .then(
+        (help): Promise<ClaudeHandshake | null | 'never'> =>
+          canAsk(help) ? readClaudeHandshake(ctx.bin, probe(ctx), 15_000, askUsage) : Promise.resolve('never'),
+      )
       .then(
         (found) => {
-          if (found?.models.length) good = { version: ctx.version, models: found.models };
-          if (!found) silent = { version: ctx.version, at: Date.now() };
+          // (fresh from when it answered, however long that took)
+          mine.at = Date.now();
+          mine.done = true;
+          // one that can't be asked was never started: nothing to stay quiet about
+          if (found === 'never') return null;
+          if (!found) silent = { version: ctx.version, at: mine.at };
+          else {
+            if (found.models.length) good = { version: ctx.version, models: found.models };
+            if (found.usage === 'silent') usageSilent = { version: ctx.version, at: mine.at };
+          }
           return found;
         },
-        () => null,
+        () => {
+          mine.done = true;
+          return null;
+        },
       );
-    shake = { version: ctx.version, at: now, value };
-    return value;
+    shake = mine;
+    return mine.value;
   };
-  /** The models the handshake listed for this version (the last good one's, when this one said none). */
+  /**
+   * The models this version lists: a look's own handshake's (under way, or just answered); else what
+   * its last one listed, without asking again; else, with none yet, one is made.
+   */
   const listed = async (ctx: Context): Promise<ClaudeModel[]> => {
-    const found = await handshake(ctx).catch(() => null);
+    const made = recent(ctx, Date.now());
+    const found = made ? await made.value.catch(() => null) : null;
     if (found?.models.length) return found.models;
-    return good && good.version === ctx.version ? good.models : [];
+    if (good && good.version === ctx.version) return good.models;
+    return made ? [] : ((await handshake(ctx).catch(() => null))?.models ?? []);
   };
   return {
     id: 'claude',
@@ -605,6 +668,12 @@ export function claudeSpec(): Spec {
       return (await handshake(ctx).catch(() => null))?.limits ?? null;
     },
     limitsFromRuns: true,
+    forget() {
+      shake = null;
+      good = null;
+      silent = null;
+      usageSilent = null;
+    },
     // it lists no defaults (they follow the account, and Anthropic's own list): a run is given both,
     // and each run's `init` says what its alias stood for
     mustChoose: true,

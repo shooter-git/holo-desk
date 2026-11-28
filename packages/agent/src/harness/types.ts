@@ -37,8 +37,8 @@ export interface HarnessInfo {
   plan?: string;
   /**
    * What the account has left, as its vendor reports it (limits.ts): read at each look and after each
-   * of its runs, or said by the runs themselves (Claude Code). None for a harness that doesn't report
-   * it (Cursor).
+   * of its runs, or (Claude Code) asked as it starts at each look and said by its runs themselves.
+   * None for a harness that doesn't report it (Cursor).
    */
   limits?: HarnessLimits;
   update?: { available: boolean; latest?: string };
@@ -65,7 +65,7 @@ export interface HarnessInfo {
   defaultModel?: string;
   /** The effort a run uses with a model when Effort is left empty, by model (Codex's catalog). */
   defaultEfforts?: Record<string, string>;
-  /** The model each alias stood for at its last run (Claude Code's `opus` → the full name its `init` gave). */
+  /** The model each alias stands for now: as the harness lists it (Claude Code, as it starts), or as its last run said. */
   aliases?: Record<string, string>;
   /**
    * It lists no defaults (Claude Code: they follow the account and Anthropic's own list), so a run

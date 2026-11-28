@@ -68,7 +68,9 @@ export function sandbox(extra: Record<string, string> = {}): Sandbox {
     rec,
     env,
     path: SYSTEM_PATH.join(':'),
-    cleanup: () => rmSync(dir, { recursive: true, force: true }),
+    // (a fake that was just stopped may still be writing what it recorded: tried again a few times,
+    // rather than failing the test on a folder that wasn't empty yet)
+    cleanup: () => rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }),
   };
 }
 

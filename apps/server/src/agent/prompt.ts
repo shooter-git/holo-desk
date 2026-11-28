@@ -260,6 +260,16 @@ Carry on with the request you were working on:
 ${request}`;
 }
 
+/**
+ * A request carried on after a go at it that didn't finish (Try again, and later ones): the same
+ * request, with what to mind first. What that go changed is in the song, and "Since your last reply"
+ * says how it ended.
+ */
+export function carryOnRequest(request: string): string {
+  return `Your last go at this request didn't finish (above). What it changed is still in the song: read the song as it is now before you change anything, and make a change again only if it isn't there. Then carry on with the request:
+${request}`;
+}
+
 export interface PromptParts {
   rules: string;
   since: string[] | null;

@@ -281,6 +281,9 @@ export function startAgentRunner(o: AgentRunnerOptions): AgentRunner {
               error: e.error.slice(0, 500),
               ...(e.fresh ? { fresh: true } : {}),
               ...(e.usage ? { usage: e.usage } : {}),
+              // why, when the harness made it plain (out of usage, signed out, not installed)
+              ...(e.why ? { why: e.why } : {}),
+              ...(e.resets ? { resets: e.resets } : {}),
             });
             break;
         }

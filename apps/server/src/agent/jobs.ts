@@ -20,7 +20,7 @@
  * the device was removed, the agent turned off).
  */
 import { randomBytes } from 'node:crypto';
-import { checkLimits, checkPlan, checkUsage, type HarnessLimits } from '@holo/agent/limits';
+import { checkFailureKind, checkLimits, checkPlan, checkUsage, type HarnessLimits } from '@holo/agent/limits';
 import {
   AFTER,
   BEFORE,
@@ -51,6 +51,7 @@ import { plainReply } from './plain.ts';
 import {
   type AttachmentInfo,
   buildPrompt,
+  carryOnRequest,
   contextLines,
   eventLine,
   oneLine,
@@ -109,6 +110,12 @@ export interface JobView {
   finished?: number;
   /** The song's title as the request was made: a studio with another song open names it by this. */
   title?: string;
+  /** The harness it runs with. */
+  harness?: HarnessId;
+  /** Why it didn't go on, when that's known for sure (the studio offers what would help). */
+  stop?: TurnStop;
+  /** The earlier go at the same request it carries on: its changes join that go's undo step. */
+  continues?: string;
 }
 
 /** A harness on the runner's computer, as the runner reports it. */
@@ -215,6 +222,8 @@ export interface AgentJob {
   changes: [string, number][];
   /** Why it didn't go on, when that's known for sure. */
   stop: TurnStop | null;
+  /** The earlier go at the same request it carries on (a turn that didn't finish), or null. */
+  continues: string | null;
 }
 
 /** What a turn that was working says when HO[LO] stopped under it (its error, and what the agent hears next). */
@@ -833,6 +842,7 @@ export class Jobs implements AgentHooks {
     attachments: readonly string[],
     prompt: (now: Project) => Promise<string>,
     context: RequestContext | null = null,
+    carry: { continues: string; before: number | null; previous: number | null } | null = null,
   ): Promise<string> {
     this.starting.add(project);
     const ceiling = preset ? this.limits.scanClockMs : this.limits.clockMs;
@@ -842,9 +852,10 @@ export class Jobs implements AgentHooks {
       const now = this.o.store.get(project);
       if (!now) throw new Refusal(404, 'No such song');
       // a restore point, whatever the agent does (and the reply's "before"); the previous request's is "previous"
-      const before = this.o.store.snapshotNow(project, 'Agent');
+      // (a go that carries an earlier one on keeps that one's: its "before" is the song before the request)
+      const before = carry?.before ?? this.o.store.snapshotNow(project, 'Agent');
       const earlier = this.o.agentStore.turns(thread.id).at(-1);
-      const previous = (earlier && parseExtra(earlier.extra).before) ?? null;
+      const previous = carry ? carry.previous : ((earlier && parseExtra(earlier.extra).before) ?? null);
       const text = await prompt(now);
       const settings = this.o.agentStore.settings();
       const token = newToken();
@@ -857,6 +868,8 @@ export class Jobs implements AgentHooks {
           request,
           started: Date.now(),
           title: now.title,
+          harness: thread.harness,
+          ...(carry ? { continues: carry.continues } : {}),
         },
         thread: thread.id,
         harness: thread.harness,
@@ -889,6 +902,7 @@ export class Jobs implements AgentHooks {
         heard: this.o.threads.events(this.o.threads.get(thread.id) ?? thread).map(eventLine),
         changes: [],
         stop: null,
+        continues: carry?.continues ?? null,
       };
       // the runner may have gone while the studio saved
       if (!this.o.live.agentRunners().includes(runner))
@@ -986,6 +1000,58 @@ export class Jobs implements AgentHooks {
     }
     if (!isLive(job)) throw new Refusal(409, 'That job has ended');
     this.end(job, 'cancelled', 'Stopped', true);
+  }
+
+  /**
+   * Try again: a request whose last go failed is carried on, in the same conversation, as a new job
+   * that continues it. It's the same request (its words, its preset, what the studio showed, its
+   * attachments still kept), told that its last go didn't finish and to read the song first. Only for
+   * the device that asked, and only for the conversation's last turn: a later request has moved on.
+   */
+  async carryOn(device: string, id: string): Promise<string> {
+    const row = this.o.agentStore.turn(id);
+    const thread = row ? this.o.threads.get(row.thread) : null;
+    if (!row || !thread) throw new Refusal(404, 'No such request');
+    if (row.device !== device) throw new Refusal(403, 'Only the device that asked can carry it on');
+    if (this.o.threads.current(thread.project)?.id !== thread.id)
+      throw new Refusal(409, 'That conversation was started over');
+    if (this.o.agentStore.turns(thread.id).at(-1)?.job !== row.job)
+      throw new Refusal(409, 'A later request has been made on this song since');
+    if (row.state !== 'failed') throw new Refusal(409, 'That request didn’t fail');
+    const project = thread.project;
+    if (!this.o.store.get(project)) throw new Refusal(404, 'No such song');
+    if (!this.o.live.studioFor(device, project))
+      throw new Refusal(409, 'Open the song in this studio first', 'not-open');
+    this.free(project);
+    const extra = parseExtra(row.extra);
+    const preset = extra.preset ?? null;
+    // (the harness as it is now: signed out or gone since, the refusal says so, as a request's does)
+    const { runner, info } = this.pick(thread.harness);
+    this.chosen(thread.harness, info);
+    // what it was sent that's still kept (a week): the rest it was told of the first time
+    const kept = (extra.attachments ?? []).filter((a) => this.o.attachment?.(a, project, device));
+    const attachments = this.attachments(device, project, kept);
+    const context = extra.context ?? null;
+    return this.begin(
+      device,
+      project,
+      thread,
+      runner,
+      row.request,
+      preset,
+      kept,
+      async (now) =>
+        buildPrompt({
+          rules: readRules(this.o.repoDir),
+          since: this.since(thread.id, now),
+          context: contextLines(context ?? undefined, now, this.about(project)),
+          attachments,
+          request: carryOnRequest(preset ? presetRequest(preset) : row.request),
+        }),
+      context,
+      // (the go it continues may itself have carried one on: the request's first is what its step is under)
+      { continues: extra.continues ?? row.job, before: extra.before ?? null, previous: extra.previous ?? null },
+    );
   }
 
   /**
@@ -1098,6 +1164,7 @@ export class Jobs implements AgentHooks {
     job.view.state = state;
     job.view.error = oneLine(why, 500);
     job.view.finished = Date.now();
+    if (job.stop && state === 'failed') job.view.stop = job.stop;
     this.stopListening(job);
     this.o.threads.addEventTo(job.thread, {
       action: state === 'failed' ? 'failed' : 'stopped',
@@ -1285,6 +1352,8 @@ export class Jobs implements AgentHooks {
         const fresh = msg.fresh === true;
         if (fresh) this.o.threads.forgetSession(job.thread);
         const why = typeof msg.error === 'string' && msg.error ? msg.error : 'The agent stopped';
+        // why, when its harness made it plain: out of usage (till when), signed out, not installed
+        job.stop = checkFailureKind(msg.why, msg.resets, Date.now()) ?? job.stop;
         this.end(job, 'failed', why, false, fresh);
         break;
       }
@@ -1680,7 +1749,16 @@ export class Jobs implements AgentHooks {
       const left = Math.max(5_000, (hidden ? this.limits.hiddenMs : this.limits.opsMs) - (Date.now() - arrived));
       const answer = await this.o.live.request(
         studio,
-        { type: 'agent-ops', project: job.view.project, job: job.view.id, batch, ops, label },
+        {
+          type: 'agent-ops',
+          project: job.view.project,
+          job: job.view.id,
+          batch,
+          ops,
+          label,
+          // (its changes join the undo step of the go it carries on)
+          ...(job.continues ? { continues: job.continues } : {}),
+        },
         left,
         true,
       );
@@ -2208,6 +2286,7 @@ function turnExtra(job: AgentJob): string {
     ...(job.changes.length ? { changes: job.changes } : {}),
     ...(job.stop ? { stop: job.stop } : {}),
     ...(job.previous !== null ? { previous: job.previous } : {}),
+    ...(job.continues ? { continues: job.continues } : {}),
   };
   return JSON.stringify(extra);
 }
@@ -2240,6 +2319,8 @@ function jobFromTurn(
       started: extra.started ?? row.at,
       ...(extra.finished !== undefined ? { finished: extra.finished } : {}),
       ...(extra.title !== undefined ? { title: extra.title } : {}),
+      harness,
+      ...(extra.continues ? { continues: extra.continues } : {}),
     },
     thread: row.thread,
     harness,
@@ -2271,6 +2352,7 @@ function jobFromTurn(
     heard: extra.heard ?? [],
     changes: extra.changes ?? [],
     stop: null,
+    continues: extra.continues ?? null,
   };
 }
 

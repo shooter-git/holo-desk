@@ -160,6 +160,20 @@ export interface JobView {
   finished?: number;
   /** Its song's title as it was asked: how the bar names it while another song is open. */
   title?: string;
+  /** The harness it runs with, why it didn't go on (when the host knows), and the earlier go it carries on. */
+  harness?: HarnessId;
+  stop?: TurnStop;
+  continues?: string;
+}
+
+/**
+ * Why a request didn't go on, where the host knows for sure: HO[LO] or its runner stopped under it
+ * (`interrupted`), its harness's account is out of usage (till `resets`, when that's known), or the
+ * harness is signed out or no longer installed. With the last three, trying again as it is won't help.
+ */
+export interface TurnStop {
+  why: 'interrupted' | 'usage' | 'signed-out' | 'not-installed';
+  resets?: number;
 }
 
 /** A request and its reply, as the song's conversation keeps them (with what it asked, its brief, why it stopped). */
@@ -176,6 +190,9 @@ export interface Turn {
   view?: View;
   go?: Go;
   error?: string;
+  harness?: HarnessId;
+  stop?: TurnStop;
+  continues?: string;
 }
 
 /** How a harness's sign-in, update, install or new look goes, from the runner (`agent-harness`). */
@@ -207,8 +224,8 @@ export interface AgentState {
   jobs: Record<string, JobView>;
   /** The open song's conversation as the host keeps it (read when the bar opens). */
   thread: { project: string; turns: Turn[] } | null;
-  /** A request on its way to the host (it has no job yet). */
-  sending: { project: string; request: string; at: number } | null;
+  /** A request on its way to the host (it has no job yet); `continues`: an earlier go it carries on. */
+  sending: { project: string; request: string; at: number; continues?: string } | null;
   /** A request the host turned down: what was asked, and why (shown as the reply). */
   refused: { project: string; request: string; error: string; at: number } | null;
   /** The job listening to what's played, until the user says Done. */
@@ -260,7 +277,7 @@ export type AgentEvent =
   | { type: 'status'; job: JobView; barOpen: boolean }
   | { type: 'listen'; job: string; on: boolean }
   | { type: 'thread'; project: string; turns: Turn[] }
-  | { type: 'sending'; project: string; request: string; at: number }
+  | { type: 'sending'; project: string; request: string; at: number; continues?: string }
   | { type: 'sent'; job: JobView }
   | { type: 'refused'; project: string; request: string; error: string; at: number }
   | { type: 'reset'; project: string }
@@ -317,7 +334,16 @@ export function reduce(a: AgentState, e: AgentEvent): AgentState {
     case 'thread':
       return { ...a, thread: { project: e.project, turns: e.turns } };
     case 'sending':
-      return { ...a, sending: { project: e.project, request: e.request, at: e.at }, refused: null };
+      return {
+        ...a,
+        sending: {
+          project: e.project,
+          request: e.request,
+          at: e.at,
+          ...(e.continues ? { continues: e.continues } : {}),
+        },
+        refused: null,
+      };
     case 'sent': {
       // the job may have been told of already (the live channel can be quicker than the answer)
       const known = a.jobs[e.job.id];
@@ -414,6 +440,13 @@ export interface Exchange {
   listening: boolean;
   /** What the reply shows under it, once it's done. */
   view: View | null;
+  /** It failed (not stopped by someone, not turned down): the conversation's last such can be tried again. */
+  failed: boolean;
+  /** Why it didn't go on, where the host knows, and the harness it ran with. */
+  stop: TurnStop | null;
+  harness: HarnessId | null;
+  /** The request's first go, when this one carries it on: the page shows only the latest go of a request. */
+  continues: string | null;
 }
 
 /** Why a job ended without a reply, as said under the request. */
@@ -440,6 +473,10 @@ function told(a: AgentState, project: string, turns: readonly Turn[]): Seen[] {
     listening: false,
     view: null,
     label: null,
+    failed: false,
+    stop: null,
+    harness: null,
+    continues: null,
   };
   if (a.sending?.project === project) {
     const s = a.sending;
@@ -455,6 +492,7 @@ function told(a: AgentState, project: string, turns: readonly Turn[]): Seen[] {
         line: null,
         reply: null,
         mine: true,
+        continues: s.continues ?? null,
       }),
     });
   }
@@ -494,6 +532,10 @@ function told(a: AgentState, project: string, turns: readonly Turn[]): Seen[] {
         mine: j.device === a.me,
         listening: a.listening === j.id,
         view: isLive(j.state) ? null : (j.view ?? null),
+        failed: j.state === 'failed',
+        stop: j.state === 'failed' ? (j.stop ?? null) : null,
+        harness: j.harness ?? null,
+        continues: j.continues ?? null,
       }),
     });
   }
@@ -517,6 +559,10 @@ function told(a: AgentState, project: string, turns: readonly Turn[]): Seen[] {
         // (the host answers a permission only from the device that asked)
         mine: true,
         view: isLive(t.state) ? null : (t.view ?? null),
+        failed: t.state === 'failed',
+        stop: t.state === 'failed' ? (t.stop ?? null) : null,
+        harness: t.harness ?? null,
+        continues: t.continues ?? null,
       }),
     });
   }
@@ -544,10 +590,54 @@ export function exchange(a: AgentState, project: string | null): Exchange | null
 export function conversation(a: AgentState, project: string | null): Exchange[] {
   if (!project || !isOn(a)) return [];
   const turns = a.thread?.project === project ? a.thread.turns : [];
-  return told(a, project, turns)
+  const all = told(a, project, turns)
     .map((seen, i) => ({ seen, i }))
     .sort((x, y) => x.seen.at - y.seen.at || y.i - x.i)
     .map(({ seen }) => seen.make());
+  // a request tried again is one exchange: its latest go (the earlier ones didn't finish)
+  const latest = new Map<string, Exchange>();
+  for (const ex of all) {
+    const first = ex.continues ?? ex.job;
+    if (first) latest.set(first, ex);
+  }
+  return all.filter((ex) => {
+    const first = ex.continues ?? ex.job;
+    return !first || latest.get(first) === ex;
+  });
+}
+
+const HARNESS_NAME: Record<HarnessId, string> = {
+  claude: 'Claude Code',
+  codex: 'Codex',
+  cursor: 'Cursor',
+  antigravity: 'Antigravity',
+};
+
+/**
+ * What a failed exchange says under its error, and whether it can be tried again as it is: not when
+ * the host knows that wouldn't help (the account is out of usage, the harness signed out or gone).
+ * `startsAgain` words when a limit starts again ("in 2 h 10 min", "Thu 3 Dec, 07:02"). Null for an
+ * exchange that didn't fail.
+ */
+export function afterFailure(
+  ex: Pick<Exchange, 'failed' | 'stop' | 'harness'>,
+  startsAgain: (resets: number) => string,
+): { say: string | null; again: boolean } | null {
+  if (!ex.failed) return null;
+  const name = ex.harness ? HARNESS_NAME[ex.harness] : 'The harness';
+  switch (ex.stop?.why) {
+    case 'usage':
+      return {
+        say: `${name} is out of usage${ex.stop.resets ? `: its limit starts again ${startsAgain(ex.stop.resets)}` : ''}.`,
+        again: false,
+      };
+    case 'signed-out':
+      return { say: `${name} is signed out: sign it in again in Settings › Agent.`, again: false };
+    case 'not-installed':
+      return { say: `${name} isn’t installed on the host any more: Settings › Agent can install it.`, again: false };
+    default:
+      return { say: null, again: true };
+  }
 }
 
 /**
@@ -1382,6 +1472,26 @@ export async function askScan(task: ScanTask, scan: string, project: string, con
     });
   } catch (err) {
     agent.dispatch({ type: 'refused', project, request, error: (err as Error).message, at });
+  }
+}
+
+/**
+ * Try again: a request whose last go failed, carried on in the same conversation (the host starts a
+ * job that continues it). The bar shows it on its way, then working, as a request.
+ */
+export async function tryAgain(ex: Pick<Exchange, 'job' | 'request' | 'continues'>, project: string): Promise<void> {
+  if (!ex.job || !isOn(state)) return;
+  const at = serverNow();
+  const continues = ex.continues ?? ex.job;
+  agent.dispatch({ type: 'sending', project, request: ex.request, at, continues });
+  try {
+    const { job } = await call<{ job: string }>('POST', `/api/agent/jobs/${encodeURIComponent(ex.job)}/continue`, {});
+    agent.dispatch({
+      type: 'sent',
+      job: { id: job, project, device: state.me ?? '', state: 'waiting', request: ex.request, started: at, continues },
+    });
+  } catch (err) {
+    agent.dispatch({ type: 'refused', project, request: ex.request, error: (err as Error).message, at });
   }
 }
 

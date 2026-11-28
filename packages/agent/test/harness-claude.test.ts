@@ -588,6 +588,12 @@ const SAID = {
     "There's an issue with the selected model (claude-sonnet-4-6). It may not exist or you may not have access to it. Run --model to pick a different model.",
 } as const;
 
+/** Why each of those failed, where Claude Code's words make it plain. */
+const WHY: Partial<Record<keyof typeof SAID, { why: 'usage' | 'signed-out' }>> = {
+  'claude-credit': { why: 'usage' },
+  'claude-unauthorized': { why: 'signed-out' },
+};
+
 describe('Claude Code: what the account has left', () => {
   it('reads a run’s rate_limit_event: the windows every model shares, and one model’s own week when it names it', () => {
     expect(
@@ -725,10 +731,86 @@ describe('Claude Code: a conversation its model service refused', () => {
     ] as const) {
       s = sandbox();
       const events = await turn(resumed(name), job(s, { session: OLD }));
-      expect(events.at(-1), name).toEqual({ type: 'failed', error: SAID[name] });
+      // (and why, where its words are plain: an API key's credit used up, a sign-in it no longer has;
+      // a rate limit by the minute, or a model, says nothing: it may pass, or isn't the account's)
+      expect(events.at(-1), name).toEqual({ type: 'failed', error: SAID[name], ...WHY[name] });
       expect(runs(), name).toBe(1);
       s.cleanup();
     }
+  });
+
+  it('says the account is out of usage when its limit refused the request, with when it starts again', async () => {
+    s = sandbox();
+    const resetsAt = Math.floor(Date.now() / 1000) + 3600;
+    const refusedBy = (info: Record<string, unknown>) =>
+      [
+        JSON.stringify({
+          type: 'system',
+          subtype: 'init',
+          session_id: OLD,
+          model: 'claude-opus-5-5',
+          tools: ['mcp__holo__finish'],
+          mcp_servers: [{ name: 'holo', status: 'connected' }],
+        }),
+        JSON.stringify({ type: 'rate_limit_event', rate_limit_info: info }),
+        JSON.stringify({
+          type: 'result',
+          subtype: 'success',
+          is_error: true,
+          result: 'You’ve reached your limit for now',
+          session_id: OLD,
+        }),
+      ].join('\n');
+    const said = (stream: string) => `cat <<'EOF'\n${stream}\nEOF\nexit 1`;
+    const rejected = fake({
+      signedIn: true,
+      run: said(refusedBy({ status: 'rejected', rateLimitType: 'five_hour', resetsAt, isUsingOverage: false })),
+    });
+    expect((await turn(rejected, job(s))).at(-1)).toEqual({
+      type: 'failed',
+      error: 'You’ve reached your limit for now',
+      why: 'usage',
+      resets: resetsAt * 1000,
+    });
+    // a window it says is used up, with no word that the request was refused: its limits say the same
+    const full = fake({
+      signedIn: true,
+      run: said(
+        refusedBy({
+          status: 'allowed',
+          rateLimitType: 'seven_day',
+          unifiedWindows: {
+            five_hour: { utilization: 0.2, resetsAt },
+            seven_day: { utilization: 1, resetsAt: resetsAt + 86_400 },
+          },
+        }),
+      ),
+    });
+    expect((await turn(full, job(s))).at(-1)).toMatchObject({
+      type: 'failed',
+      why: 'usage',
+      resets: (resetsAt + 86_400) * 1000,
+    });
+    // with usage to spare, or extra usage taking it, a failure has no reason: it may pass
+    const spare = fake({
+      signedIn: true,
+      run: said(
+        refusedBy({
+          status: 'allowed',
+          rateLimitType: 'five_hour',
+          unifiedWindows: { five_hour: { utilization: 0.4, resetsAt } },
+        }),
+      ),
+    });
+    expect((await turn(spare, job(s))).at(-1)).toEqual({ type: 'failed', error: 'You’ve reached your limit for now' });
+    const overage = fake({
+      signedIn: true,
+      run: said(refusedBy({ status: 'rejected', resetsAt, isUsingOverage: true })),
+    });
+    expect((await turn(overage, job(s))).at(-1)).toEqual({
+      type: 'failed',
+      error: 'You’ve reached your limit for now',
+    });
   });
 
   it('knows a refusal by how Claude Code words it, and the account’s, the plan’s and the model’s as ordinary', () => {

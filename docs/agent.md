@@ -126,6 +126,7 @@ Turning the agent off cancels every job, so the job-scoped routes answer 403.
 | `POST /api/agent/harnesses/:id/update` | | `{ok}`. 409 `no-harness` or `busy`. |
 | `POST /api/agent/harnesses/:id/install` | | `{ok}`. Sent as `agent-install {harness}` to a runner that reported the harness not found, with an `installer`; progress arrives as `agent-harness` with `kind:'install'`. 404 for an unknown harness; 409 `no-runner`, `busy` (a job runs on it), or no reason when a runner has it already (Update is for that) or none can install it (a Windows host). The body is empty: the runner runs its own fixed command. |
 | `POST /api/agent/requests` | `{project, text, attachments?:[id], context?, preset?}` | `{job}`. `text` is 1 to 4000 characters (empty with a preset). At most 10 attachments, each this device's for this song (400 otherwise). 404 for no such song, or a preset's scan that isn't the song's; 409 `not-open`, `busy`, `no-runner`, `no-harness`, `not-sealed`, `signed-out`. |
+| `POST /api/agent/jobs/:job/continue` | | `{job}`: **Try again**. The request whose last go failed is carried on in the same conversation, as a new job that continues it (below, "Why a request failed, and Try again"). Only the device that asked (403); 404 for no such request; 409 when it didn't fail, a later request was made on the song since, or the conversation was started over; and refused as a request is (`not-open`, `busy`, `no-runner`, `no-harness`, `not-sealed`, `signed-out`, `choose`). |
 | `POST /api/agent/jobs/:job/cancel` | | `{ok}`. Any allowed device may stop a job; one waiting for a click is dismissed (`cancelled`). 404; 409 once it has ended. |
 | `POST /api/agent/jobs/:job/permission` | `{grant:boolean, result?, attachments?:[id]}` | `{ok, job?}`, `job` being the follow-up's id. Only the device that asked may answer (403), only while the job is `awaiting` (409). `result` is at most 1000 characters; `attachments` as in a request (a screenshot, a photo, a recording). Granting can be refused as a request is (`not-open`, `busy`, `no-harness`), and with 409 when the conversation was started over since the job asked. With a job token, the same path is the tools' (below). |
 | `POST /api/agent/jobs/:job/done-listening` | | `{ok}`. The user pressed Done. Only the device that asked (403); 409 once the job has ended. |
@@ -537,9 +538,13 @@ agent's other traffic uses the existing `state`, `played`, `ack`, `transport`, `
   the agent never called `finish`, even once asked for it (below, "End of the turn"). It's often markdown, so it's made plain first (`plainReply` in
   `apps/server/src/agent/plain.ts`): its markup goes, paragraphs, headings, list items and table rows
   keep a line each, and past 600 characters it's cut at the end of a sentence, with "…".
-- `agent-failed {job, error, fresh?, usage?}` (`usage` as for `agent-done`: a failed turn used what it
+- `agent-failed {job, error, fresh?, usage?, why?, resets?}` (`usage` as for `agent-done`: a failed turn used what it
   used). `fresh: true`: the harness's model service refused the
   conversation itself, and the thread's next request starts a new conversation (below, "Ending early").
+  `why` is said only when the harness made it plain: `usage` (its account is out of usage; `resets`, in
+  ms, when the limit that refused it starts again, when that's known), `signed-out` or `not-installed`
+  (below, "Why a request failed, and Try again"). The server keeps what it knows of (`checkFailureKind`
+  in `@holo/agent/limits`: a reset ahead, within 35 days).
 - `agent-harness {harness, kind:'login'|'update'|'install'|'refresh', state:'running'|'done'|'failed', url?, code?, ask?:'code', line?, error?}`.
   A sign-in, an update or an install says `done` or `failed` only after the runner has looked at its
   harnesses again (its `harnesses` comes first).
@@ -589,7 +594,8 @@ taken only from the runner it was handed to, while it runs.
 - acks: `{type:'ack', id, ok, …}`. An ack is taken only from the connection the request went to.
 
 **Server → studio**, asked (answered with an ack carrying the same `id`):
-- `agent-ops {id, project, job, batch, ops, label}`: ack `{ok, revision?}` once applied and kept on the
+- `agent-ops {id, project, job, batch, ops, label, continues?}` (`continues`: the first go of the request
+  this job carries on, whose undo step the batch joins): ack `{ok, revision?}` once applied and kept on the
   device (`keepNow`, docs/architecture.md: a reload or a closed tab after it brings the change back and
   saves it), or `{ok:false, error}`. A page that goes before then never acks, and the tool hears 409
   `away` (above).
@@ -636,7 +642,7 @@ was played (null when the song wasn't playing); `time` is ms from the listen's s
 of the stretch `played` asked for); `length` is ms (null while still held).
 
 **`JobView`** is:
-`{id, project, device, state:'waiting'|'running'|'awaiting'|'done'|'failed'|'cancelled', request, line?, reply?, label?, permission?:{kind, detail, pack?}, brief?, briefWarnings?:[{line, kind:'command'|'url'|'secret'}], view?:{blocks, versions, dock?}, go?, error?, started, finished?}`.
+`{id, project, device, harness?, stop?:{why, resets?}, continues?, state:'waiting'|'running'|'awaiting'|'done'|'failed'|'cancelled', request, line?, reply?, label?, permission?:{kind, detail, pack?}, brief?, briefWarnings?:[{line, kind:'command'|'url'|'secret'}], view?:{blocks, versions, dock?}, go?, error?, started, finished?}`.
 - `waiting` lasts until the runner or the job's tools are first heard from.
 - `briefWarnings` are the brief's lines (from 0) the studio flags, each once: `secret` for a line that
   mentions one (ssh, `.ssh`, `id_rsa`/`id_ed25519`, private keys, `.pem`, `.env`, credentials, tokens,
@@ -766,6 +772,48 @@ of the stretch `played` asked for); `length` is ms (null while still held).
    conversation after a refused turn and to read the song as it is now (not how it changed since a song
    it never saw).
 
+## Why a request failed, and Try again
+
+A failed request's reply is its harness's own words. Under it the studio says what would help, from what
+the host knows for sure (`JobView.stop`, a turn's `stop`: `afterFailure` in apps/web/src/app/agent.ts),
+on the conversation's last exchange, for the device that asked:
+
+| What's known | Under the reply |
+|---|---|
+| nothing (it may have been passing: the service overloaded, a rate limit by the minute, the network), or `interrupted` (HO[LO] or its runner stopped under it) | **Try again** |
+| `usage` | "*Codex* is out of usage: its limit starts again in 2 h 10 min." ("Thu 3 Dec, 07:02" past a day; no time when the harness didn't say). No Try again. |
+| `signed-out` | "*Codex* is signed out: sign it in again in Settings › Agent." No Try again. |
+| `not-installed` | "*Codex* isn't installed on the host any more: Settings › Agent can install it." No Try again. |
+
+**Never on a guess.** The runner's adapter says `why` (`kindOf` in
+`packages/agent/src/harness/adapter.ts`), only for the error in the harness's own result (never a
+tool's answer, the model's words or stderr), and only from:
+- that error's fixed words, per harness (`Spec.classify`; docs/agent-harnesses.md, "Why a turn failed");
+- the harness's own word that the account's limit refused the request (Claude Code's `rate_limit_event`
+  with the status `rejected`, and no extra usage taking it);
+- or the account's limits as they are then, with a window the model counts against used up (`usedUp`
+  in `@holo/agent/limits`): what the run itself said of them (Claude Code), else asked of the harness
+  (Codex, Antigravity), ten seconds at most, and only for an error that reads like a limit (the words
+  decide whether the limits are read, never what they mean).
+
+A failure HO[LO] ended itself (a tripwire, the ceiling, the quiet) has none. Cursor's stream says
+nothing of why a run failed, so its failures always keep Try again.
+
+**Try again** (`POST /api/agent/jobs/:job/continue`, `Jobs.carryOn`) starts a new job on the same
+thread, in the harness's same session, that **continues** the failed one:
+- it's the same request: its words (or its preset), what the studio showed then, the attachments still
+  kept; its prompt has "Since your last reply" as ever (which says the last turn failed, and how), and
+  the request under these words (`carryOnRequest` in apps/server/src/agent/prompt.ts): the last go
+  didn't finish, what it changed is still in the song, read the song before changing anything, make a
+  change again only if it isn't there;
+- its `before` and `previous` are the first go's, so a view's versions and the A/B span the whole
+  request;
+- its `continues` (in the job's view, its turn and its `agent-ops`) is the request's **first** go,
+  however many goes there have been. The page shows a request's goes as one exchange, its latest
+  (`conversation()`), and the studio keeps them one undo step ("Undo grouping", below).
+
+It works from what the turn kept, so also for a request HO[LO] restarted under.
+
 ## Undo grouping (studio)
 
 `apps/web/src/app/history.ts` is pure; `apps/web/src/app/actions.ts` applies it. `Step` is
@@ -777,6 +825,11 @@ of the stretch `played` asked for); `length` is ms (null while still held).
 - **Merging:** if the job is running and the top undo step is the job's, the ops merge into it (any
   redo is dropped), and the step keeps the song from before the job. Otherwise a new step is pushed,
   labeled "Agent: <the batch's label>".
+- **A request tried again is one step.** A job that carries an earlier go on (`continues` on its
+  `agent-ops`) joins that go's step while it's still on top: the step becomes this job's (undoing it
+  stops this one, and its label is this one's), remembers the request's first go (`Step.first`) so a
+  third go joins too, and keeps the song from before the request. When the user has edited since the
+  go that failed, the new go opens a step of its own, as any job does.
 - **No toasts.** The bar says what the agent is doing.
 - **Finishing:** when `agent-status` says the job ended with a label, its steps, undone or not, are
   relabeled "Agent: <label>".
@@ -1084,8 +1137,10 @@ began and ended and the song's title then, the harness, model and effort it ran 
 showed as it was asked (`context`) and its preset, what the agent was told the user did before it
 (`heard`), what its tools changed (`changes`: each batch's label in order, with how many in a row had
 it, 40 at most, written as each batch goes in), the revisions it calls `before` and `previous`, and
-`stop` when HO[LO] knows why it didn't go on (`{why: 'interrupted'}`: HO[LO] or its runner stopped
-under it). Changing the harness, or `reset`, starts a new thread; the old one is kept but no
+`stop` when HO[LO] knows why it didn't go on (`{why, resets?}`: `interrupted`, HO[LO] or its runner
+stopped under it; `usage`, `signed-out`, `not-installed`, as its runner said), and `continues`, the
+first go of the request it carries on. A turn in `GET /api/agent/threads/:project` says its `harness`,
+`stop` and `continues` too. Changing the harness, or `reset`, starts a new thread; the old one is kept but no
 longer current.
 
 A thread keeps the user's doings since the last reply, the latest 20, and clears them once a prompt has

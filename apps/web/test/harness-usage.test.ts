@@ -4,7 +4,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import type { HarnessInfo, UsageSum } from '../src/app/agent.ts';
-import { meter, tokenCount, usageView, windowLabel } from '../src/ui/harness-usage.ts';
+import { meter, startsAgain, tokenCount, usageView, windowLabel } from '../src/ui/harness-usage.ts';
 
 const NOW = Date.UTC(2099, 0, 5, 12, 0);
 const H = 3_600_000;
@@ -248,5 +248,13 @@ describe('a harness’s usage, for its row', () => {
     const out = usageView({ ...claude, signedIn: false }, { ...clock, current: false, usage: { days: 30, rows } });
     expect(out).toMatchObject({ summary: null, plan: null, none: null, groups: [] });
     expect(out?.through?.rows).toHaveLength(2);
+  });
+});
+
+describe('when a limit starts again', () => {
+  it('is said as a wait under a day away, and as a day and a time past that', () => {
+    expect(startsAgain(NOW + 2 * H + 10 * 60_000, clock)).toBe('in 2 h 10 min');
+    expect(startsAgain(NOW + 25 * 60_000, clock)).toBe('in 25 min');
+    expect(startsAgain(NOW + 44 * H, clock)).toBe('Wed 7 Jan, 08:00');
   });
 });

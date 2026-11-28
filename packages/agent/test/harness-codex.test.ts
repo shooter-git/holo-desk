@@ -677,7 +677,9 @@ describe('Codex: a conversation its model service refused', () => {
         resumed(withError(lines('codex-refused-tool-output').join('\n'), said)),
         job(s, { session: OLD }),
       );
-      expect(events.at(-1), message).toEqual({ type: 'failed', error: said });
+      // (ordinary: the conversation is kept; why it failed is for the tests of that, below)
+      expect(events.at(-1), message).toMatchObject({ type: 'failed', error: said });
+      expect(events.at(-1), message).not.toHaveProperty('fresh');
       expect(runs(), message).toBe(1);
       s.cleanup();
     }
@@ -714,10 +716,52 @@ describe('Codex: a conversation its model service refused', () => {
     ] as const) {
       s = sandbox();
       const events = await runToEnd(resumed(lines(name).join('\n')), job(s, { session: OLD }));
-      expect(events.at(-1), name).toEqual({ type: 'failed', error: FAILED[name] });
+      expect(events.at(-1), name).toMatchObject({ type: 'failed', error: FAILED[name] });
+      expect(events.at(-1), name).not.toHaveProperty('fresh');
       expect(runs(), name).toBe(1);
       s.cleanup();
     }
+  });
+
+  /** The app server answering with one limit, a week long: this much used, starting again in an hour. */
+  const appServer = (usedPercent: number) =>
+    `read -r hello; echo '{"id":1,"result":{"userAgent":"codex"}}'; read -r ready; read -r ask
+echo "{\\"id\\":2,\\"result\\":{\\"rateLimitsByLimitId\\":{\\"codex\\":{\\"limitId\\":\\"codex\\",\\"planType\\":\\"plus\\",\\"primary\\":{\\"usedPercent\\":${usedPercent},\\"windowDurationMins\\":10080,\\"resetsAt\\":$(($(date +%s)+3600))},\\"secondary\\":null}}}}"
+sleep 5; exit 0`;
+  const failing = (name: keyof typeof FAILED, usedPercent: number) =>
+    fake({
+      signedIn: true,
+      appServer: appServer(usedPercent),
+      run: `cat <<'EOF'\n${lines(name).join('\n')}\nEOF\nexit 1`,
+    });
+
+  it('says why a turn failed where that’s plain: an API key’s quota, a sign-in the service no longer takes', async () => {
+    s = sandbox();
+    expect((await runToEnd(failing('codex-quota', 10), job(s))).at(-1)).toEqual({
+      type: 'failed',
+      error: FAILED['codex-quota'],
+      why: 'usage',
+    });
+    expect((await runToEnd(failing('codex-unauthorized', 10), job(s))).at(-1)).toMatchObject({ why: 'signed-out' });
+    for (const name of ['codex-model-missing', 'codex-context-window'] as const)
+      expect((await runToEnd(failing(name, 100), job(s))).at(-1), name).not.toHaveProperty('why');
+  });
+
+  it('takes a rate limit for the account’s only when its limits, read then, show it used up', async () => {
+    s = sandbox();
+    const before = Date.now();
+    const out = await runToEnd(failing('codex-rate-limited', 100), job(s));
+    expect(out.at(-1)).toMatchObject({ type: 'failed', error: FAILED['codex-rate-limited'], why: 'usage' });
+    const resets = (out.at(-1) as { resets: number }).resets;
+    expect(resets).toBeGreaterThan(before + 3_500_000);
+    expect(resets).toBeLessThan(Date.now() + 3_700_000);
+    // (the limits it read are said too, before the end, and aren't asked again a moment later)
+    expect(out.filter((e) => e.type === 'limits')).toHaveLength(1);
+    s.cleanup();
+    s = sandbox();
+    // usage to spare: the rate limit may pass, and nothing says it won't
+    const spare = await runToEnd(failing('codex-rate-limited', 62), job(s));
+    expect(spare.at(-1)).toEqual({ type: 'failed', error: FAILED['codex-rate-limited'] });
   });
 
   describe('its context window, again', () => {

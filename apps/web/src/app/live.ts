@@ -270,7 +270,9 @@ async function onMessage(msg: Record<string, unknown>): Promise<void> {
         return;
       }
       const ops = Array.isArray(msg.ops) ? (msg.ops as Op[]) : [];
-      const r = await applyJob(ops, job, batch, String(msg.label ?? 'Changes'));
+      // (a go that carries an earlier one on: its changes join that go's undo step)
+      const continues = typeof msg.continues === 'string' && msg.continues ? msg.continues : null;
+      const r = await applyJob(ops, job, batch, String(msg.label ?? 'Changes'), continues);
       if (!r.ok) {
         // (another song opened while they waited their turn: they never went in here)
         ack(false, { error: r.error ?? 'The changes did not apply', ...(elsewhere() ? { reason: 'not-open' } : {}) });

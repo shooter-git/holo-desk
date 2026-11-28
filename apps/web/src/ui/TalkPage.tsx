@@ -376,7 +376,7 @@ export function TalkPage({ docks = false, leaving = false }: { docks?: boolean; 
                   );
                 })}
                 <div className="talk newest" aria-live="polite" data-turn={newest.job ?? undefined}>
-                  <TalkBody ex={newest} project={project} busy={busy} elapsed />
+                  <TalkBody ex={newest} project={project} busy={busy} elapsed last />
                 </div>
               </>
             )}

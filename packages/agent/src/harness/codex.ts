@@ -12,7 +12,15 @@
  */
 import { createHash } from 'node:crypto';
 import { join } from 'node:path';
-import { checkUsage, type LimitGroup, type LimitsRead, type LimitWindow, type RunUsage, tokens } from '../limits.ts';
+import {
+  checkUsage,
+  type FailureKind,
+  type LimitGroup,
+  type LimitsRead,
+  type LimitWindow,
+  type RunUsage,
+  tokens,
+} from '../limits.ts';
 import {
   type AdapterOptions,
   type Context,
@@ -309,6 +317,17 @@ export function readCodexLimits(bin: Binary, where: SpawnOptions, timeoutMs = 20
   });
 }
 
+/**
+ * What its own error means, where its words are fixed (docs/agent-harnesses.md, "A refused
+ * conversation"): an API key's quota used up, or a sign-in the service no longer takes. A ChatGPT
+ * plan's limit isn't told by its words here: the account's limits, read as the turn fails, say it.
+ */
+export function codexClassify(error: string): FailureKind | null {
+  if (/^Quota exceeded\./.test(error)) return { why: 'usage' };
+  if (/^unexpected status 401 Unauthorized\b|, auth error: /.test(error)) return { why: 'signed-out' };
+  return null;
+}
+
 /** `codex login status`: on stderr, "Logged in using …" (exit 0) or "Not logged in" (exit 1). */
 export function parseCodexAuth(text: string): { signedIn: boolean; account?: string } | null {
   const t = plain(text);
@@ -529,6 +548,7 @@ export function codexSpec(): Spec {
       return { args: codexArgs(job, serverFor(ctx, job)), env: {} };
     },
     reader: codexReader,
+    classify: codexClassify,
     // AGENTS.md reaches the model as one message when a conversation starts, as Cursor's does
     rulesAtStartOnly: true,
     // it records the context as full and compacts the conversation before the next turn's first

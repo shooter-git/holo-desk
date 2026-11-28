@@ -136,6 +136,11 @@ function span(ms: number): string {
   return m ? `${h} h ${m} min` : `${h} h`;
 }
 
+/** When a limit starts again, as it's said after "starts again": "in 2 h 10 min", or "Thu 3 Dec, 07:02". */
+export function startsAgain(resets: number, c: Clock): string {
+  return resets - c.now < DAY ? `in ${span(resets - c.now)}` : dayAndTime(resets, c);
+}
+
 /** One window, as its line. */
 export function meter(w: LimitWindow, key: string, c: Clock): MeterView {
   const label = windowLabel(w.minutes);

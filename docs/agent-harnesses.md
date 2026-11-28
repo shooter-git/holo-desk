@@ -1197,6 +1197,24 @@ against a stand-in for the model API ("A refused conversation"), with a one-tool
 refusal with the recorded normal run's call put first, and one refused as `unexpected status 400 Bad Request: …`
 is a recorded run with its error written in that form.
 
+## Why a turn failed
+
+When a turn fails, the adapter says why only where the harness makes it plain (docs/agent.md, "Why a
+request failed, and Try again"): the studio then says what would help instead of offering Try again.
+
+| Harness | Out of usage | Signed out | Says nothing (it may pass) |
+|---|---|---|---|
+| Claude Code | a `rate_limit_event` with `status: "rejected"` (and `isUsingOverage` not true) before a result that failed, `resets` its `resetsAt`; or its limits as the run said them, with a window used up; `Credit balance is too low` (an API key's credit, no reset) | `Not logged in`, `Invalid API key`, `Failed to authenticate`, at the start of its result | `API Error: Request rejected (429)` with usage to spare (a limit by the minute: `claude-rate-limited.jsonl`), `API Error: 529 Overloaded` |
+| Codex | `Quota exceeded.` at the start (an API key's quota, no reset: `codex-quota.jsonl`); or, for an error that reads like a limit, its app server's `account/rateLimits/read` asked then, with a window used up (`resets` its `resetsAt`) | `unexpected status 401 Unauthorized`, or `, auth error: ` in it | `exceeded retry limit, last status: 429 Too Many Requests` with usage to spare |
+| Antigravity | `RESOURCE_EXHAUSTED (code 429)` at the start **and** one of the service's own fields: `reason:QUOTA_EXHAUSTED`, `quotaResetTimeStamp:<time>`, `quotaResetDelay:<Go duration>`, or "Resets in 4m42s" (`resets` from those); or `/usage` asked then, with a window of the model's group used up | (none seen) | a bare `RESOURCE_EXHAUSTED (code 429)`, and one whose model's group can't be told (a run with the account's default model) |
+| Cursor | (its stream says nothing of why a run failed) | | everything |
+
+Seen: Claude Code's event is as recorded in the fixtures with `status: "allowed"`; a `rejected` one
+hasn't been recorded (its schema names the status). Antigravity's quota fields are as T3 Code reads
+them from the same harness (its `AntigravityTurnOutcome.ts`), not seen here. The words a ChatGPT plan's
+limit fails with in `codex exec` haven't been recorded: its limits, read as the turn fails, are what
+say it. Where none of these holds, nothing is said, and the reply keeps Try again.
+
 ## The stand-in harness
 
 `packages/agent/stand-in/` is one program that answers as Claude Code and as Codex, for HO[LO]'s own
@@ -1217,9 +1235,12 @@ A request that starts with `standin:` is a script, its steps separated by `;` (`
 | `wait MS` | nothing, for that long |
 | `say WORDS` | writes in the harness's own chat, which HO[LO] doesn't show |
 | `fail WORDS` | ends the turn as that harness ends one that failed, those words its error |
+| `fail-once WORDS` | the same, the first time only: a later go at the same script (Try again) carries on from the step after it |
+| `limit SECONDS` | ends the turn as that harness ends one its account's limit refused (Claude Code: a `rejected` rate-limit event, starting again in that many seconds, an hour when not said; Codex: `Quota exceeded.`) |
 
 Any other request reads the song and finishes, changing nothing: so does the go a turn is carried on
-with when it ended without `finish`.
+with when it ended without `finish`. The script is what follows the request's last line that starts
+with `standin:`, so a request HO[LO] carries on (its words around it) still runs its script.
 
 The runner reaches it through the overrides it already has: `HOLO_CLAUDE` and `HOLO_CODEX` name a
 launcher (`stand-in/launcher.ts` writes them: a few lines of sh that start `main.ts` as that harness).
@@ -1228,7 +1249,9 @@ Nothing else starts it, and a runner without those variables never sees it.
 - `packages/agent/test/stand-in.test.ts` runs both adapters against it (in `pnpm test`).
 - `pnpm agent:check` (`tools/agent-check.mjs`; after `pnpm build`, with Playwright) starts a studio of
   its own, the real runner with the stand-in, pairs as a device, and asks in a browser: a request that
-  adds a track (the reply, the track, one Undo), and a request whose studio goes while it works (its
-  change saved on the host, the reply waiting on return). CI runs it as the `agent` job. The runner it
+  adds a track (the reply, the track, one Undo), a request whose studio goes while it works (its
+  change saved on the host, the reply waiting on return), a restart of HO[LO] under a request and under
+  a waiting OK, Try again (one exchange, one Undo for both goes), and a request out of usage (said, with
+  when the limit starts again, and no Try again). CI runs it as the `agent` job. The runner it
   starts has a home and a cache of its own and only Node's and the system's folders on its PATH, so the
   harnesses installed on the computer aren't signed in to or run.

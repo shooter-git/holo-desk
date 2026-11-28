@@ -41,9 +41,9 @@ function studio() {
       h = push(h, { project, label, at: tick() });
       project = next;
     },
-    agent(title: string, job: string, running = true, label = 'Agent: Notes') {
+    agent(title: string, job: string, running = true, label = 'Agent: Notes', continues: string | null = null) {
       const next = titled(project, title);
-      h = pushOrMergeJob(h, project, label, job, running, tick());
+      h = pushOrMergeJob(h, project, label, job, running, tick(), continues);
       project = next;
     },
     undo() {
@@ -526,5 +526,37 @@ describe('batches that went in another way', () => {
     expect(await q.submit({ batch: 'b2' })).toEqual({ ok: true });
     expect(ran).toEqual([]);
     expect([q.done('b1'), q.done('b3')]).toEqual([true, false]);
+  });
+});
+
+describe('a request tried again', () => {
+  it('stays one step: the go that carries it on joins the first go’s, which becomes its own', () => {
+    const s = studio();
+    s.edit('Mine');
+    s.agent('First go', 'j1');
+    // (the first go failed; the next carries it on, and changes more)
+    s.agent('Second go', 'j2', true, 'Agent: Notes', 'j1');
+    s.agent('Second go, more', 'j2', true, 'Agent: Notes', 'j1');
+    expect(s.history.undo.map((x) => x.job ?? null)).toEqual([null, 'j2']);
+    // one Undo takes the whole request back, to the song before its first go
+    expect(s.undo()?.job).toBe('j2');
+    expect(s.project.title).toBe('Mine');
+    // and a third go joins the same step
+    s.redo();
+    s.agent('Third go', 'j3', true, 'Agent: Notes', 'j1');
+    expect(s.history.undo.map((x) => x.job ?? null)).toEqual([null, 'j3']);
+  });
+
+  it('opens a step of its own when the first go’s isn’t on top any more', () => {
+    const s = studio();
+    s.agent('First go', 'j1');
+    s.edit('Mine, after it failed');
+    s.agent('Second go', 'j2', true, 'Agent: Notes', 'j1');
+    expect(s.history.undo.map((x) => x.job ?? null)).toEqual(['j1', null, 'j2']);
+    // (nor does it join another request's step)
+    const t = studio();
+    t.agent('Another request', 'j9');
+    t.agent('Second go', 'j2', true, 'Agent: Notes', 'j1');
+    expect(t.history.undo.map((x) => x.job ?? null)).toEqual(['j9', 'j2']);
   });
 });

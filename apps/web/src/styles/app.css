@@ -3984,6 +3984,17 @@ button.list-item {
   -webkit-user-select: text;
 }
 
+/* under a failure's own words: what would help (its harness is out of usage till when, signed out,
+   gone), in the request's quieter colour */
+.convo .reply-after {
+  margin-top: -8px;
+  padding: 0 16px 14px;
+  color: var(--text-3);
+  font-size: 12.5px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
 /* what a reply shows under it, composed by the agent from the studio's own pieces (ui/AgentView.tsx):
    its buttons, switches and rows, in its own colours. One rhythm throughout: --v-gap between the pieces
    of a view or a group (a group's title and its first control, and the lines of a choice or a row that

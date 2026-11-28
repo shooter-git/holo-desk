@@ -8,7 +8,7 @@
  */
 
 import type { DatabaseSync } from 'node:sqlite';
-import type { RunUsage } from '@holo/agent/limits';
+import type { RunUsage, StopWhy } from '@holo/agent/limits';
 import type { Go, View } from '@holo/agent/view';
 import type { RequestContext, ScanPreset } from './prompt.ts';
 
@@ -106,15 +106,22 @@ export interface TurnExtra {
   heard?: string[];
   /** What its tools changed, in order: each batch's label, and how many in a row had it. */
   changes?: [string, number][];
-  /** Why it didn't go on, when that's known for sure (`interrupted`: HO[LO] or its runner stopped under it). */
+  /**
+   * Why it didn't go on, when that's known for sure: `interrupted` (HO[LO] or its runner stopped under
+   * it), or what its harness made plain (out of usage, signed out, not installed).
+   */
   stop?: TurnStop;
+  /** The turn it carries on: an earlier go at the same request, which didn't finish. */
+  continues?: string;
   /** The song before the conversation's previous request (the job's "previous"). */
   previous?: number;
 }
 
 /** Why a turn stopped short, where HO[LO] knows. */
 export interface TurnStop {
-  why: 'interrupted';
+  why: 'interrupted' | StopWhy;
+  /** When the limit that stopped it starts again (ms since 1970), for `usage`, when that's known. */
+  resets?: number;
 }
 
 /** How many of a turn's changes are kept (the rest are counted as one more line). */
@@ -512,6 +519,14 @@ export class AgentStore {
         'SELECT thread, job, request, reply, label, state, at, extra, device FROM agent_turns WHERE thread = ? ORDER BY at, rowid',
       )
       .all(thread) as unknown as TurnRow[];
+  }
+
+  /** One turn, by its job. */
+  turn(job: string): TurnRow | null {
+    const row = this.db
+      .prepare('SELECT thread, job, request, reply, label, state, at, extra, device FROM agent_turns WHERE job = ?')
+      .get(job);
+    return (row as unknown as TurnRow | undefined) ?? null;
   }
 
   /** The turns that weren't over when HO[LO] last stopped (working, or waiting for a click), oldest first. */

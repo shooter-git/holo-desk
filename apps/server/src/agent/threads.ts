@@ -130,6 +130,9 @@ export class Threads {
           ...(extra.view ? { view: extra.view } : {}),
           ...(extra.go ? { go: extra.go } : {}),
           ...(extra.error ? { error: extra.error } : {}),
+          ...(extra.harness ? { harness: extra.harness } : {}),
+          ...(extra.stop ? { stop: extra.stop } : {}),
+          ...(extra.continues ? { continues: extra.continues } : {}),
         };
       }),
     };
@@ -150,6 +153,10 @@ export interface TurnView {
   view?: TurnExtra['view'];
   go?: TurnExtra['go'];
   error?: string;
+  /** The harness it ran with, why it didn't go on (when known), and the earlier go it carries on. */
+  harness?: HarnessId;
+  stop?: TurnExtra['stop'];
+  continues?: string;
 }
 
 /** A turn's extra (JSON), or nothing when it has none or can't be read. */

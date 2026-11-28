@@ -25,7 +25,15 @@
 import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
-import { checkUsage, type LimitGroup, type LimitsRead, type LimitWindow, type RunUsage, tokens } from '../limits.ts';
+import {
+  checkUsage,
+  type FailureKind,
+  type LimitGroup,
+  type LimitsRead,
+  type LimitWindow,
+  type RunUsage,
+  tokens,
+} from '../limits.ts';
 import { TOOLS } from '../tools/index.ts';
 import {
   type AdapterOptions,
@@ -249,6 +257,46 @@ function antigravityMinutes(window: unknown, name: unknown): number | null {
 function antigravityReset(time: unknown): number | undefined {
   const at = typeof time === 'string' ? Date.parse(time) : Number.NaN;
   return Number.isFinite(at) && at > 0 ? at : undefined;
+}
+
+const GO_UNITS: Record<string, number> = {
+  ns: 1e-6,
+  us: 1e-3,
+  µs: 1e-3,
+  μs: 1e-3,
+  ms: 1,
+  s: 1000,
+  m: 60_000,
+  h: 3_600_000,
+};
+
+/** A Go duration ("4m42s", "1h0m3.5s") in ms, or null. */
+export function goDuration(text: string): number | null {
+  if (!/^(?:\d+(?:\.\d+)?(?:ns|us|µs|μs|ms|h|m|s))+$/.test(text)) return null;
+  let ms = 0;
+  for (const [, n, unit] of text.matchAll(/(\d+(?:\.\d+)?)(ns|us|µs|μs|ms|h|m|s)/g))
+    ms += Number(n) * (GO_UNITS[unit as string] ?? 0);
+  return ms;
+}
+
+/**
+ * What its own error means when the account's quota is used up: `RESOURCE_EXHAUSTED (code 429)` that
+ * says so in the service's own fields (`reason:QUOTA_EXHAUSTED`, or when the quota starts again:
+ * `quotaResetTimeStamp:`, `quotaResetDelay:`, "Resets in 4m42s"), with that time. A bare
+ * `RESOURCE_EXHAUSTED` is a rate limit that may pass, and says nothing here (the account's limits, read
+ * as the turn fails, may).
+ */
+export function antigravityClassify(error: string, now: number = Date.now()): FailureKind | null {
+  if (!/^RESOURCE_EXHAUSTED \(code 429\)/.test(error)) return null;
+  const stamp = /\bquotaResetTimeStamp:([^\s\],]+)/.exec(error)?.[1];
+  const at = stamp ? Date.parse(stamp) : Number.NaN;
+  const delay =
+    /\bquotaResetDelay:([^\s\],]+)/.exec(error)?.[1] ??
+    /\bResets in ([0-9.a-zµμ]+?)(?:\.(?!\d)|[\s,\]]|$)/.exec(error)?.[1];
+  const wait = delay ? goDuration(delay) : null;
+  const resets = Number.isFinite(at) ? at : wait !== null ? now + wait : null;
+  if (resets === null && !/\breason:QUOTA_EXHAUSTED\b/.test(error)) return null;
+  return resets !== null && resets > now ? { why: 'usage', resets: Math.round(resets) } : { why: 'usage' };
 }
 
 /**
@@ -553,6 +601,7 @@ export function antigravitySpec(o: { startupMs?: number } = {}): Spec {
       return { args: antigravityArgs(job, variants), env: antigravityEnv(files.home) };
     },
     reader: antigravityReader,
+    classify: antigravityClassify,
     // neither its stream nor its log says whether HO[LO]'s server started: the server marks it
     toolsStarted: (job) => existsSync(join(job.workspace, READY_FILE)),
     input: (job) => antigravityInput(job.prompt),

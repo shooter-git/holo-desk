@@ -1,20 +1,22 @@
 /**
  * The Arrangement and Chords lanes, under the tracks' ruler (View switches each on).
  *
- * - **Arrangement**: the song's sections, a block from each marker to the next. Drag a block to move
- *   its bars (everything in them: the `arrange` operation), Alt-drag to copy them; drag the line
- *   between two blocks to move the marker; double-click to rename; the menu (a right click, or a tap
- *   on a touch screen) has the rest. A finger holds a block, then drags it, so a swipe still scrolls.
+ * - **Arrangement**: the song's sections, a block from each marker to the next. Click or tap a block
+ *   to go to it (the playhead at its start). Drag a block to move its bars (everything in them: the
+ *   `arrange` operation), Alt-drag to copy them; drag the line between two blocks to move the marker;
+ *   double-click to rename; the menu (a right click, or a finger held still) lists the song's
+ *   sections, to go to any of them, and has the rest. A finger holds a block, then drags it, so a
+ *   swipe still scrolls.
  * - **Chords**: the song's chord symbols, the ones the Score writes over its staves. Click one to
  *   change it, an empty beat to write one there, and drag one to another beat.
  *
  * Nothing is kept for either beyond the song's own `markers` and `chords`.
  */
 import { chordOps, moveChordOps, type Section, sections } from '@holo/agent/edits';
-import { type ChordMark, type Marker, meterAt, type Project, ticksPerBar } from '@holo/session';
+import { type ChordMark, type Marker, meterAt, type Project, ticksPerBar, tickToBarBeat } from '@holo/session';
 import { Plus } from 'lucide-react';
 import { type PointerEvent as ReactPointerEvent, useCallback, useEffect, useRef, useState } from 'react';
-import { addSectionAt, addSectionAtPlayhead, apply, playheadTick } from '../app/actions.ts';
+import { addSectionAt, addSectionAtPlayhead, apply, locate, playheadTick, setCycle } from '../app/actions.ts';
 import { store, useApp } from '../app/store.ts';
 import { alpha, movePlayhead, prepare, roundRect, useFrame, useSize } from './frame.ts';
 import { isMenuPress, LONG_PRESS_MS, useWheel } from './gesture.ts';
@@ -33,13 +35,15 @@ import {
   sectionAt,
   sectionColor,
 } from './lanes.ts';
-import { type MenuEntry, openMenu } from './menu.tsx';
+import { closeMenu, type MenuEntry, openMenu } from './menu.tsx';
 import { TouchPan, type Viewport } from './view.ts';
 
 const FONT = '600 10.5px Inter Variable, system-ui, sans-serif';
 const FONT_TOUCH = '600 12px Inter Variable, system-ui, sans-serif';
 /** How near a marker's line a mouse grabs it, pixels. */
 const EDGE = 5;
+/** How far a finger may wander and still be holding still, pixels. */
+const FINGER_SLOP = 10;
 
 type Drag =
   | { kind: 'section'; section: Section; grab: number; tick: number; place: number | null; copy: boolean }
@@ -335,10 +339,28 @@ export function SongLanes({
     const after = list[i + 1];
     const name = s.name || 'this section';
     const here = barStart(p.meter, tick);
-    const entries: MenuEntry[] = [{ heading: s.name || 'Before the first marker' }];
+    // first, the song's sections to go to, in their order (this one checked): the menu is how to hop to
+    // one that's off the screen, which is most of them on a phone
+    const entries: MenuEntry[] = [];
+    if (list.length > 1) {
+      entries.push({ heading: 'Go to' });
+      for (const q of list)
+        entries.push({
+          label: q.name || 'Before the first marker',
+          hint: `bar ${tickToBarBeat(p.meter, q.from).bar}`,
+          color: sectionColor(list, q),
+          checked: q.id === s.id,
+          // (a long song's list opens scrolled to where the press was)
+          ...(q.id === s.id ? { focus: true } : {}),
+          onSelect: () => locate(q.from),
+        });
+      entries.push('sep');
+    }
+    entries.push({ heading: s.name || 'Before the first marker' });
     if (s.marker) entries.push({ label: 'Rename', onSelect: () => startRename((s.marker as Marker).id) });
     else entries.push({ label: 'Name this section', onSelect: () => addSection(0) });
     if (here > s.from && here < s.to) entries.push({ label: 'Split here', onSelect: () => addSection(here) });
+    entries.push({ label: 'Cycle this section', onSelect: () => setCycle(s.from, s.to) });
     if (s.whole) {
       entries.push('sep');
       entries.push({ label: 'Repeat', onSelect: () => arrange('copy', s, s.to, `Repeat ${name}`) });
@@ -470,7 +492,10 @@ export function SongLanes({
     const x0 = e.clientX;
     const y0 = e.clientY;
     let last: PointerEvent = e.nativeEvent;
-    let mode: 'wait' | 'drag' | 'pan' = 'wait';
+    // (`menu`: a finger held on what can't be dragged, its menu up)
+    let mode: 'wait' | 'drag' | 'pan' | 'menu' = 'wait';
+    /** Where a finger held still, until it drags on from there. */
+    let held: { x: number; y: number } | null = null;
     const pan = touch ? new TouchPan(view, 'x', () => 0, e.nativeEvent) : null;
     // what a drag of this would move: a marker's line, a whole section, a chord
     const begin = (): boolean => {
@@ -490,9 +515,16 @@ export function SongLanes({
       dragTo(last);
       return true;
     };
+    // a finger held still: the menu of what's under it, and what it holds lifts, to be dragged on from
+    // there (which puts the menu away)
     const timer = touch
       ? window.setTimeout(() => {
-          if (mode === 'wait' && begin()) navigator.vibrate?.(10);
+          if (mode !== 'wait' || (!at.section && !at.chord)) return;
+          held = { x: last.clientX, y: last.clientY };
+          if (!begin()) mode = 'menu';
+          navigator.vibrate?.(10);
+          if (at.section) sectionMenu(held.x, held.y, at.section, at.tick);
+          else if (at.chord) chordMenu(held.x, held.y, at.chord);
         }, LONG_PRESS_MS)
       : 0;
     const move = (ev: PointerEvent) => {
@@ -500,13 +532,20 @@ export function SongLanes({
       last = ev;
       const far = Math.hypot(ev.clientX - x0, ev.clientY - y0);
       if (mode === 'wait') {
-        if (touch && far > 10) {
+        if (touch && far > FINGER_SLOP) {
           window.clearTimeout(timer);
           mode = 'pan';
         } else if (!touch && far > 3 && !begin()) mode = 'pan';
       }
       if (mode === 'pan') pan?.move(ev);
-      else if (mode === 'drag') dragTo(ev);
+      else if (mode === 'drag') {
+        if (held) {
+          if (Math.hypot(ev.clientX - held.x, ev.clientY - held.y) < FINGER_SLOP) return;
+          held = null;
+          closeMenu();
+        }
+        dragTo(ev);
+      }
     };
     const done = () => {
       window.clearTimeout(timer);
@@ -517,9 +556,12 @@ export function SongLanes({
     const up = (ev: PointerEvent) => {
       if (ev.pointerId !== id) return;
       done();
-      if (mode === 'drag') drop();
-      else if (mode === 'pan') pan?.end(ev.timeStamp);
-      else tap(at, ev, touch);
+      if (mode === 'drag') {
+        // (held and let go where it was: its menu is up, and nothing moves)
+        if (held) cancel();
+        else drop();
+      } else if (mode === 'pan') pan?.end(ev.timeStamp);
+      else if (mode === 'wait') tap(at, ev, touch);
     };
     const cancel = () => {
       done();
@@ -540,15 +582,21 @@ export function SongLanes({
       return;
     }
     if (touch) {
-      // a finger: a tap on a section is its menu (a hold, then a drag, moves it); on a song with none, the first
-      if (at.section) sectionMenu(ev.clientX, ev.clientY, at.section, at.tick);
+      // a finger: a tap on a section goes to it (held, it's the section's menu, and a drag from there
+      // moves it); on a song with none, the first
+      if (at.section) locate(at.section.from);
       else addSection(at.tick);
       return;
     }
-    // a mouse: a double click names a section, or starts one where there's none
+    // a mouse: a click on a section goes to it (on a marker's line, to the line); a double click
+    // names it, or starts one where there's none
     const again = ev.timeStamp - lastClick.current.at < 400 && Math.abs(ev.clientX - lastClick.current.x) < 6;
     lastClick.current = { at: again ? 0 : ev.timeStamp, x: ev.clientX };
-    if (!again) return;
+    if (!again) {
+      const to = at.edge ?? at.section;
+      if (to) locate(to.from);
+      return;
+    }
     if (at.section?.marker) startRename(at.section.marker.id);
     else addSection(at.section ? 0 : at.tick);
   };

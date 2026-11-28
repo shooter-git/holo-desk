@@ -118,6 +118,7 @@ import {
   type Gesture,
   type GestureOptions,
   isMenuPress,
+  LONG_PRESS_MS,
   Pinch,
   screenDpr,
   useWheel,
@@ -127,7 +128,7 @@ import { type MenuEntry, openMenu, openMenuAt } from './menu.tsx';
 import { drawMiniNotes, pitchRange } from './mini-notes.ts';
 import { DRAWER, PEEK_SWIPE, pinchAxis as pinchAxisOf, pinchedRow, pulledOut, RAIL, railRow } from './rail.ts';
 import { pressToReorder, type ReorderList } from './reorder.ts';
-import { rulerHold } from './ruler.ts';
+import { drawnCycle, rulerHold } from './ruler.ts';
 import { SongLaneHeads, SongLanes } from './SongLanes.tsx';
 import { DOUBLE_TAP_MS, gridStep, revealBy, TouchPan, Viewport, WHEEL_ZOOM, ZOOM } from './view.ts';
 import { drawClipWave, drawFades, fadeTo, trimEnd, trimStart } from './wave.ts';
@@ -381,6 +382,20 @@ const TrackRow = memo(function TrackRow({
   const compact = height < FLAT_ROW;
   const menu = (x: number, y: number) =>
     openMenu(x, y, [
+      // (first, where a finger held on a phone's rail finds them: the rail has no buttons of its own)
+      {
+        label: track.channel.mute ? 'Unmute' : 'Mute',
+        hint: 'M',
+        disabled: !!track.inactive,
+        onSelect: () => updateChannel(track.id, { mute: !track.channel.mute }, 'Mute'),
+      },
+      {
+        label: track.channel.solo ? 'Unsolo' : 'Solo',
+        hint: 'S',
+        disabled: !!track.inactive,
+        onSelect: () => updateChannel(track.id, { solo: !track.channel.solo }, 'Solo'),
+      },
+      'sep',
       { label: 'Rename', onSelect: () => setRenaming(true) },
       track.kind === 'audio'
         ? { label: 'Import audio file…', onSelect: () => chooseAudioFiles() }
@@ -558,7 +573,15 @@ const TrackRow = memo(function TrackRow({
       onContextMenu={onContextMenu}
     >
       {swatch}
-      {icons && <PowerIcon track={track} />}
+      {icons && (
+        <PowerIcon
+          track={track}
+          onHold={(x, y) => {
+            selectTrack(track.id);
+            menu(x, y);
+          }}
+        />
+      )}
       <div className="title" onDoubleClick={() => setRenaming(true)}>
         {renaming ? (
           nameField
@@ -612,6 +635,20 @@ const StackRow = memo(function StackRow({ id, stack, open, color, top, height, f
   const menu = (x: number, y: number) =>
     openMenu(x, y, [
       { heading: stack.name },
+      // (its tracks together, as its M and S buttons do: a phone's rail has no room for those)
+      {
+        label: mute ? 'Unmute' : 'Mute',
+        hint: bus ? `its bus, ${bus.name}` : 'its tracks',
+        disabled: !!inactive,
+        onSelect: () => muteStack(stack.id),
+      },
+      {
+        label: solo ? 'Unsolo' : 'Solo',
+        hint: 'its tracks',
+        disabled: !!inactive,
+        onSelect: () => soloStack(stack.id),
+      },
+      'sep',
       { label: open ? 'Close' : 'Open', onSelect: toggle },
       { label: 'Rename', onSelect: () => setRenaming(true) },
       'sep',
@@ -673,7 +710,7 @@ const StackRow = memo(function StackRow({ id, stack, open, color, top, height, f
         className={`track-row rail-cell stack-row${open ? ' open' : ''}${inactive ? ' inactive' : ''}`}
         style={{ top, height, '--stack': color } as CSSProperties}
         title={`${stack.name}: ${what}`}
-        aria-label={`${stack.name}, a stack of ${what}, ${open ? 'open' : 'closed'}`}
+        aria-label={`${stack.name}, a stack of ${what}, ${open ? 'open' : 'closed'}${mute ? ', muted' : ''}${solo ? ', soloed' : ''}`}
         aria-expanded={open}
         onPointerDown={onDown}
         onClick={(e) => {
@@ -685,8 +722,10 @@ const StackRow = memo(function StackRow({ id, stack, open, color, top, height, f
         <span className="rail-icon" style={{ color }}>
           {arrow}
         </span>
-        <span className="stack-count" aria-hidden="true">
-          {count}
+        <span className="stack-foot" aria-hidden="true">
+          <span className="stack-count">{count}</span>
+          {!!mute && <span className="mark mute">M</span>}
+          {!!solo && <span className="mark solo">S</span>}
         </span>
       </button>
     );
@@ -814,7 +853,37 @@ function StackFader({ bus, name }: { bus: Bus; name: string }) {
  * on, the on/off's own sign while it's off. Off, the track is kept as it is, but nothing plays, loads
  * or records for it.
  */
-function PowerIcon({ track }: { track: Track }) {
+function PowerIcon({ track, onHold }: { track: Track; onHold?: (x: number, y: number) => void }) {
+  // A finger held still on it is the track's menu, as on the rest of the header and on a phone's
+  // rail (where the icon is all there is of a track): the click that ends that press isn't the on/off
+  const held = useRef(false);
+  const onDown = (e: ReactPointerEvent<HTMLButtonElement>) => {
+    e.stopPropagation();
+    held.current = false;
+    if (e.pointerType !== 'touch' || !onHold) return;
+    const id = e.pointerId;
+    const x = e.clientX;
+    const y = e.clientY;
+    const timer = window.setTimeout(() => {
+      held.current = true;
+      navigator.vibrate?.(10);
+      onHold(x, y);
+    }, LONG_PRESS_MS);
+    // (a finger that wanders off, or lifts first, isn't holding)
+    const move = (ev: PointerEvent) => {
+      if (ev.pointerId === id && Math.hypot(ev.clientX - x, ev.clientY - y) > 10) done(ev);
+    };
+    const done = (ev: PointerEvent) => {
+      if (ev.pointerId !== id) return;
+      window.clearTimeout(timer);
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', done);
+      window.removeEventListener('pointercancel', done);
+    };
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', done);
+    window.addEventListener('pointercancel', done);
+  };
   return (
     <button
       type="button"
@@ -823,8 +892,11 @@ function PowerIcon({ track }: { track: Track }) {
       title={track.inactive ? `${track.name} is inactive: turn it on` : 'Active: turn off to free its CPU and memory'}
       aria-label={track.inactive ? `Make ${track.name} active` : `Make ${track.name} inactive`}
       aria-pressed={!track.inactive}
-      onPointerDown={(e) => e.stopPropagation()}
-      onClick={() => setTrackActive(track.id, !!track.inactive)}
+      onPointerDown={onDown}
+      onClick={() => {
+        if (held.current) held.current = false;
+        else setTrackActive(track.id, !!track.inactive);
+      }}
     >
       {track.inactive ? <Power /> : track.kind === 'audio' ? <Mic /> : instrumentIcon(track.instrument)}
     </button>
@@ -2264,7 +2336,7 @@ export function TracksArea() {
   };
 
   // ruler: top half sets or moves the cycle, bottom half moves the playhead (on a phone, a finger
-  // moves the playhead anywhere but at the cycle's edges: rulerHold)
+  // moves the playhead anywhere but at the cycle's edges: rulerHold; held still first, it draws a new cycle)
   const onRulerDown = (e: ReactPointerEvent<HTMLDivElement>) => {
     // the ruler has no menu: a right-click (or a wheel's click) does nothing here, as on the editors' rulers
     if (e.button !== 0 || isMenuPress(e)) return;
@@ -2281,10 +2353,46 @@ export function TracksArea() {
     const mode = rulerHold(x, y, rect.height, edges, finger);
     if (mode === 'playhead') {
       playheadAt(x);
-      start(e, {
-        threshold: 0,
-        onMove: (ev) => playheadAt(ev.clientX - rect.left),
+      // A phone's ruler has no strip a finger could aim at to draw a cycle in, so the finger holds
+      // still first: then, drawn along, it draws a new cycle from where it held. Moved before that,
+      // it moves the playhead, as a mouse does
+      let from: number | null = null;
+      let drawn: { start: number; end: number } | null = null;
+      let hold = 0;
+      const g = start(e, {
+        threshold: finger ? undefined : 0,
+        onMove: (ev, gg) => {
+          if (from === null) {
+            if (gg.moved) window.clearTimeout(hold);
+            playheadAt(ev.clientX - rect.left);
+            return;
+          }
+          const t = quantize(tracksView.xToTick(ev.clientX - rect.left), snap);
+          // (a finger that only trembles where it held hasn't drawn anything)
+          if (!drawn && t === from) return;
+          drawn = drawnCycle(from, t, snap);
+          cyclePreview.current = { on: true, ...drawn };
+          redraw();
+        },
+        onUp: () => {
+          window.clearTimeout(hold);
+          if (from === null) return;
+          cyclePreview.current = null;
+          redraw();
+          if (drawn) setCycle(drawn.start, drawn.end);
+        },
+        onAbort: () => window.clearTimeout(hold),
       });
+      if (finger)
+        hold = window.setTimeout(() => {
+          if (g.moved) return;
+          from = quantize(tracksView.xToTick(g.last.clientX - rect.left), snap);
+          g.edgeScroll = 'x';
+          navigator.vibrate?.(10);
+          // the cycle begins under the finger, a grid step long, so the hold is seen to have taken
+          cyclePreview.current = { on: true, ...drawnCycle(from, from, snap) };
+          redraw();
+        }, LONG_PRESS_MS);
       return;
     }
     const anchor = quantize(tick, snap);
@@ -2300,7 +2408,7 @@ export function TracksArea() {
         else if (mode === 'move') {
           const d = t - anchor;
           next = { start: Math.max(0, c.start + d), end: Math.max(snap, c.end + d) };
-        } else next = { start: Math.min(anchor, t), end: Math.max(anchor + snap, t) };
+        } else next = drawnCycle(anchor, t, snap);
         // drawn in place of the song's cycle until release: one undo step, no store writes per pixel
         cyclePreview.current = { on: true, ...next };
         redraw();

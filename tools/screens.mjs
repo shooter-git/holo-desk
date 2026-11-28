@@ -4,7 +4,7 @@
 //
 //   node tools/demo-song.mjs && node tools/screens.mjs
 //
-// Writes docs/images/{studio,score,mixer,phone,remote}.jpg (then `pnpm banner` makes the banner from
+// Writes docs/images/{studio,score,steps,mixer,phone,remote}.jpg (then `pnpm banner` makes the banner from
 // studio.jpg). Needs Playwright (its index.mjs in PLAYWRIGHT if it isn't installed here;
 // PLAYWRIGHT_CHROMIUM, a Chromium already on the machine) and ImageMagick's `convert`. HOLO_WEB_URL
 // is the studio (default http://127.0.0.1:47800), with the packs the demo song plays installed
@@ -73,7 +73,7 @@ const shoot = (page, name) => page.screenshot({ path: join(shots, `${name}.png`)
 const desk = { viewport: { width: 1440, height: 900 }, deviceScaleFactor: 2 };
 const phone = { viewport: { width: 390, height: 844 }, deviceScaleFactor: 3, isMobile: true, hasTouch: true };
 
-// the studio, playing the theme on the piano
+// the studio, playing the theme on the piano, with the Arrangement and Chords lanes over the tracks
 const s = await open(desk, {
   inspector: true,
   editor: 'piano',
@@ -82,6 +82,7 @@ const s = await open(desk, {
   keyHeight: 7,
   zoom: 60,
   deviceName: 'Studio',
+  show: { arrangement: true, chordLane: true },
 });
 await start(s.page);
 await s.page.locator('.track-row').first().click();
@@ -119,6 +120,30 @@ await start(c.page);
 await c.page.waitForTimeout(1500);
 await shoot(c.page, 'score');
 await c.ctx.close();
+
+// the drums in the Step Grid, playing
+const g = await open(desk, {
+  inspector: false,
+  editor: 'piano',
+  noteView: 'steps',
+  editorHeight: 480,
+  zoom: 60,
+  deviceName: 'Studio',
+});
+await start(g.page);
+// (the drums are the last track, under the editor: reached with the arrow keys)
+await g.page
+  .locator('.track-row')
+  .first()
+  .click({ position: { x: 150, y: 12 } });
+const tracks = (await (await fetch(`${web}/api/projects/${song}`)).json()).tracks.length;
+for (let i = 1; i < tracks; i++) await g.page.keyboard.press('ArrowDown');
+await g.page.getByText('Step Grid').waitFor();
+await g.page.keyboard.press('Space');
+await g.page.waitForTimeout(2600);
+await shoot(g.page, 'steps');
+await g.page.keyboard.press('Space');
+await g.ctx.close();
 
 // the mixer while the song plays, the piano's compressor open, and a palette of sounds in the Library
 const m = await open(desk, {
@@ -166,7 +191,7 @@ if (pair) {
     { allowed: true },
   );
   await start(a.page);
-  await a.page.locator('.track-row', { hasText: 'Clarinet' }).click();
+  await a.page.locator('.track-row', { hasText: 'Clarinet' }).click({ position: { x: 150, y: 12 } });
   await a.page.keyboard.press('Control+/');
   await a.page.waitForTimeout(600);
   if (!(await thread()).thread?.turns.length) {
@@ -219,10 +244,12 @@ const beside = (names, out) =>
     ...jpeg,
     join(images, out),
   );
-for (const name of ['studio', 'score', 'mixer', ...(pair ? ['agent'] : [])])
+for (const name of ['studio', 'score', 'steps', 'mixer', ...(pair ? ['agent'] : [])])
   magick(join(shots, `${name}.png`), ...jpeg, join(images, `${name}.jpg`));
 beside(['phone-tracks', 'phone-editor', 'phone-play'], 'phone.jpg');
 beside(['remote-tracks', 'remote-mixer', 'remote-markers'], 'remote.jpg');
 if (pair) beside(['phone-page', 'phone-tray'], 'phone-agent.jpg');
 rmSync(shots, { recursive: true, force: true });
-console.log(`docs/images: studio, score, mixer, phone, remote${pair ? ', agent, phone-agent' : ''} (from "${song}")`);
+console.log(
+  `docs/images: studio, score, steps, mixer, phone, remote${pair ? ', agent, phone-agent' : ''} (from "${song}")`,
+);

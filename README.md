@@ -2,7 +2,7 @@
 
 <p align="center"><b>A music studio that runs in your browser.</b><br>Write a song, play it on your keyboard, record your voice or your guitar, mix it, and print the score:<br>on your computer, your tablet and your phone, with nothing to sign up for.</p>
 
-![HO[LO] Desk playing a song: the tracks, one track's channel strip on the left, and its notes in the Piano Roll below](docs/images/studio.jpg)
+![HO[LO] Desk playing a song: the tracks under the song's sections and chords, one track's channel strip on the left, and its notes in the Piano Roll below](docs/images/studio.jpg)
 
 ## What it is
 
@@ -12,7 +12,7 @@ then open it like a web page: on that computer, or on any other device you own.
 
 - **Free and open source.** MIT licensed. No account, no subscription, no ads, and nothing is sent anywhere.
 - **Yours.** It runs on your computer, and your songs stay in a folder there.
-- **A whole studio.** Tracks, a Piano Roll, a score, audio recording, a mixer, 33 effects, 90 built-in
+- **A whole studio.** Tracks, a Piano Roll, a score, audio recording, a mixer, 32 effects, 90 built-in
   synths and 66 free sample packs, from concert grands to a full orchestra and about twenty drum kits.
 - **Familiar.** It's laid out the way Logic is, with Logic's key commands, so if you've used a studio
   before you already know where things are.
@@ -35,7 +35,9 @@ repository.
 A song is a stack of **tracks**, one for each instrument, running left to right in time. Select a track
 and its notes open in the **Piano Roll** underneath: each colored strip is a note: higher up is higher in pitch,
 and a longer strip is a longer note. Drag notes where you want them, stretch them, draw new ones, set how hard each is
-played, and undo anything. That's the picture at the top of this page.
+played, and undo anything. That's the picture at the top of this page: above the tracks are the song's
+sections (Intro, Theme) and its chords, and the cellos and the bass are kept together under one header, a
+**track stack**.
 
 You don't have to click notes in. Plug in a MIDI keyboard or drum pads and play, type on your computer's
 keyboard, or tap the keys and pads on a touch screen, and record what you played with a metronome and a
@@ -47,6 +49,8 @@ Select a drum track and choose **Steps** beside Piano Roll: the same notes as a 
 A row for each piece of the kit, a step for each sixteenth, a page of bars at a time. Tap a step to
 light it and hear it, drag along a row to paint a run of them, drag a lit step up or down for how hard
 it's hit. While the song plays a light runs along the steps and what's struck jumps.
+
+![The Step Grid: the drum part as rows of steps for the kick, the side stick and the hats, while the song plays](docs/images/steps.jpg)
 
 ### Read it as a score
 
@@ -70,7 +74,7 @@ even edit a recording note by note: nudge a sung note that's flat, straighten it
 ### Mix
 
 Every track has a channel strip: its instrument, its effects, how much it sends to shared reverbs, where
-it sits left to right, and a fader. There are 33 effects built in (equalizers, compressors, reverbs,
+it sits left to right, and a fader. There are 32 effects built in (equalizers, compressors, reverbs,
 delays, tape and tube colors, a pitch corrector, a drummer that plays along), each with its own window,
 and anything you can turn can be **automated**: drawn as a line that moves it through the song.
 
@@ -98,15 +102,16 @@ computer's screen. Play, stop, record, pick a track, ride its fader, jump to a m
 ### Ask for it in plain words (optional)
 
 HO[LO] has a command bar (<kbd>Ctrl /</kbd>) where every command, track and marker is found by name.
-If you turn the **agent** on, the same bar also takes requests in plain words, and an AI agent carries
-them out in the open song: write a bass line, harmonize a melody, fix what's muddy in the mix, read a
+If you turn the **agent** on, it also takes requests in plain words, in a panel that slides out beside
+the studio, and an AI agent carries them out in the open song: write a bass line, harmonize a melody, fix what's muddy in the mix, read a
 scanned page.
 
-![A request typed in the bar and the agent's reply: three clarinet counter-melodies, each with a play button, and buttons to keep one](docs/images/agent.jpg)
+![A request and the agent's reply in the dock at the right of the studio: three clarinet counter-melodies, each with a play button, and buttons to keep one](docs/images/agent.jpg)
 
 This is a real request and its real reply. The agent wrote three clarinet lines (the notes in the Piano
 Roll underneath are one of them) and laid out its own controls for what comes next: play each, play the
-song without, keep the one you like. What matters about it:
+song without, keep the one you like. The line above the conversation says what is doing the work and how
+much of that account's allowance is left. What matters about it:
 
 - **It's off by default**, and while it's off nothing in the studio mentions it.
 - **It uses an AI subscription you already have**: your own Claude Code, Codex, Cursor or Antigravity,
@@ -222,10 +227,11 @@ set up the agent, the sample packs, the key commands, and how the repository is 
 
 ## Everything it does
 
-- **Write and edit.** Tracks and regions on a timeline. A Piano Roll with the keyboard down the left: drag notes to new pitches and times, stretch them, set velocities, and draw any controller (mod wheel, expression, sustain, pitch bend, aftertouch, any CC). The Piano Roll shows the song's key: its notes' rows are lit, a note outside it is hatched, and with **Snap to key** on, notes move by its steps (**Move into key** brings the strays in). Quantize (all the way to the grid or part of it, straight or with a swing), transpose, split, repeat, undo everything: the undo history is a menu you can step back through, and it's kept across a reload. The **Arrangement lane** (View, off to begin with) shows the song's sections as blocks, each from a marker to the next: click or tap one to go to it, drag one to move its bars, everything in them with it, or repeat, split, rename, cycle and delete from its menu (a right click, or a finger held on it). The menu also lists the song's sections, to go to any of them, the ones off the screen too. The **cycle** is drawn on the tracks' ruler: drag along its top half, or on a phone hold a finger on the ruler, then drag. The **Chords lane** shows the song's chord symbols over the tracks, typed where they fall. Drag tracks into a new order, and **Make inactive** the ones you aren't using: they stay in the song, but nothing is loaded or played for them.
+- **Write and edit.** Tracks and regions on a timeline. A Piano Roll with the keyboard down the left: drag notes to new pitches and times, stretch them, set velocities, and draw any controller (mod wheel, expression, sustain, pitch bend, aftertouch, any CC). The Piano Roll shows the song's key: its notes' rows are lit, a note outside it is hatched, and with **Snap to key** on, notes move by its steps (**Move into key** brings the strays in). Quantize (all the way to the grid or part of it, straight or with a swing), transpose, split, repeat, undo everything: the undo history is a menu you can step back through, and it's kept across a reload. The **Arrangement lane** (View, off to begin with) shows the song's sections as blocks, each from a marker to the next: click or tap one to go to it, drag one to move its bars, everything in them with it, or repeat, split, rename, cycle and delete from its menu (a right click, or a finger held on it). The menu also lists the song's sections, to go to any of them, the ones off the screen too. The **cycle** is drawn on the tracks' ruler: drag along its top half, or on a phone hold a finger on the ruler, then drag. The **Chords lane** (View, off to begin with too) shows the song's chord symbols over the tracks: click an empty beat to write one, click one to change it, drag it to another beat. Drag tracks into a new order, and **Make inactive** the ones you aren't using: they stay in the song, but nothing is loaded or played for them.
+- **Track headers and View.** A track's header has its name, mute, solo and record, a volume slider and a pan knob, and its icon switches the track on or off; its menu (a right click, or a finger held on it) starts with Mute and Solo. **View** (the eye in the control bar, and Settings › View) chooses what the studio shows on this device: parts of the track headers, of the mixer's strips and of the control bar, region names and contents, grid lines, markers, inactive tracks, and four things that are off to begin with: track numbers (in the Mixer too), the Arrangement lane, the Chords lane, and Stereo Out pinned at the left.
 - **Track stacks.** Tracks that belong together go under one header: right-click a track for **New stack with this track** (<kbd>Ctrl Shift D</kbd>) or **Add to** a stack, or drag a track under a stack's header, among its tracks, or back out. The header's arrow folds the stack away (on this device: a phone can keep a big song folded while the desktop has it open), its M and S mute and solo its tracks together, its on/off switches them all off, and its lane shows their parts as thin strips. **Mix through a bus** makes it a summing stack: a bus named after it, the tracks routed there, and the bus's fader on the header, for one level and one chain of effects for the group. A stack never changes what you hear by being one; whenever a track's output changes (into a stack's bus, back to Stereo Out) the studio does it in that same step and says so, and **Unstack** leaves the tracks where they are, playing as they did. Drag the header to move the whole stack. In the **Mixer** a stack has a narrow tab before its strips, with the same arrow, M and S, and a closed stack's strips are folded away there too; **HO[LO] Remote** shows the stacks in its Tracks and Mixer tabs and folds them on its own.
 - **Step Grid.** A kit's part as steps (**Steps**, beside Piano Roll, on any drum track; on a phone it's the editor's tab). Rows are the kit's pieces by name, the ones the part plays and the kick, snare and hats always (**All pads** for the rest); a pad's name plays it. Tap to light a step, drag along a row to paint or erase, drag a lit step up or down for its velocity (on a touch screen, rest a finger on it first), right-click or hold for Ghost, Soft, Normal and Accent. A step is as full and as bright as it's hit hard. Each row's ⋯ fills every step, every other, on or off the beats; spreads 3, 5 or 7 hits evenly over the bar (a Euclidean rhythm); shifts the row a step; varies how hard it's hit; or lets you type it as a line (`x...x...x.o.x...`). **Swing** pushes every other step late, from a touch to a hard shuffle, and the page's ⋯ copies its bars on to the next ones. The grid is 1/8 to 1/32, or triplets, and a page holds one, two or four bars, as many as the window has room for; the strip above shows the whole part bar by bar. A lit step is a note of the track, nothing more: one played a little early or late shows where it really is and isn't moved by being looked at, and the Piano Roll and the Score show the same part. From the keyboard, arrows move over the steps, Enter lights one or puts it out, 1 to 4 set how hard.
-- **Play it live.** USB MIDI keyboards and drum pads through Web MIDI, delivered to the audio engine through shared memory: a key you press sounds in the next 128-frame block. You can also play the computer keyboard (Musical Typing) or the touch keyboard (one row of keys or two) and drum pads on a phone. Record with count-in, cycle and metronome, or don't: **Capture** (<kbd>Shift R</kbd>, the dashed circle beside Record, or a finger held on Record) keeps what you just played anyway, pedal and bends included, on the track that sounded it. Record with count-in, cycle and metronome (right-click the metronome, or open Settings › Metronome, for its sound and volume), and tap a tempo in. For the shortest time from key to ear, run [HO[LO] Engine](#play-it-in-a-few-milliseconds-holo-engine) on the computer you play on.
+- **Play it live.** USB MIDI keyboards and drum pads through Web MIDI, delivered to the audio engine through shared memory: a key you press sounds in the next 128-frame block. You can also play the computer keyboard (Musical Typing) or the touch keyboard (one row of keys or two) and drum pads on a phone. Record with count-in, cycle and metronome, or don't: **Capture** (<kbd>Shift R</kbd>, the dashed circle beside Record, or a finger held on Record) keeps what you just played anyway, pedal and bends included, on the track that sounded it. A phone's Play tab offers **Keep** once something was played. The metronome's sound and volume are a right click on it away (or Settings › Metronome), and a tempo can be tapped in. For the shortest time from key to ear, run [HO[LO] Engine](#play-it-in-a-few-milliseconds-holo-engine) on the computer you play on.
 - **Scores.** Any track as notation (press <kbd>N</kbd>): the score and the Piano Roll are the same notes, so an edit in either shows in both. Write by typing letters and note values, playing a MIDI keyboard, or clicking on a staff; edit as in a notation program (drag a note up or down, give it a sharp, flat or new value, copy and paste, from the keys, a right click, a long press or a touch screen's tools); add dynamics, articulations, slurs, lyrics, chord symbols, repeats and endings, D.C. and D.S. jumps, guitar tab and drum parts. Markings sound as they read, and playback follows the repeats. MusicXML goes in and out (MuseScore, Sibelius, Finale, Dorico), and the full score or each part prints, or saves as a PDF.
 - **Scan sheet music.** Photograph a page with your phone or open an image or a PDF: HO[LO] straightens it, finds the systems and shows each line of the page above the bars it became, for a quick review. Open-source recognition engines (Audiveris and homr, on by default) read it into the song as one undo step, and read it again to flag the bars where they differ from what's written. The agent, if you turn it on, can read it too.
 - **Record and edit audio.** Audio tracks record a microphone or an instrument through an audio interface (lined up with what you heard, using this device's measured round trip), or take WAV, FLAC, MP3, Ogg and AIFF files dropped on the tracks. Trim from either edge, drag fades, set gain, normalize, and time-stretch without changing pitch (Alt-drag a region's end, as in Logic) in the tracks area or the Audio Editor. The Audio Editor's **Notes** view shows a recording as the notes in it, each one editable: its pitch, drift and vibrato, the glide into it, its formant, level and timing, split, joined, or pasted over with another note's sound.
@@ -239,7 +245,7 @@ set up the agent, the sample packs, the key commands, and how the repository is 
 - **Everywhere.** Desktop, tablet and phone (portrait and landscape), installable as an app, in Docker, reached by your own devices over HTTPS on your tailnet. Changes you haven't saved yet, and takes you've just recorded, are kept on the device until the host has them.
 
 <details>
-<summary><b>The 33 stock plugins</b></summary>
+<summary><b>The 32 stock plugins</b></summary>
 
 | | |
 |---|---|
@@ -297,7 +303,7 @@ A common setup: HO[LO] hosted on one machine, the studio full screen on another 
 or the button beside the settings), and your phone by the instruments as **HO[LO] Remote**: press the
 phone button in the studio's control bar and scan the code, or open `/remote` on the phone. The remote
 shows the studio's position and levels as they change and drives it: play, stop, record, cycle,
-metronome and count-in, undo, the tracks (select, mute, solo, arm) and their faders, markers and *go to
+metronome and count-in, Capture, undo, the tracks and stacks (select, mute, solo, arm) and their faders, markers and *go to
 bar*, and a keyboard and drum pads that play into the selected (or armed) track. Add it to the Home
 Screen to open it like an app; it keeps the screen awake. Press **Start the studio** on the computer
 once, and the remote does the rest.
@@ -372,8 +378,10 @@ Everything the agent in the studio's bar can do on a song, the `holo` command ca
 agent's own tools: edit regions and whole bars (`holo regions`, `holo timeline`), measure takes, the mix,
 tracks and plugins (`holo measure`), hear what was just played (`holo played --analyze`), bring a MIDI
 file, a score or a recording into the song (`holo import`), and any of its tools by name (`holo tool`).
-There are many more (songs, tracks, instruments, synths, automation, tempo and key, markers, the
-transport, bouncing, MIDI and score export, creations): `holo help` lists them.
+Newer ones follow the studio: `holo stack` (track stacks), `holo steps` (a kit's part as steps), `holo
+chords`, `holo capture` (keep what was just played) and `holo stems` (a WAV for each track, or for each
+stack, in one ZIP). There are many more (songs, tracks, instruments, synths, automation, tempo and key,
+markers, the transport, bouncing, MIDI and score export, creations): `holo help` lists them.
 
 Then ask Claude things like *"harmonize the melody in bars 9 to 16 with a counter-line on the oboe"*
 or *"put a live harmonizer on my keys in A lydian, thirds and fifths"*. Each change appears in the
@@ -395,7 +403,8 @@ turn it on in **Settings › Agent**, and while it's off nothing in the studio m
    have has an **Install** button, which runs its vendor's official installer there once you confirm
    (it says what runs, and where). One you install yourself in a terminal shows up with **Look
    again**, or, if it went somewhere the runner doesn't look, once you run `pnpm run runner-service on`
-   again.
+   again. Each harness is a line with a button to pick it: the one in use is lit and says **In use**,
+   and one that's signed out can't be picked until you sign it in.
 2. **The runner going there**: `pnpm runner`, the one that also renders [creations](docs/creations.md);
    on Linux, `pnpm run runner-service on` keeps it running as a service.
 3. **Pair your first device** with a 6-digit code from the host: run `pnpm holo pair` there. It prints
@@ -421,15 +430,20 @@ choose none, and it names them; Antigravity does too, without naming them; Claud
 say, so choose its model and effort there before its first request. Antigravity runs on your Google AI
 plan, but Google's FAQ says running it inside another app isn't supported on consumer plans and can get
 the account suspended: Settings › Agent says so before you sign in or use it, and HO[LO] never picks it
-unless you do. The choice is kept on the host, so every device you use runs the agent the same way.
+unless you do. The choice is kept on the host, so every device you use runs the agent the same way
+(a song's conversation can have a choice of its own: Continue with…, below).
 
-Under each harness, Settings › Agent also says what its account has left, as its vendor reports it: a
-bar for the week and one for the five hours, with when each starts again, and for Antigravity one set
-for its own models and one for the others it serves. That's how you tell when to switch harness or
+Each harness's line in Settings › Agent also says what its account has left, as its vendor reports it.
+Folded, the line shows the one limit that counts, as a small bar (or its plan, or that it's signed out or
+not installed); its arrow opens it to its version, its sign-in and updates, every limit with when it
+starts again (the week and the five hours, a model family's own week where the vendor keeps one, and for
+Antigravity one set for its own models and one for the others it serves), and what your requests
+through HO[LO] used in the last 30 days, by model and effort. Claude Code's limits and models are read
+as it starts, so they show before a first request. That's how you tell when to switch harness or
 model. Switching keeps the song's conversation: the harness you move to is told what was asked and
-answered so far, and one you go back to carries on where it left off, told what it missed. Cursor doesn't report what's left, so its row gives its plan and a link to its own usage page.
-**More** adds what your requests through HO[LO] used in the last 30 days, by model. None of it shows
-anywhere else in the studio.
+answered so far, and one you go back to carries on where it left off, told what it missed. Cursor
+doesn't report what's left, so its line gives its plan and a link to its own usage page. Outside
+Settings, what's left shows in one place only: the line at the top of the agent's page (below).
 
 </details>
 
@@ -446,23 +460,28 @@ means. Nothing plays or moves until you click, unless you asked to see or hear s
 
 You can send the next request while one is still working: it waits its turn under the conversation
 (up to five a song), and starts by itself when the one before it is done. After a request that failed
-or that you stopped, what waits is held until you press Send on the first. You can reword or remove a
-waiting request.
+or that you stopped, what waits is held until you press Send on the first. You can reword a
+waiting request of yours, and any allowed device can take one out. A scan's Read, Check and Fix never
+wait in line.
 
 A request runs as long as the agent keeps working, up to 2 hours (3 for reading a scan); it ends if it
 goes quiet for 15 minutes, and Stop on the bar ends it at any time. When one fails, the reply is what
 its harness said, with **Try again** under it: the request carries on in the same conversation from
 where it was, and stays one step to undo. There's no Try again where it wouldn't help, and the reply
 says why instead: the harness's account is out of usage (and when its limit starts again), or the
-harness is signed out or no longer installed. A request cut short because HO[LO] restarted, or its
+harness is signed out or no longer installed. (Once a limit's time has passed, Try again is back.) Try
+again runs with the harness chosen now, which takes the conversation over if it's another. A request cut short because HO[LO] restarted, or its
 runner went away, carries on by itself once they're back (and the studio that asked, when it holds
 changes of that request it hasn't saved): once, within ten minutes of their coming back, and never one
-you stopped.
+you stopped, one begun more than four hours ago, or one whose conversation has moved on since.
 
 A reply out of usage that says when the limit starts again offers **Carry on at** that time: HO[LO]
-then carries the request on by itself, whether or not you're still there, and you can call it off.
+then carries the request on by itself, whether or not you're still there (if the host can't at that
+time, as soon as it can, for a day). **Don't carry on** calls it off, and so does asking anything else
+in that conversation.
 
-Where another harness is ready, a failed reply also offers **Continue with…**: pick the harness, its
+Where another harness is ready, or the one that ran out has another model that still runs, a failed
+reply also offers **Continue with…**: pick the harness, its
 model and its effort, and the request carries on there, told everything asked and answered in the
 conversation so far. From then on that song's conversation runs with what you picked; your other
 songs keep following Settings › Agent. One quiet line at the top of the agent's page always says what
@@ -499,9 +518,16 @@ You can even leave: switch your phone to another app or close the tab, and its c
 song; come back to find them as one undo step, the ring if it's still at work, or the dot and its reply
 if it's done. What needs you there (playing to you, listening) waits for its reply's buttons.
 
+Opening another song doesn't stop a request either. Ask on one song, open another and ask there, and
+go back and forth: each song's changes are saved on the host and are there as that request's one undo
+step when you return. Two requests run at a time, and a third waits for one to finish. The bar's dot
+stays until you've seen the reply on the song it belongs to, the bar offers a row to go there, and the
+Songs list shows a ring on a song the agent is working on and a dot on one with a reply waiting.
+
 To hear of a reply while you're away, turn on **Tell me outside HO[LO]** in Settings › Agent on that
 device: **Long runs** (replies that took more than a minute) or **Every reply**, and either way when the
-agent needs your OK. The notice comes only to the device that asked, only while HO[LO] isn't in front
+agent needs your OK. A bounce you asked the host to make is announced the same way, when it's ready or
+if it failed. The notice comes only to the device that asked, only while HO[LO] isn't in front
 there, and a tap opens the song at that reply; HO[LO]'s Home Screen icon counts the replies not seen
 yet. It needs HO[LO] opened over HTTPS (`pnpm tailnet on` or `pnpm lan on`) and the host to reach the
 internet. Android phones and computers can have it in a browser tab; an iPhone or iPad only from HO[LO]
@@ -511,13 +537,14 @@ added to its Home Screen, which is a device of its own, so allow it as one first
 
 The agent works on the open song and nothing else:
 
-- its notes, score, regions, tracks, instruments, effects, mix, automation, tempo, key, meter, markers
-  and cycle, its finish and whether it loops;
+- its notes, score, regions, tracks and track stacks, instruments, effects, mix, automation, tempo, key,
+  meter, markers, sections and cycle, its chord symbols, a kit's steps, its finish and whether it loops;
 - recordings: bringing one in, and editing the notes in it;
 - measuring: a take, a track, a plugin, the mix;
-- playing to you, listening as you play, and reading what you just played (its tempo, meter, key and
-  pickup);
-- finding sounds, and installing a HO[LO] Pack once you've clicked;
+- playing to you, listening as you play, reading what you just played (its tempo, meter, key and
+  pickup) and keeping it;
+- finding sounds, and installing a HO[LO] Pack once you've clicked; bouncing the song or exporting its
+  stems, by track or by stack, once you've clicked;
 - keeping versions of its work, and playing the bars it changed as they were, then as they are;
 - with the Scan window open, **Read this scan**, **Check it** and **Fix flagged** (from the Commands
   button in its header, on a phone or a tablet too).
@@ -685,14 +712,14 @@ pnpm lint       # Biome
 | Folder | |
 |---|---|
 | `apps/web` | the studio: React UI, the engine in an AudioWorklet, Web MIDI, the Score and Scan windows, HO[LO] Remote, the bar and the agent's views |
-| `apps/server` | the server: projects (SQLite), packs, the live channel, creations, scans and their recognition engines, network MIDI, the agent's side (devices, jobs, notices) |
+| `apps/server` | the server: projects (SQLite), packs, the live channel, creations, scans and their recognition engines, network MIDI, bounces and stems made on the host, the updater's database copies, the agent's side (devices, jobs, notices) |
 | `apps/companion` | HO[LO] Engine: the engine on a render thread, the song rendered ahead on worker threads, with native audio and MIDI (one C file over miniaudio and the OS's MIDI) |
 | `packages/engine` | the audio engine: instruments, effects, the mix; the same code live, in bounces and headless (`holo render-audio`) |
 | `packages/session` | the session format, operations, the plugin and synth registries, palettes, automation, MIDI files |
 | `packages/score` | scores: notes laid out as notation, MusicXML in and out, tab, and reading scans |
-| `packages/music` | an experience's build: the pinned renderer a project carries, its sample fetching and checks |
+| `packages/music` | an experience's build: the pinned renderer a project carries, its sample fetching and checks, the ZIP that stems go in |
 | `packages/cli` | the `holo` command, the runner and pairing |
-| `packages/agent` | the agent in the studio: its tools (an MCP server), its instructions (`AGENT.md`) and how the runner starts each harness sealed; `stand-in/` answers as Claude Code and Codex for HO[LO]'s own checks |
+| `packages/agent` | the agent in the studio: its tools (an MCP server), its instructions (`AGENT.md`) and how the runner starts each harness sealed; the edits the studio shares with it (chords, sections, steps, stems); `stand-in/` answers as Claude Code and Codex for HO[LO]'s own checks |
 | `skills/holo` | the Claude Code skill |
 | `tools` | the scripts behind the `pnpm` commands (update, tailnet, lan, netmidi, omr, ui-check, agent-check), and the ones that make this page's pictures (`demo-song.mjs`, `screens.mjs`, `banner.mjs`) |
 | `local/` | not in the repository (git ignores it): your own tools for your own creations, such as an importer |
@@ -706,7 +733,7 @@ secret, an email address or a home-folder path. [CONTRIBUTING.md](CONTRIBUTING.m
 ## Privacy and security
 
 HO[LO] has no accounts and sends nothing anywhere, unless you turn on **Tell me outside HO[LO]** on a
-device: then a short notice of each reply goes to that device through its browser's push service
+device: then a short notice of each reply (and of a bounce the host made for it) goes to that device through its browser's push service
 (Apple's, Google's, Mozilla's or Microsoft's), encrypted so only the device can read it. The agent is
 off unless you turn it on, and off, no harness is run and nothing is looked up for it. On, it runs your own Claude Code, Codex, Cursor or Antigravity, which sends what
 it reads (the song, a scanned page, a file you attached) to Anthropic, OpenAI, Cursor or Google as any session

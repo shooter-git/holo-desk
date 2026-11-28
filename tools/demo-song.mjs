@@ -207,6 +207,9 @@ song.tracks = [
   }),
   track('Drums', { type: 'synth', preset: 'Drum Synth' }, C[10], drums, { volume: -6, room: -18 }),
 ];
+// the low strings under one header, a track stack
+song.stacks = [{ id: 'stk_strings', name: 'Strings', color: C[5] }];
+for (const t of song.tracks.slice(2, 4)) t.stack = 'stk_strings';
 // the pad swells into the theme and falls back under the clarinet
 song.tracks[1].channel.automation = [
   {

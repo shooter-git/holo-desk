@@ -16,18 +16,20 @@ import {
   elapsedMs,
   type Permission,
   permit,
+  resetOffer,
   serverNow,
   stopJob,
   tryAgain,
   upload,
   useAgent,
+  waitForReset,
 } from '../app/agent.ts';
 import { canCaptureScreen, grabScreen, type Ready, record, redraw } from '../app/attach.ts';
 import { useApp } from '../app/store.ts';
 import { installs, useInstalls } from '../audio/installs.ts';
 import { MoveButton } from './AgentChooser.tsx';
 import { AgentView } from './AgentView.tsx';
-import { startsAgain } from './harness-usage.ts';
+import { atClock, startsAgain } from './harness-usage.ts';
 
 /** "0:07": how long a recording has run. */
 export const clock = (ms: number) =>
@@ -271,8 +273,8 @@ export function CopyBrief({ text }: { text: string }) {
 
 /**
  * An exchange: the request, then the work going on or the reply, what the reply shows under it, then
- * its buttons (one that failed: Try again where that may help, and Continue with… where another
- * harness is ready). `elapsed` (the page's) shows how long it has been working, beside its line.
+ * its buttons (one that failed: Try again where that may help, Carry on at the time its harness's
+ * limit starts again, and Continue with… where another harness is ready). `elapsed` (the page's) shows how long it has been working, beside its line.
  */
 export function TalkBody({
   ex,
@@ -293,7 +295,11 @@ export function TalkBody({
 }) {
   const job = ex.job;
   // (what a failure that won't pass by itself needs, and Try again when it might)
-  const after = last && ex.mine ? afterFailure(ex, (resets) => startsAgain(resets, { now: serverNow() })) : null;
+  const now = serverNow();
+  const after = last && ex.mine ? afterFailure(ex, (resets) => startsAgain(resets, { now }), now) : null;
+  // out of usage till a time its harness said: it can be carried on by itself then, and that called off
+  const reset = last ? resetOffer(ex, now) : null;
+  const waits = reset && 'waiting' in reset ? reset.waiting : null;
   const buttons = [
     ex.permission && job && ex.mine && (
       <PermissionButton key="allow" job={job} permission={ex.permission} project={project} />
@@ -301,6 +307,26 @@ export function TalkBody({
     after?.again && job && !choosing && (
       <button key="again" type="button" className="btn" onClick={() => void tryAgain(ex, project)}>
         Try again
+      </button>
+    ),
+    reset && 'at' in reset && job && ex.mine && !choosing && (
+      <button
+        key="wait"
+        type="button"
+        className="btn"
+        onClick={() => void waitForReset(job, true).catch(() => undefined)}
+      >
+        Carry on {atClock(reset.at, { now })}
+      </button>
+    ),
+    waits && job && ex.mine && !choosing && (
+      <button
+        key="no-wait"
+        type="button"
+        className="btn ghost"
+        onClick={() => void waitForReset(job, false).catch(() => undefined)}
+      >
+        Don’t carry on
       </button>
     ),
     // (it shows only where another harness, or another model, could take the request)
@@ -332,6 +358,7 @@ export function TalkBody({
         ex.reply && <div className="reply">{ex.reply}</div>
       )}
       {!ex.working && after?.say && <div className="reply-after">{after.say}</div>}
+      {!ex.working && waits && <div className="reply-after">It carries on by itself {atClock(waits, { now })}.</div>}
       {!ex.working && ex.view && ex.job && <AgentView view={ex.view} job={ex.job} busy={busy} />}
       {ex.brief && <Brief text={ex.brief} flagged={ex.flagged} />}
       {buttons.length > 0 && <div className="btns">{buttons}</div>}

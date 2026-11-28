@@ -1238,6 +1238,7 @@ A request that starts with `standin:` is a script, its steps separated by `;` (`
 | `fail-once WORDS` | the same, the first time only: a later go at the same script (Try again) carries on from the step after it |
 | `recall` | `finish`, its reply saying what the prompt told of the conversation before the request: which of HO[LO]'s headings, and how many turns of a record ("Told: The conversation so far, The song now. Turns in the record: 1.") |
 | `limit SECONDS` | ends the turn as that harness ends one its account's limit refused (Claude Code: a `rejected` rate-limit event, starting again in that many seconds, an hour when not said; Codex: `Quota exceeded.`). `limit SECONDS claude` (or `codex`): only that harness's account is out, and the other goes on to the next step |
+| `limit-until TIME` | the same, the limit starting again at that time (seconds since 1970; `claude` or `codex` after it as for `limit`): a go made once it has passed goes on to the next step |
 
 Any other request reads the song and finishes, changing nothing: so does the go a turn is carried on
 with when it ended without `finish`. The script is what follows the request's last line that starts
@@ -1256,6 +1257,7 @@ Nothing else starts it, and a runner without those variables never sees it.
   when the limit starts again, and no Try again), a conversation moved from Claude Code to Codex and
   back (one conversation on the page; each told what it needs of it), and a request out of usage
   continued with Codex from the page's chooser (one exchange, the song's own choice from then on, the
-  host's unchanged, and back to Settings' from the bar's command). CI runs it as the `agent` job. The runner it
+  host's unchanged, and back to Settings' from the bar's command), and a request out of usage for a
+  few seconds, asked to carry on when its limit starts again (it does, by itself, as one exchange). CI runs it as the `agent` job. The runner it
   starts has a home and a cache of its own and only Node's and the system's folders on its PATH, so the
   harnesses installed on the computer aren't signed in to or run.

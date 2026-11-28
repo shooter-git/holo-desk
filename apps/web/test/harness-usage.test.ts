@@ -4,7 +4,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import type { HarnessInfo, UsageSum } from '../src/app/agent.ts';
-import { meter, startsAgain, tokenCount, usageView, windowLabel } from '../src/ui/harness-usage.ts';
+import { atClock, meter, startsAgain, tokenCount, usageView, windowLabel } from '../src/ui/harness-usage.ts';
 
 const NOW = Date.UTC(2099, 0, 5, 12, 0);
 const H = 3_600_000;
@@ -256,5 +256,9 @@ describe('when a limit starts again', () => {
     expect(startsAgain(NOW + 2 * H + 10 * 60_000, clock)).toBe('in 2 h 10 min');
     expect(startsAgain(NOW + 25 * 60_000, clock)).toBe('in 25 min');
     expect(startsAgain(NOW + 44 * H, clock)).toBe('Wed 7 Jan, 08:00');
+    // a time as a button says it
+    expect(atClock(NOW + 2 * H + 5 * 60_000, clock)).toBe('at 14:05');
+    expect(atClock(NOW + 12 * H, clock)).toBe('at 00:00');
+    expect(atClock(NOW + 44 * H, clock)).toBe('Wed 7 Jan, 08:00');
   });
 });

@@ -141,6 +141,19 @@ export function startsAgain(resets: number, c: Clock): string {
   return resets - c.now < DAY ? `in ${span(resets - c.now)}` : dayAndTime(resets, c);
 }
 
+/** A time as a button or a line says it: "at 14:05" within a day, else "Thu 3 Dec, 07:02". */
+export function atClock(at: number, c: Clock): string {
+  if (Math.abs(at - c.now) >= DAY) return dayAndTime(at, c);
+  const parts = new Intl.DateTimeFormat(c.locale, {
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+    ...(c.timeZone ? { timeZone: c.timeZone } : {}),
+  }).formatToParts(at);
+  const part = (type: Intl.DateTimeFormatPartTypes) => parts.find((p) => p.type === type)?.value ?? '';
+  return `at ${part('hour') === '24' ? '00' : part('hour')}:${part('minute')}`;
+}
+
 /** One window, as its line. */
 export function meter(w: LimitWindow, key: string, c: Clock): MeterView {
   const label = windowLabel(w.minutes);

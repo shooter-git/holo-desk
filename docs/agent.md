@@ -127,10 +127,11 @@ Turning the agent off cancels every job, so the job-scoped routes answer 403.
 | `POST /api/agent/harnesses/:id/install` | | `{ok}`. Sent as `agent-install {harness}` to a runner that reported the harness not found, with an `installer`; progress arrives as `agent-harness` with `kind:'install'`. 404 for an unknown harness; 409 `no-runner`, `busy` (a job runs on it), or no reason when a runner has it already (Update is for that) or none can install it (a Windows host). The body is empty: the runner runs its own fixed command. |
 | `POST /api/agent/requests` | `{project, text, attachments?:[id], context?, preset?}` | `{job}`. `text` is 1 to 4000 characters (empty with a preset). At most 10 attachments, each this device's for this song (400 otherwise). 404 for no such song, or a preset's scan that isn't the song's; 409 `not-open`, `busy`, `no-runner`, `no-harness`, `not-sealed`, `signed-out`. |
 | `POST /api/agent/jobs/:job/continue` | `{}`, or `{harness, model?, effort?}` | `{job}`: **Try again**, or **Continue with…**. The request whose last go failed is carried on in the same conversation, as a new job that continues it (below, "Why a request failed, and Try again"). With a `harness` it's carried on with that one and its `model` and `effort` (each empty: the harness's own), which becomes the song's own choice; `harness: null` carries it on with what Settings › Agent says, the song following it again (below, "A song's own choice"). 400 for a harness, model or effort that isn't one. Only the device that asked (403); 404 for no such request; 409 when it didn't fail, a later request was made on the song since, or the conversation was started over; and refused as a request is (`not-open`, `busy`, `no-runner`, `no-harness`, `not-sealed`, `signed-out`, `choose`). |
+| `POST /api/agent/jobs/:job/wait` | | `{until}`: **Carry on when it resets**. The request, whose last go its harness's limit refused, is carried on by the host itself once that limit has started again: at `until` (ms), 15 s after the time the harness said (below, "Why a request failed, and Try again"). Only the device that asked (403); 404 for no such request; 409 when it didn't fail, a later request was made since, the conversation was started over, or (`no-reset`) the harness didn't say when its limit starts again. `DELETE` calls it off: `{ok}`. |
 | `POST /api/agent/jobs/:job/cancel` | | `{ok}`. Any allowed device may stop a job; one waiting for a click is dismissed (`cancelled`). 404; 409 once it has ended. |
 | `POST /api/agent/jobs/:job/permission` | `{grant:boolean, result?, attachments?:[id]}` | `{ok, job?}`, `job` being the follow-up's id. Only the device that asked may answer (403), only while the job is `awaiting` (409). `result` is at most 1000 characters; `attachments` as in a request (a screenshot, a photo, a recording). Granting can be refused as a request is (`not-open`, `busy`, `no-harness`), and with 409 when the conversation was started over since the job asked. With a job token, the same path is the tools' (below). |
 | `POST /api/agent/jobs/:job/done-listening` | | `{ok}`. The user pressed Done. Only the device that asked (403); 409 once the job has ended. |
-| `GET /api/agent/threads/:project` | | `{thread, job, choice, runsWith, now}`. `thread` is `{id, harness, turns:[{job, request, reply, label, state, at, permission?, brief?, briefWarnings?, view?, go?, error?, harness?, model?, effort?, stop?, continues?}]}`, or null. `choice` is the song's own `{harness, model, effort}`, or null while it follows Settings › Agent; `runsWith`, what its next request runs with either way: its `harness` is the one named (the song's, or Settings'), even when no runner has it now, or the one the host picks when none is named (null: there's none to pick). `job` is the song's job that's running or waiting for a click (a `JobView`), or null: after a reload, its button comes back. `now` is the host's time (ms). |
+| `GET /api/agent/threads/:project` | | `{thread, job, choice, runsWith, now}`. `thread` is `{id, harness, turns:[{job, request, reply, label, state, at, permission?, brief?, briefWarnings?, view?, go?, error?, harness?, model?, effort?, stop?, continues?, wait?}]}`, or null. `choice` is the song's own `{harness, model, effort}`, or null while it follows Settings › Agent; `runsWith`, what its next request runs with either way: its `harness` is the one named (the song's, or Settings'), even when no runner has it now, or the one the host picks when none is named (null: there's none to pick). `job` is the song's job that's running or waiting for a click (a `JobView`), or null: after a reload, its button comes back. `now` is the host's time (ms). |
 | `GET /api/agent/away/:project` | `?from=` (a revision) | `{away}`: what this device's studio, back on the song at revision `from`, picks up of the changes its job saved on the server while it was away (below): `{job, label, running, base, head, batches:[{batch}], song}`, the batches after `from` by id, `head` the revision they bring the song to and `song` the song then, read together (no save comes between them), `label` the job's once it has finished (its last batch's before). From a revision before the run (a save of the studio's got there, its answer lost), the whole run, `base` its first revision; otherwise `base` is `from`. `away` is null when there's nothing to pick up from `from`: no such run of the song's latest job of this device's, `from` past its first revision but not one of its own, or the song saved since by someone else. 400 for a `from` that isn't a revision. |
 | `PUT /api/agent/threads/:project/choice` | `{harness, model?, effort?}`, or `{harness: null}` | The song's conversation as `GET` answers it. What the song's requests run with from here on: its own choice (below, "A song's own choice"), or with `harness: null` what Settings › Agent says again. 404 for no such song; 400 for a harness, model or effort that isn't one; 409 `busy` while a job runs on the song, and for a choice a request couldn't run with now, refused as that request would be (`no-runner`, `no-harness`, `signed-out`, `not-sealed`, `choose`), so a song is never set to what can't run. The studios with the song open hear `agent-thread`. |
 | `POST /api/agent/threads/:project/reset` | | `{ok}`. The next request starts a new thread, which follows Settings › Agent: a song's own choice goes with its conversation, and the studios with the song open hear `agent-thread`. 409 `busy` while a job runs on the song. |
@@ -834,7 +835,7 @@ on the conversation's last exchange, for the device that asked:
 | What's known | Under the reply |
 |---|---|
 | nothing (it may have been passing: the service overloaded, a rate limit by the minute, the network), or `interrupted` (HO[LO] or its runner stopped under it) | **Try again** |
-| `usage` | "*Codex* is out of usage: its limit starts again in 2 h 10 min." ("Thu 3 Dec, 07:02" past a day; no time when the harness didn't say). No Try again. |
+| `usage` | "*Codex* is out of usage: its limit starts again in 2 h 10 min." ("Thu 3 Dec, 07:02" past a day; no time when the harness didn't say). No Try again; **Carry on at 14:05** where it said when (below). |
 | `signed-out` | "*Codex* is signed out: sign it in again in Settings › Agent." No Try again. |
 | `not-installed` | "*Codex* isn't installed on the host any more: Settings › Agent can install it." No Try again. |
 
@@ -870,6 +871,25 @@ takes the conversation over (below, "Threads"):
 
 It works from what the turn kept, so also for a request HO[LO] restarted under (which carries on by
 itself, once, when it can: above, "A request's life").
+
+**Carry on when it resets.** A reply out of usage whose harness said when its limit starts again
+(`stop.resets`, still ahead) offers "Carry on at 14:05" ("Carry on Thu 3 Dec, 07:02" past a day;
+`resetOffer` in apps/web/src/app/agent.ts). Pressed, the host carries the request on by itself at
+that time (`POST …/jobs/:job/wait`, `Jobs.waitForReset`), as Try again would: one exchange, one step
+to undo.
+- The reply then says "It carries on by itself at 14:05.", with **Don't carry on** (`DELETE`).
+- It's carried on 15 s after the time the harness said (`waitMarginMs`: the vendor's clock and the
+  host's aren't the same to the second). Its studio needn't be there: its changes are then saved on
+  the host for the studio to pick up, as for a request whose studio went away, and its notice is
+  sent as any reply's is.
+- It's kept with its turn (`wait`, also in the job's view and the conversation's turn), so a restart
+  of HO[LO] keeps it (`Jobs.recover`).
+- When the host can't carry it on at that time (it's off, its runner away, the harness not ready), it
+  does as soon as it can, for a day (`waitWindowMs`); past that the reply is as it failed.
+- Called off by the conversation moving on: a later request, Continue with… or Try again on that
+  request, a conversation started over; and with the agent turned off or the device let go.
+- Once the limit's time has passed, a reply that wasn't asked to wait offers Try again instead, and
+  says "was out of usage: its limit has started again since".
 
 **Continue with…** shows beside (or instead of) Try again where another harness is ready to take the
 request, or the one that ran out has, by its limits, another model that still runs (`canMove` in

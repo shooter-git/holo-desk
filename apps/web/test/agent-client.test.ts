@@ -1069,6 +1069,35 @@ describe('the song’s whole conversation, for the page', () => {
     expect(A.afterFailure({ ...failed, harness: null, stop: { why: 'not-installed' } }, at)).toMatchObject({
       again: false,
     });
+    // a limit that has started again since: trying again may do, and nothing says "in 1 min" for ever
+    expect(A.afterFailure({ ...failed, stop: { why: 'usage', resets: 99 } }, at, 98)?.again).toBe(false);
+    expect(A.afterFailure({ ...failed, stop: { why: 'usage', resets: 99 } }, at, 99)).toEqual({
+      say: 'Codex was out of usage: its limit has started again since.',
+      again: true,
+    });
+  });
+
+  it('offers to carry on when a limit resets only where its harness said when, and says when it waits', () => {
+    const out = { failed: true, stop: { why: 'usage' as const, resets: 500 }, wait: null };
+    expect(A.resetOffer(out, 100)).toEqual({ at: 500 });
+    // asked for: it waits (till a moment after), and that can be called off
+    expect(A.resetOffer({ ...out, wait: 515 }, 100)).toEqual({ waiting: 515 });
+    // no time said, the time passed, another kind of failure, not a failure
+    expect(A.resetOffer({ ...out, stop: { why: 'usage' } }, 100)).toBeNull();
+    expect(A.resetOffer(out, 500)).toBeNull();
+    expect(A.resetOffer({ ...out, stop: { why: 'signed-out' } }, 100)).toBeNull();
+    expect(A.resetOffer({ ...out, stop: null }, 100)).toBeNull();
+    expect(A.resetOffer({ ...out, failed: false }, 100)).toBeNull();
+    // a job's news, or its turn's, says it waits; only one that failed does
+    let a = on();
+    a = A.reduce(a, {
+      type: 'status',
+      job: job({ state: 'failed', error: 'Limit', stop: { why: 'usage', resets: 500 }, wait: 515 }),
+      barOpen: true,
+    });
+    expect(exchange(a, 'prj_a')).toMatchObject({ failed: true, wait: 515 });
+    a = A.reduce(a, { type: 'status', job: job({ state: 'running', wait: 515 }), barOpen: true });
+    expect(exchange(a, 'prj_a')?.wait).toBeNull();
   });
 
   it('has the host’s news of a job stand for its turn, kept where the turn was', () => {

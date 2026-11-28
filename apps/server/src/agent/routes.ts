@@ -510,6 +510,21 @@ export function agentRoutes(
       return { job: await theJobs.carryOn(device, (req.params as Params).job ?? '', choice) };
     }),
   );
+  // "Carry on when it resets": a request out of usage is carried on by itself once its harness's
+  // limit has started again; DELETE calls that off
+  app.post(
+    '/api/agent/jobs/:job/wait',
+    forDevice(async (req, _reply, device) => ({
+      until: theJobs.waitForReset(device, (req.params as Params).job ?? ''),
+    })),
+  );
+  app.delete(
+    '/api/agent/jobs/:job/wait',
+    forDevice(async (req, _reply, device) => {
+      theJobs.cancelWait(device, (req.params as Params).job ?? '');
+      return { ok: true };
+    }),
+  );
   // the song's own choice of what its conversation runs with; `harness: null`: as Settings › Agent says again
   app.put(
     '/api/agent/threads/:project/choice',

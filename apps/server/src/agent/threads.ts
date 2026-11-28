@@ -268,6 +268,7 @@ export class Threads {
           ...(extra.effort ? { effort: extra.effort } : {}),
           ...(extra.stop ? { stop: extra.stop } : {}),
           ...(extra.continues ? { continues: extra.continues } : {}),
+          ...(extra.wait && t.state === 'failed' ? { wait: extra.wait } : {}),
         };
       }),
     };
@@ -294,6 +295,8 @@ export interface TurnView {
   effort?: string;
   stop?: TurnExtra['stop'];
   continues?: string;
+  /** When it's carried on by itself (its limit having started again), where the user asked for that. */
+  wait?: number;
 }
 
 /** A turn's extra (JSON), or nothing when it has none or can't be read. */

@@ -169,6 +169,8 @@ export interface JobView {
   effort?: string;
   stop?: TurnStop;
   continues?: string;
+  /** When the host carries it on by itself, its limit having started again ("Carry on when it resets"). */
+  wait?: number;
 }
 
 /** A harness with the model and effort it's given (each empty: the harness's own). */
@@ -207,6 +209,7 @@ export interface Turn {
   effort?: string;
   stop?: TurnStop;
   continues?: string;
+  wait?: number;
 }
 
 /** How a harness's sign-in, update, install or new look goes, from the runner (`agent-harness`). */
@@ -473,6 +476,8 @@ export interface Exchange {
   effort: string;
   /** The request's first go, when this one carries it on: the page shows only the latest go of a request. */
   continues: string | null;
+  /** It failed out of usage, and the host carries it on by itself at this time (the user asked). */
+  wait: number | null;
 }
 
 /** Why a job ended without a reply, as said under the request. */
@@ -505,6 +510,7 @@ function told(a: AgentState, project: string, turns: readonly Turn[]): Seen[] {
     model: '',
     effort: '',
     continues: null,
+    wait: null,
   };
   if (a.sending?.project === project) {
     const s = a.sending;
@@ -566,6 +572,7 @@ function told(a: AgentState, project: string, turns: readonly Turn[]): Seen[] {
         model: j.model ?? '',
         effort: j.effort ?? '',
         continues: j.continues ?? null,
+        wait: j.state === 'failed' ? (j.wait ?? null) : null,
       }),
     });
   }
@@ -595,6 +602,7 @@ function told(a: AgentState, project: string, turns: readonly Turn[]): Seen[] {
         model: t.model ?? '',
         effort: t.effort ?? '',
         continues: t.continues ?? null,
+        wait: t.state === 'failed' ? (t.wait ?? null) : null,
       }),
     });
   }
@@ -648,17 +656,21 @@ export const HARNESS_NAME: Record<HarnessId, string> = {
 /**
  * What a failed exchange says under its error, and whether it can be tried again as it is: not when
  * the host knows that wouldn't help (the account is out of usage, the harness signed out or gone).
- * `startsAgain` words when a limit starts again ("in 2 h 10 min", "Thu 3 Dec, 07:02"). Null for an
- * exchange that didn't fail.
+ * `startsAgain` words when a limit starts again ("in 2 h 10 min", "Thu 3 Dec, 07:02"); past that time
+ * (`now`, the host's), it can be tried again. Null for an exchange that didn't fail.
  */
 export function afterFailure(
   ex: Pick<Exchange, 'failed' | 'stop' | 'harness'>,
   startsAgain: (resets: number) => string,
+  now = 0,
 ): { say: string | null; again: boolean } | null {
   if (!ex.failed) return null;
   const name = ex.harness ? HARNESS_NAME[ex.harness] : 'The harness';
   switch (ex.stop?.why) {
     case 'usage':
+      // (its limit has started again since: trying again may well do)
+      if (ex.stop.resets && ex.stop.resets <= now)
+        return { say: `${name} was out of usage: its limit has started again since.`, again: true };
       return {
         say: `${name} is out of usage${ex.stop.resets ? `: its limit starts again ${startsAgain(ex.stop.resets)}` : ''}.`,
         again: false,
@@ -670,6 +682,22 @@ export function afterFailure(
     default:
       return { say: null, again: true };
   }
+}
+
+/**
+ * "Carry on when it resets", under a reply that ran out of usage: `waiting`, the host carries it on
+ * by itself at that time (the user asked, and can call it off); `at`, it can be asked to, once its
+ * limit has started again then (only where the harness said when that is, and it's still ahead). Null
+ * otherwise.
+ */
+export function resetOffer(
+  ex: Pick<Exchange, 'failed' | 'stop' | 'wait'>,
+  now: number,
+): { waiting: number } | { at: number } | null {
+  if (!ex.failed) return null;
+  if (ex.wait) return { waiting: ex.wait };
+  const resets = ex.stop?.why === 'usage' ? ex.stop.resets : undefined;
+  return resets !== undefined && resets > now ? { at: resets } : null;
 }
 
 /**
@@ -1598,6 +1626,14 @@ export async function tryAgain(
   }
 }
 
+/**
+ * "Carry on when it resets": the host carries the failed request on by itself once its harness's limit
+ * has started again, or (`on` false) no longer does. The host tells the studios that show it.
+ */
+export async function waitForReset(job: string, on: boolean): Promise<void> {
+  await call(on ? 'POST' : 'DELETE', `/api/agent/jobs/${encodeURIComponent(job)}/wait`);
+}
+
 export async function stopJob(job: string): Promise<void> {
   await call('POST', `/api/agent/jobs/${encodeURIComponent(job)}/cancel`);
 }
@@ -1752,6 +1788,7 @@ function asEnded(j: JobView, turn: Turn | undefined): JobView | null {
     ...(turn?.brief ? { brief: turn.brief, briefWarnings: turn.briefWarnings ?? [] } : {}),
     ...(turn?.view ? { view: turn.view } : {}),
     ...(turn?.error ? { error: turn.error } : {}),
+    ...(turn?.wait ? { wait: turn.wait } : {}),
     finished: Date.now(),
   };
 }

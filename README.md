@@ -454,6 +454,9 @@ runner went away, carries on by itself once they're back (and the studio that as
 changes of that request it hasn't saved): once, within ten minutes of their coming back, and never one
 you stopped.
 
+A reply out of usage that says when the limit starts again offers **Carry on at** that time: HO[LO]
+then carries the request on by itself, whether or not you're still there, and you can call it off.
+
 Where another harness is ready, a failed reply also offers **Continue with…**: pick the harness, its
 model and its effort, and the request carries on there, told everything asked and answered in the
 conversation so far. From then on that song's conversation runs with what you picked; your other

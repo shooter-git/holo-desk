@@ -619,6 +619,8 @@ export class Jobs implements AgentHooks {
   private readonly toldOrphans = new WeakSet<LiveClient>();
   /** The queued requests being started (each shows as the request it's becoming, not in the queue). */
   private readonly queueStarting = new Set<string>();
+  /** How each job stood as its studios were last told of it (`tell`). */
+  private readonly toldAs = new WeakMap<AgentJob, JobState>();
   /** The jobs whose prompt is known to have reached their harness's session (`reachedSession`). */
   private readonly reachedBy = new WeakSet<AgentJob>();
   /** The batches each job's changes were noted for (`noteChange`), by id. */
@@ -720,10 +722,9 @@ export class Jobs implements AgentHooks {
     // job, kept a while, holds no songs)
     if (job.away) job.away.recent = [];
     // done: the next request that waits on its song starts (after the listeners below have heard).
-    // Failed or stopped, or waiting for an OK: what waits behind it is held or waits on, and the
-    // studios that list it read how it stands
+    // Failed or stopped, or waiting for an OK: what waits behind it is held or waits on (`tell` has
+    // the studios that list it read how it stands)
     if (job.view.state === 'done') queueMicrotask(() => this.queueNext(job.view.project));
-    else if (this.o.agentStore.queue(job.view.project).length) this.toldThread(job.view.project);
     for (const fn of this.endings) {
       try {
         fn(job);
@@ -931,7 +932,8 @@ export class Jobs implements AgentHooks {
    */
   async ask(device: string, req: NewRequest, queue = false): Promise<{ job: string } | { queued: string }> {
     if (queue && !req.preset) {
-      const waiting = this.o.agentStore.queue(req.project).length;
+      // (one being started counts no more: it shows as the request it's becoming)
+      const waiting = this.queueView(req.project).length;
       if (waiting || this.running(req.project) || this.starting.has(req.project))
         return { queued: this.enqueue(device, req, waiting) };
     }
@@ -949,6 +951,14 @@ export class Jobs implements AgentHooks {
     if (!unattended && !this.o.live.studioFor(device, req.project))
       throw new Refusal(409, 'Open the song in this studio first', 'not-open');
     this.free(req.project);
+    // not ahead of the requests that wait on the song (a scan's task, or a studio that doesn't queue,
+    // while they're held): they go first, or are taken out
+    if (!unattended && this.queueView(req.project).length)
+      throw new Refusal(
+        409,
+        'Other requests wait on this song: send the first of them, or take them out',
+        'queue-waits',
+      );
     if (req.preset) {
       const scan = this.o.scan(req.preset.scan);
       if (!scan || scan.project !== req.project) throw new Refusal(404, 'No such scan for this song');
@@ -1025,7 +1035,8 @@ export class Jobs implements AgentHooks {
   /**
    * A song's request is done: the next that waits on it starts, as its device's, as if sent now.
    * Not after one that failed or was stopped (the queue is held: Send on its first lets it go, and so
-   * does carrying the failed request on to its end), nor while a reply waits for the user's OK.
+   * does carrying the failed request on to its end), nor while a reply waits for the user's OK (its
+   * answer lets it go; so does Send, which passes the question over as a new request does).
    */
   private queueNext(project: string): void {
     if (this.running(project) || this.starting.has(project) || this.awaitingOn(project)) return;
@@ -1039,6 +1050,8 @@ export class Jobs implements AgentHooks {
     if (!this.o.allowed(q.device)) {
       this.o.agentStore.removeQueued(q.id);
       this.toldThread(q.project);
+      // (the one behind it is next)
+      queueMicrotask(() => this.queueNext(q.project));
       throw new Refusal(403, 'The device that sent it is no longer allowed');
     }
     let context: RequestContext | undefined;
@@ -1050,6 +1063,8 @@ export class Jobs implements AgentHooks {
       // (kept by an older version, or not as it was written: the request goes without them)
     }
     this.queueStarting.add(q.id);
+    // (it shows as the request it's becoming from here on, not as one that waits)
+    this.toldThread(q.project);
     try {
       const job = await this.request(
         q.device,
@@ -1204,6 +1219,9 @@ export class Jobs implements AgentHooks {
       const saved = await this.flush(device, project);
       if (carry?.mustSave && !saved) throw new Refusal(409, 'Its studio hasn’t saved the song yet', UNSAVED);
       if (carry?.wanted && !carry.wanted()) throw new Refusal(409, 'It was called off', CALLED_OFF);
+      // (turned off, or its device let go, while its studio saved: nobody asked meanwhile to stop it)
+      if (!this.o.agentStore.settings().enabled) throw new Refusal(409, 'The agent is off', 'off');
+      if (!this.o.allowed(device)) throw new Refusal(403, 'This device is no longer allowed');
       const now = this.o.store.get(project);
       if (!now) throw new Refusal(404, 'No such song');
       // a restore point, whatever the agent does (and the reply's "before"); the previous request's is "previous"
@@ -1896,6 +1914,16 @@ export class Jobs implements AgentHooks {
       { type: 'agent-status', job: job.view, now: Date.now() },
       (c) => c.device === job.view.device || c.state?.project === job.view.project,
     );
+    // how a job stands decides how what waits behind it does (going on, held, waiting for an OK): as
+    // it changes, the studios that list what waits read it again
+    if (this.toldAs.get(job) === job.view.state) return;
+    this.toldAs.set(job, job.view.state);
+    if (this.o.agentStore.queue(job.view.project).length) this.toldThread(job.view.project);
+  }
+
+  /** Whether a request works on a song, or is being started on it. */
+  busyOn(project: string): boolean {
+    return this.running(project) !== null || this.starting.has(project);
   }
 
   /** Jobs that ended are kept a while (the last 50), the others always. */
@@ -2246,11 +2274,13 @@ export class Jobs implements AgentHooks {
     choice: { harness: HarnessId; model: string; effort: string } | null;
     runsWith: { harness: HarnessId | null; model: string; effort: string };
     /**
-     * The requests that wait on the song, in order; `held`: nothing works on it and no reply waits for
-     * an OK, so they wait for Send (the request before them failed or was stopped).
+     * The requests that wait on the song, in order; `held`: nothing works on it, so they wait for Send
+     * (the request before them failed or was stopped); `asks`: or for the answer to a reply's
+     * question, which Send passes over.
      */
     queue: QueuedView[];
     held: boolean;
+    asks: boolean;
   } {
     let job: AgentJob | null = this.running(project);
     if (!job)
@@ -2272,7 +2302,8 @@ export class Jobs implements AgentHooks {
       choice: runs.own && runs.harness ? { harness: runs.harness, model: runs.model, effort: runs.effort } : null,
       runsWith: { harness, model: runs.model, effort: runs.effort },
       queue,
-      held: queue.length > 0 && !this.running(project) && !this.starting.has(project) && !this.awaitingOn(project),
+      held: queue.length > 0 && !this.busyOn(project),
+      asks: queue.length > 0 && !this.busyOn(project) && this.awaitingOn(project),
     };
   }
 

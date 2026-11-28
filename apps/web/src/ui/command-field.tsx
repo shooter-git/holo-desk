@@ -178,13 +178,20 @@ export function useCommandField({ mode }: { mode: FieldMode }): CommandFieldStat
             keys: '↵',
             keepOpen: true,
             run: () => {
-              // (why it couldn't join the song's queue, when it couldn't: said under the field)
+              // why it couldn't join the song's queue, when it couldn't, is said under the field, and what
+              // was typed and attached is back in it (unless something else has been since)
+              const files = chips;
               void ask(
                 text,
                 project,
                 context(),
-                chips.map((c) => c.ready),
-              ).then((why) => why && setNote(why));
+                files.map((c) => c.ready),
+              ).then((why) => {
+                if (!why) return;
+                setNote(why);
+                setQueryState((now) => now || text);
+                setChips((now) => (now.length ? now : files));
+              });
               setChips([]);
               setNote('');
             },

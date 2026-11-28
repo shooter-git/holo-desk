@@ -1473,6 +1473,7 @@ describe('since your last reply', () => {
       // (nothing waits on the song)
       queue: [],
       held: false,
+      asks: false,
       now: expect.any(Number),
     });
 

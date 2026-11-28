@@ -1383,6 +1383,40 @@ describe('a request sent while another works on the song', () => {
     expect(seen().at(-1)).toBe('GET /api/agent/threads/prj_a');
   });
 
+  it('says how what waits stands: going on, held, or behind a reply’s question', async () => {
+    const { queueTitle } = await import('../src/ui/AgentQueue.tsx');
+    expect(queueTitle({ held: false, asks: false })).toBe('Then');
+    expect(queueTitle({ held: true, asks: false })).toBe('Waiting: Send lets them go on');
+    expect(queueTitle({ held: true, asks: true })).toBe('Waiting for your answer above: or Send, to go on without it');
+    let a = on();
+    a = A.reduce(a, { type: 'thread', project: 'prj_a', turns: [], queue: [], held: true, asks: true });
+    expect(a.thread).toMatchObject({ held: true, asks: true });
+    expect(A.reduce(a, { type: 'thread', project: 'prj_a', turns: [] }).thread).toMatchObject({
+      queue: [],
+      held: false,
+      asks: false,
+    });
+  });
+
+  it('is read again when the live channel comes back: the host may hold it since', async () => {
+    A.agent.dispatch({ type: 'me', id: 'dev_me' });
+    A.agent.dispatch({ type: 'info', info: ON });
+    const waits = [{ id: 'agq_00000000000a', text: 'Two', device: 'dev_me', at: 5 }];
+    let held = false;
+    host((r) => {
+      if (r.path === '/api/agent') return [200, ON];
+      if (r.path === '/api/agent/settings') return [200, SETTINGS];
+      if (r.path === '/api/agent/devices') return [200, DEVICES];
+      if (r.path === '/api/agent/threads/prj_a') return [200, { thread: { turns: [] }, job: null, queue: waits, held }];
+    });
+    await A.loadThread('prj_a');
+    expect(A.agent.get().thread).toMatchObject({ queue: waits, held: false });
+    // the host restarted under the request that was working: what waited behind it is held
+    held = true;
+    await A.catchUp();
+    expect(A.agent.get().thread).toMatchObject({ queue: waits, held: true });
+  });
+
   it('goes from the page with its conversation started over', () => {
     let a = on();
     a = A.reduce(a, {

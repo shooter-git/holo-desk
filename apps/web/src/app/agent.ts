@@ -252,9 +252,16 @@ export interface AgentState {
    * The open song's conversation as the host keeps it (read when the bar opens), with the song's own
    * choice of what it runs with (null: it follows Settings › Agent), and the requests that wait on it
    * behind the one that works (`held`: they wait for Send, the one before them having failed or been
-   * stopped).
+   * stopped; `asks`: or for the answer to a reply's question, which Send passes over).
    */
-  thread: { project: string; turns: Turn[]; choice: Choice | null; queue: Queued[]; held: boolean } | null;
+  thread: {
+    project: string;
+    turns: Turn[];
+    choice: Choice | null;
+    queue: Queued[];
+    held: boolean;
+    asks: boolean;
+  } | null;
   /** The song whose page shows the chooser ("Continue this conversation with…"), opened from a command or the header's line. */
   choosing: string | null;
   /** A request on its way to the host (it has no job yet); `continues`: an earlier go it carries on. */
@@ -310,7 +317,15 @@ export type AgentEvent =
   | { type: 'harness'; event: HarnessEvent }
   | { type: 'status'; job: JobView; barOpen: boolean }
   | { type: 'listen'; job: string; on: boolean }
-  | { type: 'thread'; project: string; turns: Turn[]; choice?: Choice | null; queue?: Queued[]; held?: boolean }
+  | {
+      type: 'thread';
+      project: string;
+      turns: Turn[];
+      choice?: Choice | null;
+      queue?: Queued[];
+      held?: boolean;
+      asks?: boolean;
+    }
   | { type: 'unsent'; project: string }
   | { type: 'choosing'; project: string | null }
   | { type: 'sending'; project: string; request: string; at: number; continues?: string }
@@ -386,6 +401,7 @@ export function reduce(a: AgentState, e: AgentEvent): AgentState {
           choice: e.choice ?? null,
           queue: e.queue ?? [],
           held: e.held ?? false,
+          asks: e.asks ?? false,
         },
       };
     }
@@ -427,7 +443,7 @@ export function reduce(a: AgentState, e: AgentEvent): AgentState {
         // (its own choice of harness went with the conversation)
         thread:
           a.thread?.project === e.project
-            ? { project: e.project, turns: [], choice: null, queue: [], held: false }
+            ? { project: e.project, turns: [], choice: null, queue: [], held: false, asks: false }
             : a.thread,
         refused: a.refused?.project === e.project ? null : a.refused,
         unseen: a.unseen.includes(e.project) ? a.unseen.filter((p) => p !== e.project) : a.unseen,
@@ -1429,6 +1445,7 @@ interface ThreadAnswer {
   choice?: Choice | null;
   queue?: Queued[];
   held?: boolean;
+  asks?: boolean;
   now?: number;
 }
 
@@ -1468,6 +1485,7 @@ function showThread(project: string, r: ThreadAnswer, asked: number): boolean {
     choice: r.choice ?? null,
     queue: r.queue ?? [],
     held: r.held ?? false,
+    asks: r.asks ?? false,
   });
   return true;
 }
@@ -1861,6 +1879,9 @@ export async function catchUp(): Promise<JobEffect[]> {
       if (fx) effects.push({ job: now.id, ...fx });
     }
   }
+  // the conversation the page has, as the host has it now: what waits on the song and how it stands
+  // (held, since the host restarted under the request before it), a failed request's wait
+  if (state.thread) await loadThread(state.thread.project, barShows(state.thread.project));
   return effects;
 }
 

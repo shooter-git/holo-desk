@@ -4894,6 +4894,10 @@ html[data-layout="phone-portrait"] .talk-head:has(.talk-done:focus-visible) {
   border-top: 1px solid var(--line);
 }
 
+.talk-queue.folded {
+  padding-bottom: 4px;
+}
+
 .talk-queue-title,
 .talk-queue-note {
   padding: 8px 0 4px;

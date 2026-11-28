@@ -623,8 +623,8 @@ export function agentRoutes(
     '/api/agent/threads/:project/reset',
     forDevice(async (req, reply) => {
       const project = (req.params as Params).project ?? '';
-      if (theJobs.running(project))
-        return reply.code(409).send({ error: 'Still working on this song', reason: 'busy' });
+      // (nor while one is being started on it: its studio saving)
+      if (theJobs.busyOn(project)) return reply.code(409).send({ error: 'Still working on this song', reason: 'busy' });
       threads.reset(project);
       // (its own choice went with it, and what waited to carry on at a time doesn't: the studios with
       // the song open read it again)

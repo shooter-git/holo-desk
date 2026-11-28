@@ -342,9 +342,6 @@ export class AgentStore {
     );
     for (const column of ['own_harness', 'own_model', 'own_effort'])
       if (!threadColumns.has(column)) this.db.exec(`ALTER TABLE agent_threads ADD COLUMN ${column} TEXT`);
-    // added with conversations that span harnesses: each harness's own session and workspace in one.
-    // The conversations there already get theirs as they were: one harness each, working in the
-    // thread's own folder (its session is found there)
     // added with the queue: the requests sent while another worked on their song, in the order sent
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS agent_queue (
@@ -357,6 +354,9 @@ export class AgentStore {
         at INTEGER NOT NULL
       );
     `);
+    // added with conversations that span harnesses: each harness's own session and workspace in one.
+    // The conversations there already get theirs as they were: one harness each, working in the
+    // thread's own folder (its session is found there)
     const legs = this.db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'agent_legs'").get();
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS agent_legs (
@@ -677,10 +677,10 @@ export class AgentStore {
 
   // ---- the queue: requests sent while another worked on their song ----
 
-  /** A song's queued requests, in the order they were sent. */
+  /** A song's queued requests, in the order they were sent (as they were kept: the host's clock may step). */
   queue(project: string): QueuedRow[] {
     return this.db
-      .prepare('SELECT * FROM agent_queue WHERE project = ? ORDER BY at, rowid')
+      .prepare('SELECT * FROM agent_queue WHERE project = ? ORDER BY rowid')
       .all(project) as unknown as QueuedRow[];
   }
 

@@ -382,19 +382,26 @@ export function TalkPage({ docks = false, leaving = false }: { docks?: boolean; 
         <div ref={thread} className="talk-thread">
           <div className="talk-body">
             {!newest || !project ? (
-              choosing && project ? (
-                <Chooser project={project} ex={null} />
-              ) : (
-                !f.typed && (
-                  <p className="talk-empty">
-                    {f.on
-                      ? 'Ask the agent about this song, or find a command.'
-                      : 'Find a command, a track or a marker.'}
-                  </p>
-                )
-              )
+              <>
+                {choosing && project ? (
+                  <Chooser project={project} ex={null} />
+                ) : (
+                  !f.typed && (
+                    <p className="talk-empty">
+                      {f.on
+                        ? 'Ask the agent about this song, or find a command.'
+                        : 'Find a command, a track or a marker.'}
+                    </p>
+                  )
+                )}
+                {/* (what waits on a song with no exchange to show: its first request refused, say) */}
+                {project && <Queue project={project} folded={wide} />}
+              </>
             ) : wide ? (
-              <Turn ex={newest} open={false} onToggle={() => toggle(newestKey)} project={project} busy={busy} />
+              <>
+                <Turn ex={newest} open={false} onToggle={() => toggle(newestKey)} project={project} busy={busy} />
+                <Queue project={project} folded />
+              </>
             ) : (
               <>
                 {earlier.length > 0 && <div className="talk-earlier">Earlier in this song</div>}

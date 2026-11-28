@@ -90,15 +90,16 @@ export async function agentApp(work: string = mkdtempSync(join(tmpdir(), 'holo-a
    */
   const studio = (token: string | null, project: string | null, name = 'studio') => {
     const ws = connect({ role: 'editor', name, ...(token ? { agentToken: token } : {}) });
-    ws.say({
-      type: 'state',
-      state: { project, revision: 0, tick: 0, selection: { track: null, regions: [], notes: 0 } },
-    });
+    // (it answers from the first: what waits for a studio asks it as it says which song it has open)
     ws.answer = (msg) => {
       const id = typeof msg.project === 'string' ? msg.project : project;
       const revision = id ? (services.store.get(id)?.revision ?? 0) : 0;
       return { ok: true, revision };
     };
+    ws.say({
+      type: 'state',
+      state: { project, revision: 0, tick: 0, selection: { track: null, regions: [], notes: 0 } },
+    });
     return ws;
   };
 

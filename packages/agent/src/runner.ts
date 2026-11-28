@@ -441,6 +441,12 @@ export function startAgentRunner(o: AgentRunnerOptions): AgentRunner {
     caps: { agent: true },
 
     connected() {
+      // the jobs still at work here, or held, across a connection that dropped: the server gives a
+      // job whose runner went a little while before it gives it up, and one it's told of in time goes
+      // on (one that's over there is told to stop). Said before the harnesses, which is when the
+      // server looks at what waits for a runner
+      for (const job of running.keys()) o.send({ type: 'agent-started', job });
+      for (const job of held) o.send({ type: 'agent-queued', job });
       // what's known goes at once (a reconnection); nothing is looked for until the server says the
       // agent is on (agent-on): with it off, no harness is run and nothing is fetched
       if (known) report(known);

@@ -148,6 +148,16 @@ export interface TurnExtra {
   allowed?: string;
   /** The song before the conversation's previous request (the job's "previous"). */
   previous?: number;
+  /**
+   * It carried its request on by itself (after HO[LO] restarted under the go before it, or that go's
+   * runner went): a request is carried on so once.
+   */
+  auto?: true;
+  /**
+   * Some of its changes went into its studio, which keeps them and saves them in its own time: they
+   * may not be in the song as the host has it until that studio is back.
+   */
+  live?: true;
 }
 
 /** Why a turn stopped short, where HO[LO] knows. */

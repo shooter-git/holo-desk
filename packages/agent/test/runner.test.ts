@@ -364,6 +364,32 @@ describe('the agent runner', () => {
     });
   });
 
+  it('says what it’s still at as its connection opens again, before its harnesses', async () => {
+    s = sandbox();
+    const { r, sent, claude } = runner();
+    r.handle(run(1));
+    // (the same conversation's: held until the first is done)
+    r.handle(run(2, { thread: 'agt_000000000001', workspace: 'agt_000000000001' }));
+    await until(() => claude.runs.length === 1);
+    sent.length = 0;
+    // the connection dropped and is back: the server gives a job whose runner went a little while
+    r.connected();
+    expect(sent.filter((m) => m.type !== 'harnesses').map((m) => [m.type, m.job])).toEqual([
+      ['agent-started', 'agj_000000000001'],
+      ['agent-queued', 'agj_000000000002'],
+    ]);
+    claude.runs[0]?.finish();
+    await until(() => claude.runs.length === 2);
+    claude.runs[1]?.finish();
+  });
+
+  it('says nothing of jobs as its connection opens with none at work', () => {
+    s = sandbox();
+    const { r, sent } = runner();
+    r.connected();
+    expect(sent.filter((m) => m.type === 'agent-started' || m.type === 'agent-queued')).toEqual([]);
+  });
+
   it('runs at most two jobs at once, one per thread; the rest wait their turn, and the server hears so', async () => {
     s = sandbox();
     const { r, sent, claude, codex } = runner();

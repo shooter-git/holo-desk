@@ -78,6 +78,24 @@ export interface ThreadRow {
   current: number;
 }
 
+/**
+ * One harness's part in a song's conversation: its own session there, what it last saw of the song,
+ * and the folder its runs work in. A conversation that moves to another harness keeps each one's, so
+ * going back to one carries its own session on.
+ */
+export interface LegRow {
+  thread: string;
+  harness: HarnessId;
+  /** The harness's own session in this conversation, resumed when it runs here again. */
+  session: string | null;
+  /** The song as it left it at the end of its last reply here (JSON), and that song's revision. */
+  seen_doc: string | null;
+  seen_revision: number | null;
+  /** Its workspace's name under the runner's folder for the agent (the thread's id for the conversation's first). */
+  workspace: string;
+  updated: number;
+}
+
 /** What a turn keeps besides its reply: what it asked, the brief it wrote, why it stopped, what was attached. */
 export interface TurnExtra {
   permission?: { kind: string; detail: string; pack?: string };
@@ -274,6 +292,27 @@ export class AgentStore {
     if (!columns.has('extra')) this.db.exec('ALTER TABLE agent_turns ADD COLUMN extra TEXT');
     // added later still: who asked, so a turn waiting for their click is theirs after a restart too
     if (!columns.has('device')) this.db.exec('ALTER TABLE agent_turns ADD COLUMN device TEXT');
+    // added with conversations that span harnesses: each harness's own session and workspace in one.
+    // The conversations there already get theirs as they were: one harness each, working in the
+    // thread's own folder (its session is found there)
+    const legs = this.db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'agent_legs'").get();
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS agent_legs (
+        thread TEXT NOT NULL,
+        harness TEXT NOT NULL,
+        session TEXT,
+        seen_doc TEXT,
+        seen_revision INTEGER,
+        workspace TEXT NOT NULL,
+        updated INTEGER NOT NULL,
+        PRIMARY KEY (thread, harness)
+      );
+    `);
+    if (!legs)
+      this.db.exec(`
+        INSERT OR IGNORE INTO agent_legs (thread, harness, session, seen_doc, seen_revision, workspace, updated)
+        SELECT id, harness, session, seen_doc, seen_revision, id, updated FROM agent_threads WHERE current = 1;
+      `);
     // (the turns that weren't over when HO[LO] stopped are seen to as it starts: Jobs.recover)
   }
 
@@ -449,15 +488,47 @@ export class AgentStore {
     this.db.prepare('UPDATE agent_threads SET current = 0 WHERE project = ?').run(project);
   }
 
-  updateThread(id: string, patch: Partial<Pick<ThreadRow, 'session' | 'seen_doc' | 'seen_revision' | 'events_json'>>) {
+  updateThread(
+    id: string,
+    patch: Partial<Pick<ThreadRow, 'harness' | 'session' | 'seen_doc' | 'seen_revision' | 'events_json'>>,
+  ) {
     const row = this.thread(id);
     if (!row) return;
     const next = { ...row, ...patch };
     this.db
       .prepare(
-        'UPDATE agent_threads SET session = ?, seen_doc = ?, seen_revision = ?, events_json = ?, updated = ? WHERE id = ?',
+        'UPDATE agent_threads SET harness = ?, session = ?, seen_doc = ?, seen_revision = ?, events_json = ?, updated = ? WHERE id = ?',
       )
-      .run(next.session, next.seen_doc, next.seen_revision, next.events_json, Date.now(), id);
+      .run(next.harness, next.session, next.seen_doc, next.seen_revision, next.events_json, Date.now(), id);
+  }
+
+  // ---- legs: each harness's own part in a conversation ----
+
+  leg(thread: string, harness: HarnessId): LegRow | null {
+    const row = this.db.prepare('SELECT * FROM agent_legs WHERE thread = ? AND harness = ?').get(thread, harness);
+    return (row as unknown as LegRow | undefined) ?? null;
+  }
+
+  /** A conversation's legs, the one that ran last first. */
+  legs(thread: string): LegRow[] {
+    return this.db
+      .prepare('SELECT * FROM agent_legs WHERE thread = ? ORDER BY updated DESC, rowid DESC')
+      .all(thread) as unknown as LegRow[];
+  }
+
+  /** A leg as it is now (made if it isn't there yet). */
+  putLeg(leg: Omit<LegRow, 'updated'>): LegRow {
+    const updated = Date.now();
+    this.db
+      .prepare(
+        `INSERT INTO agent_legs (thread, harness, session, seen_doc, seen_revision, workspace, updated)
+         VALUES (?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT (thread, harness) DO UPDATE SET
+           session = excluded.session, seen_doc = excluded.seen_doc, seen_revision = excluded.seen_revision,
+           workspace = excluded.workspace, updated = excluded.updated`,
+      )
+      .run(leg.thread, leg.harness, leg.session, leg.seen_doc, leg.seen_revision, leg.workspace, updated);
+    return { ...leg, updated };
   }
 
   // ---- usage: what each request used, as its harness counted it ----

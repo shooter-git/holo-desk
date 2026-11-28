@@ -14,7 +14,7 @@ import type { Harness, RunEvent } from '../src/harness/types.ts';
 import { mcpServer } from '../src/harness/workspace.ts';
 import { claudeServer, codexServer } from '../stand-in/config.ts';
 import { writeLaunchers } from '../stand-in/launcher.ts';
-import { DEFAULT_STEPS, parseScript, requestOf, scriptOf, splitSteps } from '../stand-in/script.ts';
+import { DEFAULT_STEPS, parseScript, recallOf, requestOf, scriptOf, splitSteps } from '../stand-in/script.ts';
 import { job as anyJob, REPO, runToEnd, type Sandbox, sandbox, TOKEN } from './fakes.ts';
 
 describe('a stand-in script', () => {
@@ -56,6 +56,18 @@ describe('a stand-in script', () => {
     expect(scriptOf(wrapped)).toBe('standin: finish Hi');
     expect(parseScript(wrapped)).toEqual([{ do: 'call', tool: 'finish', args: { label: 'Stand-in', reply: 'Hi' } }]);
     expect(scriptOf('Make the chorus bigger, standin: or not')).toBeNull();
+  });
+
+  it('says what a prompt told of the conversation before the request', () => {
+    expect(recallOf('## The request\nstandin: recall')).toBe(
+      'Told: nothing before the request. Turns in the record: 0.',
+    );
+    expect(
+      recallOf(
+        '# Rules\n### 1. A rule of the agent’s\n\n## The conversation so far\nA record.\n\n### 1. Asked\nOne\n\n### 2. Asked\nTwo\n\n## The song now\n- Read it.\n\n## The request\nstandin: recall',
+      ),
+    ).toBe('Told: The conversation so far, The song now. Turns in the record: 2.');
+    expect(parseScript('standin: recall')).toEqual([{ do: 'recall' }]);
   });
 
   it('reads the song and finishes when the request isn’t a script', () => {

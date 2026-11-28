@@ -12,7 +12,9 @@
  * - `fail-once WORDS`: the same, the first time only: a later go at the same script (Try again) carries
  *   on from the step after it;
  * - `limit SECONDS`: end the turn as the harness ends one its account's limit refused, the limit
- *   starting again that many seconds from now (an hour when not said).
+ *   starting again that many seconds from now (an hour when not said);
+ * - `recall`: `finish`, the reply saying what it was told of the conversation before the request (which
+ *   of HO[LO]'s headings, and how many turns of a record), so a check can see what a harness was handed.
  *
  * The script is what follows the request's last line that starts with `standin:`, so a request carried
  * on (wrapped in a few words of HO[LO]'s) still runs its script.
@@ -26,7 +28,8 @@ export type Step =
   | { do: 'wait'; ms: number }
   | { do: 'say'; text: string }
   | { do: 'fail'; error: string; once?: true }
-  | { do: 'limit'; seconds: number };
+  | { do: 'limit'; seconds: number }
+  | { do: 'recall' };
 
 export const MARK = 'standin:';
 
@@ -66,6 +69,18 @@ export function splitSteps(text: string): string[] {
 
 const isObject = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 
+/** The headings HO[LO] says the conversation so far under (apps/server/src/agent/prompt.ts). */
+const HEADINGS = ['Since your last reply', 'Since you were last here', 'The conversation so far', 'The song now'];
+
+/** What a prompt told of the conversation before its request: which headings, and how many turns of a record. */
+export function recallOf(prompt: string): string {
+  const told = HEADINGS.filter((h) => prompt.includes(`## ${h}\n`));
+  // (counted from the first of them: the agent's rules, where they're in the prompt, have headings of their own)
+  const from = Math.min(...told.map((h) => prompt.indexOf(`## ${h}\n`)));
+  const turns = told.length ? (prompt.slice(from).match(/^### \d+\. /gm) ?? []).length : 0;
+  return `Told: ${told.length ? told.join(', ') : 'nothing before the request'}. Turns in the record: ${turns}.`;
+}
+
 /** What a run does when its request isn't a script. */
 export const DEFAULT_STEPS: readonly Step[] = [
   { do: 'call', tool: 'song_status', args: {} },
@@ -101,6 +116,7 @@ export function parseScript(request: string): Step[] | string {
     else if (verb === 'fail') steps.push({ do: 'fail', error: rest || 'The stand-in was told to fail' });
     else if (verb === 'fail-once')
       steps.push({ do: 'fail', error: rest || 'The stand-in was told to fail, once', once: true });
+    else if (verb === 'recall') steps.push({ do: 'recall' });
     else if (verb === 'limit') {
       const seconds = rest ? Number(rest) : 3600;
       if (!Number.isFinite(seconds) || seconds <= 0 || seconds > 35 * 86_400)

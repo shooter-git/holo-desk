@@ -426,7 +426,8 @@ unless you do. The choice is kept on the host, so every device you use runs the 
 Under each harness, Settings › Agent also says what its account has left, as its vendor reports it: a
 bar for the week and one for the five hours, with when each starts again, and for Antigravity one set
 for its own models and one for the others it serves. That's how you tell when to switch harness or
-model. Cursor doesn't report what's left, so its row gives its plan and a link to its own usage page.
+model. Switching keeps the song's conversation: the harness you move to is told what was asked and
+answered so far, and one you go back to carries on where it left off, told what it missed. Cursor doesn't report what's left, so its row gives its plan and a link to its own usage page.
 **More** adds what your requests through HO[LO] used in the last 30 days, by model. None of it shows
 anywhere else in the studio.
 

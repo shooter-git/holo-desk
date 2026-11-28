@@ -907,8 +907,9 @@ export function defineHarness(spec: Spec, o: AdapterOptions): Harness {
             continue;
           }
           if (outcome.again === 'fresh' && attempt.session) {
-            // the harness no longer has that session: start the conversation again (it reads the rules then)
-            attempt = { ...attempt, prompt: given.prompt };
+            // the harness no longer has that session: start the conversation again (it reads the rules
+            // then), told what was asked and answered in the one before when the server gave that
+            attempt = { ...attempt, prompt: given.freshPrompt ?? given.prompt };
             delete attempt.session;
             continue;
           }

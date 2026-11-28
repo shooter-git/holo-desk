@@ -68,7 +68,8 @@ describe('a request', () => {
     expect(sent).toMatchObject({
       type: 'agent-run',
       job,
-      thread: expect.stringMatching(/^agt_[0-9a-f]{12}$/),
+      // (the conversation's folder for this harness)
+      thread: expect.stringMatching(/^agt_[0-9a-f]{12}_claude$/),
       harness: 'claude',
       model: '',
       effort: '',
@@ -1475,7 +1476,12 @@ describe('since your last reply', () => {
     desk.say({ type: 'history', action: 'step', label: 'Move notes' });
     const now = await save({ ...seen, title: 'Song', tempo: [{ tick: 0, bpm: 90 }] });
     const second = await start({ project: s.id, text: 'Try again, softer' });
-    expect(second.run).toMatchObject({ thread: stored.id, workspace: stored.id, session: 'sess-abc' });
+    // (the conversation's folder for this harness: the runner knows the conversation by it)
+    expect(second.run).toMatchObject({
+      thread: `${stored.id}_claude`,
+      workspace: `${stored.id}_claude`,
+      session: 'sess-abc',
+    });
     const changes = describeChanges(seen, now, { middleC: 'C3' });
     expect(changes.length).toBeGreaterThan(0);
     expect(second.run.prompt).toContain(
@@ -1530,9 +1536,15 @@ describe('since your last reply', () => {
     const fourth = await start({ project: s.id, text: 'Continue' });
     expect(fourth.run.thread).toBe(third.run.thread);
     expect(fourth.run.session).toBeUndefined();
+    // (and what was asked and answered in the one before, which this one never saw)
     expect(fourth.run.prompt).toContain(
-      `## Since your last reply\n- This is a new conversation: the last one couldn't go on, as its last turn was refused (${refused}). What that turn changed may still be in the song: read the song as it is now before you change it.\n\n## What the studio shows`,
+      '## The conversation so far\nYou are taking over a conversation about this song.',
     );
+    expect(fourth.run.prompt).toContain(`Did not finish: it failed (${refused}).`);
+    expect(fourth.run.prompt).toContain(
+      `## The song now\n- This is a new conversation: the last one couldn't go on, as its last turn was refused (${refused}). What that turn changed may still be in the song: read the song as it is now before you change it.\n- Read the song as it is now before you change it: it is what counts, whatever the record says.\n\n## What the studio shows`,
+    );
+    expect(fourth.run.prompt).not.toContain('## Since your last reply');
     expect(fourth.run.prompt).not.toContain('as you left it');
   });
 });

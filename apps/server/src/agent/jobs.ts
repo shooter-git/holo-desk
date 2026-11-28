@@ -54,16 +54,20 @@ import {
   carryOnRequest,
   contextLines,
   eventLine,
+  historySections,
   oneLine,
   type Permission,
   type PermissionKind,
   permissionFollowUp,
+  permissionWords,
   presetRequest,
   presetTitle,
+  type RecordedTurn,
   type RequestContext,
   readRules,
   type ScanPreset,
-  sinceLines,
+  type Section,
+  sizeText,
   songLines,
 } from './prompt.ts';
 import {
@@ -790,10 +794,10 @@ export class Jobs implements AgentHooks {
       request,
       req.preset,
       req.attachments,
-      async (now) =>
+      async (now, history) =>
         buildPrompt({
           rules: readRules(this.o.repoDir),
-          since: this.since(thread.id, now),
+          history,
           context: contextLines(req.context, now, this.about(req.project)),
           attachments,
           request: req.preset ? presetRequest(req.preset) : req.text,
@@ -817,11 +821,52 @@ export class Jobs implements AgentHooks {
       throw new Refusal(409, 'Still working on this song', 'busy');
   }
 
-  /** What the agent hears of first: what the user did since its last reply, and how the song changed. */
-  private since(threadId: string, now: Project): string[] | null {
+  /**
+   * What the harness a thread runs with now hears of the conversation before the request (prompt.ts,
+   * `historySections`): since its last reply; or, when the conversation went on with another harness
+   * meanwhile, what it missed; or, with no session of its own in it, the whole of it so far. `fresh`:
+   * as for a harness with no session, whatever it has (what a conversation started over in the middle
+   * of a turn is given instead).
+   */
+  private soFar(threadId: string, now: Project, fresh = false): Section[] {
     const thread = this.o.threads.get(threadId);
-    if (!thread) return null;
-    return sinceLines(this.o.threads.events(thread), this.o.threads.seenSong(thread), now, this.middleC());
+    if (!thread) return [];
+    const rows = this.o.agentStore.turns(thread.id);
+    // a turn from before turns kept their harness was the conversation's only one's
+    const own = (extra: TurnExtra) => !extra.harness || extra.harness === thread.harness;
+    const turns = rows.map((row) => {
+      const extra = parseExtra(row.extra);
+      const attached = (extra.attachments ?? []).map((id) => {
+        const a = row.device ? this.o.attachment?.(id, thread.project, row.device) : null;
+        return a
+          ? `${a.id} ${JSON.stringify(a.name)} (${a.type}, ${sizeText(a.size)}), readable with attachment_get`
+          : 'a file no longer kept';
+      });
+      const turn: RecordedTurn = {
+        request: row.request,
+        reply: row.reply,
+        state: row.state,
+        ...(extra.harness ? { by: HARNESS_NAMES[extra.harness] } : {}),
+        ...(extra.continues ? { again: true } : {}),
+        ...(extra.error ? { error: extra.error } : {}),
+        ...(extra.changes?.length ? { changes: extra.changes } : {}),
+        ...(extra.heard?.length ? { heard: extra.heard } : {}),
+        ...(extra.permission ? { asked: permissionWords(extra.permission) } : {}),
+        ...(attached.length ? { attached } : {}),
+      };
+      return { turn, own: own(extra) };
+    });
+    // what was asked of another harness since this one last ran here
+    const last = turns.findLastIndex((t) => t.own);
+    return historySections({
+      session: !fresh && !!thread.session,
+      turns: turns.map((t) => t.turn),
+      missed: turns.slice(last + 1).map((t) => t.turn),
+      events: this.o.threads.events(thread),
+      seen: fresh ? null : this.o.threads.seenSong(thread),
+      now,
+      middleC: this.middleC(),
+    });
   }
 
   private middleC(): MiddleC {
@@ -840,7 +885,7 @@ export class Jobs implements AgentHooks {
     request: string,
     preset: ScanPreset | null,
     attachments: readonly string[],
-    prompt: (now: Project) => Promise<string>,
+    prompt: (now: Project, history: Section[]) => Promise<string>,
     context: RequestContext | null = null,
     carry: { continues: string; before: number | null; previous: number | null } | null = null,
   ): Promise<string> {
@@ -856,7 +901,11 @@ export class Jobs implements AgentHooks {
       const before = carry?.before ?? this.o.store.snapshotNow(project, 'Agent');
       const earlier = this.o.agentStore.turns(thread.id).at(-1);
       const previous = carry ? carry.previous : ((earlier && parseExtra(earlier.extra).before) ?? null);
-      const text = await prompt(now);
+      const text = await prompt(now, this.soFar(thread.id, now));
+      // the same, as a conversation started over is told it: should the harness no longer have its
+      // session (or its service refuse the conversation before it has done anything), the runner starts
+      // one in the middle of the turn, and it's given this instead
+      const fresh = thread.session ? await prompt(now, this.soFar(thread.id, now, true)) : null;
       const settings = this.o.agentStore.settings();
       const token = newToken();
       job = {
@@ -898,8 +947,9 @@ export class Jobs implements AgentHooks {
         previous,
         changed: false,
         context,
-        // (what the prompt just told of: the thread's events, cleared below)
-        heard: this.o.threads.events(this.o.threads.get(thread.id) ?? thread).map(eventLine),
+        // (what the prompt just told of: the thread's events, cleared below; in words anyone reading
+        // the conversation's record later can be told them in)
+        heard: this.o.threads.events(this.o.threads.get(thread.id) ?? thread).map((e) => eventLine(e, false)),
         changes: [],
         stop: null,
         continues: carry?.continues ?? null,
@@ -910,19 +960,23 @@ export class Jobs implements AgentHooks {
       this.jobs.set(job.view.id, job);
       this.assigned.set(job, runner);
       const current = this.o.threads.get(thread.id);
+      // the folder this harness works in, in this conversation: the runner knows a job's conversation
+      // by it (and runs one job at a time in each)
+      const workspace = this.o.threads.leg(current ?? thread).workspace;
       this.o.live.sendTo(runner, {
         type: 'agent-run',
         job: job.view.id,
-        thread: thread.id,
+        thread: workspace,
         harness: thread.harness,
         model: settings.model,
         effort: settings.effort,
         // how the studio names notes: the tools read and write them the same way
         middleC: this.middleC(),
         prompt: text,
+        ...(fresh && fresh !== text ? { freshPrompt: fresh } : {}),
         token,
         ...(current?.session ? { session: current.session } : {}),
-        workspace: thread.id,
+        workspace,
         base: this.o.base(),
         // its ceiling: the runner's own limit is set a little past it, so this one comes first
         limitMs: ceiling,
@@ -1040,10 +1094,10 @@ export class Jobs implements AgentHooks {
       row.request,
       preset,
       kept,
-      async (now) =>
+      async (now, history) =>
         buildPrompt({
           rules: readRules(this.o.repoDir),
-          since: this.since(thread.id, now),
+          history,
           context: contextLines(context ?? undefined, now, this.about(project)),
           attachments,
           request: carryOnRequest(preset ? presetRequest(preset) : row.request),
@@ -1098,10 +1152,10 @@ export class Jobs implements AgentHooks {
       job.view.request,
       job.preset,
       attachmentIds,
-      async (now) =>
+      async (_now, history) =>
         buildPrompt({
           rules: readRules(this.o.repoDir),
-          since: this.since(thread.id, now),
+          history,
           context: [],
           attachments,
           request: permissionFollowUp(permission, result, job.view.request),
@@ -1189,7 +1243,7 @@ export class Jobs implements AgentHooks {
     // (stopped while the studio saved)
     if (!isLive(job)) return;
     const song = this.o.store.get(job.view.project);
-    if (song) this.o.threads.seen(job.thread, song);
+    if (song) this.o.threads.seen(job.thread, job.harness, song);
     // the song as the turn left it, when the reply's view (or its dock) plays or keeps it
     const view = job.view.view;
     if (view && viewVersions([...view.blocks, ...(view.dock ?? [])]).includes(AFTER)) {
@@ -1329,7 +1383,7 @@ export class Jobs implements AgentHooks {
         break;
       case 'agent-session':
         if (typeof msg.session === 'string' && /^[A-Za-z0-9][\w.:-]{0,199}$/.test(msg.session)) {
-          this.o.threads.setSession(job.thread, msg.session);
+          this.o.threads.setSession(job.thread, job.harness, msg.session);
           if (job.view.state === 'waiting') {
             job.view.state = 'running';
             this.tell(job);
@@ -1350,7 +1404,7 @@ export class Jobs implements AgentHooks {
         this.used(job, msg.usage);
         // its model service refused the conversation itself: carried on, it would be refused again
         const fresh = msg.fresh === true;
-        if (fresh) this.o.threads.forgetSession(job.thread);
+        if (fresh) this.o.threads.forgetSession(job.thread, job.harness);
         const why = typeof msg.error === 'string' && msg.error ? msg.error : 'The agent stopped';
         // why, when its harness made it plain: out of usage (till when), signed out, not installed
         job.stop = checkFailureKind(msg.why, msg.resets, Date.now()) ?? job.stop;

@@ -535,7 +535,7 @@ the studio that asked ◄── server ◄── /api/agent/jobs/:job/* ◄─�
 - **Threads** (`apps/server/src/agent/threads.ts`). Each song has one conversation: the harness's own
   session, carried on from request to request, the song as the agent last saw it, and what the user did
   since (undo, redo, their own steps). The next prompt has a "since your last reply" part, so the agent
-  hears what was undone or changed. A new harness, or *Start a new conversation with the agent*, starts a new thread.
+  hears what was undone or changed. The conversation stays the song's when the harness changes: each harness keeps a session of its own in it, and one that wasn't there is told what was asked and answered without it ([agent.md](agent.md), "Threads"). *Start a new conversation with the agent* starts a new thread.
 
 A scan can also be read in without the agent, by the recognition engines (Audiveris and homr, on by
 default): the Scan window writes their reading (`packages/score/src/scan/reading.ts`) into the song as

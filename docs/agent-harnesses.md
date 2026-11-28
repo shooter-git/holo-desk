@@ -1251,8 +1251,8 @@ Nothing else starts it, and a runner without those variables never sees it.
 - `pnpm agent:check` (`tools/agent-check.mjs`; after `pnpm build`, with Playwright) starts a studio of
   its own, the real runner with the stand-in, pairs as a device, and asks in a browser: a request that
   adds a track (the reply, the track, one Undo), a request whose studio goes while it works (its
-  change saved on the host, the reply waiting on return), a restart of HO[LO] under a request and under
-  a waiting OK, Try again (one exchange, one Undo for both goes), and a request out of usage (said, with
+  change saved on the host, the reply waiting on return), a restart of HO[LO] under a request (cut
+  short, it carries on by itself as one exchange) and under a waiting OK, Try again (one exchange, one Undo for both goes), and a request out of usage (said, with
   when the limit starts again, and no Try again), a conversation moved from Claude Code to Codex and
   back (one conversation on the page; each told what it needs of it), and a request out of usage
   continued with Codex from the page's chooser (one exchange, the song's own choice from then on, the

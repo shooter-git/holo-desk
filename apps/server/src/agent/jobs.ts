@@ -233,6 +233,10 @@ export interface AgentJob {
   continues: string | null;
   /** What the user allowed, and what happened, when it follows a permission: its request is carried on. */
   allowed: string | null;
+  /** It carries its request on by itself (after HO[LO] restarted under the go before it, or that go's runner went). */
+  auto: boolean;
+  /** Some of its changes went into its studio (which saves them in its own time), not straight into the song here. */
+  live: boolean;
 }
 
 /** What a turn that was working says when HO[LO] stopped under it (its error, and what the agent hears next). */
@@ -415,6 +419,14 @@ export interface Limits {
   hiddenMs: number;
   /** How long a batch waits for a studio that's back to pick up the changes saved here meanwhile. */
   catchUpMs: number;
+  /**
+   * A request cut short (HO[LO] restarted under it, or its runner went) carries on by itself, once:
+   * within this long of being cut short, when it began less than `carryOldMs` ago. What it waits for
+   * meanwhile (the runner back, its studio back) is looked at every `carryTickMs`.
+   */
+  carryWindowMs: number;
+  carryOldMs: number;
+  carryTickMs: number;
 }
 
 export const LIMITS: Limits = {
@@ -433,6 +445,9 @@ export const LIMITS: Limits = {
   awayMs: 15_000,
   hiddenMs: 8_000,
   catchUpMs: 3_000,
+  carryWindowMs: 10 * MINUTE,
+  carryOldMs: 24 * HOUR,
+  carryTickMs: 2_000,
 };
 
 export interface JobsOptions {
@@ -513,7 +528,8 @@ export function noRunnerText({ state, host }: { state: RunnerState; host: string
 
 export class Jobs implements AgentHooks {
   private readonly o: JobsOptions;
-  private readonly limits: Limits;
+  /** (a test may shorten one) */
+  readonly limits: Limits;
   private readonly jobs = new Map<string, AgentJob>();
   /** The runner each job was handed to: only it may say how the job goes. */
   private readonly assigned = new WeakMap<AgentJob, LiveClient>();
@@ -535,6 +551,12 @@ export class Jobs implements AgentHooks {
    * conversations' next requests: each runner is told to stop them as it comes back.
    */
   private readonly orphans = new Set<string>();
+  /**
+   * The requests cut short that are to carry on by themselves, by song: the go that was cut short, the
+   * device that asked, and when it was cut short (`carryOnPending`).
+   */
+  private readonly carrying = new Map<string, { job: string; device: string; since: number }>();
+  private carryTimer: ReturnType<typeof setInterval> | null = null;
   private readonly toldOrphans = new WeakSet<LiveClient>();
   /** The jobs whose prompt is known to have reached their harness's session (`reachedSession`). */
   private readonly reachedBy = new WeakSet<AgentJob>();
@@ -575,6 +597,8 @@ export class Jobs implements AgentHooks {
         this.o.agentStore.updateTurn(row.job, { state: 'failed', extra: JSON.stringify(next) });
         this.o.threads.addEventTo(row.thread, { action: 'failed', label: RESTARTED, at: Date.now() });
         this.orphans.add(row.job);
+        // (it carries on by itself, once, when what it needs is back)
+        if (row.project && row.device && row.current === 1) this.toCarryOn(row.job, row.project, row.device);
         continue;
       }
       const thread = this.o.threads.get(row.thread);
@@ -962,6 +986,8 @@ export class Jobs implements AgentHooks {
       allowed?: string;
       /** The model and effort to run with, when not the song's selection (a follow-up runs as what asked did). */
       runs?: { model: string; effort: string };
+      /** It carries its request on by itself. */
+      auto?: boolean;
     } | null = null,
   ): Promise<string> {
     this.starting.add(project);
@@ -1035,6 +1061,8 @@ export class Jobs implements AgentHooks {
         stop: null,
         continues: carried?.continues ?? null,
         allowed: carry?.allowed ?? null,
+        auto: carry?.auto === true,
+        live: false,
       };
       // the runner may have gone while the studio saved
       if (!this.o.live.agentRunners().includes(runner))
@@ -1149,6 +1177,8 @@ export class Jobs implements AgentHooks {
     device: string,
     id: string,
     choice?: { harness: HarnessId; model: string; effort: string } | null,
+    /** By itself (`carryOnPending`): its studio needn't have the song open, and its changes are then saved here. */
+    auto = false,
   ): Promise<string> {
     const row = this.o.agentStore.turn(id);
     const thread = row ? this.o.threads.get(row.thread) : null;
@@ -1161,7 +1191,7 @@ export class Jobs implements AgentHooks {
     if (row.state !== 'failed') throw new Refusal(409, 'That request didn’t fail');
     const project = thread.project;
     if (!this.o.store.get(project)) throw new Refusal(404, 'No such song');
-    if (!this.o.live.studioFor(device, project))
+    if (!auto && !this.o.live.studioFor(device, project))
       throw new Refusal(409, 'Open the song in this studio first', 'not-open');
     this.free(project);
     const extra = parseExtra(row.extra);
@@ -1208,6 +1238,7 @@ export class Jobs implements AgentHooks {
         before: extra.before ?? null,
         previous: extra.previous ?? null,
         runs: { model: runs.model, effort: runs.effort },
+        ...(auto ? { auto } : {}),
       },
     );
     // what was picked is the song's own only now that the request has gone ahead with it: a refusal
@@ -1217,6 +1248,73 @@ export class Jobs implements AgentHooks {
       this.toldThread(project);
     }
     return job;
+  }
+
+  // ---- a request cut short carries on by itself, once ----
+
+  /** A go was cut short (HO[LO] restarted under it, or its runner went): it's to carry on by itself. */
+  private toCarryOn(job: string, project: string, device: string): void {
+    this.carrying.set(project, { job, device, since: Date.now() });
+    if (this.carryTimer) return;
+    this.carryTimer = setInterval(() => this.carryOnPending(), this.limits.carryTickMs);
+    this.carryTimer.unref?.();
+  }
+
+  /**
+   * What a request cut short does now: `go` (everything it needs is there), `wait` (something may still
+   * come back in time: a runner, its harness, its studio), or `drop` (it isn't to carry on by itself:
+   * too late, moved on from, carried on so once already, or not wanted any more).
+   */
+  private carryVerdict(p: { job: string; device: string; since: number }, now: number): 'go' | 'wait' | 'drop' {
+    if (now - p.since > this.limits.carryWindowMs) return 'drop';
+    const row = this.o.agentStore.turn(p.job);
+    const thread = row ? this.o.threads.get(row.thread) : null;
+    if (!row || !thread || !this.o.store.get(thread.project)) return 'drop';
+    const extra = parseExtra(row.extra);
+    // only a go that HO[LO] or its runner stopped under: never one the user stopped, or that failed otherwise
+    if (row.state !== 'failed' || extra.stop?.why !== 'interrupted') return 'drop';
+    if (now - (extra.started ?? row.at) > this.limits.carryOldMs) return 'drop';
+    // the conversation has moved on (a later request, Try again, started over)
+    const turns = this.o.agentStore.turns(thread.id);
+    if (this.o.threads.current(thread.project)?.id !== thread.id || turns.at(-1)?.job !== row.job) return 'drop';
+    // once a request: a go that carried on by itself and was cut short too is left to the user
+    const first = extra.continues ?? row.job;
+    const goes = turns.filter((t) => t.job === first || parseExtra(t.extra).continues === first);
+    if (goes.some((t) => parseExtra(t.extra).auto)) return 'drop';
+    if (!this.o.agentStore.settings().enabled || !this.o.allowed(p.device)) return 'drop';
+    if (this.running(thread.project) || this.starting.has(thread.project)) return 'wait';
+    // a runner with the harness the song runs with, ready as a request needs it
+    try {
+      const runs = this.selection(thread.project);
+      const { harness, info } = this.pick(runs.harness, runs.own);
+      this.chosen(harness, info, runs, runs.own);
+    } catch {
+      return 'wait';
+    }
+    // what it changed in its studio may not be in the song here yet: that studio saves first (it's
+    // asked to as the request begins); with none of that, it carries on without its studio, its
+    // changes saved here for the studio to pick up
+    if (extra.live && !this.o.live.studioFor(p.device, thread.project)) return 'wait';
+    return 'go';
+  }
+
+  /**
+   * The requests cut short carry on by themselves where they can now: once each, as Try again would
+   * (the same request, in the same conversation, told its last go didn't finish and to read the song
+   * first). Looked at as a runner reports its harnesses and every little while until none waits.
+   */
+  carryOnPending(now = Date.now()): void {
+    for (const [project, p] of this.carrying) {
+      const verdict = this.carryVerdict(p, now);
+      if (verdict === 'wait') continue;
+      this.carrying.delete(project);
+      // (refused after all, as a request can be: it stays as it was, with Try again)
+      if (verdict === 'go') void this.carryOn(p.device, p.job, undefined, true).catch(() => undefined);
+    }
+    if (!this.carrying.size && this.carryTimer) {
+      clearInterval(this.carryTimer);
+      this.carryTimer = null;
+    }
   }
 
   /**
@@ -1315,6 +1413,9 @@ export class Jobs implements AgentHooks {
       this.clearTimers(job);
       this.stopListening(job);
     }
+    this.carrying.clear();
+    if (this.carryTimer) clearInterval(this.carryTimer);
+    this.carryTimer = null;
   }
 
   // ---- the end of a job ----
@@ -1461,6 +1562,8 @@ export class Jobs implements AgentHooks {
         this.toldOrphans.add(client);
         for (const job of this.orphans) this.o.live.sendTo(client, { type: 'agent-cancel', job });
       }
+      // (a request cut short may have waited for this runner, or for one of its harnesses)
+      if (client.caps?.agent) this.carryOnPending();
       return;
     }
     if (msg.type === 'agent-harness') {
@@ -1673,6 +1776,8 @@ export class Jobs implements AgentHooks {
       job.dropped = setTimeout(() => {
         job.stop = { why: 'interrupted' };
         this.end(job, 'failed', 'The runner disconnected', false);
+        // (it carries on by itself, once, when a runner is back)
+        this.toCarryOn(job.view.id, job.view.project, job.view.device);
       }, this.limits.droppedMs);
       job.dropped.unref?.();
     }
@@ -1960,6 +2065,8 @@ export class Jobs implements AgentHooks {
       if (!elsewhere && (!hidden || answer.error !== NO_ANSWER)) {
         if (!answer.ok)
           throw new Refusal(answer.error === NO_ANSWER ? 504 : 400, answer.error ?? 'The studio refused the change');
+        // (in its studio, which saves it in its own time: not yet in the song as it is here)
+        job.live = true;
         this.noteChange(job, label, batch);
         return typeof answer.revision === 'number' ? { ok: true, revision: answer.revision } : { ok: true };
       }
@@ -2479,6 +2586,8 @@ function turnExtra(job: AgentJob): string {
     ...(job.previous !== null ? { previous: job.previous } : {}),
     ...(job.continues ? { continues: job.continues } : {}),
     ...(job.allowed ? { allowed: job.allowed } : {}),
+    ...(job.auto ? { auto: true } : {}),
+    ...(job.live ? { live: true } : {}),
   };
   return JSON.stringify(extra);
 }
@@ -2548,6 +2657,8 @@ function jobFromTurn(
     stop: null,
     continues: extra.continues ?? null,
     allowed: extra.allowed ?? null,
+    auto: extra.auto === true,
+    live: extra.live === true,
   };
 }
 

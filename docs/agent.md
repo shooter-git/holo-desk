@@ -764,6 +764,30 @@ of the stretch `played` asked for); `length` is ms (null while still held).
    starts the follow-up as before. It's let go (`cancelled`) only when its conversation was started
    over, its device is no longer allowed, or it's from before turns kept who asked.
 
+   **Cut short, a request carries on by itself, once** (`Jobs.carryOnPending`). A go that HO[LO]
+   restarted under, or whose runner dropped, is carried on as Try again would carry it (below, "Why a
+   request failed, and Try again"): the same request, in the same conversation and session, told its
+   last go didn't finish and to read the song before changing anything; one exchange on the page, one
+   step to undo. Its turn says `auto`.
+   - **When.** As soon as what it needs is there: the agent on, the device still allowed, a runner
+     back with the harness the song runs with ready (signed in, limited, its model and effort
+     chosen), nothing else at work on the song. It's looked at as a runner reports its harnesses and
+     every 2 s meanwhile (`carryTickMs`). The runner is sent `agent-cancel` for the go before it
+     first.
+   - **Its studio.** What the go that was cut short changed in its studio (its turn says `live`) is
+     kept there and saved in that studio's own time, so it may not be in the song here yet: such a
+     request waits for that studio to have the song open again, and the studio saves as the request
+     begins. One that changed nothing there carries on without its studio, its changes saved here for
+     the studio to pick up, as a request whose studio went away.
+   - **Not** later than 10 minutes after it was cut short (`carryWindowMs`: after HO[LO] came back,
+     or the runner was given up on), nor for a request begun more than a day ago (`carryOldMs`); not
+     once the conversation has moved on (a later request, Try again, started over); never for a
+     request the user stopped, or one that failed for another reason.
+   - **Once a request.** A go that carried on by itself and is cut short too is left to the user: its
+     reply offers Try again, and Continue with… where another harness is ready.
+   - What waits to carry on is kept in memory: a second restart before it began leaves the request
+     as cut short, with Try again.
+
    The harness's session on the thread is carried on after all of these (after a stop, "Continue" goes on where it
    was), but one: a harness whose model service refused the conversation itself, as the error in the
    harness's own result says it (`refusedRequest` in `packages/agent/src/harness/adapter.ts`:
@@ -833,7 +857,8 @@ takes the conversation over (below, "Threads"):
   however many goes there have been. The page shows a request's goes as one exchange, its latest
   (`conversation()`), and the studio keeps them one undo step ("Undo grouping", below).
 
-It works from what the turn kept, so also for a request HO[LO] restarted under.
+It works from what the turn kept, so also for a request HO[LO] restarted under (which carries on by
+itself, once, when it can: above, "A request's life").
 
 **Continue with…** shows beside (or instead of) Try again where another harness is ready to take the
 request, or the one that ran out has, by its limits, another model that still runs (`canMove` in
@@ -1235,8 +1260,9 @@ showed as it was asked (`context`) and its preset, what the agent was told the u
 (`heard`), what its tools changed (`changes`: each batch's label in order, with how many in a row had
 it, 40 at most, written as each batch goes in), the revisions it calls `before` and `previous`, and
 `stop` when HO[LO] knows why it didn't go on (`{why, resets?}`: `interrupted`, HO[LO] or its runner
-stopped under it; `usage`, `signed-out`, `not-installed`, as its runner said), and `continues`, the
-first go of the request it carries on. A turn in `GET /api/agent/threads/:project` says its `harness`,
+stopped under it; `usage`, `signed-out`, `not-installed`, as its runner said), `continues`, the
+first go of the request it carries on, `auto` when it carried on by itself, and `live` once some of
+its changes went into its studio rather than straight into the song here. A turn in `GET /api/agent/threads/:project` says its `harness`,
 `stop` and `continues` too. `reset` starts a new thread; the old one is kept but no longer current.
 
 **A conversation isn't one harness's.** A request runs with the harness the host has chosen then, on

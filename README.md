@@ -449,7 +449,9 @@ goes quiet for 15 minutes, and Stop on the bar ends it at any time. When one fai
 its harness said, with **Try again** under it: the request carries on in the same conversation from
 where it was, and stays one step to undo. There's no Try again where it wouldn't help, and the reply
 says why instead: the harness's account is out of usage (and when its limit starts again), or the
-harness is signed out or no longer installed.
+harness is signed out or no longer installed. A request cut short because HO[LO] restarted, or its
+runner went away, carries on by itself once they're back: once, within ten minutes, and never one you
+stopped.
 
 Where another harness is ready, a failed reply also offers **Continue with…**: pick the harness, its
 model and its effort, and the request carries on there, told everything asked and answered in the

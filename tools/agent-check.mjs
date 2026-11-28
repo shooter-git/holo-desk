@@ -12,8 +12,9 @@
 //   - a request while away: the studio's page is closed while the request works; its change is saved
 //     on the host, the reply waits, and the studio that comes back has both;
 //   - a restart of HO[LO]: while a request works HO[LO] says it's busy (an update waits for it); stopped
-//     under it and started again, the request reads as cut short, saying why; a reply that was waiting
-//     for the user's OK still shows its button;
+//     under it and started again, the request reads as cut short, saying why, and carries on by itself
+//     once the runner is back, as one exchange; a reply that was waiting for the user's OK still shows
+//     its button;
 //   - Try again: a request that fails in passing shows Try again; pressed, the request carries on from
 //     where it was, the page shows it as one exchange, and one Undo takes the whole request back;
 //   - out of usage: a request its harness's limit refused says so, with when the limit starts again, and
@@ -310,21 +311,39 @@ const SCENARIOS = {
   /** HO[LO] restarts under a working request, and under a reply that waits for an OK. */
   async restart({ ctx, id, token }) {
     const lastTurn = async () => (await api(`/api/agent/threads/${id}`, { token })).thread?.turns.at(-1);
+    const turns = async () => (await api(`/api/agent/threads/${id}`, { token })).thread?.turns ?? [];
     const page = await open(ctx, id);
-    // a request at work: HO[LO] is busy, so an update waits; stopped under it anyway, it says why
-    await ask(page, 'standin: wait 20000; finish Too late');
+    // a request at work: HO[LO] is busy, so an update waits; stopped under it anyway, it says why,
+    // and carries on by itself once the runner is back
+    await ask(page, 'standin: wait 4000; track_add {"name": "Strings"}; finish Added strings after all');
     await until('the request never started', async () => ['waiting', 'running'].includes((await lastTurn())?.state));
     if ((await api('/api/health')).busy !== true) throw new Error('HO[LO] didn’t say it’s busy while a request worked');
     await restart(token);
-    const cut = await lastTurn();
+    const [cut] = await turns();
     if (cut?.state !== 'failed' || !/restarted/.test(cut.error ?? ''))
       throw new Error(`the request cut short reads ${cut?.state}: ${cut?.error ?? 'no reason given'}`);
-    if ((await api('/api/health')).busy !== false) throw new Error('HO[LO] still says it’s busy after the restart');
+    const carried = await until(
+      'the request cut short never carried on by itself',
+      async () => {
+        const all = await turns();
+        return all.length === 2 && all[1].state === 'done' ? all[1] : null;
+      },
+      40_000,
+    );
+    if (carried.continues !== cut.job) throw new Error('the go that carried on isn’t the same request’s');
+    if ((await api('/api/health')).busy !== false)
+      throw new Error('HO[LO] still says it’s busy after the request ended');
+    if ((await songTracks(id)).filter((name) => name === 'Strings').length !== 1)
+      throw new Error(`the request carried on left ${JSON.stringify(await songTracks(id))}`);
     await page.reload();
     await page.getByRole('button', { name: 'Start the studio' }).click();
     await page.locator('.track-row').first().waitFor();
+    await track(page, 'Strings').waitFor();
     await page.locator('.cb-bar').first().click();
-    await page.locator('.talk-page', { hasText: 'HO[LO] restarted while it was working' }).waitFor();
+    // one exchange for the one request: its reply, not the go that was cut short
+    await page.locator('.talk-page .reply', { hasText: 'Added strings after all' }).waitFor();
+    if (await page.locator('.talk-page', { hasText: 'HO[LO] restarted while it was working' }).count())
+      throw new Error('the go that was cut short still shows beside the one that carried it on');
 
     // a reply that waits for an OK: its button is there after a restart
     await ask(

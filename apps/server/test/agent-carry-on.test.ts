@@ -158,6 +158,8 @@ describe('Try again', () => {
     open.splice(open.indexOf(w.t), 1);
     const t = await agentApp(w.t.work);
     open.push(t);
+    // (past the time in which it would have carried on by itself: agent-restart.test.ts)
+    t.services.jobs.carryOnPending(Date.now() + 11 * 60_000);
     const run = t.runner();
     t.studio(w.token, w.s.id, 'desk');
     const res = await again(t, w.token, first.job);

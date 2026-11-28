@@ -17,7 +17,10 @@
 //   - Try again: a request that fails in passing shows Try again; pressed, the request carries on from
 //     where it was, the page shows it as one exchange, and one Undo takes the whole request back;
 //   - out of usage: a request its harness's limit refused says so, with when the limit starts again, and
-//     doesn't offer Try again.
+//     doesn't offer Try again;
+//   - a conversation moved to another harness (the host's choice changed from Claude Code to Codex): it
+//     stays one conversation on the page; Codex is told all of it so far; gone back to, Claude Code
+//     carries its own session on and is told only what it missed.
 //
 //   pnpm build && pnpm agent:check
 //
@@ -219,6 +222,33 @@ const SCENARIOS = {
       .waitFor();
     if (await page.locator('.talk-page button', { hasText: 'Try again' }).count())
       throw new Error('Try again is offered for a request that’s out of usage');
+    await page.close();
+  },
+
+  /** The conversation carries over when the harness changes, and each harness is told what it needs of it. */
+  async move({ ctx, id, token }) {
+    const use = (harness, model = '', effort = '') =>
+      api('/api/agent/settings', { method: 'PUT', token, body: { harness, model, effort } });
+    const said = (page, text) => page.locator('.talk-page .talk.newest .reply', { hasText: text }).waitFor();
+    const page = await open(ctx, id);
+    try {
+      await ask(page, 'standin: track_add {"name": "Bass"}; finish Added a bass');
+      await said(page, 'Added a bass');
+      // another harness from here on: it never saw the conversation, and is told all of it
+      await use('codex');
+      await ask(page, 'standin: recall');
+      await said(page, 'Told: The conversation so far, The song now. Turns in the record: 1.');
+      // (one conversation still: the first exchange is there above it)
+      await page.locator('.talk-page .talk-turn', { hasText: 'Added a bass' }).waitFor();
+      // back to the first: its own session carried on, told what happened without it
+      await use('claude', 'opus', 'low');
+      await ask(page, 'standin: recall');
+      await said(page, 'Told: Since you were last here. Turns in the record: 1.');
+      if ((await page.locator('.talk-page .talk-turn').count()) !== 2)
+        throw new Error('the conversation didn’t keep its two earlier exchanges across the harnesses');
+    } finally {
+      await use('claude', 'opus', 'low');
+    }
     await page.close();
   },
 

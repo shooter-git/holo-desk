@@ -17,7 +17,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { createInterface } from 'node:readline';
 import { claudeServer, codexServer, type Server } from './config.ts';
-import { parseScript, requestOf, type Step } from './script.ts';
+import { parseScript, recallOf, requestOf, type Step } from './script.ts';
 
 const isObject = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 
@@ -155,7 +155,7 @@ async function play(steps: readonly Step[], tools: Tools, dialect: Dialect): Pro
       return { last, error: step.error, output };
     } else if (step.do === 'limit')
       return { last, error: 'The account’s limit refused the request', limited: step.seconds, output };
-    else {
+    else if (step.do === 'call') {
       output += tokensOf(JSON.stringify(step.args)) + 8;
       dialect.tool(step.tool, step.args);
       dialect.toolDone(step.tool, await tools.call(step.tool, step.args));
@@ -188,8 +188,13 @@ function failedOnce(steps: readonly Step[]): void {
 
 /** A turn's steps from its prompt; a script that can't be read is a turn that fails saying why. */
 function stepsOf(prompt: string): Step[] {
-  const steps = parseScript(requestOf(prompt));
-  if (typeof steps === 'string') return [{ do: 'fail', error: `The stand-in couldn’t read its script: ${steps}` }];
+  const parsed = parseScript(requestOf(prompt));
+  if (typeof parsed === 'string') return [{ do: 'fail', error: `The stand-in couldn’t read its script: ${parsed}` }];
+  // (what it was told is said from the prompt itself)
+  const steps = parsed.map(
+    (s): Step =>
+      s.do === 'recall' ? { do: 'call', tool: 'finish', args: { label: 'Stand-in', reply: recallOf(prompt) } } : s,
+  );
   // (a script whose `fail-once` has failed: this go carries on from the step after it; the script it
   // was given is what's remembered, so what's left of it doesn't count as another)
   const once = steps.findIndex((s) => s.do === 'fail' && s.once);

@@ -378,6 +378,23 @@ ${replay('claude-normal')}`,
     expect(events.at(-1)?.type).toBe('done');
   });
 
+  it('gives the conversation it starts again what one that never saw the last needs, when it was handed that', async () => {
+    s = sandbox();
+    const gone = `case "$*" in *--resume=*) echo "No conversation found with session ID: gone" >&2; exit 1;; esac
+${replay('claude-normal')}`;
+    await runToEnd(
+      fake({ run: gone }),
+      job(s, { session: 'gone-session', freshPrompt: 'THE CONVERSATION SO FAR, then the request\n' }),
+    );
+    expect(recorded(s, 0).stdin).toContain(PROMPT_MARK);
+    expect(recorded(s, 1).stdin).toBe('THE CONVERSATION SO FAR, then the request\n');
+    s.cleanup();
+    // (without one, the turn's own prompt again, as before)
+    s = sandbox();
+    await runToEnd(fake({ run: gone }), job(s, { session: 'gone-session' }));
+    expect(recorded(s, 1).stdin).toContain(PROMPT_MARK);
+  });
+
   it('doesn’t run without a model and an effort it offers: it has no default to fall back on', async () => {
     s = sandbox();
     const h = fake({ signedIn: true });

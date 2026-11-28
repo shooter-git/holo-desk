@@ -95,6 +95,11 @@ export interface Job {
   effort: string;
   /** What the harness reads on stdin: never in argv. */
   prompt: string;
+  /**
+   * What a conversation started over in the middle of the turn reads instead (it never saw what the
+   * session before it did, so it's told): `prompt`, when not given.
+   */
+  freshPrompt?: string;
   /** The agent's standing instructions (AGENT.md), put where the harness reads them; null: none. */
   instructions: string | null;
   /** The harness's session to carry on, when the thread has one. */

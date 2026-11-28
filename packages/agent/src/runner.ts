@@ -71,6 +71,12 @@ export interface AgentRun {
   model: string;
   effort: string;
   prompt: string;
+  /**
+   * The prompt for the conversation started over in the middle of the turn (its session gone, or its
+   * service refusing it before it had done anything): the same, with what was asked and answered so
+   * far said, as a conversation that never saw it needs. Without it, `prompt` again.
+   */
+  freshPrompt?: string;
   token: string;
   session?: string;
   middleC?: 'C3' | 'C4';
@@ -100,6 +106,9 @@ export function parseRun(msg: Record<string, unknown>): AgentRun | string {
     return 'not a session id';
   const run: AgentRun = { job, thread, harness: harness as HarnessId, model, effort, prompt, token };
   if (typeof session === 'string') run.session = session;
+  // (one that isn't a prompt is left out, not refused: the turn's own prompt stands for it)
+  const fresh = msg.freshPrompt;
+  if (typeof fresh === 'string' && fresh.trim() && fresh.length <= MAX_PROMPT) run.freshPrompt = fresh;
   if (msg.middleC === 'C3' || msg.middleC === 'C4') run.middleC = msg.middleC;
   // (one that isn't a number of ms is left out: the adapter's own limit applies)
   const limit = msg.limitMs;
@@ -229,6 +238,7 @@ export function startAgentRunner(o: AgentRunnerOptions): AgentRunner {
         model: run.model,
         effort: run.effort,
         prompt: withoutInstructions(run.prompt, instructions),
+        ...(run.freshPrompt ? { freshPrompt: withoutInstructions(run.freshPrompt, instructions) } : {}),
         instructions,
         base: o.base,
         middleC: run.middleC ?? (await middleC()),

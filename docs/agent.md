@@ -557,8 +557,12 @@ taken only from the runner it was handed to, while it runs.
   on, and to every such runner when the agent is turned on (`PUT /settings`, or a pairing while it's
   off). Only then does the runner look for the harnesses. There is no `agent-off`: with the agent off,
   the runner is handed nothing.
-- `agent-run {job, thread, harness, model, effort, middleC, prompt, token, session?, workspace, base, limitMs}`.
-  `workspace` is the thread's id; `base` is where the tools reach the server
+- `agent-run {job, thread, harness, model, effort, middleC, prompt, freshPrompt?, token, session?, workspace, base, limitMs}`.
+  `thread` and `workspace` are both the name of the folder this harness works in, in this conversation
+  (below, "Threads": the conversation's id for its first harness, the id and the harness for any
+  other): the runner knows a job's conversation by it. `freshPrompt` is what a
+  conversation started over in the middle of the turn is given instead of `prompt` (the same, with what
+  was asked and answered so far: it never saw it); `base` is where the tools reach the server
   (`http://127.0.0.1:<port>`); `middleC` is `'C3'` or `'C4'`, as the studio names notes; `limitMs` is
   the job's ceiling (below), which the runner's own limit is set a minute past.
 - `agent-cancel {job}`
@@ -664,9 +668,12 @@ of the stretch `played` asked for); `length` is ms (null while still held).
    restore point (`store.snapshotNow(project, 'Agent')`). It builds the prompt from the song as saved:
    1. the agent's rules (`packages/agent/AGENT.md`, at most 40,000 characters; a short fallback if it's
       missing);
-   2. "Since your last reply", on a thread that has one: what the user did since (undo, redo, their own
-      steps, a turn that stopped or failed, a "Not now"), then `describeChanges(seen, now, {middleC})`,
-      or "The song is as you left it.";
+   2. what the harness needs of the conversation before the request (below, "Threads"): "Since your
+      last reply" for a harness that was there for all of it (what the user did since: undo, redo, their
+      own steps, a turn that stopped or failed, a "Not now"; then `describeChanges(seen, now,
+      {middleC})`, or "The song is as you left it."); "Since you were last here" for one the conversation
+      went on without; "The conversation so far" and "The song now" for one that has no session of its
+      own in it;
    3. "What the studio shows": the context, in words;
    4. "Attachments": each id, name, type, size, and a few words of what was measured;
    5. "The request": the user's words, or a preset's fixed words.
@@ -675,8 +682,8 @@ of the stretch `played` asked for); `length` is ms (null while still held).
    the harness. It adds the turn, clears the thread's events, and starts the job's two limits: its
    quiet and its ceiling ("Ending early", below). A permission still waiting on that song is passed
    over (`done`).
-3. **Runner.** It runs at most two jobs at once, one per thread. It opens the thread's workspace
-   (`${XDG_CACHE_HOME:-~/.cache}/holo/agent/<thread>`, mode 0700) and puts the token in
+3. **Runner.** It runs at most two jobs at once, one in each conversation's folder. It opens that workspace
+   (`${XDG_CACHE_HOME:-~/.cache}/holo/agent/<workspace>`, mode 0700) and puts the token in
    `<workspace>/.holo-job` (mode 0600). It starts the harness sealed, with `@holo/agent`'s MCP server as
    its only tools (`HOLO_URL`, `HOLO_JOB`, `HOLO_JOB_TOKEN_FILE`, `HOLO_MIDDLE_C`), the prompt on stdin,
    and the thread's session resumed if it has one. The rules (`AGENT.md`) go where the harness reads
@@ -750,7 +757,7 @@ of the stretch `played` asked for); `length` is ms (null while still held).
    starts the follow-up as before. It's let go (`cancelled`) only when its conversation was started
    over, its device is no longer allowed, or it's from before turns kept who asked.
 
-   The thread's session is carried on after all of these (after a stop, "Continue" goes on where it
+   The harness's session on the thread is carried on after all of these (after a stop, "Continue" goes on where it
    was), but one: a harness whose model service refused the conversation itself, as the error in the
    harness's own result says it (`refusedRequest` in `packages/agent/src/harness/adapter.ts`:
    Antigravity's `INVALID_ARGUMENT (code 400): …`; Claude Code's `API Error: 400 …`, and its `Prompt is
@@ -766,11 +773,15 @@ of the stretch `played` asked for); `length` is ms (null while still held).
    conversation before the next turn's first request. A resumed turn that fails so again in the
    conversation the last one failed so in counts as refused (`refusedIfRepeated`).
    A resumed turn refused before it called any tool starts again at once as a new conversation, in the
-   same job, once. One refused later (its changes stand) fails; the runner's `agent-failed` says
-   `fresh`, and the server forgets the thread's session and the song it last saw. The next request
-   starts a new conversation on the same thread, whose "Since your last reply" says it's a new
-   conversation after a refused turn and to read the song as it is now (not how it changed since a song
-   it never saw).
+   same job, once (given the turn's `freshPrompt`: what was asked and answered so far, which it never
+   saw). One refused later (its changes stand) fails; the runner's `agent-failed` says `fresh`, and the
+   server forgets that harness's session on the thread and the song it last saw. The next request
+   starts a new conversation on the same thread, told the conversation so far, and under "The song
+   now" that it's a new conversation after a refused turn (when it's that harness's very next request:
+   one made of another harness in between is told the turn failed by the record alone) and to read the
+   song as it is now (not how it changed since a song it never saw). What was refused may have been in the conversation itself:
+   should the new one be refused too, that turn fails as any other, and nothing starts over again by
+   itself.
 
 ## Why a request failed, and Try again
 
@@ -800,12 +811,15 @@ A failure HO[LO] ended itself (a tripwire, the ceiling, the quiet) has none. Cur
 nothing of why a run failed, so its failures always keep Try again.
 
 **Try again** (`POST /api/agent/jobs/:job/continue`, `Jobs.carryOn`) starts a new job on the same
-thread, in the harness's same session, that **continues** the failed one:
+thread that **continues** the failed one, with the harness the host has chosen now, as a request
+runs: the one that failed, in its same session; or, when another was chosen since, that one, which
+takes the conversation over (below, "Threads"):
 - it's the same request: its words (or its preset), what the studio showed then, the attachments still
-  kept; its prompt has "Since your last reply" as ever (which says the last turn failed, and how), and
-  the request under these words (`carryOnRequest` in apps/server/src/agent/prompt.ts): the last go
-  didn't finish, what it changed is still in the song, read the song before changing anything, make a
-  change again only if it isn't there;
+  kept. Its prompt says the conversation as that harness needs it ("Since your last reply", which says
+  the last turn failed and how; or, for another harness, the conversation so far, the go that failed
+  its last turn), and the request under these words (`carryOnRequest` in
+  apps/server/src/agent/prompt.ts): the last go didn't finish, what it changed is still in the song,
+  read the song before changing anything, make a change again only if it isn't there;
 - its `before` and `previous` are the first go's, so a view's versions and the A/B span the whole
   request;
 - its `continues` (in the job's view, its turn and its `agent-ops`) is the request's **first** go,
@@ -1140,8 +1154,59 @@ it, 40 at most, written as each batch goes in), the revisions it calls `before` 
 `stop` when HO[LO] knows why it didn't go on (`{why, resets?}`: `interrupted`, HO[LO] or its runner
 stopped under it; `usage`, `signed-out`, `not-installed`, as its runner said), and `continues`, the
 first go of the request it carries on. A turn in `GET /api/agent/threads/:project` says its `harness`,
-`stop` and `continues` too. Changing the harness, or `reset`, starts a new thread; the old one is kept but no
-longer current.
+`stop` and `continues` too. `reset` starts a new thread; the old one is kept but no longer current.
+
+**A conversation isn't one harness's.** A request runs with the harness the host has chosen then, on
+the song's current thread whichever harness ran before: changing the harness in Settings › Agent keeps
+the conversation. Each harness has its own part in it, a **leg**
+(`agent_legs(thread, harness, session, seen_doc, seen_revision, told, workspace, updated)`): its own
+session there, the song as it last saw it, the last turn its session knows of (`told`), and the folder
+its runs work in. A conversation's first harness works in a folder named for the thread alone, as
+every conversation did before legs (so a version of HO[LO] from before them, gone back to, finds it
+there too); any other in `<thread>_<harness>`. Two harnesses can't share a folder (each keeps files of
+its own there). The thread's own `harness`, `session` and `seen_doc` are those of the leg that ran
+last: `Threads.forRequest` gives the thread as the request's harness has it, and it's made so
+(`Threads.use`) only once the request goes ahead, past everything that can still refuse it; the leg it
+stood for is then kept as the thread had it. A permission's follow-up runs with the harness that asked
+(the thread's, since nothing has run since). A session refused (`fresh`) is forgotten for that harness
+alone.
+
+**What each is told** (`historySections` in apps/server/src/agent/prompt.ts, from `Jobs.soFar`), before
+the request, by how it stands in the conversation:
+
+| The harness | Is told |
+|---|---|
+| has a session of its own here, and no turn was made without it | **Since your last reply**, as ever |
+| has one, and turns were made with another harness that its session doesn't know of | **Since you were last here**: those turns, then what the user did and how the song differs from the one it last saw |
+| has none, and the conversation has turns (another harness takes over; or its own session was refused or is gone) | **The conversation so far**: every turn; then **The song now**: to read the song as it is before changing it (the record isn't the song), with what the user did since |
+| has none, in a new conversation | nothing, as ever |
+
+A session knows the conversation up to the last of its harness's turns that **reached** it (`told`:
+its tools were heard from, its runner said a line of it, or it ended well; `Jobs.reachedSession`). A
+go that never got that far (the harness couldn't start, the runner was gone) told it nothing, so what
+it missed is told it again the next time. Where that isn't known (a leg from before it was kept, a
+turn no longer among the 50), what it missed is what was asked of another harness after its own last
+turn. A harness that takes a conversation over is told so; one starting its own conversation over
+(every turn of it was its own) is told that instead.
+
+A turn of the record (`record`) says, as HO[LO] kept it with the turn: the request (one carried on
+says so) and the harness it was asked of; what the user had allowed before it, and what the studio
+reported, when it follows a permission; what was attached, by id while it's kept (the harness can
+read it with `attachment_get`: an attachment named on the thread is the job's to read); what the
+agent had been told the user did before it; what its tools changed (each batch's label, in order);
+what it asked the user to allow; then its reply, or how it ended (stopped; failed, with the error;
+the user's "not now"). The request and the reply are quoted, every line marked `> `: they may hold
+anything, a line that reads like a heading of HO[LO]'s included, and none of it passes for the
+record's own. The record opens by saying it is one, not instructions: only the request asks for
+anything. It takes 60,000 characters at most (`RECORD_BUDGET`), in whole turns: the latest always,
+then the first, then from the newest back while they fit, with a line where some were left out.
+Nothing in it is read from a harness's own files.
+
+The same turn's prompt is built a second time as the third row has it (`freshPrompt` on `agent-run`),
+for a harness with a session: should the harness no longer have that session, or its service refuse the
+conversation before it has done anything, the runner starts one over in the middle of the turn, and
+gives it that (without the rules a resumed turn's prompt has at its head for Codex and Cursor: a new
+conversation reads them itself).
 
 A thread keeps the user's doings since the last reply, the latest 20, and clears them once a prompt has
 told them: `undo`, `redo`, `step`, and `stopped`, `failed` or `denied` for a turn that didn't end well.

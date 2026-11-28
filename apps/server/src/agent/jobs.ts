@@ -54,16 +54,21 @@ import {
   carryOnRequest,
   contextLines,
   eventLine,
+  historySections,
+  NOT_NOW,
   oneLine,
   type Permission,
   type PermissionKind,
   permissionFollowUp,
+  permissionWords,
   presetRequest,
   presetTitle,
+  type RecordedTurn,
   type RequestContext,
   readRules,
   type ScanPreset,
-  sinceLines,
+  type Section,
+  sizeText,
   songLines,
 } from './prompt.ts';
 import {
@@ -224,6 +229,8 @@ export interface AgentJob {
   stop: TurnStop | null;
   /** The earlier go at the same request it carries on (a turn that didn't finish), or null. */
   continues: string | null;
+  /** What the user allowed, and what happened, when it follows a permission: its request is carried on. */
+  allowed: string | null;
 }
 
 /** What a turn that was working says when HO[LO] stopped under it (its error, and what the agent hears next). */
@@ -523,6 +530,8 @@ export class Jobs implements AgentHooks {
    */
   private readonly orphans = new Set<string>();
   private readonly toldOrphans = new WeakSet<LiveClient>();
+  /** The jobs whose prompt is known to have reached their harness's session (`reachedSession`). */
+  private readonly reachedBy = new WeakSet<AgentJob>();
   /** The batches each job's changes were noted for (`noteChange`), by id. */
   private readonly noted = new WeakMap<AgentJob, Set<string>>();
   /** Songs a request is being started on (it waits for the studio to save first). */
@@ -580,6 +589,17 @@ export class Jobs implements AgentHooks {
       waiting.set(kept.view.project, kept);
       this.jobs.set(kept.view.id, kept);
     }
+  }
+
+  /**
+   * A job's harness is at work on its prompt (its tools were heard from, its runner said a line of it,
+   * or its turn ended well): its session now knows the conversation up to this turn. A go that never
+   * got that far told it nothing, and what it missed is told it again next time.
+   */
+  private reachedSession(job: AgentJob): void {
+    if (this.reachedBy.has(job)) return;
+    this.reachedBy.add(job);
+    this.o.threads.reached(job.thread, job.harness, job.view.id);
   }
 
   /** Whether a request is at work, or being started: an update of HO[LO] waits for it (`/api/health`). */
@@ -790,10 +810,10 @@ export class Jobs implements AgentHooks {
       request,
       req.preset,
       req.attachments,
-      async (now) =>
+      async (now, history) =>
         buildPrompt({
           rules: readRules(this.o.repoDir),
-          since: this.since(thread.id, now),
+          history,
           context: contextLines(req.context, now, this.about(req.project)),
           attachments,
           request: req.preset ? presetRequest(req.preset) : req.text,
@@ -817,11 +837,60 @@ export class Jobs implements AgentHooks {
       throw new Refusal(409, 'Still working on this song', 'busy');
   }
 
-  /** What the agent hears of first: what the user did since its last reply, and how the song changed. */
-  private since(threadId: string, now: Project): string[] | null {
-    const thread = this.o.threads.get(threadId);
-    if (!thread) return null;
-    return sinceLines(this.o.threads.events(thread), this.o.threads.seenSong(thread), now, this.middleC());
+  /**
+   * What the harness a thread runs with hears of the conversation before the request (prompt.ts,
+   * `historySections`): since its last reply; or, when the conversation went on with another harness
+   * meanwhile, what it missed; or, with no session of its own in it, the whole of it so far. `fresh`:
+   * as for a harness with no session, whatever it has (what a conversation started over in the middle
+   * of a turn is given instead). `thread` is as the request will run it (`Threads.forRequest`).
+   */
+  private soFar(thread: ThreadRow, now: Project, fresh = false): Section[] {
+    const rows = this.o.agentStore.turns(thread.id);
+    // a turn from before turns kept their harness was the conversation's only one's
+    const own = (extra: TurnExtra) => !extra.harness || extra.harness === thread.harness;
+    const turns = rows.map((row) => {
+      const extra = parseExtra(row.extra);
+      const attached = (extra.attachments ?? []).map((id) => {
+        const a = row.device ? this.o.attachment?.(id, thread.project, row.device) : null;
+        return a
+          ? `${a.id} ${JSON.stringify(a.name)} (${a.type}, ${sizeText(a.size)}), readable with attachment_get`
+          : 'a file no longer kept';
+      });
+      const turn: RecordedTurn = {
+        request: row.request,
+        reply: row.reply,
+        state: row.state,
+        ...(extra.harness ? { by: HARNESS_NAMES[extra.harness] } : {}),
+        ...(extra.continues || extra.allowed ? { again: true } : {}),
+        ...(extra.allowed ? { allowed: extra.allowed } : {}),
+        ...(extra.error ? { error: extra.error } : {}),
+        ...(extra.changes?.length ? { changes: extra.changes } : {}),
+        ...(extra.heard?.length ? { heard: extra.heard } : {}),
+        ...(extra.permission ? { asked: permissionWords(extra.permission) } : {}),
+        ...(attached.length ? { attached } : {}),
+      };
+      return { turn, own: own(extra) };
+    });
+    // What was asked of another harness since this one's session last knew the conversation: after
+    // the last turn that reached it (a go that never started told it nothing), or, where that isn't
+    // known (a leg from before it was kept, a turn no longer kept), after its last turn.
+    const told = this.o.threads.legOf(thread.id, thread.harness)?.told ?? null;
+    const reached = told ? rows.findIndex((r) => r.job === told) : -1;
+    const from = reached >= 0 ? reached : turns.findLastIndex((t) => t.own);
+    return historySections({
+      session: !fresh && !!thread.session,
+      turns: turns.map((t) => t.turn),
+      missed: turns
+        .slice(from + 1)
+        .filter((t) => !t.own)
+        .map((t) => t.turn),
+      // (a conversation every turn of which was this harness's own is one it starts over, not one it takes over)
+      others: turns.some((t) => !t.own),
+      events: this.o.threads.events(thread),
+      seen: fresh ? null : this.o.threads.seenSong(thread),
+      now,
+      middleC: this.middleC(),
+    });
   }
 
   private middleC(): MiddleC {
@@ -840,9 +909,9 @@ export class Jobs implements AgentHooks {
     request: string,
     preset: ScanPreset | null,
     attachments: readonly string[],
-    prompt: (now: Project) => Promise<string>,
+    prompt: (now: Project, history: Section[]) => Promise<string>,
     context: RequestContext | null = null,
-    carry: { continues: string; before: number | null; previous: number | null } | null = null,
+    carry: { continues?: string; before?: number | null; previous?: number | null; allowed?: string } | null = null,
   ): Promise<string> {
     this.starting.add(project);
     const ceiling = preset ? this.limits.scanClockMs : this.limits.clockMs;
@@ -853,10 +922,15 @@ export class Jobs implements AgentHooks {
       if (!now) throw new Refusal(404, 'No such song');
       // a restore point, whatever the agent does (and the reply's "before"); the previous request's is "previous"
       // (a go that carries an earlier one on keeps that one's: its "before" is the song before the request)
-      const before = carry?.before ?? this.o.store.snapshotNow(project, 'Agent');
+      const carried = carry?.continues ? carry : null;
+      const before = carried?.before ?? this.o.store.snapshotNow(project, 'Agent');
       const earlier = this.o.agentStore.turns(thread.id).at(-1);
-      const previous = carry ? carry.previous : ((earlier && parseExtra(earlier.extra).before) ?? null);
-      const text = await prompt(now);
+      const previous = carried ? (carried.previous ?? null) : ((earlier && parseExtra(earlier.extra).before) ?? null);
+      const text = await prompt(now, this.soFar(thread, now));
+      // the same, as a conversation started over is told it: should the harness no longer have its
+      // session (or its service refuse the conversation before it has done anything), the runner starts
+      // one in the middle of the turn, and it's given this instead
+      const fresh = thread.session ? await prompt(now, this.soFar(thread, now, true)) : null;
       const settings = this.o.agentStore.settings();
       const token = newToken();
       job = {
@@ -869,7 +943,7 @@ export class Jobs implements AgentHooks {
           started: Date.now(),
           title: now.title,
           harness: thread.harness,
-          ...(carry ? { continues: carry.continues } : {}),
+          ...(carried?.continues ? { continues: carried.continues } : {}),
         },
         thread: thread.id,
         harness: thread.harness,
@@ -898,31 +972,38 @@ export class Jobs implements AgentHooks {
         previous,
         changed: false,
         context,
-        // (what the prompt just told of: the thread's events, cleared below)
-        heard: this.o.threads.events(this.o.threads.get(thread.id) ?? thread).map(eventLine),
+        // (what the prompt just told of: the thread's events, cleared below; in words anyone reading
+        // the conversation's record later can be told them in)
+        heard: this.o.threads.events(this.o.threads.get(thread.id) ?? thread).map((e) => eventLine(e, false)),
         changes: [],
         stop: null,
-        continues: carry?.continues ?? null,
+        continues: carried?.continues ?? null,
+        allowed: carry?.allowed ?? null,
       };
       // the runner may have gone while the studio saved
       if (!this.o.live.agentRunners().includes(runner))
         throw new Refusal(409, 'The runner disconnected: start it again with pnpm runner', 'no-runner');
       this.jobs.set(job.view.id, job);
       this.assigned.set(job, runner);
-      const current = this.o.threads.get(thread.id);
+      // nothing refuses the request from here on: the thread is its harness's now (when another ran last)
+      const current = this.o.threads.use(thread);
+      // the folder this harness works in, in this conversation: the runner knows a job's conversation
+      // by it (and runs one job at a time in each)
+      const workspace = this.o.threads.leg(current).workspace;
       this.o.live.sendTo(runner, {
         type: 'agent-run',
         job: job.view.id,
-        thread: thread.id,
+        thread: workspace,
         harness: thread.harness,
         model: settings.model,
         effort: settings.effort,
         // how the studio names notes: the tools read and write them the same way
         middleC: this.middleC(),
         prompt: text,
+        ...(fresh && fresh !== text ? { freshPrompt: fresh } : {}),
         token,
-        ...(current?.session ? { session: current.session } : {}),
-        workspace: thread.id,
+        ...(current.session ? { session: current.session } : {}),
+        workspace,
         base: this.o.base(),
         // its ceiling: the runner's own limit is set a little past it, so this one comes first
         limitMs: ceiling,
@@ -1025,9 +1106,12 @@ export class Jobs implements AgentHooks {
     this.free(project);
     const extra = parseExtra(row.extra);
     const preset = extra.preset ?? null;
-    // (the harness as it is now: signed out or gone since, the refusal says so, as a request's does)
-    const { runner, info } = this.pick(thread.harness);
-    this.chosen(thread.harness, info);
+    // with the harness chosen now, as a request is (signed out or gone, the refusal says so): when
+    // that's another than the one that failed, it takes the conversation over, the go that failed its last turn
+    const { harness, runner, info } = this.pick(this.o.agentStore.settings().harness);
+    this.chosen(harness, info);
+    const going = this.o.threads.forRequest(project, harness);
+    const same = (extra.harness ?? thread.harness) === harness;
     // what it was sent that's still kept (a week): the rest it was told of the first time
     const kept = (extra.attachments ?? []).filter((a) => this.o.attachment?.(a, project, device));
     const attachments = this.attachments(device, project, kept);
@@ -1035,18 +1119,18 @@ export class Jobs implements AgentHooks {
     return this.begin(
       device,
       project,
-      thread,
+      going,
       runner,
       row.request,
       preset,
       kept,
-      async (now) =>
+      async (now, history) =>
         buildPrompt({
           rules: readRules(this.o.repoDir),
-          since: this.since(thread.id, now),
+          history,
           context: contextLines(context ?? undefined, now, this.about(project)),
           attachments,
-          request: carryOnRequest(preset ? presetRequest(preset) : row.request),
+          request: carryOnRequest(preset ? presetRequest(preset) : row.request, same),
         }),
       context,
       // (the go it continues may itself have carried one on: the request's first is what its step is under)
@@ -1072,7 +1156,7 @@ export class Jobs implements AgentHooks {
     if (job.view.state !== 'awaiting' || !permission) throw new Refusal(409, 'That job isn’t waiting for an answer');
     if (!grant) {
       job.view.state = 'done';
-      job.view.reply = 'Not now';
+      job.view.reply = NOT_NOW;
       this.o.threads.addEventTo(job.thread, { action: 'denied', label: permission.detail, at: Date.now() });
       this.saveTurn(job);
       this.tell(job);
@@ -1098,14 +1182,16 @@ export class Jobs implements AgentHooks {
       job.view.request,
       job.preset,
       attachmentIds,
-      async (now) =>
+      async (_now, history) =>
         buildPrompt({
           rules: readRules(this.o.repoDir),
-          since: this.since(thread.id, now),
+          history,
           context: [],
           attachments,
           request: permissionFollowUp(permission, result, job.view.request),
         }),
+      null,
+      { allowed: `${permissionWords(permission)}. Reported: ${oneLine(result, 300) || 'nothing'}` },
     );
     if (job.view.state === 'awaiting') {
       job.view.state = 'done';
@@ -1189,7 +1275,8 @@ export class Jobs implements AgentHooks {
     // (stopped while the studio saved)
     if (!isLive(job)) return;
     const song = this.o.store.get(job.view.project);
-    if (song) this.o.threads.seen(job.thread, song);
+    this.reachedSession(job);
+    if (song) this.o.threads.seen(job.thread, job.harness, song);
     // the song as the turn left it, when the reply's view (or its dock) plays or keeps it
     const view = job.view.view;
     if (view && viewVersions([...view.blocks, ...(view.dock ?? [])]).includes(AFTER)) {
@@ -1325,11 +1412,12 @@ export class Jobs implements AgentHooks {
       case 'agent-progress':
         job.view.state = 'running';
         job.view.line = oneLine(String(msg.line ?? ''), 200);
+        this.reachedSession(job);
         this.tell(job);
         break;
       case 'agent-session':
         if (typeof msg.session === 'string' && /^[A-Za-z0-9][\w.:-]{0,199}$/.test(msg.session)) {
-          this.o.threads.setSession(job.thread, msg.session);
+          this.o.threads.setSession(job.thread, job.harness, msg.session);
           if (job.view.state === 'waiting') {
             job.view.state = 'running';
             this.tell(job);
@@ -1350,7 +1438,7 @@ export class Jobs implements AgentHooks {
         this.used(job, msg.usage);
         // its model service refused the conversation itself: carried on, it would be refused again
         const fresh = msg.fresh === true;
-        if (fresh) this.o.threads.forgetSession(job.thread);
+        if (fresh) this.o.threads.forgetSession(job.thread, job.harness);
         const why = typeof msg.error === 'string' && msg.error ? msg.error : 'The agent stopped';
         // why, when its harness made it plain: out of usage (till when), signed out, not installed
         job.stop = checkFailureKind(msg.why, msg.resets, Date.now()) ?? job.stop;
@@ -1600,6 +1688,7 @@ export class Jobs implements AgentHooks {
       job.view.state = 'running';
       this.tell(job);
     }
+    this.reachedSession(job);
     return job;
   }
 
@@ -2287,6 +2376,7 @@ function turnExtra(job: AgentJob): string {
     ...(job.stop ? { stop: job.stop } : {}),
     ...(job.previous !== null ? { previous: job.previous } : {}),
     ...(job.continues ? { continues: job.continues } : {}),
+    ...(job.allowed ? { allowed: job.allowed } : {}),
   };
   return JSON.stringify(extra);
 }
@@ -2353,6 +2443,7 @@ function jobFromTurn(
     changes: extra.changes ?? [],
     stop: null,
     continues: extra.continues ?? null,
+    allowed: extra.allowed ?? null,
   };
 }
 

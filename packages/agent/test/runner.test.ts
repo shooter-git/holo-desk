@@ -341,6 +341,29 @@ describe('the agent runner', () => {
     expect(parseRun(run(4))).not.toHaveProperty('limitMs');
   });
 
+  it('takes the prompt for a conversation started over, its rules off as the turn’s own; one that isn’t a prompt is left out', async () => {
+    s = sandbox();
+    const { r, claude } = runner();
+    // (as the server sends it: the agent's rules first, which the harness is given its own way)
+    const rules = readInstructions(REPO) ?? '';
+    expect(rules.length).toBeGreaterThan(100);
+    r.handle(
+      run(1, { freshPrompt: `${rules}\n\n## The conversation so far\nA record.\n\n## The request\nCarry on\n` }),
+    );
+    await until(() => claude.runs.length === 1);
+    expect(claude.runs[0]?.job.freshPrompt).toBe('## The conversation so far\nA record.\n\n## The request\nCarry on\n');
+    for (const freshPrompt of [7, '', '   ', 'x'.repeat(400_001), null])
+      expect(parseRun(run(2, { freshPrompt })), String(freshPrompt).slice(0, 12)).not.toHaveProperty('freshPrompt');
+    // (an older server gives none: the turn's own prompt stands for it)
+    expect(parseRun(run(3))).not.toHaveProperty('freshPrompt');
+    // the conversation's folder is named for the thread and the harness, as the server names it
+    expect(
+      parseRun(run(4, { thread: 'agt_0123456789ab_antigravity', workspace: 'agt_0123456789ab_antigravity' })),
+    ).toMatchObject({
+      thread: 'agt_0123456789ab_antigravity',
+    });
+  });
+
   it('runs at most two jobs at once, one per thread; the rest wait their turn, and the server hears so', async () => {
     s = sandbox();
     const { r, sent, claude, codex } = runner();

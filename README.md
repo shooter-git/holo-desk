@@ -652,6 +652,7 @@ pnpm dev        # the server (:47800) and the studio with hot reload (:47810)
 pnpm engine     # HO[LO] Engine from the repository (after `pnpm engine:build`)
 pnpm test       # unit tests
 pnpm ui:check   # the layout in a browser, desktop to phone (after pnpm build; needs Playwright)
+pnpm agent:check  # the agent end to end in a browser, with a stand-in for the harnesses (after pnpm build; needs Playwright)
 pnpm typecheck
 pnpm lint       # Biome
 ```
@@ -666,9 +667,9 @@ pnpm lint       # Biome
 | `packages/score` | scores: notes laid out as notation, MusicXML in and out, tab, and reading scans |
 | `packages/music` | an experience's build: the pinned renderer a project carries, its sample fetching and checks |
 | `packages/cli` | the `holo` command, the runner and pairing |
-| `packages/agent` | the agent in the studio: its tools (an MCP server), its instructions (`AGENT.md`) and how the runner starts each harness sealed |
+| `packages/agent` | the agent in the studio: its tools (an MCP server), its instructions (`AGENT.md`) and how the runner starts each harness sealed; `stand-in/` answers as Claude Code and Codex for HO[LO]'s own checks |
 | `skills/holo` | the Claude Code skill |
-| `tools` | the scripts behind the `pnpm` commands (update, tailnet, lan, netmidi, omr, ui-check), and the ones that make this page's pictures (`demo-song.mjs`, `screens.mjs`, `banner.mjs`) |
+| `tools` | the scripts behind the `pnpm` commands (update, tailnet, lan, netmidi, omr, ui-check, agent-check), and the ones that make this page's pictures (`demo-song.mjs`, `screens.mjs`, `banner.mjs`) |
 | `local/` | not in the repository (git ignores it): your own tools for your own creations, such as an importer |
 | `packs.lock.json` | the sample packs HO[LO] plays: a commit of [HO[LO] Packs](https://github.com/shooter-git/holo-packs) (their maps, sources and checksums; no audio) and every pack's hash |
 | `deploy` | Docker: the image, its compose file, and the recognition engines' image |

@@ -28,6 +28,10 @@ pnpm lint && pnpm typecheck && pnpm test
   landscape). `pnpm build && pnpm ui:check` opens the studio at each of those sizes in a browser and
   says what's cut off, covered or out of line (it needs Playwright: see the top of
   `tools/ui-check.mjs`); CI runs it too.
+- Changes to the agent (the bar's requests, the runner, an adapter, the job's routes) should pass
+  `pnpm build && pnpm agent:check`: a request typed in a real browser, carried out by the real runner
+  and tools with a stand-in for the harnesses, so it needs no sign-in (`docs/agent-harnesses.md`, "The
+  stand-in harness"); CI runs it too. A behaviour it doesn't cover yet gets a scenario there.
 
 ## Commits
 

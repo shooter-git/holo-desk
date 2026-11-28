@@ -260,8 +260,8 @@ export function TalkPage({ docks = false, leaving = false }: { docks?: boolean; 
   const choosing = !!project && choosingFor === project && !busy && !wide;
   const carries = choosing && newest?.failed && newest.mine && newest.job ? newest : null;
   useEffect(() => {
-    if (busy && choosingFor) showChooser(null);
-  }, [busy, choosingFor]);
+    if (busy && choosingFor === project) showChooser(null);
+  }, [busy, choosingFor, project]);
   useEffect(() => () => showChooser(null), []);
   // the newest reply, shown here with a dock: once the page closes a phone keeps that row at hand
   const docked = newest && !newest.working && newest.view?.dock?.length ? newest.job : null;
@@ -276,6 +276,8 @@ export function TalkPage({ docks = false, leaving = false }: { docks?: boolean; 
     if (project && project !== firstSong.current) {
       firstSong.current = project;
       setOpened(new Set());
+      // (and the chooser was the other song's)
+      showChooser(null);
     }
   }, [project]);
 

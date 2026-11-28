@@ -1133,6 +1133,104 @@ describe('the song’s whole conversation, for the page', () => {
   });
 });
 
+describe('a song’s own choice of what its conversation runs with', () => {
+  const CODEX = { harness: 'codex', model: 'gpt-6.1-sol', effort: 'low' };
+  afterEach(() => {
+    S.store.set({ project: null });
+    A.agent.dispatch({ type: 'info', info: OFF });
+    vi.unstubAllGlobals();
+  });
+
+  it('is read with the conversation, set and taken back on the host, and carried on with', async () => {
+    A.agent.dispatch({ type: 'me', id: 'dev_me' });
+    A.agent.dispatch({ type: 'info', info: ON });
+    let choice: typeof CODEX | null = CODEX;
+    const asked = host((r) => {
+      if (r.path === '/api/agent/threads/prj_a') return [200, { thread: { turns: [] }, job: null, choice }];
+      if (r.path === '/api/agent/threads/prj_a/choice') {
+        choice = (r.body as { harness: string | null }).harness ? (r.body as typeof CODEX) : null;
+        return [200, { thread: { turns: [] }, job: null, choice }];
+      }
+      if (r.path === '/api/agent/jobs/agj_00000000000a/continue') return [200, { job: 'agj_00000000000b' }];
+    });
+    await A.loadThread('prj_a');
+    expect(A.agent.get().thread).toEqual({ project: 'prj_a', turns: [], choice: CODEX });
+    await A.setChoice('prj_a', null);
+    expect(asked.at(-1)).toMatchObject({ method: 'PUT', body: { harness: null } });
+    expect(A.agent.get().thread?.choice).toBeNull();
+    await A.setChoice('prj_a', CODEX);
+    expect(asked.at(-1)).toMatchObject({ method: 'PUT', body: CODEX });
+    expect(A.agent.get().thread?.choice).toEqual(CODEX);
+    // Try again as it is, with a harness picked, and with what Settings says
+    const ex = { job: 'agj_00000000000a', request: 'Strings', continues: null };
+    await A.tryAgain(ex, 'prj_a');
+    expect(asked.at(-1)?.body).toEqual({});
+    await A.tryAgain(ex, 'prj_a', CODEX);
+    expect(asked.at(-1)?.body).toEqual(CODEX);
+    await A.tryAgain(ex, 'prj_a', null);
+    expect(asked.at(-1)?.body).toEqual({ harness: null });
+  });
+
+  it('is read again when the host says it changed, for the song the page has', async () => {
+    A.agent.dispatch({ type: 'me', id: 'dev_me' });
+    A.agent.dispatch({ type: 'info', info: ON });
+    let choice: typeof CODEX | null = null;
+    const asked = host((r) => {
+      if (r.path.startsWith('/api/agent/threads/')) return [200, { thread: { turns: [] }, job: null, choice }];
+    });
+    await A.loadThread('prj_a');
+    choice = CODEX;
+    expect(A.agentMessage({ type: 'agent-thread', project: 'prj_b' })).toEqual({ handled: true });
+    await settled();
+    expect(asked).toHaveLength(1);
+    A.agentMessage({ type: 'agent-thread', project: 'prj_a' });
+    await settled();
+    expect(A.agent.get().thread?.choice).toEqual(CODEX);
+  });
+
+  it('isn’t taken from an answer about a song that’s no longer the open one, or from an older ask', async () => {
+    A.agent.dispatch({ type: 'me', id: 'dev_me' });
+    A.agent.dispatch({ type: 'info', info: ON });
+    const waiting: Record<string, (answer: Response) => void> = {};
+    vi.stubGlobal(
+      'fetch',
+      (path: string) =>
+        new Promise<Response>((ok) => {
+          waiting[path] = ok;
+        }),
+    );
+    const answer = (path: string, choice: unknown) =>
+      waiting[path]?.({
+        ok: true,
+        status: 200,
+        json: async () => ({ thread: { turns: [] }, job: null, choice }),
+      } as Response);
+    S.store.set({ project: { id: 'prj_a' } as Project });
+    const a = A.loadThread('prj_a');
+    // another song opens before the first one's answer comes
+    S.store.set({ project: { id: 'prj_b' } as Project });
+    const b = A.loadThread('prj_b');
+    answer('/api/agent/threads/prj_b', null);
+    await b;
+    answer('/api/agent/threads/prj_a', CODEX);
+    await a;
+    expect(A.agent.get().thread).toEqual({ project: 'prj_b', turns: [], choice: null });
+    // two asks about the open song, answered out of order: the later ask's answer stays
+    const first = A.loadThread('prj_b');
+    const firstAnswer = waiting['/api/agent/threads/prj_b'];
+    const second = A.loadThread('prj_b');
+    answer('/api/agent/threads/prj_b', CODEX);
+    await second;
+    firstAnswer?.({
+      ok: true,
+      status: 200,
+      json: async () => ({ thread: { turns: [] }, job: null, choice: null }),
+    } as Response);
+    await first;
+    expect(A.agent.get().thread?.choice).toEqual(CODEX);
+  });
+});
+
 describe('the host’s clock', () => {
   it('is kept from what the host says, and a difference under a second is let be', () => {
     let a = on();

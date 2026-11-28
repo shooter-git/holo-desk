@@ -11,6 +11,7 @@ import { useEffect, useState } from 'react';
 import {
   conversation,
   type Exchange,
+  HARNESS_NAME,
   type HarnessId,
   loadSettings,
   lookAtHarnesses,
@@ -20,7 +21,18 @@ import {
   tryAgain,
   useAgent,
 } from '../app/agent.ts';
-import { canMove, choiceOf, chooserNote, type Offer, offers, runsLine, runsNow, toPick } from './agent-chooser.ts';
+import {
+  asksFirst,
+  canMove,
+  choiceOf,
+  chooserFor,
+  chooserNote,
+  type Offer,
+  offers,
+  runsLine,
+  runsNow,
+  toPick,
+} from './agent-chooser.ts';
 import { caution, choices, effortsFor, runsWith, shown } from './harness-row.ts';
 
 /** A model's name as a harness takes it (as Settings › Agent checks what's typed). */
@@ -34,12 +46,14 @@ const MODEL = /^[A-Za-z0-9][\w.:\-[\]=]{0,79}$/;
 export function RunsLine({ project, busy }: { project: string; busy: boolean }) {
   const a = useAgent((s) => s);
   const known = a.settings !== null;
-  // what the host has of its harnesses, when this page hasn't heard yet; and their limits read again
-  // if that was a while ago (the host sees to how often)
+  // what the host has of its harnesses, when this page hasn't heard yet
   useEffect(() => {
     if (!known) void loadSettings().catch(() => undefined);
-    void lookAtHarnesses().catch(() => undefined);
   }, [known]);
+  // and their limits read again if that was a while ago (the host sees to how often), as the page opens
+  useEffect(() => {
+    void lookAtHarnesses().catch(() => undefined);
+  }, []);
   const runs = runsNow(a, project);
   if (!runs) return null;
   const line = runsLine(runs, { now: serverNow() }, conversation(a, project).at(-1) ?? null);
@@ -80,8 +94,16 @@ const byDefault = (value: string | null | undefined, unknown: string) =>
   value ? `${shown(value)} (default)` : unknown;
 
 /** The model and effort the picked harness runs with: its own lists, its defaults named where it says them. */
-function RunWith({ offer, onChange }: { offer: Offer; onChange: (model: string, effort: string) => void }) {
+function RunWith({
+  offer,
+  onChange,
+}: {
+  offer: Offer;
+  /** `bad`: what's typed for the model isn't a model's name (nothing is sent until it is). */
+  onChange: (model: string, effort: string, bad?: boolean) => void;
+}) {
   const { h, model, effort } = offer;
+  const [typed, setTyped] = useState(model);
   const must = !!h.mustChoose;
   const models = choices(h.models ?? [], model, h.aliases);
   const own = effortsFor(h, model);
@@ -113,10 +135,12 @@ function RunWith({ offer, onChange }: { offer: Offer; onChange: (model: string, 
           className="input"
           aria-label="Model"
           placeholder={must ? 'Type a model’s name' : byDefault(h.defaultModel, `${h.name}’s default`)}
-          defaultValue={model}
+          value={typed}
           onChange={(e) => {
+            setTyped(e.target.value);
             const next = e.target.value.trim();
-            if (next === '' || MODEL.test(next)) onChange(next, effort);
+            const fine = next === '' || MODEL.test(next);
+            onChange(fine ? next : model, effort, !fine);
           }}
         />
       )}
@@ -141,28 +165,38 @@ function RunWith({ offer, onChange }: { offer: Offer; onChange: (model: string, 
  * device); without one, what's picked is what the song's next request runs with.
  */
 export function Chooser({ project, ex }: { project: string; ex: Exchange | null }) {
+  const known = useAgent((s) => s.settings !== null);
+  // (nothing to offer until the host's harnesses are known: it's on its way)
+  return known ? <Choosing project={project} ex={ex} /> : null;
+}
+
+function Choosing({ project, ex }: { project: string; ex: Exchange | null }) {
   const a = useAgent((s) => s);
   const now = serverNow();
-  const o = offers(a, project, ex, { now });
+  // (with nothing to carry the failed request on with, it's the chooser for the song's next requests)
+  const { o, carries } = chooserFor(a, project, ex, { now });
+  const carried = carries ? ex : null;
   const [picked, setPicked] = useState<HarnessId | 'settings' | null>(o.selected);
-  const [edits, setEdits] = useState<Partial<Record<HarnessId, { model: string; effort: string }>>>({});
+  const [edits, setEdits] = useState<Partial<Record<HarnessId, { model: string; effort: string; bad?: boolean }>>>({});
   const [asking, setAsking] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
-  // (what's picked ahead comes once the host's harnesses are known)
-  const ahead = o.selected;
-  useEffect(() => {
-    setPicked((was) => was ?? ahead);
-  }, [ahead]);
-
   const offer = o.ready.find((r) => r.h.id === picked);
+  const edit = offer ? edits[offer.h.id] : undefined;
   const pick: Offer | 'settings' | null =
-    picked === 'settings' ? (o.settings ? 'settings' : null) : offer ? { ...offer, ...edits[offer.h.id] } : null;
-  const missing = toPick(pick);
+    picked === 'settings'
+      ? o.settings
+        ? 'settings'
+        : null
+      : offer
+        ? { ...offer, ...(edit ? { model: edit.model, effort: edit.effort } : {}) }
+        : null;
+  const missing = edit?.bad ? 'That isn’t a model’s name' : toPick(pick);
   const note = chooserNote(pick && pick !== 'settings' ? pick : null, o.notes, { now });
-  // a harness whose vendor doesn't support it here asks first, unless the conversation already runs with it
-  const runs = runsNow(a, project);
-  const warning = pick && pick !== 'settings' && pick.asks && runs?.id !== pick.h.id ? caution(pick.h) : null;
+  // a harness whose vendor doesn't support it here asks first (picked by name, or as what Settings
+  // says), unless the conversation already runs with it
+  const asks = asksFirst(pick, o, runsNow(a, project));
+  const warning = asks ? caution({ id: asks }) : null;
 
   const go = async () => {
     if (!pick) return;
@@ -170,12 +204,12 @@ export function Chooser({ project, ex }: { project: string; ex: Exchange | null 
     setBusy(true);
     setError('');
     try {
-      if (ex) {
+      if (carried) {
         // (a refusal shows as the reply, as a request's does)
         showChooser(null);
-        await tryAgain(ex, project, choice === null && !o.own ? undefined : choice);
+        await tryAgain(carried, project, choice);
       } else {
-        if (choice || o.own) await setChoice(project, choice);
+        await setChoice(project, choice);
         showChooser(null);
       }
     } catch (err) {
@@ -225,7 +259,9 @@ export function Chooser({ project, ex }: { project: string; ex: Exchange | null 
         <RunWith
           key={pick.h.id}
           offer={pick}
-          onChange={(model, effort) => setEdits((was) => ({ ...was, [pick.h.id]: { model, effort } }))}
+          onChange={(model, effort, bad) =>
+            setEdits((was) => ({ ...was, [pick.h.id]: { model, effort, ...(bad ? { bad } : {}) } }))
+          }
         />
       )}
       {pick === 'settings' && o.settings && (
@@ -238,7 +274,7 @@ export function Chooser({ project, ex }: { project: string; ex: Exchange | null 
         </div>
       )}
       {asking && warning ? (
-        <div className="talk-choose-ask" role="alertdialog" aria-label={`Use ${(pick as Offer).h.name}?`}>
+        <div className="talk-choose-ask" role="alertdialog" aria-label={`Use ${HARNESS_NAME[asks as HarnessId]}?`}>
           <span>
             {warning.text}{' '}
             <a href={warning.link} target="_blank" rel="noopener noreferrer">
@@ -266,7 +302,7 @@ export function Chooser({ project, ex }: { project: string; ex: Exchange | null 
             disabled={busy || missing !== null}
             onClick={() => (warning ? setAsking(true) : void go())}
           >
-            {ex ? 'Continue' : 'Use for this song'}
+            {carried ? 'Continue' : 'Use for this song'}
           </button>
         </div>
       )}

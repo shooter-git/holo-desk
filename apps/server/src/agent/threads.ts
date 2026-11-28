@@ -74,7 +74,17 @@ export class Threads {
   use(thread: ThreadRow): ThreadRow {
     const stored = this.store.thread(thread.id);
     if (!stored) return thread;
-    if (stored.harness !== thread.harness) {
+    if (stored.harness !== thread.harness && !this.store.turns(stored.id).length) {
+      // a thread no request has run on (made when the song was given its own choice, since changed):
+      // this harness is its first, in the thread's own folder
+      this.store.dropLegs(stored.id);
+      this.store.updateThread(stored.id, {
+        harness: thread.harness,
+        session: null,
+        seen_doc: null,
+        seen_revision: null,
+      });
+    } else if (stored.harness !== thread.harness) {
       const { session, seen_doc, seen_revision } = stored;
       this.store.putLeg({ ...this.leg(stored), session, seen_doc, seen_revision });
       const leg = this.store.leg(thread.id, thread.harness);

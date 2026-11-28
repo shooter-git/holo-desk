@@ -117,6 +117,100 @@ describe('a song’s own choice', () => {
   });
 });
 
+describe('a choice that couldn’t run', () => {
+  const MUST = { ...CLAUDE, models: ['opus', 'sonnet'], efforts: ['low', 'high'], mustChoose: true };
+  const failAt = async (w: World, text: string) => {
+    const res = await w.t.app.inject({
+      method: 'POST',
+      url: '/api/agent/requests',
+      headers: auth(w.token),
+      payload: { project: w.s.id, text },
+    });
+    return res.json() as { error: string; reason: string };
+  };
+
+  it('isn’t taken: a harness signed out, or one still needing a model and an effort', async () => {
+    const w = await world();
+    w.run.say({ type: 'harnesses', list: [MUST, { ...CODEX, signedIn: false }] });
+    expect((await choose(w, w.s.id, { harness: 'codex' })).json()).toMatchObject({ reason: 'signed-out' });
+    const need = (await choose(w, w.s.id, { harness: 'claude', model: 'opus' })).json() as Msg;
+    // (said of the song's own choice, not of Settings › Agent: that's where it's chosen)
+    expect(need).toMatchObject({
+      reason: 'choose',
+      error: 'Choose an effort for Claude Code in this song’s own choice, the line at the top of the agent’s page',
+    });
+    expect(await view(w, w.s.id)).toMatchObject({ choice: null });
+    expect((await choose(w, w.s.id, { harness: 'claude', model: 'opus', effort: 'low' })).statusCode).toBe(200);
+  });
+
+  it('says where to change it when it stops being able to: the song’s own choice, not Settings', async () => {
+    const w = await world();
+    w.run.say({ type: 'harnesses', list: [MUST, CODEX] });
+    await choose(w, w.s.id, { harness: 'claude', model: 'opus', effort: 'low' });
+    // the harness no longer offers the model
+    w.run.say({ type: 'harnesses', list: [{ ...MUST, models: ['sonnet'] }, CODEX] });
+    expect(await failAt(w, 'One')).toEqual({
+      reason: 'choose',
+      error:
+        'Claude Code no longer offers “opus”: choose a model for Claude Code in this song’s own choice, the line at the top of the agent’s page',
+    });
+    // the harness is gone from the host
+    await choose(w, w.s.id, { harness: 'codex' });
+    w.run.say({ type: 'harnesses', list: [MUST] });
+    expect(await failAt(w, 'Two')).toEqual({
+      reason: 'no-harness',
+      error:
+        'Codex isn’t on this computer: pick another harness in this song’s own choice, the line at the top of the agent’s page',
+    });
+    // a song that follows Settings is still sent there
+    const other = await w.t.song('Second Light');
+    w.t.studio(w.token, other.id, 'desk two');
+    await w.t.app.inject({
+      method: 'PUT',
+      url: '/api/agent/settings',
+      headers: auth(w.token),
+      payload: { harness: 'cursor' },
+    });
+    const res = await w.t.app.inject({
+      method: 'POST',
+      url: '/api/agent/requests',
+      headers: auth(w.token),
+      payload: { project: other.id, text: 'Three' },
+    });
+    expect((res.json() as Msg).error).toBe('Cursor isn’t on this computer: pick another harness in Settings › Agent');
+  });
+});
+
+describe('a song given a choice before its first request', () => {
+  it('starts its conversation with the harness that runs first, in the thread’s own folder, told nothing happened “since”', async () => {
+    const w = await world();
+    await choose(w, w.s.id, { harness: 'codex', model: '', effort: '' });
+    // (the studio's steps before any request aren't "since a reply")
+    w.desk.say({ type: 'history', action: 'step', label: 'Move notes' });
+    const events = () =>
+      w.t.services.store.database
+        .prepare('SELECT events_json FROM agent_threads WHERE project = ? AND current = 1')
+        .get(w.s.id) as { events_json: string } | undefined;
+    await waitFor(() => (events()?.events_json ?? '[]') !== '[]');
+    await choose(w, w.s.id, { harness: null });
+    const sent = sentFor(w.run, await ask(w, w.s.id, 'One')) as Msg & { prompt: string };
+    const thread = (await view(w, w.s.id)).thread as unknown as { id: string };
+    expect(sent).toMatchObject({ harness: 'claude', thread: thread.id, workspace: thread.id });
+    expect(sent.prompt).not.toContain('## Since your last reply');
+    expect(sent.prompt).not.toContain('## The conversation so far');
+  });
+});
+
+describe('started over', () => {
+  it('tells the song’s studios, whose line would still say the choice that went with it', async () => {
+    const w = await world();
+    await choose(w, w.s.id, { harness: 'codex', model: '', effort: '' });
+    const before = w.desk.got('agent-thread').length;
+    await w.t.app.inject({ method: 'POST', url: `/api/agent/threads/${w.s.id}/reset`, headers: auth(w.token) });
+    expect(w.desk.got('agent-thread')).toHaveLength(before + 1);
+  });
+});
+
 describe('a database from before songs had a choice of their own', () => {
   it('carries its conversations on, following Settings, and takes a choice from then on', async () => {
     const w = await world();
@@ -186,6 +280,29 @@ describe('Continue with another harness', () => {
     expect(await view(w, w.s.id)).toMatchObject({ choice: null, runsWith: { harness: 'claude' } });
   });
 
+  it('leaves the song as it was when the request doesn’t go ahead after all', async () => {
+    const w = await world();
+    const job = await ask(w, w.s.id, 'Strings');
+    w.run.say({ type: 'agent-failed', job, error: 'Overloaded' });
+    await waitFor(() => w.t.services.jobs.get(job)?.view.state === 'failed');
+    const told = w.desk.got('agent-thread').length;
+    // the runner goes while the studio saves: refused past the point where the harness was picked
+    const answer = w.desk.answer;
+    w.desk.answer = (msg) => {
+      w.run.close();
+      return answer?.(msg) ?? null;
+    };
+    const res = await w.t.app.inject({
+      method: 'POST',
+      url: `/api/agent/jobs/${job}/continue`,
+      headers: auth(w.token),
+      payload: { harness: 'codex' },
+    });
+    expect(res.statusCode, res.body).toBe(409);
+    expect(await view(w, w.s.id)).toMatchObject({ choice: null });
+    expect(w.desk.got('agent-thread')).toHaveLength(told);
+  });
+
   it('changes nothing when the harness picked can’t run it', async () => {
     const w = await world();
     const job = await ask(w, w.s.id, 'Strings');
@@ -199,6 +316,38 @@ describe('Continue with another harness', () => {
     });
     expect(res.json()).toMatchObject({ reason: 'no-harness' });
     expect(await view(w, w.s.id)).toMatchObject({ choice: null });
+  });
+});
+
+describe('a waiting OK, after HO[LO] restarted', () => {
+  it('still says the model and effort its turn ran with, so the page draws no change of hands', async () => {
+    const w = await world();
+    await w.t.app.inject({
+      method: 'PUT',
+      url: '/api/agent/settings',
+      headers: auth(w.token),
+      payload: { harness: 'claude', model: 'opus', effort: 'high' },
+    });
+    const job = await ask(w, w.s.id, 'Bounce it');
+    w.run.say({ type: 'agent-session', job, session: 'claude-1' });
+    await w.t.app.inject({
+      method: 'POST',
+      url: `/api/agent/jobs/${job}/permission`,
+      headers: auth(sentFor(w.run, job).token),
+      payload: { kind: 'bounce', detail: 'To hear the mix' },
+    });
+    w.run.say({ type: 'agent-done', job });
+    await waitFor(() => w.t.services.jobs.get(job)?.view.state === 'awaiting');
+    await w.t.stop();
+    open.splice(open.indexOf(w.t), 1);
+    const t = await agentApp(w.t.work);
+    open.push(t);
+    t.runner([CLAUDE, CODEX]);
+    t.studio(w.token, w.s.id, 'desk');
+    const shown = (
+      await t.app.inject({ method: 'GET', url: `/api/agent/threads/${w.s.id}`, headers: auth(w.token) })
+    ).json() as { job: Msg };
+    expect(shown.job).toMatchObject({ id: job, state: 'awaiting', harness: 'claude', model: 'opus', effort: 'high' });
   });
 });
 

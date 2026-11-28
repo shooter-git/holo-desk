@@ -1344,9 +1344,9 @@ export async function lookAtHarnesses(): Promise<void> {
 export async function loadThread(project: string, barOpen = true): Promise<void> {
   if (!isOn(state)) return;
   try {
+    const asked = ++threadAsked;
     const r = await call<ThreadAnswer>('GET', `/api/agent/threads/${encodeURIComponent(project)}`);
-    heardClock(r.now);
-    agent.dispatch({ type: 'thread', project, turns: r.thread?.turns ?? [], choice: r.choice ?? null });
+    if (!showThread(project, r, asked)) return;
     // the song's job that's working, or waiting for a click (after a reload, its button comes back);
     // seen only if the song is still the open one (another may have opened before the answer came)
     const open = studio.get().project?.id;
@@ -1370,13 +1370,31 @@ interface ThreadAnswer {
  * Settings › Agent says again. The other songs aren't touched.
  */
 export async function setChoice(project: string, choice: Choice | null): Promise<void> {
+  const asked = ++threadAsked;
   const r = await call<ThreadAnswer>(
     'PUT',
     `/api/agent/threads/${encodeURIComponent(project)}/choice`,
     choice ?? { harness: null },
   );
+  showThread(project, r, asked);
+}
+
+/** How many times a song's conversation has been asked for, and the latest of those whose answer shows. */
+let threadAsked = 0;
+let threadShown = 0;
+
+/**
+ * A song's conversation as the host just answered it, kept as the open song's: not when another song
+ * has opened since it was asked (its answer would stand in for that song's, its own choice with it),
+ * nor when a later ask has answered already. False when it wasn't kept.
+ */
+function showThread(project: string, r: ThreadAnswer, asked: number): boolean {
+  const open = studio.get().project?.id;
+  if ((open && open !== project) || asked < threadShown) return false;
+  threadShown = asked;
   heardClock(r.now);
   agent.dispatch({ type: 'thread', project, turns: r.thread?.turns ?? [], choice: r.choice ?? null });
+  return true;
 }
 
 /** The chooser on a song's page: shown, or put away. */

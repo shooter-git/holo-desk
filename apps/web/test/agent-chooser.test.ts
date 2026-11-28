@@ -7,8 +7,10 @@ import { describe, expect, it } from 'vitest';
 import type { AgentSettings, AgentState, HarnessInfo, Turn } from '../src/app/agent.ts';
 import * as A from '../src/app/agent.ts';
 import {
+  asksFirst,
   canMove,
   choiceOf,
+  chooserFor,
   chooserNote,
   leftOf,
   movedLine,
@@ -112,8 +114,16 @@ describe('what a song’s conversation runs with', () => {
     );
     // not known yet, or no harness at all: nothing
     expect(runsNow(told(null), P)).toBeNull();
-    expect(runsNow(told(settings([])), P)).toBeNull();
+    expect(runsNow(told(settings([], { harness: null })), P)).toBeNull();
     expect(runsNow(a, null)).toBeNull();
+    // the harness Settings names isn't on the host now: it's still the one named (a request is
+    // refused, it isn't run with another), and the line says so
+    const named = told(settings([codex()]));
+    expect(runsNow(named, P)).toMatchObject({ id: 'claude', info: null, model: 'opus', effort: 'high' });
+    expect(runsLine(runsNow(named, P) as NonNullable<ReturnType<typeof runsNow>>, clock)).toEqual({
+      text: 'Claude Code · Opus · high',
+      usage: { text: 'not on the host now', warn: true },
+    });
   });
 
   it('is said in one line: the harness, its model and effort, and what’s left', () => {
@@ -138,7 +148,16 @@ describe('what a song’s conversation runs with', () => {
       turns: [],
       choice: { harness: 'codex', model: 'gpt-6.1-sol', effort: 'high' },
     });
-    expect(line(gone)).toEqual({ text: 'This song: Codex · Gpt-6.1-sol · high', usage: null });
+    expect(line(gone)).toEqual({
+      text: 'This song: Codex · Gpt-6.1-sol · high',
+      usage: { text: 'not on the host now', warn: true },
+    });
+    // a share read an hour ago or more says so (the account may have been used since)
+    const old = (ago: number) =>
+      told(settings([codex({ limits: { at: NOW - ago, groups: [{ windows: [week(0.37)] }] } })], { harness: 'codex' }));
+    expect(line(old(59 * 60_000)).usage?.text).toBe('63% left');
+    expect(line(old(3 * H)).usage?.text).toBe('63% left, read 3 h ago');
+    expect(line(old(6 * 24 * H)).usage?.text).toBe('63% left, read 6 days ago');
   });
 
   it('says a harness’s own word that it’s out of usage, whatever limits were last read', () => {
@@ -152,10 +171,11 @@ describe('what a song’s conversation runs with', () => {
       ...over,
     });
     expect(runsLine(runs, clock, refused()).usage).toEqual({ text: 'Used up, resets in 2 h', warn: true });
-    // it has started again since, it gave no time, or it was another harness's or model's: as the limits say
+    // with no time said, it's still what the harness said (and what the reply under the line says)
+    expect(runsLine(runs, clock, refused({ stop: { why: 'usage' } })).usage).toEqual({ text: 'Used up', warn: true });
+    // it has started again since, or it was another harness's or model's: as the limits say
     for (const other of [
       refused({ stop: { why: 'usage', resets: NOW - H } }),
-      refused({ stop: { why: 'usage' } }),
       refused({ harness: 'codex' }),
       refused({ model: 'sonnet' }),
       refused({ stop: null }),
@@ -271,7 +291,11 @@ describe('what the chooser offers', () => {
       ['antigravity', '', '', true],
     ]);
     expect(o.notes).toEqual(['Cursor is signed out']);
-    expect(o.settings).toEqual({ id: 'claude', text: 'Claude Code, Opus at high effort (last ran as Opus 9.1)' });
+    expect(o.settings).toEqual({
+      id: 'claude',
+      text: 'Claude Code, Opus at high effort (last ran as Opus 9.1)',
+      asks: false,
+    });
     // the song follows Settings: that's what's picked as it opens
     expect(o).toMatchObject({ selected: 'settings', own: false });
   });
@@ -362,17 +386,23 @@ describe('what the chooser offers', () => {
     // only the one that failed is there: Try again is all there is
     const alone = offers(told(settings([claude()])), P, failed('claude'), clock);
     expect(canMove(alone, failed('claude'))).toBe(false);
-    // only one that asks first beside it: offered, not picked ahead (Settings' is what failed)
+    // only one that asks first beside it: offered, not picked ahead; what Settings says is (it failed
+    // in passing, and picking it doesn't make it the song's own)
     const asks = offers(told(settings([claude(), antigravity()])), P, failed('claude'), clock);
-    expect(asks.selected).toBe('claude');
+    expect(asks.selected).toBe('settings');
     expect(canMove(asks, failed('claude'))).toBe(true);
     // not a failure: nothing to continue with
     expect(canMove(blip, { failed: false, harness: 'claude', stop: null })).toBe(false);
   });
 
   it('doesn’t offer the harness that failed where that wouldn’t help', () => {
-    const a = told(settings([claude(), codex()]));
+    const as = {
+      usage: claude(),
+      'signed-out': claude({ signedIn: false }),
+      'not-installed': claude({ found: false }),
+    };
     for (const why of ['usage', 'signed-out', 'not-installed'] as const) {
+      const a = told(settings([as[why], codex()]));
       const o = offers(a, P, failed('claude', why), clock);
       expect(o.ready.map((r) => r.h.id)).toEqual(['codex']);
       // (the reply says it of the one that failed; following Settings would be it again)
@@ -417,6 +447,82 @@ describe('what the chooser offers', () => {
     });
   });
 
+  it('offers the harness that failed again once what stopped it no longer holds', () => {
+    const a = told(settings([claude(), codex()]));
+    // its limit has started again since; it's signed in, or installed, again
+    for (const stop of [
+      { why: 'usage' as const, resets: NOW - H },
+      { why: 'signed-out' as const },
+      { why: 'not-installed' as const },
+    ]) {
+      const o = offers(a, P, { failed: true, harness: 'claude', stop }, clock);
+      expect(o.ready.map((r) => r.h.id)).toEqual(['claude', 'codex']);
+      expect(o.settings).toMatchObject({ id: 'claude' });
+    }
+    // a host with that harness alone, hours after it ran out: the chooser isn't empty
+    const alone = told(settings([claude()]));
+    expect(
+      offers(alone, P, { failed: true, harness: 'claude', stop: { why: 'usage', resets: NOW - H } }, clock),
+    ).toMatchObject({
+      ready: [{ model: 'opus', effort: 'high' }],
+      selected: 'settings',
+    });
+  });
+
+  it('with nothing to carry a failed request on with, is the chooser for the song’s next requests', () => {
+    const alone = told(settings([claude()]));
+    const out = { failed: true, harness: 'claude' as const, model: 'opus', stop: { why: 'usage' as const } };
+    expect(offers(alone, P, out, clock)).toMatchObject({ ready: [], settings: null });
+    // (so what the song runs with can still be changed: another model, say)
+    const c = chooserFor(alone, P, out, clock);
+    expect(c.carries).toBe(false);
+    expect(c.o).toMatchObject({ ready: [{ h: { id: 'claude' } }], settings: { id: 'claude' }, selected: 'settings' });
+    // with another harness ready, it carries the request on
+    expect(chooserFor(told(settings([claude(), codex()])), P, out, clock)).toMatchObject({
+      carries: true,
+      o: { selected: 'codex' },
+    });
+    expect(chooserFor(alone, P, null, clock).carries).toBe(false);
+  });
+
+  it('never picks ahead, or runs without asking, a harness that asks first: by name or as what Settings says', () => {
+    // Settings' harness asks first; the song's own choice is another, which ran out
+    const a = told(settings([claude(), antigravity()], { harness: 'antigravity', model: '', effort: '' }), {
+      project: P,
+      turns: [],
+      choice: { harness: 'claude', model: 'opus', effort: 'high' },
+    });
+    const o = offers(a, P, { failed: true, harness: 'claude', model: 'opus', stop: { why: 'usage' } }, clock);
+    expect(o.ready.map((r) => [r.h.id, r.asks])).toEqual([['antigravity', true]]);
+    expect(o.settings).toMatchObject({ id: 'antigravity', asks: true });
+    expect(o.selected).toBeNull();
+    const runs = runsNow(a, P);
+    expect(asksFirst('settings', o, runs)).toBe('antigravity');
+    expect(asksFirst(o.ready[0] ?? null, o, runs)).toBe('antigravity');
+    // the conversation already runs with it: it was asked then
+    const follows = told(a.settings);
+    expect(asksFirst('settings', offers(follows, P, null, clock), runsNow(follows, P))).toBeNull();
+    // one that doesn't ask
+    const plain = offers(told(settings([claude(), codex()])), P, null, clock);
+    expect(asksFirst(plain.ready[1] ?? null, plain, null)).toBeNull();
+    expect(asksFirst('settings', plain, null)).toBeNull();
+    expect(asksFirst(null, plain, null)).toBeNull();
+  });
+
+  it('doesn’t call a harness used up when one of its models counts against no limit it reports', () => {
+    const groups = [
+      { models: ['Gemini 4 Neon'], windows: [week(1, NOW + 5 * H)] },
+      { models: ['Claude Opus 5.5'], windows: [week(1, NOW + 3 * H)] },
+    ];
+    const all = antigravity({ limits: { at: NOW, groups } });
+    expect(offers(told(settings([all])), P, null, clock).notes).toEqual(['Antigravity is used up, resets in 3 h']);
+    const more = antigravity({ models: ['gemini-4-neon', 'claude-opus-5.5', 'gpt-oss'], limits: { at: NOW, groups } });
+    expect(offers(told(settings([more])), P, null, clock)).toMatchObject({
+      ready: [{ h: { id: 'antigravity' } }],
+      notes: [],
+    });
+  });
+
   it('says what’s left for what’s picked, then of the others', () => {
     const o = offers(told(settings([claude(), codex(), cursor({ signedIn: false })])), P, null, clock);
     const codexOffer = o.ready.find((r) => r.h.id === 'codex') ?? null;
@@ -441,7 +547,7 @@ describe('the bar’s command', () => {
     expect(busy.commands.find((r) => r.id === 'agent-continue')?.available?.({} as never)).toBe(false);
   });
 
-  it('the chooser is one song’s, put away with its conversation', () => {
+  it('the chooser is one song’s, shown and put away', () => {
     let s = A.reduce(A.EMPTY, { type: 'choosing', project: P });
     expect(s.choosing).toBe(P);
     s = A.reduce(s, { type: 'choosing', project: null });

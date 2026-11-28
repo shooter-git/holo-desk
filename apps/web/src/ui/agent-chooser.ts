@@ -14,6 +14,7 @@
  */
 import { groupFor, type LimitGroup, type LimitWindow, usedUp } from '@holo/agent/limits';
 import {
+  type AgentSettings,
   type AgentState,
   type Choice,
   type Exchange,
@@ -38,17 +39,27 @@ export interface RunsNow {
   own: boolean;
 }
 
+/**
+ * The harness Settings › Agent runs with, as the host decides it for a request: the one named there
+ * (`info` null when no runner has it now: a request is refused, it isn't run with another), or, with
+ * none named, the one the host picks. Null when there's none.
+ */
+function hostRuns(s: AgentSettings): { id: HarnessId; info: HarnessInfo | null } | null {
+  if (s.harness) return { id: s.harness, info: s.harnesses.find((h) => h.id === s.harness && h.found) ?? null };
+  const info = inUse(s.harnesses, null);
+  return info ? { id: info.id, info } : null;
+}
+
 /** Null until the host's settings are known, and when the host has no harness to run with. */
 export function runsNow(a: Told, project: string | null): RunsNow | null {
   if (!a.settings || !project) return null;
-  const listed = a.settings.harnesses;
   const own = a.thread?.project === project ? a.thread.choice : null;
   if (own) {
-    const info = listed.find((h) => h.id === own.harness && h.found) ?? null;
+    const info = a.settings.harnesses.find((h) => h.id === own.harness && h.found) ?? null;
     return { id: own.harness, info, model: own.model, effort: own.effort, own: true };
   }
-  const info = inUse(listed, a.settings.harness);
-  return info ? { id: info.id, info, model: a.settings.model, effort: a.settings.effort, own: false } : null;
+  const host = hostRuns(a.settings);
+  return host ? { ...host, model: a.settings.model, effort: a.settings.effort, own: false } : null;
 }
 
 /** What's left of an account's usage for a model, as the header's line and the chooser say it. */
@@ -108,9 +119,23 @@ export function leftOf(
 /** A signed-in harness's limits as last read (none for one that's signed out, or doesn't report them). */
 const groupsOf = (h: HarnessInfo): readonly LimitGroup[] => (h.signedIn === false ? [] : (h.limits?.groups ?? []));
 
-/** What's left for a harness run with this model and effort. */
+const HOUR = 3_600_000;
+
+/** How long ago limits were read, once that's an hour or more: "3 h ago", "2 days ago". */
+function readAgo(at: number | undefined, now: number): string | null {
+  const age = at === undefined ? 0 : now - at;
+  if (age < HOUR) return null;
+  return age < 48 * HOUR ? `${Math.round(age / HOUR)} h ago` : `${Math.round(age / (24 * HOUR))} days ago`;
+}
+
+/**
+ * What's left for a harness run with this model and effort. A share read an hour ago or more says so
+ * (the account may have been used since, here or elsewhere: Claude Code reports only with a request).
+ */
 function leftFor(h: HarnessInfo, model: string, effort: string, c: Clock): Left | null {
-  return leftOf(groupsOf(h), [model, runsWith(h, model, effort).model], c);
+  const left = leftOf(groupsOf(h), [model, runsWith(h, model, effort).model], c);
+  const ago = left && left.level !== 'out' ? readAgo(h.limits?.at, c.now) : null;
+  return left && ago ? { ...left, text: `${left.text}, read ${ago}`, say: `${left.say} (read ${ago})` } : left;
 }
 
 /** The model and effort a run uses, in the menus' own names: what's chosen, else the harness's default when it says. */
@@ -130,8 +155,9 @@ export interface RunsLine {
 
 /**
  * `last`: the conversation's newest exchange. When it's one this harness and model refused for being
- * out of usage, till a time still ahead, the line says so whatever limits were last read (a harness
- * that reports none, or ones read before it ran out): it's the harness's own word.
+ * out of usage (till a time still ahead, or with no time said), the line says so whatever limits were
+ * last read (a harness that reports none, or ones read before it ran out): it's the harness's own
+ * word, and what the reply under it says. A harness no runner has now is said to be gone.
  */
 export function runsLine(
   r: RunsNow,
@@ -141,13 +167,15 @@ export function runsLine(
   const said = named(r.info, r.model, r.effort);
   const parts = [r.info?.name ?? HARNESS_NAME[r.id], said.model, said.effort].filter(Boolean);
   const left = r.info ? leftFor(r.info, r.model, r.effort, c) : null;
-  const refused =
-    last?.failed && last.stop?.why === 'usage' && last.harness === r.id && last.model === r.model
-      ? last.stop.resets
-      : undefined;
-  const usage =
-    refused !== undefined && refused > c.now && left?.level !== 'out'
-      ? { text: `Used up, resets ${startsAgain(refused, c)}`, warn: true }
+  const stop = last?.failed && last.harness === r.id && last.model === r.model ? last.stop : null;
+  const refused = stop?.why === 'usage' && (stop.resets === undefined || stop.resets > c.now) ? stop : null;
+  const usage = !r.info
+    ? { text: 'not on the host now', warn: true }
+    : refused && left?.level !== 'out'
+      ? {
+          text: `Used up${refused.resets === undefined ? '' : `, resets ${startsAgain(refused.resets, c)}`}`,
+          warn: true,
+        }
       : left
         ? { text: left.text, warn: left.level !== 'ok' }
         : null;
@@ -185,7 +213,7 @@ export interface Offers {
    * Following Settings › Agent again, and what that is ("Claude Code, Opus at high effort"). Under a
    * failed request, only when what it says can carry it on.
    */
-  settings: { id: HarnessId; text: string } | null;
+  settings: { id: HarnessId; text: string; asks: boolean } | null;
   /** Why the others aren't offered, each a clause: "Cursor is signed out". */
   notes: string[];
   /** What's picked as it opens; null when nothing can be picked ahead. */
@@ -199,13 +227,16 @@ type Failed = Pick<Exchange, 'failed' | 'harness' | 'stop'> & Partial<Pick<Excha
 
 /**
  * Out of usage whichever model it's run with: a limit every model shares is used up, or (when every
- * limit is by model) each of them is. `resets`: when it starts again, when the vendor says.
+ * limit is by model, and each model the harness lists counts against one of them) each of them is.
+ * `resets`: when it starts again, when the vendor says. Null where that can't be told.
  */
-function outForAll(groups: readonly LimitGroup[], now: number): { resets?: number } | null {
+function outForAll(h: HarnessInfo, groups: readonly LimitGroup[], now: number): { resets?: number } | null {
   const shared = usedUp(groups, null, now);
   if (shared) return shared;
   if (!groups.length || groups.some((g) => !g.models?.length)) return null;
   if (!groups.every((g) => g.windows.some((w) => outNow(w, now)))) return null;
+  // (a model of its own in none of the groups: which limit it counts against isn't known)
+  if (!h.models?.length || !h.models.every((m) => groupFor(groups, m))) return null;
   // (the first of them to start again: from then some model runs)
   const resets = groups.map((g) => {
     const all = g.windows.filter((w) => outNow(w, now)).map((w) => w.resets);
@@ -230,7 +261,7 @@ function otherModel(h: HarnessInfo, groups: readonly LimitGroup[], ranOut: strin
 function prefill(a: Told, project: string, h: HarnessInfo): { model: string; effort: string } {
   const thread = a.thread?.project === project ? a.thread : null;
   const last = thread?.turns.findLast((t) => t.harness === h.id);
-  const host = a.settings && inUse(a.settings.harnesses, a.settings.harness)?.id === h.id ? a.settings : null;
+  const host = a.settings && hostRuns(a.settings)?.id === h.id ? a.settings : null;
   const from = (thread?.choice?.harness === h.id ? thread.choice : null) ??
     (last ? { model: last.model ?? '', effort: last.effort ?? '' } : null) ??
     host ?? { model: '', effort: '' };
@@ -243,18 +274,31 @@ function prefill(a: Told, project: string, h: HarnessInfo): { model: string; eff
 
 /**
  * What the chooser offers for a song. `failed`: the exchange it would carry on, when it's opened under
- * one that failed; the harness that failed isn't offered where that wouldn't help (signed out, gone, or
- * out of usage with every model).
+ * one that failed; the harness that failed isn't offered while what stopped it still holds (signed out,
+ * gone, or out of usage till a time still ahead, with every model).
  */
 export function offers(a: Told, project: string, failed: Failed | null, c: Clock): Offers {
   const listed = a.settings?.harnesses ?? [];
   const thread = a.thread?.project === project ? a.thread : null;
   const stopped = failed?.failed ? failed : null;
+  // why the harness that failed can't carry the request on, while that still holds: a limit that has
+  // started again, a harness signed in or installed again since, is as any other
+  const was = stopped ? listed.find((h) => h.id === stopped.harness && h.found) : undefined;
+  const stop = stopped?.stop ?? null;
+  const holds =
+    stop?.why === 'usage'
+      ? stop.resets === undefined || stop.resets > c.now
+      : stop?.why === 'signed-out'
+        ? was?.signedIn !== true
+        : stop?.why === 'not-installed'
+          ? !was
+          : false;
+  const forGood = stopped && stop && holds ? { id: stopped.harness, why: stop.why } : null;
   const ready: Offer[] = [];
   const notes: string[] = [];
   for (const h of listed) {
     if (!h.found) continue;
-    const itFailed = stopped?.harness === h.id ? stopped.stop?.why : undefined;
+    const itFailed = forGood?.id === h.id ? forGood.why : undefined;
     // (the reply already says so of the one that failed)
     if (itFailed === 'signed-out' || itFailed === 'not-installed') continue;
     if (h.signedIn === false) {
@@ -268,7 +312,7 @@ export function offers(a: Told, project: string, failed: Failed | null, c: Clock
       continue;
     }
     const groups = groupsOf(h);
-    const out = outForAll(groups, c.now);
+    const out = outForAll(h, groups, c.now);
     if (itFailed === 'usage') {
       // out of usage as it said: offered only where its limits go by model and show another model's
       // still running, with that model filled in
@@ -284,26 +328,56 @@ export function offers(a: Told, project: string, failed: Failed | null, c: Clock
   }
   // following Settings again: always there to go back to; to carry a failed request on, only when
   // what it says can run it (not the harness that just ran out, or one that isn't ready)
-  const host = a.settings ? inUse(listed, a.settings.harness) : null;
-  const forGood = stopped?.stop && stopped.stop.why !== 'interrupted' ? stopped.harness : null;
-  const runsIt = !!host && host.id !== forGood && ready.some((o) => o.h.id === host.id);
+  const host = a.settings ? hostRuns(a.settings) : null;
+  const runsIt = !!host && host.id !== forGood?.id && ready.some((o) => o.h.id === host.id);
   const follows = host && a.settings && (stopped ? runsIt : true) ? host : null;
   const settings =
     follows && a.settings
-      ? { id: follows.id, text: `${follows.name}, ${runsWithText(follows, a.settings.model, a.settings.effort)}` }
+      ? {
+          id: follows.id,
+          text: follows.info
+            ? `${follows.info.name}, ${runsWithText(follows.info, a.settings.model, a.settings.effort)}`
+            : `${HARNESS_NAME[follows.id]}, which isn’t on the host now`,
+          asks: !!caution(follows),
+        }
       : null;
   const own = thread?.choice ?? null;
   let selected: Offers['selected'] = null;
   if (stopped) {
+    // another harness that's ready; else what Settings says; else the one that ran out, with another
+    // model. Never one that asks first.
     const other = ready.find((o) => o.h.id !== stopped.harness && !o.asks);
     selected =
       other?.h.id ??
-      (settings && settings.id !== stopped.harness ? 'settings' : null) ??
-      ready.find((o) => o.h.id === stopped.harness)?.h.id ??
+      (settings && !settings.asks ? 'settings' : null) ??
+      ready.find((o) => o.h.id === stopped.harness && !o.asks)?.h.id ??
       null;
   } else if (own) selected = ready.some((o) => o.h.id === own.harness) ? own.harness : null;
   else selected = settings ? 'settings' : null;
   return { ready, settings, notes, selected, own: !!own };
+}
+
+/**
+ * The chooser as it opens on a song whose newest exchange is `failed` (null: none that failed, or not
+ * asked from this device). It carries that request on while there's something to carry it on with;
+ * where there isn't (its only harness ran out), it's the chooser for the song's next requests, so
+ * what the song runs with can still be changed.
+ */
+export function chooserFor(a: Told, project: string, failed: Failed | null, c: Clock): { o: Offers; carries: boolean } {
+  const under = failed?.failed ? offers(a, project, failed, c) : null;
+  return under && (under.ready.length || under.settings)
+    ? { o: under, carries: true }
+    : { o: offers(a, project, null, c), carries: false };
+}
+
+/**
+ * The harness a pick asks about first (its vendor doesn't support it on a consumer plan), whether it's
+ * picked by name or as what Settings says: null for one that doesn't ask, and for one the conversation
+ * already runs with.
+ */
+export function asksFirst(pick: Offer | 'settings' | null, o: Offers, runs: RunsNow | null): HarnessId | null {
+  const id = pick === 'settings' ? (o.settings?.asks ? o.settings.id : null) : pick?.asks ? pick.h.id : null;
+  return id && runs?.id !== id ? id : null;
 }
 
 /**

@@ -560,6 +560,11 @@ export class AgentStore {
     return { ...leg, updated };
   }
 
+  /** A thread's legs, gone: for one no request has run on yet. */
+  dropLegs(thread: string): void {
+    this.db.prepare('DELETE FROM agent_legs WHERE thread = ?').run(thread);
+  }
+
   // ---- usage: what each request used, as its harness counted it ----
 
   /** Keep what a request used (once a request: a second word for the same one replaces the first). */

@@ -115,8 +115,10 @@ export interface JobView {
   finished?: number;
   /** The song's title as the request was made: a studio with another song open names it by this. */
   title?: string;
-  /** The harness it runs with. */
+  /** The harness it runs with, and the model and effort given it (none: the harness's own). */
   harness?: HarnessId;
+  model?: string;
+  effort?: string;
   /** Why it didn't go on, when that's known for sure (the studio offers what would help). */
   stop?: TurnStop;
   /** The earlier go at the same request it carries on: its changes join that go's undo step. */
@@ -476,7 +478,7 @@ const HARNESS_NAMES: Record<HarnessId, string> = {
  * left to choose, and what was chosen and is no longer offered (an empty list says nothing, as the
  * runner takes it). Null when it will, or when the harness has defaults of its own.
  */
-export function chooseText(name: string, info: HarnessInfo, model: string, effort: string): string | null {
+export function chooseText(name: string, info: HarnessInfo, model: string, effort: string, own = false): string | null {
   if (!info.mustChoose) return null;
   const offered = (list: string[] | undefined, value: string) => !!value && (!list?.length || list.includes(value));
   const keptModel = offered(info.models, model);
@@ -486,9 +488,13 @@ export function chooseText(name: string, info: HarnessInfo, model: string, effor
   const gone = [model && !keptModel ? `“${model}”` : null, effort && !keptEffort ? `“${effort}” effort` : null].filter(
     Boolean,
   );
-  const choose = `${what} for ${name} in Settings › Agent`;
+  // (where it's chosen: the song's own choice is the line at the top of the agent's page, not Settings')
+  const choose = `${what} for ${name} ${own ? OWN_CHOICE : 'in Settings › Agent'}`;
   return gone.length ? `${name} no longer offers ${gone.join(' or ')}: choose ${choose}` : `Choose ${choose}`;
 }
+
+/** Where a song's own choice is changed, as a refusal says it. */
+const OWN_CHOICE = 'in this song’s own choice, the line at the top of the agent’s page';
 
 /**
  * Why no runner takes the agent's jobs, said to an allowed device: none connected, or the one that is
@@ -673,7 +679,7 @@ export class Jobs implements AgentHooks {
   }
 
   /** The harness a request runs with, its runner and what it reported; or why there's none. */
-  private pick(wanted: HarnessId | null): { harness: HarnessId; runner: LiveClient; info: HarnessInfo } {
+  private pick(wanted: HarnessId | null, own = false): { harness: HarnessId; runner: LiveClient; info: HarnessInfo } {
     if (!this.o.live.agentRunners().length) throw new Refusal(409, noRunnerText(this.o.live.runners()), 'no-runner');
     // none chosen: the first that can be sealed, else the first found (whose refusal then says why);
     // never one that runs only when it's chosen
@@ -686,7 +692,7 @@ export class Jobs implements AgentHooks {
       throw new Refusal(
         409,
         wanted
-          ? `${HARNESS_NAMES[wanted]} isn’t on this computer: pick another harness in Settings › Agent`
+          ? `${HARNESS_NAMES[wanted]} isn’t on this computer: pick another harness ${own ? OWN_CHOICE : 'in Settings › Agent'}`
           : [...CHOSEN_ONLY].some((id) => this.runnerFor(id))
             ? 'Choose a harness in Settings › Agent: Antigravity runs only once it’s chosen there'
             : 'No harness is on this computer: install Claude Code, Codex or Cursor',
@@ -707,10 +713,46 @@ export class Jobs implements AgentHooks {
   }
 
   /** A harness that lists no defaults runs only with a model and an effort chosen (409 `choose`). */
-  private chosen(harness: HarnessId, info: HarnessInfo): void {
-    const { model, effort } = this.o.agentStore.settings();
-    const why = chooseText(HARNESS_NAMES[harness], info, model, effort);
+  private chosen(harness: HarnessId, info: HarnessInfo, runs: { model: string; effort: string }, own = false): void {
+    const why = chooseText(HARNESS_NAMES[harness], info, runs.model, runs.effort, own);
     if (why) throw new Refusal(409, why, 'choose');
+  }
+
+  /**
+   * What a song's requests run with: its conversation's own choice when it has one, else the host's
+   * (Settings › Agent). `harness` null: whichever is available, as the host leaves it.
+   */
+  selection(project: string): { harness: HarnessId | null; model: string; effort: string; own: boolean } {
+    const thread = this.o.threads.current(project);
+    if (thread?.own_harness)
+      return { harness: thread.own_harness, model: thread.own_model ?? '', effort: thread.own_effort ?? '', own: true };
+    const { harness, model, effort } = this.o.agentStore.settings();
+    return { harness, model, effort, own: false };
+  }
+
+  /**
+   * The song's own choice of harness, model and effort for its conversation (null: Settings › Agent's
+   * again). Not while a request works on the song; and only a choice a request could run with now: a
+   * harness no runner has, one signed out or that can't be limited, a model or effort still to choose
+   * are refused as a request with them would be, so a song is never left set to what can't run.
+   */
+  choose(project: string, choice: { harness: HarnessId; model: string; effort: string } | null): void {
+    if (!this.o.store.get(project)) throw new Refusal(404, 'No such song');
+    this.free(project);
+    if (choice) {
+      const { harness, info } = this.pick(choice.harness, true);
+      this.chosen(harness, info, choice, true);
+    }
+    this.o.threads.choose(project, choice);
+    this.toldThread(project);
+  }
+
+  /**
+   * The studios with a song open hear that what its conversation runs with changed, or that it was
+   * started over (its own choice gone with it): they read it again.
+   */
+  toldThread(project: string): void {
+    this.o.live.toDevices({ type: 'agent-thread', project }, (c) => c.state?.project === project);
   }
 
   /**
@@ -797,9 +839,9 @@ export class Jobs implements AgentHooks {
       if (!scan || scan.project !== req.project) delete req.context.scan;
     }
     const attachments = this.attachments(device, req.project, req.attachments);
-    const settings = this.o.agentStore.settings();
-    const { harness, runner, info } = this.pick(settings.harness);
-    this.chosen(harness, info);
+    const runs = this.selection(req.project);
+    const { harness, runner, info } = this.pick(runs.harness, runs.own);
+    this.chosen(harness, info, runs, runs.own);
     const thread = this.o.threads.forRequest(req.project, harness);
     const request = req.preset ? presetTitle(req.preset) : req.text;
     return this.begin(
@@ -886,7 +928,9 @@ export class Jobs implements AgentHooks {
         .map((t) => t.turn),
       // (a conversation every turn of which was this harness's own is one it starts over, not one it takes over)
       others: turns.some((t) => !t.own),
-      events: this.o.threads.events(thread),
+      // (a conversation with no turn yet, made when the song was given its own choice: nothing was
+      // replied, so nothing happened "since")
+      events: rows.length ? this.o.threads.events(thread) : [],
       seen: fresh ? null : this.o.threads.seenSong(thread),
       now,
       middleC: this.middleC(),
@@ -911,7 +955,14 @@ export class Jobs implements AgentHooks {
     attachments: readonly string[],
     prompt: (now: Project, history: Section[]) => Promise<string>,
     context: RequestContext | null = null,
-    carry: { continues?: string; before?: number | null; previous?: number | null; allowed?: string } | null = null,
+    carry: {
+      continues?: string;
+      before?: number | null;
+      previous?: number | null;
+      allowed?: string;
+      /** The model and effort to run with, when not the song's selection (a follow-up runs as what asked did). */
+      runs?: { model: string; effort: string };
+    } | null = null,
   ): Promise<string> {
     this.starting.add(project);
     const ceiling = preset ? this.limits.scanClockMs : this.limits.clockMs;
@@ -931,7 +982,7 @@ export class Jobs implements AgentHooks {
       // session (or its service refuse the conversation before it has done anything), the runner starts
       // one in the middle of the turn, and it's given this instead
       const fresh = thread.session ? await prompt(now, this.soFar(thread, now, true)) : null;
-      const settings = this.o.agentStore.settings();
+      const settings = carry?.runs ?? this.selection(project);
       const token = newToken();
       job = {
         view: {
@@ -943,6 +994,8 @@ export class Jobs implements AgentHooks {
           started: Date.now(),
           title: now.title,
           harness: thread.harness,
+          ...(settings.model ? { model: settings.model } : {}),
+          ...(settings.effort ? { effort: settings.effort } : {}),
           ...(carried?.continues ? { continues: carried.continues } : {}),
         },
         thread: thread.id,
@@ -974,7 +1027,10 @@ export class Jobs implements AgentHooks {
         context,
         // (what the prompt just told of: the thread's events, cleared below; in words anyone reading
         // the conversation's record later can be told them in)
-        heard: this.o.threads.events(this.o.threads.get(thread.id) ?? thread).map((e) => eventLine(e, false)),
+        heard: (this.o.agentStore.turns(thread.id).length
+          ? this.o.threads.events(this.o.threads.get(thread.id) ?? thread)
+          : []
+        ).map((e) => eventLine(e, false)),
         changes: [],
         stop: null,
         continues: carried?.continues ?? null,
@@ -1089,7 +1145,11 @@ export class Jobs implements AgentHooks {
    * attachments still kept), told that its last go didn't finish and to read the song first. Only for
    * the device that asked, and only for the conversation's last turn: a later request has moved on.
    */
-  async carryOn(device: string, id: string): Promise<string> {
+  async carryOn(
+    device: string,
+    id: string,
+    choice?: { harness: HarnessId; model: string; effort: string } | null,
+  ): Promise<string> {
     const row = this.o.agentStore.turn(id);
     const thread = row ? this.o.threads.get(row.thread) : null;
     if (!row || !thread) throw new Refusal(404, 'No such request');
@@ -1108,15 +1168,24 @@ export class Jobs implements AgentHooks {
     const preset = extra.preset ?? null;
     // with the harness chosen now, as a request is (signed out or gone, the refusal says so): when
     // that's another than the one that failed, it takes the conversation over, the go that failed its last turn
-    const { harness, runner, info } = this.pick(this.o.agentStore.settings().harness);
-    this.chosen(harness, info);
+    // (picked for this song as it's carried on, "Continue with…": a harness with its model and effort,
+    // or null for Settings › Agent's again; not given, as the song's requests run now)
+    const host = this.o.agentStore.settings();
+    const runs =
+      choice === undefined
+        ? this.selection(project)
+        : choice
+          ? { ...choice, own: true }
+          : { harness: host.harness, model: host.model, effort: host.effort, own: false };
+    const { harness, runner, info } = this.pick(runs.harness, runs.own);
+    this.chosen(harness, info, runs, runs.own);
     const going = this.o.threads.forRequest(project, harness);
     const same = (extra.harness ?? thread.harness) === harness;
     // what it was sent that's still kept (a week): the rest it was told of the first time
     const kept = (extra.attachments ?? []).filter((a) => this.o.attachment?.(a, project, device));
     const attachments = this.attachments(device, project, kept);
     const context = extra.context ?? null;
-    return this.begin(
+    const job = await this.begin(
       device,
       project,
       going,
@@ -1134,8 +1203,20 @@ export class Jobs implements AgentHooks {
         }),
       context,
       // (the go it continues may itself have carried one on: the request's first is what its step is under)
-      { continues: extra.continues ?? row.job, before: extra.before ?? null, previous: extra.previous ?? null },
+      {
+        continues: extra.continues ?? row.job,
+        before: extra.before ?? null,
+        previous: extra.previous ?? null,
+        runs: { model: runs.model, effort: runs.effort },
+      },
     );
+    // what was picked is the song's own only now that the request has gone ahead with it: a refusal
+    // on the way (the studio's save, the runner gone) leaves the song as it was
+    if (choice !== undefined) {
+      this.o.threads.choose(project, choice);
+      this.toldThread(project);
+    }
+    return job;
   }
 
   /**
@@ -1173,7 +1254,9 @@ export class Jobs implements AgentHooks {
     this.free(job.view.project);
     const found = this.runnerFor(thread.harness);
     if (!found) throw new Refusal(409, `${HARNESS_NAMES[thread.harness]} isn’t available now`, 'no-harness');
-    this.chosen(thread.harness, found.info);
+    // (with the model and effort its turn had: the song's choice may have moved to another harness since)
+    const asked = { model: job.model, effort: job.effort };
+    this.chosen(thread.harness, found.info, asked);
     const next = await this.begin(
       device,
       job.view.project,
@@ -1191,7 +1274,7 @@ export class Jobs implements AgentHooks {
           request: permissionFollowUp(permission, result, job.view.request),
         }),
       null,
-      { allowed: `${permissionWords(permission)}. Reported: ${oneLine(result, 300) || 'nothing'}` },
+      { allowed: `${permissionWords(permission)}. Reported: ${oneLine(result, 300) || 'nothing'}`, runs: asked },
     );
     if (job.view.state === 'awaiting') {
       job.view.state = 'done';
@@ -1667,13 +1750,32 @@ export class Jobs implements AgentHooks {
    * A song's conversation, as the bar shows it after a reload: each turn with what it asked, its brief
    * and why it stopped, and the song's job that's running or waiting for a click, if there is one.
    */
-  threadView(project: string): { thread: ReturnType<Threads['view']>; job: JobView | null } {
+  threadView(project: string): {
+    thread: ReturnType<Threads['view']>;
+    job: JobView | null;
+    /** The song's own choice (null: it follows Settings › Agent), and what its next request runs with. */
+    choice: { harness: HarnessId; model: string; effort: string } | null;
+    runsWith: { harness: HarnessId | null; model: string; effort: string };
+  } {
     let job: AgentJob | null = this.running(project);
     if (!job)
       for (const j of this.jobs.values())
         if (j.view.project === project && j.view.state === 'awaiting' && (!job || j.view.started > job.view.started))
           job = j;
-    return { thread: this.o.threads.view(project), job: job?.view ?? null };
+    const runs = this.selection(project);
+    // (the harness a request would get now: the one chosen, or the one the host would pick; none, null)
+    let harness = runs.harness;
+    try {
+      harness = this.pick(runs.harness).harness;
+    } catch {
+      // (not available now: a request says why)
+    }
+    return {
+      thread: this.o.threads.view(project),
+      job: job?.view ?? null,
+      choice: runs.own && runs.harness ? { harness: runs.harness, model: runs.model, effort: runs.effort } : null,
+      runsWith: { harness, model: runs.model, effort: runs.effort },
+    };
   }
 
   // ---- the job's tools (/api/agent/jobs/:job/*) ----
@@ -2410,6 +2512,8 @@ function jobFromTurn(
       ...(extra.finished !== undefined ? { finished: extra.finished } : {}),
       ...(extra.title !== undefined ? { title: extra.title } : {}),
       harness,
+      ...(extra.model ? { model: extra.model } : {}),
+      ...(extra.effort ? { effort: extra.effort } : {}),
       ...(extra.continues ? { continues: extra.continues } : {}),
     },
     thread: row.thread,

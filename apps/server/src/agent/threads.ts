@@ -74,7 +74,17 @@ export class Threads {
   use(thread: ThreadRow): ThreadRow {
     const stored = this.store.thread(thread.id);
     if (!stored) return thread;
-    if (stored.harness !== thread.harness) {
+    if (stored.harness !== thread.harness && !this.store.turns(stored.id).length) {
+      // a thread no request has run on (made when the song was given its own choice, since changed):
+      // this harness is its first, in the thread's own folder
+      this.store.dropLegs(stored.id);
+      this.store.updateThread(stored.id, {
+        harness: thread.harness,
+        session: null,
+        seen_doc: null,
+        seen_revision: null,
+      });
+    } else if (stored.harness !== thread.harness) {
       const { session, seen_doc, seen_revision } = stored;
       this.store.putLeg({ ...this.leg(stored), session, seen_doc, seen_revision });
       const leg = this.store.leg(thread.id, thread.harness);
@@ -211,6 +221,18 @@ export class Threads {
     this.setLeg(threadId, harness, { session: null, seen_doc: null, seen_revision: null, told: null });
   }
 
+  /**
+   * The song's own choice of what its conversation runs with, or (null) Settings › Agent's again. It's
+   * the current thread's, made if the song has none yet: it lasts until it's changed, or the
+   * conversation is started over.
+   */
+  choose(project: string, choice: { harness: HarnessId; model: string; effort: string } | null): void {
+    const current = this.store.currentThread(project);
+    if (!current && !choice) return;
+    const thread = current ?? this.forRequest(project, (choice as { harness: HarnessId }).harness);
+    this.store.setChoice(thread.id, choice);
+  }
+
   /** "Start over": the song's next request starts a new thread. */
   reset(project: string): void {
     this.store.endThreads(project);
@@ -242,6 +264,8 @@ export class Threads {
           ...(extra.go ? { go: extra.go } : {}),
           ...(extra.error ? { error: extra.error } : {}),
           ...(extra.harness ? { harness: extra.harness } : {}),
+          ...(extra.model ? { model: extra.model } : {}),
+          ...(extra.effort ? { effort: extra.effort } : {}),
           ...(extra.stop ? { stop: extra.stop } : {}),
           ...(extra.continues ? { continues: extra.continues } : {}),
         };
@@ -264,8 +288,10 @@ export interface TurnView {
   view?: TurnExtra['view'];
   go?: TurnExtra['go'];
   error?: string;
-  /** The harness it ran with, why it didn't go on (when known), and the earlier go it carries on. */
+  /** The harness it ran with (and the model and effort given it: none, the harness's own), why it didn't go on (when known), and the earlier go it carries on. */
   harness?: HarnessId;
+  model?: string;
+  effort?: string;
   stop?: TurnExtra['stop'];
   continues?: string;
 }

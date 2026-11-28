@@ -126,13 +126,14 @@ Turning the agent off cancels every job, so the job-scoped routes answer 403.
 | `POST /api/agent/harnesses/:id/update` | | `{ok}`. 409 `no-harness` or `busy`. |
 | `POST /api/agent/harnesses/:id/install` | | `{ok}`. Sent as `agent-install {harness}` to a runner that reported the harness not found, with an `installer`; progress arrives as `agent-harness` with `kind:'install'`. 404 for an unknown harness; 409 `no-runner`, `busy` (a job runs on it), or no reason when a runner has it already (Update is for that) or none can install it (a Windows host). The body is empty: the runner runs its own fixed command. |
 | `POST /api/agent/requests` | `{project, text, attachments?:[id], context?, preset?}` | `{job}`. `text` is 1 to 4000 characters (empty with a preset). At most 10 attachments, each this device's for this song (400 otherwise). 404 for no such song, or a preset's scan that isn't the song's; 409 `not-open`, `busy`, `no-runner`, `no-harness`, `not-sealed`, `signed-out`. |
-| `POST /api/agent/jobs/:job/continue` | | `{job}`: **Try again**. The request whose last go failed is carried on in the same conversation, as a new job that continues it (below, "Why a request failed, and Try again"). Only the device that asked (403); 404 for no such request; 409 when it didn't fail, a later request was made on the song since, or the conversation was started over; and refused as a request is (`not-open`, `busy`, `no-runner`, `no-harness`, `not-sealed`, `signed-out`, `choose`). |
+| `POST /api/agent/jobs/:job/continue` | `{}`, or `{harness, model?, effort?}` | `{job}`: **Try again**, or **Continue with…**. The request whose last go failed is carried on in the same conversation, as a new job that continues it (below, "Why a request failed, and Try again"). With a `harness` it's carried on with that one and its `model` and `effort` (each empty: the harness's own), which becomes the song's own choice; `harness: null` carries it on with what Settings › Agent says, the song following it again (below, "A song's own choice"). 400 for a harness, model or effort that isn't one. Only the device that asked (403); 404 for no such request; 409 when it didn't fail, a later request was made on the song since, or the conversation was started over; and refused as a request is (`not-open`, `busy`, `no-runner`, `no-harness`, `not-sealed`, `signed-out`, `choose`). |
 | `POST /api/agent/jobs/:job/cancel` | | `{ok}`. Any allowed device may stop a job; one waiting for a click is dismissed (`cancelled`). 404; 409 once it has ended. |
 | `POST /api/agent/jobs/:job/permission` | `{grant:boolean, result?, attachments?:[id]}` | `{ok, job?}`, `job` being the follow-up's id. Only the device that asked may answer (403), only while the job is `awaiting` (409). `result` is at most 1000 characters; `attachments` as in a request (a screenshot, a photo, a recording). Granting can be refused as a request is (`not-open`, `busy`, `no-harness`), and with 409 when the conversation was started over since the job asked. With a job token, the same path is the tools' (below). |
 | `POST /api/agent/jobs/:job/done-listening` | | `{ok}`. The user pressed Done. Only the device that asked (403); 409 once the job has ended. |
-| `GET /api/agent/threads/:project` | | `{thread, job, now}`. `thread` is `{id, harness, turns:[{job, request, reply, label, state, at, permission?, brief?, briefWarnings?, view?, go?, error?}]}`, or null. `job` is the song's job that's running or waiting for a click (a `JobView`), or null: after a reload, its button comes back. `now` is the host's time (ms). |
+| `GET /api/agent/threads/:project` | | `{thread, job, choice, runsWith, now}`. `thread` is `{id, harness, turns:[{job, request, reply, label, state, at, permission?, brief?, briefWarnings?, view?, go?, error?, harness?, model?, effort?, stop?, continues?}]}`, or null. `choice` is the song's own `{harness, model, effort}`, or null while it follows Settings › Agent; `runsWith`, what its next request runs with either way: its `harness` is the one named (the song's, or Settings'), even when no runner has it now, or the one the host picks when none is named (null: there's none to pick). `job` is the song's job that's running or waiting for a click (a `JobView`), or null: after a reload, its button comes back. `now` is the host's time (ms). |
 | `GET /api/agent/away/:project` | `?from=` (a revision) | `{away}`: what this device's studio, back on the song at revision `from`, picks up of the changes its job saved on the server while it was away (below): `{job, label, running, base, head, batches:[{batch}], song}`, the batches after `from` by id, `head` the revision they bring the song to and `song` the song then, read together (no save comes between them), `label` the job's once it has finished (its last batch's before). From a revision before the run (a save of the studio's got there, its answer lost), the whole run, `base` its first revision; otherwise `base` is `from`. `away` is null when there's nothing to pick up from `from`: no such run of the song's latest job of this device's, `from` past its first revision but not one of its own, or the song saved since by someone else. 400 for a `from` that isn't a revision. |
-| `POST /api/agent/threads/:project/reset` | | `{ok}`. The next request starts a new thread. 409 `busy` while a job runs on the song. |
+| `PUT /api/agent/threads/:project/choice` | `{harness, model?, effort?}`, or `{harness: null}` | The song's conversation as `GET` answers it. What the song's requests run with from here on: its own choice (below, "A song's own choice"), or with `harness: null` what Settings › Agent says again. 404 for no such song; 400 for a harness, model or effort that isn't one; 409 `busy` while a job runs on the song, and for a choice a request couldn't run with now, refused as that request would be (`no-runner`, `no-harness`, `signed-out`, `not-sealed`, `choose`), so a song is never set to what can't run. The studios with the song open hear `agent-thread`. |
+| `POST /api/agent/threads/:project/reset` | | `{ok}`. The next request starts a new thread, which follows Settings › Agent: a song's own choice goes with its conversation, and the studios with the song open hear `agent-thread`. 409 `busy` while a job runs on the song. |
 | `GET /api/agent/push` | `?key=1` (subscribing) | `{key, mode:'off'|'long'|'every', endpoint?, unseen}`: this device's notices outside HO[LO] (below). `key` is the host's VAPID public key (base64url, 65 bytes uncompressed), or null while none has been made: only `?key=1` makes it, as a device subscribes. `endpoint` is the subscription's, when on; `unseen` how many replies this device asked for no device has seen (its badge). Answers with the agent off. |
 | `PUT /api/agent/push` | `{mode:'long'|'every', subscription:{endpoint, keys:{p256dh, auth}}}` | As GET. Turns notices on for this device, or changes when they come. `subscription` is the browser's `PushSubscription.toJSON()`: `endpoint` must be `https` on 443, ≤ 1000 characters, no user or password, on `fcm.googleapis.com`, `*.push.apple.com`, `*.push.services.mozilla.com` or `*.notify.windows.com`; `p256dh` a P-256 point (65 bytes, uncompressed) and `auth` 16 bytes, base64url (400 otherwise). Another device with the same endpoint (the same browser, paired again) loses it. |
 | `DELETE /api/agent/push` | | As GET (`mode:'off'`). Off: the subscription and this device's unseen replies are deleted. Answers with the agent off. |
@@ -246,7 +247,9 @@ says what its account has left and what the requests through HO[LO] used:
   after the next. The others are asked as Settings › Agent opens.
 - A harness that isn't installed says nothing; one signed out, only what was counted.
 
-Nothing of this shows outside Settings › Agent: no bar, badge or notice in the studio or the agent's page.
+Outside Settings › Agent, one place says anything of it: the line under the agent's page's header
+(below, "The page"), with what's left for the model the song's conversation runs with. No bar, badge
+or notice elsewhere in the studio.
 
 **Model and Effort** list the harness's own names, with no line under them unless one saved is no
 longer offered. Such a model or effort stays selected, labeled "(no longer offered)", with a line saying
@@ -264,12 +267,13 @@ adapter decides it, in the menus' names: "Gpt-6.1-sol at low effort", "Auto: Cur
 alias stands for (Claude Code lists only aliases, so its Model menu adds each one's version then:
 "Opus (<its version>)"), or, in the warning color, what's left to choose ("Choose an effort first").
 The choice is the host's, shared by every allowed device, so a request from a phone runs as one from
-the desktop. A run that says something new of an alias sends the harness list again at once (the runner's
+the desktop. A song can have its own instead (below, "A song's own choice"). A run that says something new of an alias sends the harness list again at once (the runner's
 `harnesses` message), so the row follows without a look.
 
 ### Usage
 
-Two things, both shown only in Settings › Agent (above), both as the vendors and their harnesses
+Two things, shown in Settings › Agent (above; what's left also in the line under the page's header),
+both as the vendors and their harnesses
 report them: HO[LO] works nothing out, and asks no vendor anything itself. docs/agent-harnesses.md,
 "Limits and usage", says where each harness's come from.
 
@@ -638,6 +642,9 @@ taken only from the runner it was handed to, while it runs.
   code).
 - `agent-removed {}`, to a device that was just removed.
 - `agent-devices {}`, to allowed devices: the device list, or the requests waiting, changed.
+- `agent-thread {project}`, to the allowed devices with that song open: what its conversation runs
+  with changed (its own choice set or taken back, or the conversation started over). They read the
+  conversation again.
 - `saved {project, revision}`, when a job's batch was saved on the server (its studio away), to the
   studios with the song open.
 
@@ -827,6 +834,65 @@ takes the conversation over (below, "Threads"):
   (`conversation()`), and the studio keeps them one undo step ("Undo grouping", below).
 
 It works from what the turn kept, so also for a request HO[LO] restarted under.
+
+**Continue with…** shows beside (or instead of) Try again where another harness is ready to take the
+request, or the one that ran out has, by its limits, another model that still runs (`canMove` in
+apps/web/src/ui/agent-chooser.ts). It opens the chooser under the reply (below, "A song's own
+choice"); Continue is the same route with the harness, model and effort picked, so the request carries
+on there as Try again does: one exchange, one step to undo, the new harness told the conversation so
+far.
+
+## A song's own choice
+
+A song's conversation runs with what Settings › Agent says, until the user picks something else for
+it on the page. That choice is the song's alone: the other songs go on following Settings.
+
+- **Kept** on the song's current thread (`agent_threads.own_harness`, `own_model`, `own_effort`; all
+  null while it follows Settings), so it lasts until it's changed, taken back ("As in Settings"), or
+  the conversation is started over. `Jobs.selection(project)` is what every request of the song runs
+  with: a request, Try again, and the go after a restart.
+- **A waiting OK's follow-up** is the exception: it runs with the harness that asked, and the model and
+  effort its turn had, whatever was chosen since (it carries on that harness's own session).
+- **Set** by `PUT /api/agent/threads/:project/choice`, or by `…/jobs/:job/continue` with a harness. Any
+  allowed device may; not while a request works on the song. Only a choice a request could run with
+  now is taken. Continue makes what was picked the song's own only once the request has gone ahead
+  with it: refused on the way (the studio's save, the runner gone), the song is as it was.
+- **When it can't run any more** (its harness gone from the host, a model it no longer offers), the
+  song's requests are refused, never run with another harness; the refusal names the song's own
+  choice, "the line at the top of the agent's page", not Settings › Agent, and that line says "not on
+  the host now" of a harness no runner has.
+- A song given a choice before its first request has a conversation with no turn yet. Its first
+  request starts it as any first request does: with the harness that runs it, in the thread's own
+  folder, told nothing happened "since".
+
+**The chooser** (`Chooser` in apps/web/src/ui/AgentChooser.tsx; its rules in `offers`,
+ui/agent-chooser.ts) opens under the conversation from the line under the page's header, from Continue
+with… under a failed reply, and from the bar's command "Continue this conversation with…":
+
+- **The harnesses that are ready, as buttons**: found, signed in, limited to HO[LO]'s tools, nothing
+  under way on them (an update), and not out of usage with every model (a limit every model shares
+  used up, or, where every limit is by model, each of them). Antigravity is listed when it's ready,
+  never picked ahead, and asks first as Settings' Use does, unless the conversation already runs with
+  it.
+- **Model and Effort** for the one picked, filled in: the song's own choice, else what that harness
+  last ran with on this song, else Settings' (when it's the harness Settings uses), else its default.
+  The user picks; HO[LO] doesn't judge which models are comparable. A harness with no defaults (Claude
+  Code) needs both chosen first.
+- **"As in Settings"**: the song follows Settings › Agent again. Always there outside a failure; under
+  a failed request only when what Settings says can carry it on. When what Settings says is a harness
+  that asks first, so does this, and it's never picked ahead.
+- **One line** says what's left for what's picked ("Codex has 63% left this week"), then why the
+  others aren't offered ("Cursor is signed out", "Codex is used up, resets in 2 h 10 min").
+- Under a failed request (the conversation's last, asked from this device) its button is **Continue**,
+  and the request carries on with what's picked. The harness that failed isn't offered there while
+  what stopped it still holds: signed out, gone, or out of usage till a time still ahead (unless its
+  limits go by model and show another model's still run: then with that model filled in). Once its
+  limit has started again, or it's signed in or installed again, it's offered as any other. Picked
+  ahead: another harness that's ready, else what Settings says, else the one that ran out with its
+  other model.
+- Otherwise the button is **Use for this song**: nothing runs, and the song's next request does with
+  it. That's also the chooser under a failed request nothing can carry on (its only harness ran out),
+  so what the song runs with can still be changed (`chooserFor`).
 
 ## Undo grouping (studio)
 
@@ -1034,6 +1100,23 @@ button and the swipe down all bring it; a second press of the slash button puts 
   they move the caret.
 - **Solid.** It's the studio's own surface, opaque, with nothing blurred behind it: no cost on a
   phone's GPU or memory beyond its own drawing.
+- **What the conversation runs with.** One quiet line under the header (`RunsLine`; its words are
+  `runsLine`'s in ui/agent-chooser.ts): the harness, its model and effort, and what's left of the
+  account's usage for that model, "Codex · Gpt-6.1-sol · high · 63% left", with "This song:" before it
+  when the song has its own choice. What's left is the tightest limit the model counts against (those
+  every model shares, and its own group's), named when it isn't the week ("5-hour: 8% left"), in the
+  warning color at a fifth or less, and "Used up, resets in 2 h 10 min" when gone (also on the
+  harness's own word: its last request here refused for it, till a time still ahead, or with no time
+  said). A share read an hour ago or more says so ("63% left, read 3 h ago"): the account may have
+  been used since. Nothing is said of usage where nothing is known: a harness that reports none,
+  Claude Code before its first request, a limit that has started again since it was read. The harness
+  is the one a request would run with, as the host decides it: one named that no runner has now is
+  still named, with "not on the host now". As the page opens the host is asked to look at
+  its harnesses' limits again, as Settings › Agent asks it (`…/harnesses/look`: the host sees to how
+  often). A press opens the chooser (above, "A song's own choice");
+  not while a request works on the song.
+- **Where it changed hands.** Between two turns that ran with another harness, or another model, one
+  centered muted line: "Continued with Codex, Gpt-6.1-sol at high" (`movedLine`).
 - **The panes under it rest.** Held upright, the views under the page are hidden and their frames
   skipped (`FramePause` in apps/web/src/ui/frame.ts; docs/architecture.md); the transport's display
   keeps going. They draw again as it
@@ -1143,7 +1226,7 @@ Limits, plainly:
 
 ## Threads ("since your last reply")
 
-`agent_threads(id, project, harness, session, seen_doc, seen_revision, events_json, created, updated, current)`
+`agent_threads(id, project, harness, session, seen_doc, seen_revision, events_json, created, updated, current, own_harness, own_model, own_effort)`
 holds one current thread (`agt_…`) per song. `agent_turns(job, thread, request, reply, label, state, at, extra)`
 holds its turns, the last 50, each with the `device` that asked; `extra` keeps the permission, the brief and its flagged lines, the view (its dock too) and
 its go, the error, and the attachments, and what a turn needs to be read or carried on later: when it

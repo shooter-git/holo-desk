@@ -123,6 +123,8 @@ class Tools {
 
 /** How a harness writes what happens in a turn. */
 interface Dialect {
+  /** Which harness it answers as. */
+  as: 'claude' | 'codex';
   tool(name: string, args: Record<string, unknown>): void;
   toolDone(name: string, answer: Answer): void;
   text(text: string): void;
@@ -153,9 +155,11 @@ async function play(steps: readonly Step[], tools: Tools, dialect: Dialect): Pro
     } else if (step.do === 'fail') {
       if (step.once) failedOnce(steps);
       return { last, error: step.error, output };
-    } else if (step.do === 'limit')
+    } else if (step.do === 'limit') {
+      // (another harness's account: this one goes on)
+      if (step.only && step.only !== dialect.as) continue;
       return { last, error: 'The account’s limit refused the request', limited: step.seconds, output };
-    else if (step.do === 'call') {
+    } else if (step.do === 'call') {
       output += tokensOf(JSON.stringify(step.args)) + 8;
       dialect.tool(step.tool, step.args);
       dialect.toolDone(step.tool, await tools.call(step.tool, step.args));
@@ -287,6 +291,7 @@ async function claude(argv: readonly string[]): Promise<number> {
     return 1;
   }
   const outcome = await play(stepsOf(prompt), tools, {
+    as: 'claude',
     tool: (name, input) =>
       say({
         type: 'assistant',
@@ -456,6 +461,7 @@ async function codex(argv: readonly string[]): Promise<number> {
   }
   let item = 0;
   const outcome = await play(stepsOf(prompt), tools, {
+    as: 'codex',
     tool: (tool, args) =>
       say({
         type: 'item.started',

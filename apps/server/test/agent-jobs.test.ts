@@ -1467,6 +1467,9 @@ describe('since your last reply', () => {
         ],
       },
       job: null,
+      // (the song follows Settings › Agent: no choice of its own)
+      choice: null,
+      runsWith: { harness: 'claude', model: '', effort: '' },
       now: expect.any(Number),
     });
 

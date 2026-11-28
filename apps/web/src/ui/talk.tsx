@@ -25,6 +25,7 @@ import {
 import { canCaptureScreen, grabScreen, type Ready, record, redraw } from '../app/attach.ts';
 import { useApp } from '../app/store.ts';
 import { installs, useInstalls } from '../audio/installs.ts';
+import { MoveButton } from './AgentChooser.tsx';
 import { AgentView } from './AgentView.tsx';
 import { startsAgain } from './harness-usage.ts';
 
@@ -270,7 +271,8 @@ export function CopyBrief({ text }: { text: string }) {
 
 /**
  * An exchange: the request, then the work going on or the reply, what the reply shows under it, then
- * its button. `elapsed` (the page's) shows how long it has been working, beside its line.
+ * its buttons (one that failed: Try again where that may help, and Continue with… where another
+ * harness is ready). `elapsed` (the page's) shows how long it has been working, beside its line.
  */
 export function TalkBody({
   ex,
@@ -278,13 +280,16 @@ export function TalkBody({
   busy,
   elapsed = false,
   last = false,
+  choosing = false,
 }: {
   ex: Exchange;
   project: string;
   busy: boolean;
   elapsed?: boolean;
-  /** The conversation's last exchange: one that failed can be tried again from here. */
+  /** The conversation's last exchange: one that failed can be tried again from here, or carried on with another harness. */
   last?: boolean;
+  /** The page's chooser is open under it: it has the buttons a failure would. */
+  choosing?: boolean;
 }) {
   const job = ex.job;
   // (what a failure that won't pass by itself needs, and Try again when it might)
@@ -293,11 +298,13 @@ export function TalkBody({
     ex.permission && job && ex.mine && (
       <PermissionButton key="allow" job={job} permission={ex.permission} project={project} />
     ),
-    after?.again && job && (
+    after?.again && job && !choosing && (
       <button key="again" type="button" className="btn" onClick={() => void tryAgain(ex, project)}>
         Try again
       </button>
     ),
+    // (it shows only where another harness, or another model, could take the request)
+    after && job && !choosing && <MoveButton key="move" ex={ex} project={project} />,
     ex.brief && <CopyBrief key="brief" text={ex.brief} />,
   ].filter(Boolean);
   return (

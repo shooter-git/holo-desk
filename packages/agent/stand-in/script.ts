@@ -12,7 +12,8 @@
  * - `fail-once WORDS`: the same, the first time only: a later go at the same script (Try again) carries
  *   on from the step after it;
  * - `limit SECONDS`: end the turn as the harness ends one its account's limit refused, the limit
- *   starting again that many seconds from now (an hour when not said);
+ *   starting again that many seconds from now (an hour when not said); `limit SECONDS claude` (or
+ *   `codex`): only that harness's account is out, and the other goes on to the next step;
  * - `recall`: `finish`, the reply saying what it was told of the conversation before the request (which
  *   of HO[LO]'s headings, and how many turns of a record), so a check can see what a harness was handed.
  *
@@ -28,7 +29,7 @@ export type Step =
   | { do: 'wait'; ms: number }
   | { do: 'say'; text: string }
   | { do: 'fail'; error: string; once?: true }
-  | { do: 'limit'; seconds: number }
+  | { do: 'limit'; seconds: number; only?: 'claude' | 'codex' }
   | { do: 'recall' };
 
 export const MARK = 'standin:';
@@ -118,10 +119,13 @@ export function parseScript(request: string): Step[] | string {
       steps.push({ do: 'fail', error: rest || 'The stand-in was told to fail, once', once: true });
     else if (verb === 'recall') steps.push({ do: 'recall' });
     else if (verb === 'limit') {
-      const seconds = rest ? Number(rest) : 3600;
+      const [count = '', only, ...more] = rest.split(/\s+/).filter(Boolean);
+      const seconds = count ? Number(count) : 3600;
       if (!Number.isFinite(seconds) || seconds <= 0 || seconds > 35 * 86_400)
         return 'limit takes seconds, up to 35 days';
-      steps.push({ do: 'limit', seconds });
+      if (more.length || (only !== undefined && only !== 'claude' && only !== 'codex'))
+        return 'limit takes seconds, then claude or codex when only that one is out';
+      steps.push({ do: 'limit', seconds, ...(only ? { only } : {}) });
     } else if (verb === 'finish' && !rest.startsWith('{'))
       steps.push({ do: 'call', tool: 'finish', args: { label: 'Stand-in', reply: rest || 'Done.' } });
     else if (/^[a-z][a-z0-9_]*$/.test(verb)) {

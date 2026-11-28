@@ -446,6 +446,7 @@ async function onMessage(msg: Record<string, unknown>): Promise<void> {
     case 'agent-settings':
     case 'agent-harness':
     case 'agent-devices':
+    case 'agent-thread':
     case 'agent-removed': {
       const r = agentMessage(msg);
       if (r.effects) jobEffects([r.effects]);

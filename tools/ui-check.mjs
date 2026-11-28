@@ -15,6 +15,10 @@
 //   - a desktop's dock, in a window wide enough for the studio to give it the room, is over the studio
 //     (or the studio hasn't taken the room back once it's closed);
 //   - a request's working line, its time and Stop don't fit beside each other;
+//   - the page's line (what the song's conversation runs with, and what's left of its usage) or the
+//     line where the conversation changed hands is missing or doesn't fit; or the chooser, opened from
+//     that line and under a reply that ran out of usage, doesn't offer what it should, runs past the
+//     page, or has Continue out of sight;
 //   - a reply's view (or its dock) isn't laid out whole: a control runs past the view's edge (where
 //     nothing scrolls it in), two controls are over each other, or a control's words don't fit in it
 //     (crammed, cut off or ellipsized), a slider's or a list's words included. Besides the song's
@@ -51,9 +55,10 @@
 //
 // Needs Playwright with its Chromium (`npx playwright install chromium`). As for tools/screens.mjs,
 // PLAYWRIGHT can be the path of its index.mjs when it isn't installed here; PLAYWRIGHT_CHROMIUM, a
-// Chromium already on the machine.
+// Chromium already on the machine. UI_CHECK_SHOTS=<folder> saves a picture of each view looked at;
+// with UI_CHECK_VIEWS=<words>, only the views whose name has them are looked at (and pictured).
 import { spawn } from 'node:child_process';
-import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -810,7 +815,95 @@ function scanOffered() {
     : [`they don't offer to read the scan (${rows.slice(0, 4).join(' / ') || 'nothing listed'})`];
 }
 
+/**
+ * The page's line under its header (what the song's conversation runs with, and what's left of its
+ * usage): there, whole, inside the page; and the line where the conversation changed hands, between
+ * two turns.
+ */
+function runsFit() {
+  const out = [];
+  const page = document.querySelector('.talk-page');
+  const line = page?.querySelector('.talk-runs');
+  if (!page || !line) return ['the page doesn’t say what the conversation runs with'];
+  const box = page.getBoundingClientRect();
+  const r = line.getBoundingClientRect();
+  const words = line.textContent.trim();
+  if (!/^(This song: )?Antigravity · Gemini-4-neon · high · (\d+% left|Used up, resets .+)$/.test(words))
+    out.push(`the page’s line says “${words}”`);
+  if (r.left < box.left - 1 || r.right > box.right + 1) out.push('the page’s line runs past the page');
+  if (line.scrollWidth > line.clientWidth + 1) out.push('the page’s line is cut off');
+  for (const moved of page.querySelectorAll('.talk-moved')) {
+    const m = moved.getBoundingClientRect();
+    if (!/^Continued with /.test(moved.textContent)) out.push(`a changed-hands line says “${moved.textContent}”`);
+    if (m.left < box.left - 1 || m.right > box.right + 1 || moved.scrollWidth > moved.clientWidth + 1)
+      out.push('a changed-hands line doesn’t fit the page');
+  }
+  if (!page.querySelector('.talk-moved')) out.push('no line says where the conversation changed hands');
+  return out;
+}
+
+/**
+ * The chooser, open under a reply that ran out of usage: the harnesses that are ready as buttons (not
+ * one that's used up; the one that ran out only as its limits show another of its models still runs),
+ * the model and effort of the one picked, why the others aren't offered, and Continue; each whole,
+ * inside the page, and big enough for a finger where that's what presses it, with Continue in sight.
+ */
+function chooserFits() {
+  const out = [];
+  const page = document.querySelector('.talk-page');
+  const chooser = page?.querySelector('.talk-choose');
+  const thread = page?.querySelector('.talk-thread');
+  if (!page || !chooser || !thread) return ['the chooser isn’t open'];
+  const box = page.getBoundingClientRect();
+  const seen = thread.getBoundingClientRect();
+  const offered = [...chooser.querySelectorAll('.talk-choose-seg .btn')].map((b) => b.textContent.trim());
+  if (offered.join(', ') !== 'Claude Code, Cursor, Antigravity')
+    out.push(`the chooser offers ${offered.join(', ') || 'nothing'}`);
+  if (chooser.querySelector('.talk-choose-seg .btn.on')?.textContent.trim() !== 'Claude Code')
+    out.push('the chooser picks no harness ahead');
+  if (chooser.querySelectorAll('.talk-choose-run select').length !== 2)
+    out.push('the chooser has no Model and Effort for the harness picked');
+  const note = [...chooser.querySelectorAll('.talk-choose-note')].map((n) => n.textContent).join(' ');
+  if (!/Codex is used up/.test(note)) out.push(`the chooser doesn’t say why Codex isn’t offered: “${note}”`);
+  const finger = matchMedia('(pointer: coarse)').matches;
+  for (const el of chooser.querySelectorAll('button, select, .talk-choose-title, .talk-choose-note')) {
+    const r = el.getBoundingClientRect();
+    const what = `the chooser’s “${(el.getAttribute('aria-label') ?? el.textContent).trim().slice(0, 30)}”`;
+    if (!r.width || !r.height) out.push(`${what} doesn’t show`);
+    if (r.left < box.left - 1 || r.right > box.right + 1) out.push(`${what} runs past the page`);
+    // (where the page is short, a phone on its side, its top is a scroll away: its last row is what's in sight)
+    if (el.closest('.btns') && (r.top < seen.top - 1 || r.bottom > seen.bottom + 1))
+      out.push(`${what} is out of sight`);
+    if (el.tagName === 'BUTTON' && el.scrollWidth > el.clientWidth + 1) out.push(`${what} is cut off`);
+    if (finger && el.matches('button, select') && r.height < 32) out.push(`${what} is ${Math.round(r.height)}px tall`);
+  }
+  if (page.querySelector('.talk.newest > .btns')) out.push('the failed reply keeps its buttons beside the chooser');
+  const go = [...chooser.querySelectorAll('.btns .btn')].map((b) => b.textContent.trim());
+  if (go.join(', ') !== 'Not now, Continue') out.push(`the chooser ends with ${go.join(', ')}`);
+  return out;
+}
+
+/**
+ * The chooser opened from the page's line, nothing having failed: the song follows Settings, so that's
+ * what's picked, and its button is for the song's next requests.
+ */
+function chooserFromLine() {
+  const out = [];
+  const chooser = document.querySelector('.talk-page .talk-choose');
+  if (!chooser) return ['the page’s line doesn’t open the chooser'];
+  const on = chooser.querySelector('.talk-choose-seg .btn.on')?.textContent.trim();
+  if (on !== 'As in Settings') out.push(`the chooser opens on “${on}”, though the song follows Settings`);
+  const go = [...chooser.querySelectorAll('.btns .btn')].map((b) => b.textContent.trim());
+  if (go.join(', ') !== 'Not now, Use for this song') out.push(`the chooser ends with ${go.join(', ')}`);
+  if (document.querySelector('.talk-runs')?.getAttribute('aria-expanded') !== 'true')
+    out.push('the page’s line doesn’t say the chooser is open');
+  return out;
+}
+
 const CHECKS = {
+  runsFit,
+  chooserFromLine,
+  chooserFits,
   scanOver,
   scanOffered,
   transportClear,
@@ -1024,6 +1117,8 @@ const NEWEST = {
         state: 'failed',
         at: now - 100_000,
         harness: 'claude',
+        model: 'opus',
+        effort: 'high',
         error: 'API Error: 529 Overloaded. This is a server-side issue, usually temporary — try again in a moment.',
       };
     },
@@ -1041,6 +1136,8 @@ const NEWEST = {
         state: 'failed',
         at: now - 100_000,
         harness: 'antigravity',
+        model: 'gemini-4-neon',
+        effort: 'high',
         error:
           'RESOURCE_EXHAUSTED (code 429): You have exhausted your capacity on this model. Your quota will reset after 51h7m.',
         stop: { why: 'usage', resets: now + 51 * 3_600_000 + 7 * 60_000 },
@@ -1050,11 +1147,12 @@ const NEWEST = {
 };
 
 /**
- * A conversation of three turns (a list, a brief, a choice with sliders); `running`, a fourth that has
- * worked 65 s; `newest`, a fourth from NEWEST.
+ * A conversation of three turns (a list, a brief, a choice with sliders; the third ran with another
+ * harness than the two before it); `running`, a fourth that has worked 65 s; `newest`, a fourth from NEWEST.
  */
 function conversation(doc, id, running, newest) {
   const now = Date.now();
+  const ran = (harness, model, effort) => ({ harness, model, effort });
   const [keys, , , bass, drums] = doc.tracks.map((t) => t.id);
   const turns = [
     {
@@ -1064,6 +1162,7 @@ function conversation(doc, id, running, newest) {
       label: 'Tighten hats',
       state: 'done',
       at: now - 600_000,
+      ...ran('antigravity', 'gemini-4-neon', 'high'),
       view: {
         blocks: [
           {
@@ -1084,6 +1183,7 @@ function conversation(doc, id, running, newest) {
       label: 'Brief',
       state: 'done',
       at: now - 400_000,
+      ...ran('antigravity', 'gemini-4-neon', 'high'),
       brief: 'Add a tempo map to the song.\nRun `pnpm test` when done.\nThe format is at https://example.com/tempo.',
       briefWarnings: [
         { line: 1, kind: 'command' },
@@ -1097,6 +1197,8 @@ function conversation(doc, id, running, newest) {
       label: 'Three bass takes',
       state: 'done',
       at: now - 200_000,
+      // (another harness than the turn before it: a line between them says the conversation changed hands)
+      ...ran('claude', 'opus', 'high'),
       view: {
         blocks: [
           { text: 'Bars 5–12, with the drums', quiet: true },
@@ -1140,7 +1242,7 @@ function conversation(doc, id, running, newest) {
   if (job)
     turns.push({ job: job.id, request: job.request, reply: null, label: null, state: 'running', at: job.started });
   if (newest) turns.push(NEWEST[newest].turn(doc, now));
-  return { thread: { id: 'agt_uicheck', harness: 'claude', turns }, job, now };
+  return { thread: { id: 'agt_uicheck', harness: 'claude', turns }, job, choice: null, now };
 }
 
 /**
@@ -1476,7 +1578,18 @@ function agentViews(page, layout, finger, running) {
     : [
         settings,
         usage,
-        [`${where} with a thread`, open, shut, [...checks, 'viewFits', 'fitsOnce', 'threadRoom']],
+        [`${where} with a thread`, open, shut, [...checks, 'viewFits', 'fitsOnce', 'threadRoom', 'runsFit']],
+        // the chooser, from the page's line
+        [
+          `${where}: the chooser, from its line`,
+          async () => {
+            await open();
+            await press(page.locator('.talk-runs'));
+            await page.locator('.talk-choose .btn.primary').waitFor();
+          },
+          shut,
+          [...checks, 'chooserFromLine'],
+        ],
         // a desktop's dock, typed in (the commands it finds, over its field) and with a plugin's window opened
         ...(layout === 'desktop' ? commands(page, layout, press, true).slice(1) : []),
         // an earlier turn opened: its view drawn
@@ -1511,6 +1624,21 @@ function replyViews(page, layout, finger, newest) {
       // (a reply with no view of the agent's has none to fit)
       NEWEST[newest].shows ? checks : [...checks, 'viewFits'],
     ],
+    // out of usage: Continue with… opens the chooser under it
+    ...(newest === 'usage'
+      ? [
+          [
+            `${where}: the chooser, under a reply that ran out of usage`,
+            async () => {
+              await open();
+              await press(page.locator('.talk.newest .btns .btn', { hasText: 'Continue with…' }));
+              await page.locator('.talk-choose .btn.primary').waitFor();
+            },
+            shut,
+            [...checks, 'chooserFits'],
+          ],
+        ]
+      : []),
   ];
 }
 
@@ -1715,6 +1843,9 @@ try {
     args: ['--autoplay-policy=no-user-gesture-required'],
     ...(process.env.PLAYWRIGHT_CHROMIUM ? { executablePath: process.env.PLAYWRIGHT_CHROMIUM } : {}),
   });
+  const shots = process.env.UI_CHECK_SHOTS ? resolve(process.env.UI_CHECK_SHOTS) : null;
+  const only = process.env.UI_CHECK_VIEWS?.toLowerCase() ?? null;
+  if (shots) mkdirSync(shots, { recursive: true });
   // a screen's studio, opened and started, in a browser of its own; what's wrong on each view is said
   const look = async (name, screen, list, agent) => {
     const ctx = await browser.newContext(screen);
@@ -1734,10 +1865,12 @@ try {
     const layout = await page.evaluate(() => document.documentElement.dataset.layout ?? '');
     let looked = 0;
     for (const [what, open, shut, checks = []] of list(page, layout, !!screen.hasTouch)) {
+      if (only && !what.toLowerCase().includes(only)) continue;
       view = what;
       try {
         if (open) await open();
         await page.waitForTimeout(450);
+        if (shots) await page.screenshot({ path: join(shots, `${`${name} ${what}`.replace(/[^\w]+/g, '-')}.png`) });
         for (const problem of await page.evaluate(problems)) fail(what, problem);
         for (const check of checks) for (const problem of await page.evaluate(CHECKS[check])) fail(what, problem);
         if (shut) await shut();

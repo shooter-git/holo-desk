@@ -76,6 +76,13 @@ export interface ThreadRow {
   created: number;
   updated: number;
   current: number;
+  /**
+   * The song's own choice of what its conversation runs with (`own_harness` null: it follows Settings ›
+   * Agent). Its model and effort are empty for the harness's own.
+   */
+  own_harness?: HarnessId | null;
+  own_model?: string | null;
+  own_effort?: string | null;
 }
 
 /**
@@ -300,6 +307,12 @@ export class AgentStore {
     if (!columns.has('extra')) this.db.exec('ALTER TABLE agent_turns ADD COLUMN extra TEXT');
     // added later still: who asked, so a turn waiting for their click is theirs after a restart too
     if (!columns.has('device')) this.db.exec('ALTER TABLE agent_turns ADD COLUMN device TEXT');
+    // added with a song's own choice of harness, model and effort (none: it follows Settings › Agent)
+    const threadColumns = new Set(
+      (this.db.prepare('PRAGMA table_info(agent_threads)').all() as { name: string }[]).map((c) => c.name),
+    );
+    for (const column of ['own_harness', 'own_model', 'own_effort'])
+      if (!threadColumns.has(column)) this.db.exec(`ALTER TABLE agent_threads ADD COLUMN ${column} TEXT`);
     // added with conversations that span harnesses: each harness's own session and workspace in one.
     // The conversations there already get theirs as they were: one harness each, working in the
     // thread's own folder (its session is found there)
@@ -511,6 +524,13 @@ export class AgentStore {
       .run(next.harness, next.session, next.seen_doc, next.seen_revision, next.events_json, Date.now(), id);
   }
 
+  /** A thread's own choice of what it runs with; null: it follows Settings › Agent again. */
+  setChoice(id: string, choice: { harness: HarnessId; model: string; effort: string } | null): void {
+    this.db
+      .prepare('UPDATE agent_threads SET own_harness = ?, own_model = ?, own_effort = ?, updated = ? WHERE id = ?')
+      .run(choice?.harness ?? null, choice?.model ?? null, choice?.effort ?? null, Date.now(), id);
+  }
+
   // ---- legs: each harness's own part in a conversation ----
 
   leg(thread: string, harness: HarnessId): LegRow | null {
@@ -538,6 +558,11 @@ export class AgentStore {
       )
       .run(leg.thread, leg.harness, leg.session, leg.seen_doc, leg.seen_revision, leg.told, leg.workspace, updated);
     return { ...leg, updated };
+  }
+
+  /** A thread's legs, gone: for one no request has run on yet. */
+  dropLegs(thread: string): void {
+    this.db.prepare('DELETE FROM agent_legs WHERE thread = ?').run(thread);
   }
 
   // ---- usage: what each request used, as its harness counted it ----

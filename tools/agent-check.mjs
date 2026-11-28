@@ -20,7 +20,12 @@
 //     doesn't offer Try again;
 //   - a conversation moved to another harness (the host's choice changed from Claude Code to Codex): it
 //     stays one conversation on the page; Codex is told all of it so far; gone back to, Claude Code
-//     carries its own session on and is told only what it missed.
+//     carries its own session on and is told only what it missed;
+//   - continued with another harness, from the page: a request Claude Code's limit refused offers
+//     Continue with…; Codex picked, the request carries on there (told the conversation so far) as one
+//     exchange; the page's line says the song runs with Codex, a line says where it changed hands, and
+//     the host's own choice in Settings is as it was; "As in Settings" from the bar's command takes the
+//     song back to it.
 //
 //   pnpm build && pnpm agent:check
 //
@@ -249,6 +254,56 @@ const SCENARIOS = {
     } finally {
       await use('claude', 'opus', 'low');
     }
+    await page.close();
+  },
+
+  /** Out of usage, the request is carried on with another harness picked on the page: the song's own from then on. */
+  async choose({ ctx, id, token }) {
+    const page = await open(ctx, id);
+    const newest = (text) => page.locator('.talk-page .talk.newest .reply', { hasText: text }).waitFor();
+    const line = (text) => page.locator('.talk-page .talk-runs', { hasText: text }).waitFor();
+    const host = async () => {
+      const { harness, model, effort } = await api('/api/agent/settings', { token });
+      return JSON.stringify({ harness, model, effort });
+    };
+    const before = await host();
+    await ask(page, 'standin: track_add {"name": "Bass"}; finish Added a bass');
+    await newest('Added a bass');
+    await line(/^Claude Code · Opus · low/);
+    // Claude Code's account runs out: no Try again, but another harness is ready
+    await ask(page, 'standin: limit 7200 claude; recall');
+    await page.locator('.talk-page .reply-after', { hasText: 'Claude Code is out of usage' }).waitFor();
+    if (await page.locator('.talk-page button', { hasText: 'Try again' }).count())
+      throw new Error('Try again is offered for a request that’s out of usage');
+    await line(/^Claude Code · Opus · low · Used up, resets in /);
+    await page.locator('.talk-page button', { hasText: 'Continue with…' }).click();
+    const chooser = page.locator('.talk-page .talk-choose');
+    const picked = await chooser.locator('.talk-choose-seg .btn.on').textContent();
+    if (picked?.trim() !== 'Codex')
+      throw new Error(`the chooser picked ${picked?.trim() ?? 'nothing'} ahead, not Codex`);
+    if (await chooser.locator('.talk-choose-seg .btn', { hasText: 'Claude Code' }).count())
+      throw new Error('the chooser offers the harness that just ran out of usage');
+    await chooser.locator('.btn.primary', { hasText: 'Continue' }).click();
+    // carried on by Codex, which is told the conversation so far; one exchange for the one request
+    await newest('Told: The conversation so far, The song now. Turns in the record: 2.');
+    if (await page.locator('.talk-page .reply-after', { hasText: 'out of usage' }).count())
+      throw new Error('the go that ran out of usage still shows beside the one that carried it on');
+    await line(/^This song: Codex/);
+    await page.locator('.talk-page .talk-moved', { hasText: /^Continued with Codex/ }).waitFor();
+    if ((await host()) !== before) throw new Error(`the host’s own choice changed: ${before} is now ${await host()}`);
+    const choice = (await api(`/api/agent/threads/${id}`, { token })).choice;
+    if (choice?.harness !== 'codex') throw new Error(`the song’s own choice is ${JSON.stringify(choice)}`);
+    // its next request runs with Codex too, in the session it now has
+    await ask(page, 'standin: recall');
+    await newest('Told: Since your last reply.');
+    // back to what Settings says, from the bar's command
+    await field(page).fill('continue this conversation');
+    await page.locator('.talk-page [role=option]', { hasText: 'Continue this conversation with…' }).first().click();
+    await chooser.locator('.talk-choose-seg .btn', { hasText: 'As in Settings' }).click();
+    await chooser.locator('.btn.primary', { hasText: 'Use for this song' }).click();
+    await line(/^Claude Code · Opus · low/);
+    if ((await api(`/api/agent/threads/${id}`, { token })).choice !== null)
+      throw new Error('the song still has its own choice after going back to Settings’');
     await page.close();
   },
 

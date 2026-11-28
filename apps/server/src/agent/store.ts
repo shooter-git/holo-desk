@@ -158,6 +158,11 @@ export interface TurnExtra {
    * may not be in the song as the host has it until that studio is back.
    */
   live?: true;
+  /**
+   * "Carry on when it resets": the user asked that it be carried on by itself once its harness's
+   * limit has started again, at this time (ms). Gone once it has, or was called off.
+   */
+  wait?: number;
 }
 
 /** Why a turn stopped short, where HO[LO] knows. */
@@ -642,6 +647,19 @@ export class AgentStore {
       .prepare('SELECT thread, job, request, reply, label, state, at, extra, device FROM agent_turns WHERE job = ?')
       .get(job);
     return (row as unknown as TurnRow | undefined) ?? null;
+  }
+
+  /** The failed turns of current conversations that wait to be carried on at a time (`extra.wait`), oldest first. */
+  waitingTurns(): UnfinishedTurn[] {
+    return this.db
+      .prepare(
+        `SELECT t.thread, t.job, t.request, t.reply, t.label, t.state, t.at, t.extra, t.device,
+                th.project AS project, th.current AS current
+         FROM agent_turns t JOIN agent_threads th ON th.id = t.thread
+         WHERE t.state = 'failed' AND th.current = 1 AND t.extra LIKE '%"wait":%'
+         ORDER BY t.at, t.rowid`,
+      )
+      .all() as unknown as UnfinishedTurn[];
   }
 
   /** The turns that weren't over when HO[LO] last stopped (working, or waiting for a click), oldest first. */

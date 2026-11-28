@@ -14,6 +14,8 @@
  * - `limit SECONDS`: end the turn as the harness ends one its account's limit refused, the limit
  *   starting again that many seconds from now (an hour when not said); `limit SECONDS claude` (or
  *   `codex`): only that harness's account is out, and the other goes on to the next step;
+ * - `limit-until TIME`: the same, the limit starting again at that time (seconds since 1970): a go
+ *   made after it goes on to the next step, so a check can wait for a limit to start again;
  * - `recall`: `finish`, the reply saying what it was told of the conversation before the request (which
  *   of HO[LO]'s headings, and how many turns of a record), so a check can see what a harness was handed.
  *
@@ -29,7 +31,7 @@ export type Step =
   | { do: 'wait'; ms: number }
   | { do: 'say'; text: string }
   | { do: 'fail'; error: string; once?: true }
-  | { do: 'limit'; seconds: number; only?: 'claude' | 'codex' }
+  | { do: 'limit'; seconds: number; only?: 'claude' | 'codex'; until?: number }
   | { do: 'recall' };
 
 export const MARK = 'standin:';
@@ -118,7 +120,14 @@ export function parseScript(request: string): Step[] | string {
     else if (verb === 'fail-once')
       steps.push({ do: 'fail', error: rest || 'The stand-in was told to fail, once', once: true });
     else if (verb === 'recall') steps.push({ do: 'recall' });
-    else if (verb === 'limit') {
+    else if (verb === 'limit-until') {
+      const [time = '', only, ...more] = rest.split(/\s+/).filter(Boolean);
+      const until = Number(time);
+      if (!Number.isFinite(until) || until <= 0) return 'limit-until takes a time, in seconds since 1970';
+      if (more.length || (only !== undefined && only !== 'claude' && only !== 'codex'))
+        return 'limit-until takes a time, then claude or codex when only that one is out';
+      steps.push({ do: 'limit', seconds: 0, until, ...(only ? { only } : {}) });
+    } else if (verb === 'limit') {
       const [count = '', only, ...more] = rest.split(/\s+/).filter(Boolean);
       const seconds = count ? Number(count) : 3600;
       if (!Number.isFinite(seconds) || seconds <= 0 || seconds > 35 * 86_400)

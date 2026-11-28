@@ -158,7 +158,10 @@ async function play(steps: readonly Step[], tools: Tools, dialect: Dialect): Pro
     } else if (step.do === 'limit') {
       // (another harness's account: this one goes on)
       if (step.only && step.only !== dialect.as) continue;
-      return { last, error: 'The account’s limit refused the request', limited: step.seconds, output };
+      // (a limit till a time: started again by now, this go goes on)
+      const left = step.until === undefined ? step.seconds : Math.ceil(step.until - Date.now() / 1000);
+      if (left <= 0) continue;
+      return { last, error: 'The account’s limit refused the request', limited: left, output };
     } else if (step.do === 'call') {
       output += tokensOf(JSON.stringify(step.args)) + 8;
       dialect.tool(step.tool, step.args);

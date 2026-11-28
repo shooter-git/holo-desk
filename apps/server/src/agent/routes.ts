@@ -510,6 +510,21 @@ export function agentRoutes(
       return { job: await theJobs.carryOn(device, (req.params as Params).job ?? '', choice) };
     }),
   );
+  // "Carry on when it resets": a request out of usage is carried on by itself once its harness's
+  // limit has started again; DELETE calls that off
+  app.post(
+    '/api/agent/jobs/:job/wait',
+    forDevice(async (req, _reply, device) => ({
+      until: theJobs.waitForReset(device, (req.params as Params).job ?? ''),
+    })),
+  );
+  app.delete(
+    '/api/agent/jobs/:job/wait',
+    forDevice(async (req, _reply, device) => {
+      theJobs.cancelWait(device, (req.params as Params).job ?? '');
+      return { ok: true };
+    }),
+  );
   // the song's own choice of what its conversation runs with; `harness: null`: as Settings › Agent says again
   app.put(
     '/api/agent/threads/:project/choice',
@@ -587,8 +602,9 @@ export function agentRoutes(
       if (theJobs.running(project))
         return reply.code(409).send({ error: 'Still working on this song', reason: 'busy' });
       threads.reset(project);
-      // (its own choice went with it: the studios with the song open read it again)
-      theJobs.toldThread(project);
+      // (its own choice went with it, and what waited to carry on at a time doesn't: the studios with
+      // the song open read it again)
+      theJobs.startedOver(project);
       return { ok: true };
     }),
   );

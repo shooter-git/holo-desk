@@ -55,6 +55,11 @@ describe('a stand-in script', () => {
       { do: 'call', tool: 'finish' },
     ]);
     expect(parseScript('standin: limit 90 cursor')).toMatch(/claude or codex/);
+    // till a time
+    expect(parseScript('standin: limit-until 4102444800 claude')).toEqual([
+      { do: 'limit', seconds: 0, until: 4102444800, only: 'claude' },
+    ]);
+    expect(parseScript('standin: limit-until soon')).toMatch(/seconds since 1970/);
   });
 
   it('finds the script in a request carried on: from its last line that starts with standin:', () => {
@@ -266,6 +271,17 @@ describe.each(HARNESSES)('the stand-in as %s', (_name, make, runsWith) => {
     expect(ended(await runToEnd(make(s), request(`standin: limit 600 ${mine}; finish Went on`)))).toMatchObject({
       type: 'failed',
       why: 'usage',
+    });
+  });
+
+  it('is out of usage till a time, and goes on once that has passed', async () => {
+    s = sandbox();
+    const soon = Math.floor(Date.now() / 1000) + 600;
+    const out = ended(await runToEnd(make(s), request(`standin: limit-until ${soon}; finish Went on`)));
+    expect(out).toMatchObject({ type: 'failed', why: 'usage' });
+    const past = Math.floor(Date.now() / 1000) - 5;
+    expect(ended(await runToEnd(make(s), request(`standin: limit-until ${past}; finish Went on`)))).toMatchObject({
+      type: 'done',
     });
   });
 

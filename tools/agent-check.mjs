@@ -26,7 +26,9 @@
 //     Continue with…; Codex picked, the request carries on there (told the conversation so far) as one
 //     exchange; the page's line says the song runs with Codex, a line says where it changed hands, and
 //     the host's own choice in Settings is as it was; "As in Settings" from the bar's command takes the
-//     song back to it.
+//     song back to it;
+//   - carry on when it resets: a request out of usage till a few seconds from now offers it; asked, the
+//     reply says when it carries on, and at that time the request does, by itself, as one exchange.
 //
 //   pnpm build && pnpm agent:check
 //
@@ -305,6 +307,35 @@ const SCENARIOS = {
     await line(/^Claude Code · Opus · low/);
     if ((await api(`/api/agent/threads/${id}`, { token })).choice !== null)
       throw new Error('the song still has its own choice after going back to Settings’');
+    await page.close();
+  },
+
+  /** Out of usage till a time: asked to, the request carries on by itself once the limit has started again. */
+  async reset({ ctx, id, token }) {
+    const turns = async () => (await api(`/api/agent/threads/${id}`, { token })).thread?.turns ?? [];
+    const page = await open(ctx, id);
+    // (a limit that starts again in a few seconds: the stand-in goes on once that time has passed)
+    const until = Math.floor(Date.now() / 1000) + 6;
+    await ask(
+      page,
+      `standin: limit-until ${until} claude; track_add {"name": "Strings"}; finish Added strings after the reset`,
+    );
+    await page.locator('.talk-page .reply-after', { hasText: 'Claude Code is out of usage' }).waitFor();
+    await page.locator('.talk-page button', { hasText: /^Carry on at \d\d:\d\d$/ }).click();
+    await page.locator('.talk-page .reply-after', { hasText: /^It carries on by itself at \d\d:\d\d\.$/ }).waitFor();
+    await page.locator('.talk-page button', { hasText: 'Don’t carry on' }).waitFor();
+    const [out] = await turns();
+    if (typeof out?.wait !== 'number') throw new Error('the host doesn’t say the request waits for its limit');
+    // at that time (a moment after the limit starts again) it carries on, nobody pressing anything
+    await page
+      .locator('.talk-page .talk.newest .reply', { hasText: 'Added strings after the reset' })
+      .waitFor({ timeout: 45_000 });
+    await track(page, 'Strings').waitFor();
+    const all = await turns();
+    if (all.length !== 2 || all[1].continues !== out.job || all[1].state !== 'done')
+      throw new Error(`the request that waited reads ${JSON.stringify(all.map((t) => [t.state, t.continues]))}`);
+    if (await page.locator('.talk-page .reply-after').count())
+      throw new Error('the go that ran out of usage still shows beside the one that carried it on');
     await page.close();
   },
 

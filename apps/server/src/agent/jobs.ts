@@ -79,6 +79,7 @@ import {
   KEEP_CHANGES,
   type ThreadRow,
   type TurnExtra,
+  type TurnRow,
   type TurnStop,
   type UnfinishedTurn,
   type UsageSum,
@@ -123,6 +124,8 @@ export interface JobView {
   stop?: TurnStop;
   /** The earlier go at the same request it carries on: its changes join that go's undo step. */
   continues?: string;
+  /** When it's carried on by itself, its limit having started again (the user asked: "Carry on when it resets"). */
+  wait?: number;
 }
 
 /** A harness on the runner's computer, as the runner reports it. */
@@ -238,6 +241,30 @@ export interface AgentJob {
   /** Some of its changes went into its studio (which saves them in its own time), not straight into the song here. */
   live: boolean;
 }
+
+/** A request that is to carry on by itself: its last go, who asked, since when it waits; `until`, not before a time. */
+interface Pending {
+  job: string;
+  device: string;
+  since: number;
+  until?: number;
+  /** How many times it was refused as it began (one that waits for its limit is tried again a while). */
+  tries?: number;
+}
+
+/** What refuses a request for now and may pass: one that waited for its limit is tried again past these. */
+const MAY_PASS: ReadonlySet<string> = new Set([
+  'busy',
+  'no-runner',
+  'no-harness',
+  'signed-out',
+  'not-sealed',
+  'choose',
+]);
+/** How many times, at most (a look every 2 s: a minute's worth of a refusal the look before didn't foresee). */
+const WAIT_TRIES = 30;
+/** Why a request asked to carry on at a time doesn't begin: it was called off as it began (`Refusal.reason`). */
+const CALLED_OFF = 'called-off';
 
 /** Why a request that carries on by itself doesn't begin yet: its studio holds changes it hasn't saved (`Refusal.reason`). */
 const UNSAVED = 'unsaved';
@@ -433,6 +460,13 @@ export interface Limits {
   carryTickMs: number;
   /** How long one that needs nothing of its studio waits for that studio to be back before going on without it. */
   carryStudioMs: number;
+  /**
+   * "Carry on when it resets": how long after its limit starts again a request is carried on (the
+   * vendor's clock and this one's aren't the same to the second), and for how long after that it's
+   * still carried on when it couldn't be then (the host off, its runner away).
+   */
+  waitMarginMs: number;
+  waitWindowMs: number;
 }
 
 export const LIMITS: Limits = {
@@ -457,6 +491,8 @@ export const LIMITS: Limits = {
   carryOldMs: 4 * HOUR,
   carryTickMs: 2_000,
   carryStudioMs: 20_000,
+  waitMarginMs: 15_000,
+  waitWindowMs: 24 * HOUR,
 };
 
 export interface JobsOptions {
@@ -561,10 +597,11 @@ export class Jobs implements AgentHooks {
    */
   private readonly orphans = new Set<string>();
   /**
-   * The requests cut short that are to carry on by themselves, by song: the go that was cut short, the
-   * device that asked, and when it was cut short (`carryOnPending`).
+   * The requests that are to carry on by themselves, by song (`carryOnPending`): one cut short (the go
+   * that was, the device that asked, and when it was cut short), or one out of usage that the user
+   * asked to have carried on once its limit has started again (`until`).
    */
-  private readonly carrying = new Map<string, { job: string; device: string; since: number }>();
+  private readonly carrying = new Map<string, Pending>();
   private carryTimer: ReturnType<typeof setInterval> | null = null;
   private readonly toldOrphans = new WeakSet<LiveClient>();
   /** The jobs whose prompt is known to have reached their harness's session (`reachedSession`). */
@@ -627,6 +664,16 @@ export class Jobs implements AgentHooks {
       }
       waiting.set(kept.view.project, kept);
       this.jobs.set(kept.view.id, kept);
+    }
+    // what was asked to carry on once its limit has started again still is
+    // (its conversation's last turn, with nothing cut short on the song: any other is from before the
+    // conversation moved on, and waits for nothing)
+    for (const row of this.o.agentStore.waitingTurns()) {
+      const until = parseExtra(row.extra).wait;
+      const last = this.o.agentStore.turns(row.thread).at(-1)?.job === row.job;
+      if (last && row.project && row.device && typeof until === 'number' && !this.carrying.has(row.project))
+        this.pend(row.project, { job: row.job, device: row.device, since: Date.now(), until });
+      else this.setWait(row.job, null);
     }
   }
 
@@ -999,6 +1046,8 @@ export class Jobs implements AgentHooks {
       auto?: boolean;
       /** Its studio holds changes that may not be in the song here: it doesn't begin unless that studio saved. */
       mustSave?: boolean;
+      /** Asked to carry on at a time: whether that still stands once its studio has saved (it may be called off meanwhile). */
+      wanted?: () => boolean;
     } | null = null,
   ): Promise<string> {
     this.starting.add(project);
@@ -1007,6 +1056,7 @@ export class Jobs implements AgentHooks {
     try {
       const saved = await this.flush(device, project);
       if (carry?.mustSave && !saved) throw new Refusal(409, 'Its studio hasn’t saved the song yet', UNSAVED);
+      if (carry?.wanted && !carry.wanted()) throw new Refusal(409, 'It was called off', CALLED_OFF);
       const now = this.o.store.get(project);
       if (!now) throw new Refusal(404, 'No such song');
       // a restore point, whatever the agent does (and the reply's "before"); the previous request's is "previous"
@@ -1083,6 +1133,8 @@ export class Jobs implements AgentHooks {
       this.assigned.set(job, runner);
       // nothing refuses the request from here on: the thread is its harness's now (when another ran last)
       const current = this.o.threads.use(thread);
+      // (the conversation has moved on: a request that waited on this song to carry on at a time doesn't)
+      this.callOff(project);
       // the folder this harness works in, in this conversation: the runner knows a job's conversation
       // by it (and runs one job at a time in each)
       const workspace = this.o.threads.leg(current).workspace;
@@ -1190,8 +1242,12 @@ export class Jobs implements AgentHooks {
     device: string,
     id: string,
     choice?: { harness: HarnessId; model: string; effort: string } | null,
-    /** By itself (`carryOnPending`): its studio needn't have the song open, and its changes are then saved here. */
-    auto = false,
+    /**
+     * Who carries it on: the user (Try again, Continue with…), or HO[LO] by itself (`carryOnPending`):
+     * after it was cut short (`itself`), or its limit having started again as the user asked (`reset`).
+     * By itself, its studio needn't have the song open, and its changes are then saved here.
+     */
+    by: 'user' | 'itself' | 'reset' = 'user',
   ): Promise<string> {
     const row = this.o.agentStore.turn(id);
     const thread = row ? this.o.threads.get(row.thread) : null;
@@ -1204,7 +1260,7 @@ export class Jobs implements AgentHooks {
     if (row.state !== 'failed') throw new Refusal(409, 'That request didn’t fail');
     const project = thread.project;
     if (!this.o.store.get(project)) throw new Refusal(404, 'No such song');
-    if (!auto && !this.o.live.studioFor(device, project))
+    if (by === 'user' && !this.o.live.studioFor(device, project))
       throw new Refusal(409, 'Open the song in this studio first', 'not-open');
     this.free(project);
     const extra = parseExtra(row.extra);
@@ -1252,7 +1308,11 @@ export class Jobs implements AgentHooks {
         previous: extra.previous ?? null,
         runs: { model: runs.model, effort: runs.effort },
         // (by itself, after a go whose changes went into its studio: only on the song with them in it)
-        ...(auto ? { auto, mustSave: extra.live === true } : {}),
+        ...(by === 'itself' ? { auto: true, mustSave: extra.live === true } : {}),
+        // (asked for at a time: called off while its studio saves, it doesn't begin)
+        ...(by === 'reset'
+          ? { wanted: () => parseExtra(this.o.agentStore.turn(row.job)?.extra ?? null).wait === extra.wait }
+          : {}),
       },
     );
     // what was picked is the song's own only now that the request has gone ahead with it: a refusal
@@ -1261,47 +1321,141 @@ export class Jobs implements AgentHooks {
       this.o.threads.choose(project, choice);
       this.toldThread(project);
     }
+    // (carried on: it waits for nothing any more, whoever carried it on)
+    if (extra.wait) this.setWait(row.job, null);
     return job;
   }
 
-  // ---- a request cut short carries on by itself, once ----
+  // ---- a request carries on by itself: once when cut short, or when its limit has started again ----
 
-  /** A go was cut short (HO[LO] restarted under it, or its runner went): it's to carry on by itself. */
-  private toCarryOn(job: string, project: string, device: string, since = Date.now()): void {
-    this.carrying.set(project, { job, device, since });
+  /** A request is to carry on by itself when it can (`carryOnPending`). */
+  private pend(project: string, p: Pending): void {
+    this.carrying.set(project, p);
     if (this.carryTimer) return;
     this.carryTimer = setInterval(() => void this.carryOnPending(), this.limits.carryTickMs);
     this.carryTimer.unref?.();
   }
 
-  /** The songs with a request cut short that still waits to carry on by itself. */
+  /** A go was cut short (HO[LO] restarted under it, or its runner went): it's to carry on by itself. */
+  private toCarryOn(job: string, project: string, device: string, since = Date.now()): void {
+    // (the newest go on the song: one before it that waited to carry on at a time no longer does)
+    this.callOff(project);
+    this.pend(project, { job, device, since });
+  }
+
+  /** The songs with a request that still waits to carry on by itself. */
   carryWaiting(): string[] {
     return [...this.carrying.keys()];
   }
 
   /**
-   * What a request cut short does now: `go` (everything it needs is there), `wait` (something may still
-   * come back in time: a runner, its harness, its studio), or `drop` (it isn't to carry on by itself:
-   * too late, moved on from, carried on so once already, or not wanted any more).
+   * "Carry on when it resets": a request whose last go its harness's limit refused is carried on by
+   * itself once that limit has started again (a moment after, `waitMarginMs`), as Try again would
+   * carry it. Only where the harness said when that is; only for the device that asked, and the
+   * conversation's last turn. It's kept with the turn, so a restart of HO[LO] keeps it. The time it
+   * will be carried on at.
    */
-  private carryVerdict(p: { job: string; device: string; since: number }, now: number): 'go' | 'wait' | 'drop' {
-    if (now - p.since > this.limits.carryWindowMs) return 'drop';
+  waitForReset(device: string, id: string): number {
+    const { row, project, extra } = this.failedLast(device, id);
+    const resets = extra.stop?.why === 'usage' ? extra.stop.resets : undefined;
+    if (resets === undefined) throw new Refusal(409, 'Its harness didn’t say when its limit starts again', 'no-reset');
+    const until = Math.max(resets, Date.now()) + this.limits.waitMarginMs;
+    this.setWait(row.job, until);
+    this.pend(project, { job: row.job, device, since: Date.now(), until });
+    return until;
+  }
+
+  /** Called off: the request stays as it failed, with what its reply offers. */
+  cancelWait(device: string, id: string): void {
+    const { row } = this.failedLast(device, id);
+    this.setWait(row.job, null);
+  }
+
+  /**
+   * A song's request no longer waits to carry on at a time: the conversation moved on (a later
+   * request, the request carried on another way, a go cut short since), or was started over.
+   */
+  private callOff(project: string): void {
+    const p = this.carrying.get(project);
+    if (p?.until !== undefined) this.setWait(p.job, null);
+  }
+
+  /** A song's conversation was started over: what waited on it doesn't, and its studios read it again. */
+  startedOver(project: string): void {
+    this.callOff(project);
+    this.toldThread(project);
+  }
+
+  /** A failed turn that can still be carried on by the device that asked: its conversation's last (else a refusal). */
+  private failedLast(device: string, id: string): { row: TurnRow; project: string; extra: TurnExtra } {
+    const row = this.o.agentStore.turn(id);
+    const thread = row ? this.o.threads.get(row.thread) : null;
+    if (!row || !thread) throw new Refusal(404, 'No such request');
+    if (row.device !== device) throw new Refusal(403, 'Only the device that asked can carry it on');
+    if (this.o.threads.current(thread.project)?.id !== thread.id)
+      throw new Refusal(409, 'That conversation was started over');
+    if (this.o.agentStore.turns(thread.id).at(-1)?.job !== row.job)
+      throw new Refusal(409, 'A later request has been made on this song since');
+    if (row.state !== 'failed') throw new Refusal(409, 'That request didn’t fail');
+    return { row, project: thread.project, extra: parseExtra(row.extra) };
+  }
+
+  /**
+   * A turn's wait, set or taken away: kept with the turn (and gone from what waits here, when taken
+   * away), and the studios with its song open read the conversation again (`agent-thread`: a job long
+   * over isn't told of as news).
+   */
+  private setWait(id: string, until: number | null): void {
+    const job = this.jobs.get(id);
+    if (job) {
+      if (until === null) delete job.view.wait;
+      else job.view.wait = until;
+      this.saveTurn(job);
+    } else {
+      const row = this.o.agentStore.turn(id);
+      if (!row) return;
+      const { wait: _was, ...extra } = parseExtra(row.extra);
+      this.o.agentStore.updateTurn(id, { extra: JSON.stringify(until === null ? extra : { ...extra, wait: until }) });
+    }
+    const project = this.o.threads.get(this.o.agentStore.turn(id)?.thread ?? '')?.project;
+    if (!project) return;
+    const waits = this.carrying.get(project);
+    if (until === null && waits?.until !== undefined && waits.job === id) this.carrying.delete(project);
+    this.toldThread(project);
+  }
+
+  /**
+   * What a request that waits to carry on does now: `go` (everything it needs is there), `wait`
+   * (something may still come in time: a runner, its harness, its studio, the time it waits for), or
+   * `drop` (it isn't to carry on by itself: too late, moved on from, or not wanted any more).
+   */
+  private carryVerdict(p: Pending, now: number): 'go' | 'wait' | 'drop' {
+    const reset = p.until !== undefined;
+    if (p.until !== undefined && now < p.until) return 'wait';
+    if (reset ? now - (p.until as number) > this.limits.waitWindowMs : now - p.since > this.limits.carryWindowMs)
+      return 'drop';
     const row = this.o.agentStore.turn(p.job);
     const thread = row ? this.o.threads.get(row.thread) : null;
     if (!row || !thread || !this.o.store.row(thread.project)) return 'drop';
     const extra = parseExtra(row.extra);
-    // only a go that HO[LO] or its runner stopped under: never one the user stopped, or that failed otherwise
-    if (row.state !== 'failed' || extra.stop?.why !== 'interrupted') return 'drop';
-    // (begun this long ago, it wasn't cut short a moment ago: the host was off for hours, and nobody
-    // is waiting on it)
-    if (now - (extra.started ?? row.at) > this.limits.carryOldMs) return 'drop';
+    if (row.state !== 'failed') return 'drop';
     // the conversation has moved on (a later request, Try again, started over)
     const turns = this.o.agentStore.turns(thread.id);
     if (this.o.threads.current(thread.project)?.id !== thread.id || turns.at(-1)?.job !== row.job) return 'drop';
-    // once a request: a go that carried on by itself and was cut short too is left to the user
-    const first = extra.continues ?? row.job;
-    const goes = turns.filter((t) => t.job === first || parseExtra(t.extra).continues === first);
-    if (goes.some((t) => parseExtra(t.extra).auto)) return 'drop';
+    if (reset) {
+      // (called off, or asked for another time since)
+      if (extra.wait !== p.until) return 'drop';
+    } else {
+      // only a go that HO[LO] or its runner stopped under: never one the user stopped, or that failed otherwise
+      if (extra.stop?.why !== 'interrupted') return 'drop';
+      // (begun this long ago, it wasn't cut short a moment ago: the host was off for hours, and nobody
+      // is waiting on it)
+      if (now - (extra.started ?? row.at) > this.limits.carryOldMs) return 'drop';
+      // once a request: a go that carried on by itself and was cut short too is left to the user
+      const first = extra.continues ?? row.job;
+      const goes = turns.filter((t) => t.job === first || parseExtra(t.extra).continues === first);
+      if (goes.some((t) => parseExtra(t.extra).auto)) return 'drop';
+    }
     if (!this.o.agentStore.settings().enabled || !this.o.allowed(p.device)) return 'drop';
     if (this.running(thread.project) || this.starting.has(thread.project)) return 'wait';
     // a runner with the harness the song runs with, ready as a request needs it
@@ -1312,19 +1466,22 @@ export class Jobs implements AgentHooks {
     } catch {
       return 'wait';
     }
-    if (this.studioOf(p.device, thread.project)) return 'go';
-    // Without its studio: never when what it changed went in there (it may not be in the song here
-    // yet: that studio saves first, as the request begins). With none of that, it carries on with its
-    // changes saved here, once the studio has had a moment to come back (it reconnects after the
-    // runner does, and what the user did meanwhile is saved first when it's there).
+    // (asked for at a time, often hours ahead: its studio is there or not; when it is, it saves as the
+    // request begins)
+    if (reset || this.studioOf(p.device, thread.project)) return 'go';
+    // Cut short, without its studio: never when what it changed went in there (it may not be in the
+    // song here yet: that studio saves first, as the request begins). With none of that, it carries
+    // on with its changes saved here, once the studio has had a moment to come back (it reconnects
+    // after the runner does, and what the user did meanwhile is saved first when it's there).
     return extra.live || now - p.since < this.limits.carryStudioMs ? 'wait' : 'go';
   }
 
   /**
-   * The requests cut short carry on by themselves where they can now: once each, as Try again would
+   * The requests that wait carry on by themselves where they can now, as Try again would carry them
    * (the same request, in the same conversation, told its last go didn't finish and to read the song
-   * first). Looked at as a runner reports its harnesses, as a studio shows a song, and every little
-   * while until none waits. Answered once those that began have been handed to their runners.
+   * first): one cut short, once; one out of usage, once its limit has started again. Looked at as a
+   * runner reports its harnesses, as a studio shows a song, and every little while until none waits.
+   * Answered once those that began have been handed to their runners.
    */
   async carryOnPending(now = Date.now()): Promise<void> {
     const begun: Promise<unknown>[] = [];
@@ -1332,16 +1489,34 @@ export class Jobs implements AgentHooks {
       const verdict = this.carryVerdict(p, now);
       if (verdict === 'wait') continue;
       this.carrying.delete(project);
-      if (verdict === 'drop') continue;
-      // whatever a runner may still run of the go before it stops first (one whose connection dropped
-      // and came back still has it; after a restart it was told as it came back, and is again)
-      for (const runner of this.o.live.agentRunners()) this.o.live.sendTo(runner, { type: 'agent-cancel', job: p.job });
+      if (verdict === 'drop') {
+        // (it no longer says it carries on by itself: too late for it, or the agent is off)
+        if (p.until !== undefined && parseExtra(this.o.agentStore.turn(p.job)?.extra ?? null).wait === p.until)
+          this.setWait(p.job, null);
+        continue;
+      }
+      // cut short: whatever a runner may still run of the go before it stops first (one whose
+      // connection dropped and came back still has it; after a restart it was told as it came back,
+      // and is again)
+      if (p.until === undefined)
+        for (const runner of this.o.live.agentRunners())
+          this.o.live.sendTo(runner, { type: 'agent-cancel', job: p.job });
       begun.push(
-        this.carryOn(p.device, p.job, undefined, true).catch((err: unknown) => {
-          // its studio didn't save what it holds of the go before: it's asked again while there's time.
-          // Refused otherwise, as a request can be: it stays as it was, with Try again
-          if (err instanceof Refusal && err.reason === UNSAVED && !this.carrying.has(project))
-            this.toCarryOn(p.job, project, p.device, p.since);
+        this.carryOn(p.device, p.job, undefined, p.until === undefined ? 'itself' : 'reset').catch((err: unknown) => {
+          if (this.carrying.has(project)) return;
+          const refused = err instanceof Refusal ? err.reason : undefined;
+          if (p.until === undefined) {
+            // its studio didn't save what it holds of the go before: it's asked again while there's
+            // time. Refused otherwise, as a request can be: it stays as it was, with Try again
+            if (refused === UNSAVED) this.pend(project, p);
+            return;
+          }
+          // One that waited for its limit: refused for now by what the look before it didn't foresee
+          // (the runner gone as it began), it's tried again, a few times. Anything else (called off as
+          // it began, or what wouldn't pass) ends the wait: the reply is as it failed
+          const tries = (p.tries ?? 0) + 1;
+          if (refused !== undefined && MAY_PASS.has(refused) && tries < WAIT_TRIES) this.pend(project, { ...p, tries });
+          else this.setWait(p.job, null);
         }),
       );
     }
@@ -1417,8 +1592,9 @@ export class Jobs implements AgentHooks {
     return next;
   }
 
-  /** A device was removed: its jobs stop at once. */
+  /** A device was removed: its jobs stop at once, and what it asked to have carried on at a time isn't. */
   deviceRemoved(device: string): void {
+    for (const [project, p] of [...this.carrying]) if (p.device === device) this.callOff(project);
     for (const job of this.jobs.values()) {
       if (job.view.device !== device) continue;
       if (isLive(job)) this.end(job, 'cancelled', 'This device was removed', true);
@@ -1432,6 +1608,8 @@ export class Jobs implements AgentHooks {
 
   /** The agent was turned off: every job stops. */
   stopAll(why: string): void {
+    // (and nothing waits to carry on at a time)
+    for (const project of [...this.carrying.keys()]) this.callOff(project);
     for (const job of this.jobs.values()) {
       if (isLive(job)) this.end(job, 'cancelled', why, true);
       else if (job.view.state === 'awaiting') {
@@ -2646,6 +2824,7 @@ function turnExtra(job: AgentJob): string {
     ...(job.allowed ? { allowed: job.allowed } : {}),
     ...(job.auto ? { auto: true } : {}),
     ...(job.live ? { live: true } : {}),
+    ...(v.wait !== undefined ? { wait: v.wait } : {}),
   };
   return JSON.stringify(extra);
 }

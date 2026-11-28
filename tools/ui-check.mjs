@@ -15,6 +15,8 @@
 //   - a desktop's dock, in a window wide enough for the studio to give it the room, is over the studio
 //     (or the studio hasn't taken the room back once it's closed);
 //   - a request's working line, its time and Stop don't fit beside each other;
+//   - a reply out of usage doesn't offer to carry on when its limit starts again, or one that waits
+//     for that doesn't say when it carries on, with a way to call it off;
 //   - the page's line (what the song's conversation runs with, and what's left of its usage) or the
 //     line where the conversation changed hands is missing or doesn't fit; or the chooser, opened from
 //     that line and under a reply that ran out of usage, doesn't offer what it should, runs past the
@@ -900,8 +902,29 @@ function chooserFromLine() {
   return out;
 }
 
+/**
+ * A reply out of usage: it offers to carry on once the limit has started again ("Carry on …"); or,
+ * asked to, it says when it carries on by itself, with "Don't carry on" instead.
+ */
+function waitOffered() {
+  const out = [];
+  const newest = document.querySelector('.talk-page .talk.newest');
+  if (!newest) return ['the page shows no newest turn'];
+  const buttons = [...newest.querySelectorAll('.btns .btn')].map((b) => b.textContent.trim());
+  const lines = [...newest.querySelectorAll('.reply-after')].map((l) => l.textContent.trim());
+  const waits = lines.some((l) => /^It carries on by itself /.test(l));
+  if (waits) {
+    if (!buttons.includes('Don’t carry on')) out.push(`a reply that waits has ${buttons.join(', ') || 'no buttons'}`);
+    if (buttons.some((b) => /^Carry on /.test(b))) out.push('a reply that waits still offers to carry on');
+  } else if (!buttons.some((b) => /^Carry on /.test(b)))
+    out.push(`a reply out of usage has ${buttons.join(', ') || 'no buttons'}, and no Carry on`);
+  if (buttons.includes('Try again')) out.push('a reply out of usage offers Try again');
+  return out;
+}
+
 const CHECKS = {
   runsFit,
+  waitOffered,
   chooserFromLine,
   chooserFits,
   scanOver,
@@ -1141,6 +1164,20 @@ const NEWEST = {
         error:
           'RESOURCE_EXHAUSTED (code 429): You have exhausted your capacity on this model. Your quota will reset after 51h7m.',
         stop: { why: 'usage', resets: now + 51 * 3_600_000 + 7 * 60_000 },
+      };
+    },
+  },
+  // the same, asked to carry on once its limit has started again: when it will, and a way to call that off
+  waiting: {
+    what: 'a reply that waits for its limit to start again',
+    shows: '.reply-after + .reply-after',
+    turn(doc, now) {
+      const resets = now + 2 * 3_600_000 + 10 * 60_000;
+      return {
+        ...NEWEST.usage.turn(doc, now),
+        error: 'You’ve hit your usage limit. Your limit will reset at 2:05 PM.',
+        stop: { why: 'usage', resets },
+        wait: resets + 15_000,
       };
     },
   },
@@ -1622,7 +1659,9 @@ function replyViews(page, layout, finger, newest) {
       },
       shut,
       // (a reply with no view of the agent's has none to fit)
-      NEWEST[newest].shows ? checks : [...checks, 'viewFits'],
+      NEWEST[newest].shows
+        ? [...checks, ...(newest === 'usage' || newest === 'waiting' ? ['waitOffered'] : [])]
+        : [...checks, 'viewFits'],
     ],
     // out of usage: Continue with… opens the chooser under it
     ...(newest === 'usage'

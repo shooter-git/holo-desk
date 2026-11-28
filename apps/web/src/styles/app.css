@@ -5328,12 +5328,6 @@ html[data-layout="phone-landscape"] .tray {
   color: var(--text-2);
 }
 
-/* beside the harnesses, a list as tall as what they say of themselves: at its first row, not its middle */
-.agent-grid .agent-key-top {
-  align-self: start;
-  padding-top: 9px;
-}
-
 .agent-select {
   min-width: 220px;
 }
@@ -5352,60 +5346,200 @@ html[data-layout="phone-landscape"] .tray {
   color: var(--warn);
 }
 
-/* a harness a row: its name and version, then its sign-in, its update and whether it's in use, each in
-   a column of its own so the rows line up; what's under way (a sign-in, an update) or why it can't be
-   used goes under it, full width */
+/* the harnesses: their name over them, Look again at its end */
+.agent-harness-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 22px;
+  margin-top: 8px;
+}
+
+.agent-look {
+  height: 22px;
+  min-height: 0;
+  margin-right: -6px;
+  padding: 0 6px;
+}
+
+/* a harness a line, to pick one from: what picks it, its name, then at its end the one thing that
+   matters while it's folded (what its account has left, or what it lacks), what can be done about it,
+   and what opens it. The one in use is lit as a chosen row is anywhere in the studio, and says so.
+   Under the line, once it's opened: its states, and its usage in full; opened or not: a question, or
+   what's under way. Where a line's end has no room beside the name, it goes under it. */
+.agent-harnesses {
+  margin-bottom: 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
 .agent-harness {
+  --harness-line: 28px;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: start;
+  column-gap: 10px;
+  padding: 5px 6px 5px 12px;
+  border-bottom: 1px solid rgb(0 0 0 / 0.25);
+}
+
+.agent-harness:last-child {
+  border-bottom: 0;
+}
+
+.agent-harness.open {
+  padding-bottom: 12px;
+}
+
+.agent-harness.current {
+  background: linear-gradient(90deg, rgb(var(--accent-rgb) / 0.16), rgb(var(--accent-rgb) / 0.04));
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
+/* what picks it: a ring, the one in use with the studio's blue in it (its label is the room around it) */
+.harness-pick {
+  display: grid;
+  place-items: center;
+  height: var(--harness-line);
+  cursor: pointer;
+}
+
+.harness-pick:has(:disabled) {
+  cursor: default;
+}
+
+.harness-radio {
+  display: grid;
+  place-content: center;
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  border: 1.5px solid var(--text-3);
+  border-radius: 50%;
+  background: var(--bg-1);
+  appearance: none;
+  cursor: inherit;
+}
+
+.harness-radio:checked {
+  border-color: var(--accent);
+}
+
+.harness-radio:checked::before {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--accent);
+  content: "";
+}
+
+.harness-radio:disabled:not(:checked) {
+  opacity: 0.35;
+}
+
+.harness-line {
+  display: flex;
   flex-wrap: wrap;
-  gap: 4px 10px;
-}
-
-.agent-harness .agent-cell {
-  display: inline-flex;
-  justify-content: flex-end;
-  min-width: 64px;
-}
-
-.agent-harness .agent-update {
-  min-width: 132px;
-}
-
-.agent-harness .agent-use {
-  min-width: 44px;
-}
-
-.agent-harness .agent-more {
-  flex-basis: 100%;
+  align-items: center;
+  gap: 0 8px;
   min-width: 0;
-  padding-bottom: 2px;
-  font-size: 12px;
+  min-height: var(--harness-line);
+}
+
+/* (as tall as its line, so what picks the harness and what opens it stay level with its name when the
+   line's end goes under it) */
+.harness-name {
+  font-size: calc(var(--fs) + 1px);
+  font-weight: 600;
+  line-height: var(--harness-line);
+  white-space: nowrap;
+}
+
+.harness-inuse {
+  color: var(--accent);
+  font-size: calc(var(--fs) - 1px);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.harness-end {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: var(--harness-line);
+  margin-left: auto;
+}
+
+.harness-end:empty {
+  display: none;
+}
+
+.harness-end .btn {
+  height: calc(var(--harness-line) - 4px);
+}
+
+/* folded, the limit that counts: its name, a small bar, what's left (or a few words) */
+.harness-brief {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  white-space: nowrap;
+}
+
+.harness-brief .usage-bar {
+  width: 56px;
+}
+
+.harness-more {
+  width: var(--harness-line);
+  min-width: 0;
+  height: var(--harness-line);
+  color: var(--text-3);
+}
+
+.harness-under {
+  grid-column: 2 / -1;
+  min-width: 0;
+  margin-top: 8px;
+  padding-right: 6px;
   line-height: 1.5;
   overflow-wrap: anywhere;
 }
 
-/* a harness's usage, under its row: what its account has left, a line a limit (its name, a bar of
-   what's left, the words), and what the requests through HO[LO] used. Folded it's one line with More
-   at its end; the bars are the studio's own blue, amber when a fifth or less is left */
-.agent-harness .agent-usage {
-  display: grid;
-  gap: 8px;
-  margin-top: 2px;
-  padding-top: 6px;
-  border-top: 1px solid var(--line-2);
+/* its version, its sign-in, its update: one quiet line, close under its name */
+.harness-states {
+  margin-top: 0;
+  font-size: calc(var(--fs) - 1px);
 }
 
-.usage-main {
-  display: flex;
-  align-items: flex-start;
-  gap: 4px 12px;
+.harness-states > span + span::before {
+  margin: 0 6px;
+  font-family: var(--font);
+  content: "·";
+}
+
+/* a question, or a sign-in under way: set into the row */
+.harness-ask {
+  padding: 8px 10px;
+  border: 1px solid var(--line-2);
+  border-radius: var(--radius);
+  background: var(--bg-1);
+}
+
+/* a harness's usage, opened: what its account has left, a line a limit (its name, a bar of what's
+   left, the words), and what the requests through HO[LO] used. The bars are the studio's own blue,
+   amber when a fifth or less is left */
+.harness-usage {
+  display: grid;
+  gap: 8px;
 }
 
 .usage-meters {
   display: grid;
-  flex: 1 1 auto;
-  grid-template-columns: max-content minmax(72px, 200px) minmax(0, 1fr);
+  grid-template-columns: max-content minmax(72px, 220px) minmax(0, 1fr);
   align-items: center;
-  gap: 5px 12px;
+  gap: 6px 12px;
   min-width: 0;
 }
 
@@ -5438,7 +5572,7 @@ html[data-layout="phone-landscape"] .tray {
 .usage-text {
   display: flex;
   flex-wrap: wrap;
-  gap: 0 8px;
+  gap: 0 12px;
   min-width: 0;
   line-height: 1.5;
 }
@@ -5453,25 +5587,25 @@ html[data-layout="phone-landscape"] .tray {
   font-variant-numeric: tabular-nums;
 }
 
-.usage-meter[data-level="low"] .usage-fill {
+[data-level="low"] > .usage-bar > .usage-fill {
   background: var(--warn);
 }
 
-.usage-meter[data-level="out"] .usage-left {
+[data-level="out"] .usage-left {
   color: var(--danger);
 }
 
-.usage-meter[data-level="out"] .usage-bar {
+[data-level="out"] > .usage-bar {
   box-shadow: inset 0 0 0 1px var(--danger-line);
 }
 
 /* started again since it was read: no bar to show, only its outline */
-.usage-meter[data-level="stale"] .usage-bar {
+[data-level="stale"] > .usage-bar {
   background: none;
   box-shadow: inset 0 0 0 1px var(--line-3);
 }
 
-.usage-meter[data-level="stale"] .usage-left {
+[data-level="stale"] .usage-left {
   color: var(--text-2);
 }
 
@@ -5495,23 +5629,18 @@ html[data-layout="phone-landscape"] .tray {
   font-size: 11px;
 }
 
-/* a harness that doesn't say what's left: its plan and why, then what HO[LO] counted, a line each */
-.usage-plain {
-  display: grid;
-  flex: 1 1 auto;
-  gap: 2px;
-  min-width: 0;
+/* a harness that doesn't say what's left: its plan and why, with its own page */
+.usage-plain,
+.usage-foot {
+  line-height: 1.5;
 }
 
-.usage-toggle {
-  flex: none;
-  min-height: 0;
-  margin: -3px -6px -3px 0;
-  padding: 2px 6px;
-  font-size: 12px;
+/* the requests through HO[LO], by model: what they are on a line of its own, then its name and three
+   columns of numbers */
+.usage-through-name {
+  margin-top: 2px;
 }
 
-/* the requests through HO[LO], by model: its name, then three columns of numbers */
 .usage-through {
   display: grid;
   grid-template-columns: minmax(0, 1fr) repeat(3, max-content);
@@ -5534,15 +5663,6 @@ html[data-layout="phone-landscape"] .tray {
 .usage-model {
   color: var(--text);
   overflow-wrap: anywhere;
-}
-
-/* the harnesses, then Look again under them, at the start */
-.agent-harness-list {
-  align-items: flex-start;
-}
-
-.agent-harness-list > .agent-harnesses {
-  align-self: stretch;
 }
 
 /* Install's and Update's question: its words, then its two buttons (on a phone, under the words) */
@@ -5618,6 +5738,32 @@ html[data-layout="phone-landscape"] .tray {
   line-height: 1.5;
 }
 
+@media (pointer: coarse) {
+  .agent-harness {
+    --harness-line: 36px;
+    column-gap: 12px;
+  }
+  .agent-harness.open {
+    padding-bottom: 14px;
+  }
+  .harness-pick {
+    width: 28px;
+    margin-left: -4px;
+  }
+  .harness-radio {
+    width: 20px;
+    height: 20px;
+  }
+  .harness-radio:checked::before {
+    width: 10px;
+    height: 10px;
+  }
+  .agent-harness-head,
+  .agent-look {
+    min-height: 30px;
+  }
+}
+
 @media (max-width: 560px) {
   .agent-grid {
     grid-template-columns: minmax(0, 1fr);
@@ -5626,16 +5772,20 @@ html[data-layout="phone-landscape"] .tray {
   .agent-grid .agent-key {
     margin-top: 8px;
   }
-  .agent-grid .agent-key-top {
-    padding-top: 0;
-  }
   .agent-select {
     min-width: 0;
     width: 100%;
   }
-  /* a phone: the name and version, then its states on a line of their own */
-  .agent-harness > .grow {
-    flex-basis: 100%;
+  /* a phone: a folded line says what's left in words alone; a button there says what the harness
+     lacks by itself */
+  .harness-brief .usage-bar {
+    display: none;
+  }
+  .harness-brief {
+    gap: 6px;
+  }
+  .agent-harness:not(.open) .harness-end:has(.btn) .harness-brief {
+    display: none;
   }
   /* a phone: a device's words on their own lines, then its two buttons side by side, full width */
   .agent-devices .agent-ask > .grow {
@@ -5645,10 +5795,8 @@ html[data-layout="phone-landscape"] .tray {
     flex: 1 1 0;
     min-height: 36px;
   }
-  .agent-harness .agent-cell {
-    min-width: 0;
-  }
-  /* a phone: a limit's name and its words on one line, its bar under them, full width */
+  /* a phone: a limit's name and what's left at the start, when it starts again at the end, its bar
+     under them, full width */
   .usage-meters {
     grid-template-columns: minmax(0, 1fr);
     gap: 8px;
@@ -5665,6 +5813,12 @@ html[data-layout="phone-landscape"] .tray {
   }
   .usage-text {
     grid-area: text;
+    justify-content: space-between;
+  }
+  /* (at the end still when it has a line to itself) */
+  .usage-when {
+    margin-left: auto;
+    font-size: calc(var(--fs) - 1px);
   }
   .usage-bar {
     grid-area: bar;
@@ -5672,13 +5826,16 @@ html[data-layout="phone-landscape"] .tray {
   .usage-group:not(:first-child) {
     margin-top: 4px;
   }
-  .usage-toggle {
-    min-height: 32px;
-    margin: -8px -6px -8px 0;
-    padding: 4px 8px;
-  }
+  /* a phone: a model's name on a line of its own, its numbers under their headings */
   .usage-through {
-    gap: 4px 14px;
+    gap: 2px 14px;
+  }
+  .usage-row:not(.usage-head) > .usage-model {
+    grid-column: 1 / -1;
+    margin-top: 4px;
+  }
+  .usage-row:not(.usage-head) > .usage-model + span {
+    grid-column: 2;
   }
   .agent-confirm > .grow {
     flex-basis: 100%;

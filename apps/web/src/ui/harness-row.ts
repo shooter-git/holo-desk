@@ -2,8 +2,8 @@
  * What a harness's row in Settings › Agent shows, from what the host reports of it and what's under way
  * (a sign-in, an update, an install): one place for its whole life, tried on its own in a test.
  *
- * Not installed → Install (asked first) → installed and signed out → Sign in → signed in → Use / In use
- * → Update to x.y when one is out (asked first) → Up to date.
+ * Not installed → Install (asked first) → installed and signed out → Sign in → signed in → it can be
+ * picked (the one in use is) → Update when one is out (asked first) → Up to date.
  */
 import type { HarnessEvent, HarnessInfo } from '../app/agent.ts';
 
@@ -88,6 +88,19 @@ export function harnessRow(h: HarnessInfo, event: HarnessEvent | undefined, curr
     // an install's last word stays (it's installed); an update's while it runs or failed
     progress: relayed('update') ?? relayed('install'),
   };
+}
+
+/**
+ * A harness's states, as the line under its name says them once it's opened: its version, whether
+ * it's signed in, and whether it's up to date (what can be done about each is a button in its row).
+ */
+export function rowStates(v: HarnessRowView): { key: 'version' | 'signin' | 'update'; text: string }[] {
+  const out: { key: 'version' | 'signin' | 'update'; text: string }[] = [];
+  if (v.label) out.push({ key: 'version', text: v.label });
+  if (v.signIn) out.push({ key: 'signin', text: v.signIn === 'signed-in' ? 'Signed in' : 'Signed out' });
+  if (v.update)
+    out.push({ key: 'update', text: v.update === 'up-to-date' ? 'Up to date' : `${v.update.latest} is out` });
+  return out;
 }
 
 /**

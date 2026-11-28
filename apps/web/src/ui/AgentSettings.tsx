@@ -1,7 +1,7 @@
 /**
  * Settings › Agent: Off or On, and, once this device is allowed, Claude Code, Codex, Cursor and
- * Antigravity as the host has them (each installed or not, with its version, sign-in and update, and the one the agent
- * runs with), its model and effort, what it asks first and never does, whether this device is told of
+ * Antigravity as the host has them (a line each: the one the agent runs with picked, and what each has
+ * left of its account's limits; opened, its version, sign-in, update and usage), its model and effort, what it asks first and never does, whether this device is told of
  * a reply outside HO[LO], and the devices allowed to use it. Off is the default, and then this section
  * is all there is of it.
  *
@@ -10,6 +10,7 @@
  * one too); a later one asks to join, and a device that's allowed approves it. With no allowed device
  * at hand, a later one can pair with a code too.
  */
+import { ChevronDown, ChevronRight } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import {
   AgentError,
@@ -45,7 +46,7 @@ import {
   unsubscribe,
 } from '../app/notify.ts';
 import { takePairCode } from '../app/pair-link.ts';
-import { HarnessUsage } from './HarnessUsage.tsx';
+import { HarnessUsage, UsageBrief, useMinute } from './HarnessUsage.tsx';
 import {
   caution,
   choices,
@@ -54,10 +55,12 @@ import {
   harnessRow,
   installQuestion,
   inUse,
+  rowStates,
   runsWith,
   runsWithText,
   toChoose,
 } from './harness-row.ts';
+import { brief, usageView } from './harness-usage.ts';
 
 /**
  * Where turning it on has got to, on a device not allowed yet. `code`: a code from the host is asked for
@@ -339,24 +342,24 @@ function Allowed() {
           {problem}
         </div>
       )}
+      <div className="agent-harness-head">
+        <span className="label">Harness</span>
+        {(listed.length > 0 || runner?.keyed) && <LookAgain />}
+      </div>
+      {listed.length ? (
+        <Harnesses
+          listed={listed}
+          current={current}
+          model={settings.model}
+          effort={settings.effort}
+          usage={settings.usage}
+        />
+      ) : (
+        <span className="muted">
+          {runner?.keyed ? 'The runner hasn’t said yet which harnesses the host has.' : runnerProblem(runner)}
+        </span>
+      )}
       <div className="agent-grid">
-        <span className={listed.length ? 'agent-key agent-key-top' : 'agent-key'}>Harness</span>
-        {listed.length ? (
-          <Harnesses
-            listed={listed}
-            current={current}
-            model={settings.model}
-            effort={settings.effort}
-            usage={settings.usage}
-          />
-        ) : (
-          <div className="hstack" style={{ flexWrap: 'wrap' }}>
-            <span className="muted">
-              {runner?.keyed ? 'The runner hasn’t said yet which harnesses the host has.' : runnerProblem(runner)}
-            </span>
-            {runner?.keyed && <LookAgain />}
-          </div>
-        )}
         {current && <HarnessRows harness={current} model={settings.model} effort={settings.effort} />}
         <span className="agent-key">Asks first</span>
         <span>
@@ -394,9 +397,9 @@ function LookAgain() {
 type Usage = { days: number; rows: readonly UsageSum[] } | undefined;
 
 /**
- * Claude Code, Codex, Cursor and Antigravity, a row each, installed or not: its version, sign-in and
- * update, and the one the agent runs with; one that isn't on the host offers Install. Under each, what
- * its account has left and what the requests through HO[LO] used (HarnessUsage).
+ * Claude Code, Codex, Cursor and Antigravity, a line each, installed or not, to pick one from: the one
+ * the agent runs with is picked, and says so. A line ends with what matters of its harness (what its
+ * account has left, or what it lacks) and opens for the rest (HarnessRow).
  */
 function Harnesses({
   listed,
@@ -414,29 +417,30 @@ function Harnesses({
   // the model a request runs with now: its limits lead, where a harness has them by groups of models
   const runs = current ? runsWith(current, model, effort).model : null;
   return (
-    <div className="vstack agent-harness-list">
-      <div className="list boxed agent-harnesses">
-        {listed.map((h) => (
-          <HarnessRow
-            key={h.id}
-            harness={h}
-            current={h === current}
-            chosen={h === current ? model : null}
-            runs={h === current ? runs : null}
-            usage={usage}
-          />
-        ))}
-      </div>
-      <LookAgain />
+    <div className="agent-harnesses" role="radiogroup" aria-label="Harness">
+      {listed.map((h) => (
+        <HarnessRow
+          key={h.id}
+          harness={h}
+          current={h === current}
+          chosen={h === current ? model : null}
+          runs={h === current ? runs : null}
+          usage={usage}
+        />
+      ))}
     </div>
   );
 }
 
 /**
- * A harness, plainly (harness-row.ts): "Not installed" and Install; or its version, "Signed in" or
- * Sign in, "Up to date" or Update to x.y, and "In use" or Use. Install and Update ask first, and so do
- * Sign in and Use for a harness its vendor doesn't support HO[LO] running (`caution`). Under it, a
- * sign-in, an update or an install under way, and why one can't be used yet.
+ * A harness, plainly (harness-row.ts). Its line: what picks it (the one in use is picked, and says "In
+ * use"), its name, then at its end the one thing that matters while it's folded (harness-usage.ts,
+ * `brief`: the limit that counts, its plan, or that it's signed out or not installed) and what can be
+ * done about it (Install, Sign in, Update), and what opens it. Opened (the one in use starts so): its
+ * version, sign-in and update in a line, and its usage in full (HarnessUsage). Install and Update ask
+ * first, and so do Sign in and picking it for a harness its vendor doesn't support HO[LO] running
+ * (`caution`). A question, a sign-in, an update or an install under way, and why one can't be used
+ * yet, show under the line whether it's opened or not.
  */
 function HarnessRow({
   harness: h,
@@ -452,10 +456,16 @@ function HarnessRow({
   usage: Usage;
 }) {
   const event = useAgent((a) => a.harness[h.id]);
+  const now = useMinute();
   const [confirm, setConfirm] = useState<null | 'update' | 'install' | 'login' | 'use'>(null);
   const [code, setCode] = useState('');
   const [error, setError] = useState('');
+  // opened or folded, once that's asked: until then the one in use is open, the others folded
+  const [asked, setAsked] = useState<boolean | null>(null);
   const v = harnessRow(h, event, current);
+  const u = usageView(h, { now, current, chosen, runs, ...(usage ? { usage } : {}) });
+  const open = h.found && (asked ?? current);
+  const short = open ? null : brief(v, u);
   const act = (action: 'login' | 'update' | 'install') => {
     setError('');
     void harnessAction(h.id, action).catch((err: unknown) => setError(message(err)));
@@ -466,67 +476,88 @@ function HarnessRow({
   const use = () =>
     void setSettings({ harness: h.id, model: '', effort: '' }).catch((err: unknown) => setError(message(err)));
   return (
-    <div className="list-item still agent-harness">
-      <span className="strong">{h.name}</span>
-      {v.label && <span className={v.version ? 'muted mono' : 'muted'}>{v.label}</span>}
-      <span className="grow" />
-      <span className="agent-cell">
-        {v.signIn === 'signed-in' ? (
-          <span className="muted" title={h.account}>
-            Signed in
-          </span>
-        ) : v.signIn ? (
-          <button
-            type="button"
-            className="btn"
-            disabled={v.signIn.busy || confirm !== null}
-            onClick={() => (warning ? setConfirm('login') : act('login'))}
-          >
-            Sign in
-          </button>
-        ) : null}
-      </span>
-      <span className="agent-cell agent-update">
-        {v.install ? (
-          <button
-            type="button"
-            className="btn"
-            disabled={v.install.busy || confirm !== null}
-            onClick={() => setConfirm('install')}
-          >
-            {v.install.busy ? 'Installing…' : 'Install'}
-          </button>
-        ) : v.update === 'up-to-date' ? (
-          <span className="muted">Up to date</span>
-        ) : v.update ? (
-          <button
-            type="button"
-            className="btn"
-            disabled={v.update.busy || confirm !== null}
-            onClick={() => setConfirm('update')}
-          >
-            Update to {v.update.latest}
-          </button>
-        ) : null}
-      </span>
-      <span className="agent-cell agent-use">
-        {v.use === 'in-use' ? (
-          <span className="muted">In use</span>
-        ) : v.use === 'use' ? (
-          <button
-            type="button"
-            className="btn ghost"
-            aria-label={`Use ${h.name}`}
-            disabled={confirm !== null}
-            onClick={() => (warning ? setConfirm('use') : use())}
-          >
-            Use
-          </button>
-        ) : null}
-      </span>
-      {v.note && <span className="agent-more muted">{v.note}</span>}
+    <div className={`agent-harness${current ? ' current' : ''}${open ? ' open' : ''}`}>
+      <label className="harness-pick">
+        <input
+          type="radio"
+          className="harness-radio"
+          aria-label={`Use ${h.name}`}
+          checked={current}
+          disabled={!current && (v.use !== 'use' || confirm !== null)}
+          onChange={() => (warning ? setConfirm('use') : use())}
+        />
+      </label>
+      <div className="harness-line">
+        <span className="harness-name">{h.name}</span>
+        {current && <span className="harness-inuse">In use</span>}
+        <span className="harness-end">
+          {short && <UsageBrief brief={short} />}
+          {v.install && (
+            <button
+              type="button"
+              className="btn"
+              disabled={v.install.busy || confirm !== null}
+              onClick={() => setConfirm('install')}
+            >
+              {v.install.busy ? 'Installing…' : 'Install'}
+            </button>
+          )}
+          {v.signIn && v.signIn !== 'signed-in' && (
+            <button
+              type="button"
+              className="btn"
+              disabled={v.signIn.busy || confirm !== null}
+              onClick={() => (warning ? setConfirm('login') : act('login'))}
+            >
+              Sign in
+            </button>
+          )}
+          {v.update && v.update !== 'up-to-date' && (
+            <button
+              type="button"
+              className="btn"
+              aria-label={`Update ${h.name} to ${v.update.latest}`}
+              disabled={v.update.busy || confirm !== null}
+              onClick={() => setConfirm('update')}
+            >
+              {v.update.busy ? 'Updating…' : 'Update'}
+            </button>
+          )}
+        </span>
+      </div>
+      {h.found ? (
+        <button
+          type="button"
+          className="btn ghost icon harness-more"
+          aria-expanded={open}
+          aria-label={`${open ? 'Less' : 'More'} of ${h.name}`}
+          onClick={() => setAsked(!open)}
+        >
+          {open ? <ChevronDown aria-hidden="true" /> : <ChevronRight aria-hidden="true" />}
+        </button>
+      ) : (
+        <span />
+      )}
+      {open && (
+        <div className="harness-under harness-states muted">
+          {rowStates(v).map((s) => (
+            <span
+              key={s.key}
+              className={s.key === 'version' && v.version ? 'mono' : undefined}
+              title={s.key === 'signin' ? h.account : undefined}
+            >
+              {s.text}
+            </span>
+          ))}
+        </div>
+      )}
+      {v.note && <span className="harness-under muted">{v.note}</span>}
       {confirm === 'install' && (
-        <div className="agent-more hstack agent-confirm" role="alertdialog" aria-label={`Install ${h.name}?`}>
+        <div
+          className="harness-under harness-ask hstack agent-confirm"
+          role="alertdialog"
+          aria-label={`Install ${h.name}?`}
+        >
           <span className="grow">
             {question.text} (<code className="mono agent-command">{question.command}</code>).
           </span>
@@ -547,7 +578,7 @@ function HarnessRow({
       )}
       {warning && (confirm === 'login' || confirm === 'use') && (
         <div
-          className="agent-more hstack agent-confirm"
+          className="harness-under harness-ask hstack agent-confirm"
           role="alertdialog"
           aria-label={confirm === 'login' ? `Sign in to ${h.name}?` : `Use ${h.name}?`}
         >
@@ -574,9 +605,15 @@ function HarnessRow({
           </button>
         </div>
       )}
-      {confirm === 'update' && (
-        <div className="agent-more hstack agent-confirm" role="alertdialog" aria-label={`Update ${h.name}?`}>
-          <span className="grow">This updates the {h.name} your terminal uses too.</span>
+      {confirm === 'update' && v.update && v.update !== 'up-to-date' && (
+        <div
+          className="harness-under harness-ask hstack agent-confirm"
+          role="alertdialog"
+          aria-label={`Update ${h.name}?`}
+        >
+          <span className="grow">
+            This updates the {h.name} your terminal uses too, to {v.update.latest}.
+          </span>
           <button
             type="button"
             className="btn primary"
@@ -592,11 +629,11 @@ function HarnessRow({
           </button>
         </div>
       )}
-      {v.progress?.line && <span className="agent-more muted">{v.progress.line}</span>}
-      {v.progress?.error && <span className="agent-more agent-error">{v.progress.error}</span>}
-      {error && <span className="agent-more agent-error">{error}</span>}
+      {v.progress?.line && <span className="harness-under muted">{v.progress.line}</span>}
+      {v.progress?.error && <span className="harness-under agent-error">{v.progress.error}</span>}
+      {error && <span className="harness-under agent-error">{error}</span>}
       {v.signin && (
-        <div className="agent-more vstack">
+        <div className="harness-under harness-ask vstack">
           {v.signin.url && (
             <div className="agent-signin">
               <a className="btn" href={v.signin.url} target="_blank" rel="noopener noreferrer">
@@ -643,7 +680,7 @@ function HarnessRow({
           {v.signin.error && <span className="agent-error">{v.signin.error}</span>}
         </div>
       )}
-      <HarnessUsage harness={h} current={current} chosen={chosen} runs={runs} usage={usage} />
+      {open && u && <HarnessUsage name={h.name} view={u} />}
     </div>
   );
 }

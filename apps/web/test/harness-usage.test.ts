@@ -1,10 +1,11 @@
 /**
  * What a harness's row in Settings › Agent says of its account's usage (ui/harness-usage.ts): each
- * limit's line, which lines show folded, and what the requests through HO[LO] used.
+ * limit's line, what the row says folded, and what the requests through HO[LO] used.
  */
 import { describe, expect, it } from 'vitest';
 import type { HarnessInfo, UsageSum } from '../src/app/agent.ts';
-import { atClock, meter, startsAgain, tokenCount, usageView, windowLabel } from '../src/ui/harness-usage.ts';
+import { harnessRow } from '../src/ui/harness-row.ts';
+import { atClock, brief, meter, startsAgain, tokenCount, usageView, windowLabel } from '../src/ui/harness-usage.ts';
 
 const NOW = Date.UTC(2099, 0, 5, 12, 0);
 const H = 3_600_000;
@@ -137,42 +138,49 @@ describe('a limit, as its line', () => {
 });
 
 describe('a harness’s usage, for its row', () => {
-  it('shows the longest limit folded, and every limit of its own for the one in use', () => {
+  it('has the longest limit to say folded, and every limit once opened', () => {
     const other = usageView(claude, { ...clock, current: false, usage: { days: 30, rows } });
-    expect(other?.lead.map((m) => m.label)).toEqual(['Weekly']);
-    expect(other?.summaryOf).toBeNull();
-    // the rest is under More: its other limit, its plan, the requests
-    expect(other?.more).toBe(true);
+    expect(other?.summary).toMatchObject({ label: 'Weekly', text: '29% left' });
+    expect(other?.groups).toHaveLength(1);
+    // one group for every model: it has no name
+    expect(other?.groups[0]?.name).toBeNull();
+    expect(other?.groups[0]?.meters.map((m) => `${m.label}: ${m.text}`)).toEqual([
+      'Weekly: 29% left',
+      '5-hour: 67% left',
+    ]);
     const used = usageView(claude, { ...clock, current: true, chosen: 'opus', runs: 'claude-opus-5-5' });
-    expect(used?.lead.map((m) => `${m.label}: ${m.text}`)).toEqual(['Weekly: 29% left', '5-hour: 67% left']);
+    expect(used?.summary?.label).toBe('Weekly');
     expect(used?.plan).toBe('Max plan');
     // read two minutes ago: not worth saying
     expect(used?.read).toBeNull();
-    expect(used?.more).toBe(true);
     expect(used?.through).toBeNull();
   });
 
   it('leads with the group the model in use counts against, where limits go by groups of models', () => {
     const gemini = usageView(antigravity, { ...clock, current: true, chosen: 'gemini-4-neon', runs: 'gemini-4-neon' });
-    expect(gemini?.summaryOf).toBe('Gemini Models');
+    expect(gemini?.summary?.text).toBe('37% left');
     expect(gemini?.groups.map((g) => [g.name, g.inUse])).toEqual([
       ['Gemini Models', true],
       ['Claude and GPT models', false],
     ]);
-    expect(gemini?.lead.map((m) => m.text)).toEqual(['37% left', '100% left']);
+    expect(gemini?.groups[0]?.meters.map((m) => m.text)).toEqual(['37% left', '100% left']);
     const claudeThere = usageView(antigravity, {
       ...clock,
       current: true,
       chosen: 'claude-opus-5-5',
       runs: 'claude-opus-5-5',
     });
-    expect(claudeThere?.summaryOf).toBe('Claude and GPT models');
-    expect(claudeThere?.groups[0]).toMatchObject({ inUse: true, models: 'Claude Opus 5.5, GPT-OSS 120B' });
-    expect(claudeThere?.lead.map((m) => m.when)).toEqual(['', '']);
+    expect(claudeThere?.summary).toMatchObject({ text: '100% left', when: '' });
+    expect(claudeThere?.groups[0]).toMatchObject({
+      name: 'Claude and GPT models',
+      inUse: true,
+      models: 'Claude Opus 5.5, GPT-OSS 120B',
+    });
+    expect(claudeThere?.groups[0]?.meters.map((m) => m.when)).toEqual(['', '']);
     // not the one in use, or a model no group lists: the vendor's first group, none marked
     const idle = usageView(antigravity, { ...clock, current: false });
-    expect(idle?.summaryOf).toBe('Gemini Models');
-    expect(idle?.lead).toHaveLength(1);
+    expect(idle?.groups[0]?.name).toBe('Gemini Models');
+    expect(idle?.summary?.text).toBe('37% left');
     expect(idle?.groups.some((g) => g.inUse)).toBe(false);
     const unknown = usageView(antigravity, { ...clock, current: true, chosen: 'new-model', runs: 'new-model' });
     expect(unknown?.groups.some((g) => g.inUse)).toBe(false);
@@ -210,7 +218,6 @@ describe('a harness’s usage, for its row', () => {
     const v = usageView(claude, { ...clock, current: true, usage: { days: 30, rows } });
     expect(v?.through).toEqual({
       days: 30,
-      line: '124 requests · 4M tokens in, 74k out',
       rows: [
         { key: 'opus|high', label: 'Opus · high', requests: '98', read: '3.4M', written: '61k' },
         { key: 'sonnet|medium', label: 'Sonnet · medium', requests: '26', read: '600k', written: '12k' },
@@ -223,16 +230,14 @@ describe('a harness’s usage, for its row', () => {
     const v = usageView(cursor, { ...clock, current: false, usage: { days: 30, rows } });
     expect(v).toMatchObject({
       summary: null,
-      lead: [],
+      groups: [],
       plan: 'Pro+ plan',
       none: 'Cursor doesn’t report what’s left of its plan',
       link: { href: 'https://cursor.com/dashboard?tab=usage', text: 'Cursor’s usage page' },
-      more: true,
     });
-    expect(v?.through?.line).toBe('1 request · 940 tokens in, 12 out');
-    expect(v?.through?.rows[0]?.label).toBe('Auto');
-    // nothing counted yet: nothing to unfold
-    expect(usageView(cursor, { ...clock, current: false })?.more).toBe(false);
+    expect(v?.through?.rows).toEqual([{ key: 'auto|', label: 'Auto', requests: '1', read: '940', written: '12' }]);
+    // nothing counted yet: none to show
+    expect(usageView(cursor, { ...clock, current: false })?.through).toBeNull();
   });
 
   it('says a harness that tells with each request will show after its next one', () => {
@@ -250,7 +255,7 @@ describe('a harness’s usage, for its row', () => {
     });
   });
 
-  it('says how long ago the limits were read once that’s a while, and a note folded when a limit is low', () => {
+  it('says how long ago the limits were read once that’s a while, and what the vendor says beside them', () => {
     const old = { ...claude, limits: { ...(claude.limits as NonNullable<HarnessInfo['limits']>), at: NOW - 9 * H } };
     expect(usageView(old, { ...clock, current: true })?.read).toBe('Read 9 h ago');
     expect(
@@ -262,12 +267,7 @@ describe('a harness’s usage, for its row', () => {
     const codex = base('codex', 'Codex', {
       limits: { at: NOW, note: '1 early reset available', groups: [{ windows: [{ minutes: 10080, used: 1 }] }] },
     });
-    expect(usageView(codex, { ...clock, current: false })).toMatchObject({
-      note: '1 early reset available',
-      noteNow: '1 early reset available',
-    });
-    const fine = { ...codex, limits: { ...codex.limits, groups: [{ windows: [{ minutes: 10080, used: 0.1 }] }] } };
-    expect(usageView(fine as HarnessInfo, { ...clock, current: false })?.noteNow).toBeNull();
+    expect(usageView(codex, { ...clock, current: false })?.note).toBe('1 early reset available');
   });
 
   it('shows nothing of one that isn’t installed, and of one signed out only what was counted', () => {
@@ -276,6 +276,40 @@ describe('a harness’s usage, for its row', () => {
     const out = usageView({ ...claude, signedIn: false }, { ...clock, current: false, usage: { days: 30, rows } });
     expect(out).toMatchObject({ summary: null, plan: null, none: null, groups: [] });
     expect(out?.through?.rows).toHaveLength(2);
+  });
+});
+
+describe('a harness’s row folded, in the one thing that matters', () => {
+  const said = (h: HarnessInfo, current = false) =>
+    brief(harnessRow(h, undefined, current), usageView(h, { ...clock, current, usage: { days: 30, rows } }));
+
+  it('is the limit that counts: the longest of the group its model counts against', () => {
+    expect(said(claude)).toEqual({
+      meter: expect.objectContaining({ label: 'Weekly', text: '29% left', level: 'ok' }),
+    });
+    const there = usageView(antigravity, {
+      ...clock,
+      current: true,
+      chosen: 'claude-opus-5-5',
+      runs: 'claude-opus-5-5',
+    });
+    expect(brief(harnessRow(antigravity, undefined, true), there)).toEqual({
+      meter: expect.objectContaining({ label: 'Weekly', text: '100% left' }),
+    });
+  });
+
+  it('is its plan for one that reports no limit, and nothing when it has no plan either', () => {
+    expect(said(base('cursor', 'Cursor', { plan: 'Pro+' }))).toEqual({ text: 'Pro+ plan' });
+    expect(said(base('claude', 'Claude Code', { plan: 'max' }), true)).toEqual({ text: 'Max plan' });
+    expect(said(base('codex', 'Codex'))).toBeNull();
+  });
+
+  it('is what it lacks before it can be used, whatever else is known of it', () => {
+    expect(said({ ...claude, signedIn: false })).toEqual({ text: 'Signed out' });
+    expect(said({ ...claude, found: false })).toEqual({ text: 'Not installed' });
+    expect(said({ ...claude, found: false, installer: 'curl -fsSL https://example.com/install.sh | bash' })).toEqual({
+      text: 'Not installed',
+    });
   });
 });
 

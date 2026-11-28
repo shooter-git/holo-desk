@@ -91,6 +91,12 @@ export interface LegRow {
   /** The song as it left it at the end of its last reply here (JSON), and that song's revision. */
   seen_doc: string | null;
   seen_revision: number | null;
+  /**
+   * The last turn of the conversation its session knows of: its own latest that reached it (the
+   * prompt of that turn told it everything before). Turns after it made with another harness are what
+   * it has missed. Null: none yet, or not known (a leg from before this was kept).
+   */
+  told: string | null;
   /** Its workspace's name under the runner's folder for the agent (the thread's id for the conversation's first). */
   workspace: string;
   updated: number;
@@ -131,6 +137,8 @@ export interface TurnExtra {
   stop?: TurnStop;
   /** The turn it carries on: an earlier go at the same request, which didn't finish. */
   continues?: string;
+  /** What the user allowed, and what the studio reported, when it follows a permission (its request carried on). */
+  allowed?: string;
   /** The song before the conversation's previous request (the job's "previous"). */
   previous?: number;
 }
@@ -303,6 +311,7 @@ export class AgentStore {
         session TEXT,
         seen_doc TEXT,
         seen_revision INTEGER,
+        told TEXT,
         workspace TEXT NOT NULL,
         updated INTEGER NOT NULL,
         PRIMARY KEY (thread, harness)
@@ -521,13 +530,13 @@ export class AgentStore {
     const updated = Date.now();
     this.db
       .prepare(
-        `INSERT INTO agent_legs (thread, harness, session, seen_doc, seen_revision, workspace, updated)
-         VALUES (?, ?, ?, ?, ?, ?, ?)
+        `INSERT INTO agent_legs (thread, harness, session, seen_doc, seen_revision, told, workspace, updated)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT (thread, harness) DO UPDATE SET
            session = excluded.session, seen_doc = excluded.seen_doc, seen_revision = excluded.seen_revision,
-           workspace = excluded.workspace, updated = excluded.updated`,
+           told = excluded.told, workspace = excluded.workspace, updated = excluded.updated`,
       )
-      .run(leg.thread, leg.harness, leg.session, leg.seen_doc, leg.seen_revision, leg.workspace, updated);
+      .run(leg.thread, leg.harness, leg.session, leg.seen_doc, leg.seen_revision, leg.told, leg.workspace, updated);
     return { ...leg, updated };
   }
 

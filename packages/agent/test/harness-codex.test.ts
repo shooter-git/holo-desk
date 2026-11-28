@@ -411,6 +411,20 @@ ${replay('codex-normal')}`,
     expect(events.at(-1)?.type).toBe('done');
   });
 
+  it('gives the thread it starts again what one that never saw the last needs, without the rules a resumed turn has', async () => {
+    s = sandbox();
+    const h = fake({
+      run: `case "$*" in exec\\ resume*) echo "Error: thread/resume: thread/resume failed: no rollout found for thread id x" >&2; exit 1;; esac
+${replay('codex-normal')}`,
+    });
+    await runToEnd(h, job(s, { session: 'gone-thread', freshPrompt: 'THE CONVERSATION SO FAR, then the request\n' }));
+    // (the resumed go has the rules at its head: Codex reads AGENTS.md only as a thread starts)
+    expect(recorded(s, 0).stdin).toContain('# Rules');
+    expect(recorded(s, 0).stdin).toContain(PROMPT_MARK);
+    // the new thread reads AGENTS.md itself: what it's given is the conversation so far and the request, alone
+    expect(recorded(s, 1).stdin).toBe('THE CONVERSATION SO FAR, then the request\n');
+  });
+
   it('checks the effort against the model’s', async () => {
     s = sandbox();
     const h = fake();

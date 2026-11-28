@@ -31,12 +31,24 @@ export class Threads {
   }
 
   /**
-   * The thread a request on a song goes on, as the harness it'll run with has it: the current one
-   * (switched to that harness's leg when another ran last), or a new one when there's none.
+   * The thread a request on a song goes on, as the harness it'll run with has it: the current one, or
+   * a new one when there's none. When another harness ran last, the thread is given as this one has it
+   * (its own session and what it last saw: none, the first time) without being changed yet: the
+   * request may still be refused. `use` makes it so, once the request is going ahead.
    */
   forRequest(project: string, harness: HarnessId): ThreadRow {
     const current = this.store.currentThread(project);
-    if (current) return current.harness === harness ? current : this.switchTo(current, harness);
+    if (current) {
+      if (current.harness === harness) return current;
+      const leg = this.store.leg(current.id, harness);
+      return {
+        ...current,
+        harness,
+        session: leg?.session ?? null,
+        seen_doc: leg?.seen_doc ?? null,
+        seen_revision: leg?.seen_revision ?? null,
+      };
+    }
     const now = Date.now();
     const thread = this.store.addThread({
       id: `agt_${randomBytes(6).toString('hex')}`,
@@ -53,39 +65,56 @@ export class Threads {
     return thread;
   }
 
-  /** A thread as another harness has it: that one's own session and what it last saw (none, the first time). */
-  private switchTo(thread: ThreadRow, harness: HarnessId): ThreadRow {
-    // (the leg the thread stood for is kept as it is: its harness may be gone back to)
-    this.leg(thread);
-    const leg = this.store.leg(thread.id, harness);
-    this.store.updateThread(thread.id, {
-      harness,
-      session: leg?.session ?? null,
-      seen_doc: leg?.seen_doc ?? null,
-      seen_revision: leg?.seen_revision ?? null,
-    });
+  /**
+   * A request goes ahead on a thread as `forRequest` gave it: when that's with another harness than
+   * the one that ran last, the thread becomes that one's. The leg it stood for is kept as the thread
+   * has it (a version of HO[LO] from before legs, gone back to for a while, writes the thread alone),
+   * so its harness can be gone back to.
+   */
+  use(thread: ThreadRow): ThreadRow {
+    const stored = this.store.thread(thread.id);
+    if (!stored) return thread;
+    if (stored.harness !== thread.harness) {
+      const { session, seen_doc, seen_revision } = stored;
+      this.store.putLeg({ ...this.leg(stored), session, seen_doc, seen_revision });
+      const leg = this.store.leg(thread.id, thread.harness);
+      this.store.updateThread(thread.id, {
+        harness: thread.harness,
+        session: leg?.session ?? null,
+        seen_doc: leg?.seen_doc ?? null,
+        seen_revision: leg?.seen_revision ?? null,
+      });
+    }
     const next = this.store.thread(thread.id) ?? thread;
     this.leg(next);
     return next;
   }
 
   /**
-   * The leg of the harness a thread runs with now, made if it isn't there: as the thread has it. The
-   * first of a conversation from before legs works in the thread's own folder (the migration made
-   * it); every other in one of its own, named for the thread and the harness (two harnesses can't
-   * share a folder: each keeps its own files there).
+   * The leg of the harness a thread runs with, made if it isn't there: as the thread has it. A
+   * conversation's first works in the thread's own folder (where a version of HO[LO] from before legs
+   * runs it too: its session is found there whichever version carries it on); every other in one of
+   * its own, named for the thread and the harness (two harnesses can't share a folder: each keeps its
+   * own files there).
    */
   leg(thread: ThreadRow): LegRow {
     const known = this.store.leg(thread.id, thread.harness);
     if (known) return known;
+    const first = this.store.legs(thread.id).length === 0;
     return this.store.putLeg({
       thread: thread.id,
       harness: thread.harness,
       session: thread.session,
       seen_doc: thread.seen_doc,
       seen_revision: thread.seen_revision,
-      workspace: `${thread.id}_${thread.harness}`,
+      told: null,
+      workspace: first ? thread.id : `${thread.id}_${thread.harness}`,
     });
+  }
+
+  /** The leg a harness has in a thread, or null. */
+  legOf(threadId: string, harness: HarnessId): LegRow | null {
+    return this.store.leg(threadId, harness);
   }
 
   /** The harnesses that have a session of their own in a thread. */
@@ -100,7 +129,7 @@ export class Threads {
   private setLeg(
     threadId: string,
     harness: HarnessId,
-    patch: Partial<Pick<LegRow, 'session' | 'seen_doc' | 'seen_revision'>>,
+    patch: Partial<Pick<LegRow, 'session' | 'seen_doc' | 'seen_revision' | 'told'>>,
   ): void {
     const thread = this.store.thread(threadId);
     if (!thread) return;
@@ -110,10 +139,20 @@ export class Threads {
       session: null,
       seen_doc: null,
       seen_revision: null,
-      workspace: `${threadId}_${harness}`,
+      told: null,
+      workspace: this.store.legs(threadId).length === 0 ? threadId : `${threadId}_${harness}`,
     };
     this.store.putLeg({ ...leg, ...patch });
-    if (thread.harness === harness) this.store.updateThread(threadId, patch);
+    const { told: _, ...mirrored } = patch;
+    if (thread.harness === harness && Object.keys(mirrored).length) this.store.updateThread(threadId, mirrored);
+  }
+
+  /**
+   * A turn reached its harness's session (its tools were heard from, or it ended well): the session
+   * now knows the conversation up to that turn, whose prompt told it what came before.
+   */
+  reached(threadId: string, harness: HarnessId, job: string): void {
+    this.setLeg(threadId, harness, { told: job });
   }
 
   events(thread: ThreadRow): ThreadEvent[] {
@@ -169,7 +208,7 @@ export class Threads {
    * nothing to it (it's told what was asked and answered so far instead).
    */
   forgetSession(threadId: string, harness: HarnessId): void {
-    this.setLeg(threadId, harness, { session: null, seen_doc: null, seen_revision: null });
+    this.setLeg(threadId, harness, { session: null, seen_doc: null, seen_revision: null, told: null });
   }
 
   /** "Start over": the song's next request starts a new thread. */

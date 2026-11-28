@@ -344,9 +344,14 @@ describe('the agent runner', () => {
   it('takes the prompt for a conversation started over, its rules off as the turn’s own; one that isn’t a prompt is left out', async () => {
     s = sandbox();
     const { r, claude } = runner();
-    r.handle(run(1, { freshPrompt: 'The conversation so far\nThe request' }));
+    // (as the server sends it: the agent's rules first, which the harness is given its own way)
+    const rules = readInstructions(REPO) ?? '';
+    expect(rules.length).toBeGreaterThan(100);
+    r.handle(
+      run(1, { freshPrompt: `${rules}\n\n## The conversation so far\nA record.\n\n## The request\nCarry on\n` }),
+    );
     await until(() => claude.runs.length === 1);
-    expect(claude.runs[0]?.job.freshPrompt).toBe('The conversation so far\nThe request');
+    expect(claude.runs[0]?.job.freshPrompt).toBe('## The conversation so far\nA record.\n\n## The request\nCarry on\n');
     for (const freshPrompt of [7, '', '   ', 'x'.repeat(400_001), null])
       expect(parseRun(run(2, { freshPrompt })), String(freshPrompt).slice(0, 12)).not.toHaveProperty('freshPrompt');
     // (an older server gives none: the turn's own prompt stands for it)

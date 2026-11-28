@@ -224,7 +224,7 @@ export async function buildApp(
       return null;
     }
   })();
-  const version = '0.10.1';
+  const version = '0.10.2';
   app.get('/api/health', async () => {
     const editor = live.state().state;
     return {

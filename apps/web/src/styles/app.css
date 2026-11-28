@@ -1415,6 +1415,28 @@ a.btn {
   font-size: 9px;
 }
 
+/* under a stack's arrow: how many tracks it has, then M and S while they're muted or soloed together */
+.track-row.rail-cell .stack-foot {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.track-row.rail-cell .stack-foot .mark {
+  padding: 0 3px;
+  border-radius: 3px;
+  color: #0b0d10;
+  font: 750 9px / 12px var(--font);
+}
+
+.track-row.rail-cell .stack-foot .mute {
+  background: var(--mute);
+}
+
+.track-row.rail-cell .stack-foot .solo {
+  background: var(--solo);
+}
+
 .track-row.rail-cell {
   display: flex;
   flex-direction: column;

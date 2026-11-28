@@ -53,3 +53,11 @@ The studio's fonts are [Inter](https://rsms.me/inter/) and [JetBrains Mono](http
   page to read; `deploy/omr/server.py`, which calls them, is part of HO[LO] Desk (MIT). The image CI
   publishes (`ghcr.io/shooter-git/holo-desk:omr-*`) is built from that Dockerfile; their source, at
   those versions, is at the links above.
+
+## Thanks
+
+- [T3 Code](https://github.com/pingdotgg/t3code) by T3 Tools (MIT), a desktop home for coding
+  agents, inspired how HO[LO]'s agent keeps going: a conversation carried from one harness to
+  another, a request tried again or carried on after a failure or a restart, a stand-in harness for
+  the checks, and updates that take a copy first. The ideas are theirs; the code here was written
+  for HO[LO]. Thank you. If you work with coding agents, give it a try.

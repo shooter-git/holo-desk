@@ -729,8 +729,20 @@ of the stretch `played` asked for); `length` is ms (null while still held).
    - the runner drops for 15 s, or the harness fails.
 
    The runner is sent `agent-cancel`, except when the harness failed or the runner dropped. The agent
-   hears next time that its turn didn't finish. Jobs live in memory: after a restart, turns still under
-   way read `failed`, and those waiting for a click `cancelled`.
+   hears next time that its turn didn't finish.
+
+   **A restart of HO[LO]** (`Jobs.recover`, as it starts). A job's clocks, its token and its runner's
+   word of it live in memory, so a turn that was working can't go on: it reads `failed`, with the
+   error "HO[LO] restarted while it was working", and the agent hears so next time, in the same
+   conversation. What it had changed is in the song, and is kept with its turn (`changes`, below). An
+   update of HO[LO] waits for a working request (`busy` in `/api/health`), so this is for a crash or a
+   reboot. The runner outlives HO[LO] and may still run that turn (nothing it does reaches a song: its
+   token is gone); as it comes back it's sent `agent-cancel` for each such job, and again for any job
+   it says it's at work on (`agent-queued`, `agent-started`, `agent-progress`, `agent-session`) that
+   isn't running here, so the conversation's next request isn't kept waiting behind it. A turn waiting
+   for the user's click (`awaiting`) still waits: its job is made again from its turn, and the click
+   starts the follow-up as before. It's let go (`cancelled`) only when its conversation was started
+   over, its device is no longer allowed, or it's from before turns kept who asked.
 
    The thread's session is carried on after all of these (after a stop, "Continue" goes on where it
    was), but one: a harness whose model service refused the conversation itself, as the error in the
@@ -1066,8 +1078,14 @@ Limits, plainly:
 
 `agent_threads(id, project, harness, session, seen_doc, seen_revision, events_json, created, updated, current)`
 holds one current thread (`agt_…`) per song. `agent_turns(job, thread, request, reply, label, state, at, extra)`
-holds its turns, the last 50; `extra` keeps the permission, the brief and its flagged lines, the view (its dock too) and
-its go, the error, and the attachments. Changing the harness, or `reset`, starts a new thread; the old one is kept but no
+holds its turns, the last 50, each with the `device` that asked; `extra` keeps the permission, the brief and its flagged lines, the view (its dock too) and
+its go, the error, and the attachments, and what a turn needs to be read or carried on later: when it
+began and ended and the song's title then, the harness, model and effort it ran with, what the studio
+showed as it was asked (`context`) and its preset, what the agent was told the user did before it
+(`heard`), what its tools changed (`changes`: each batch's label in order, with how many in a row had
+it, 40 at most, written as each batch goes in), the revisions it calls `before` and `previous`, and
+`stop` when HO[LO] knows why it didn't go on (`{why: 'interrupted'}`: HO[LO] or its runner stopped
+under it). Changing the harness, or `reset`, starts a new thread; the old one is kept but no
 longer current.
 
 A thread keeps the user's doings since the last reply, the latest 20, and clears them once a prompt has

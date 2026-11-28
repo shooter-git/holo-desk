@@ -7,7 +7,8 @@
 //                          waits until you run `update` again, so it never replaces your build.
 //   autoupdate on|off|status
 //                          a timer (systemd, as you) that runs `tick` every 15 minutes
-//   tick                   one look: when following a channel and no studio is playing or recording, pull;
+//   tick                   one look: when following a channel and HO[LO] isn't busy (a studio playing or
+//                          recording, a bounce the host is making, a request the agent is working on), pull;
 //                          a new image is started, the same one changes nothing (the engines' too)
 //
 // A new version is started with care. The songs' database is copied first (the server makes the copy,
@@ -168,7 +169,12 @@ async function health() {
   }
 }
 
-/** A studio playing or recording right now (the server says): an update waits for the next look. */
+const BUSY = 'HO[LO] is busy (a studio playing or recording, a bounce, or the agent at work on a request)';
+
+/**
+ * HO[LO] busy right now, as the server says: a studio playing or recording, a bounce the host is making,
+ * or a request the agent is working on. An update waits for the next look.
+ */
 async function busy() {
   return (await health())?.busy === true; // not running: nothing to interrupt
 }
@@ -563,7 +569,7 @@ async function tickAfterGoingBack(values) {
   const was = plainValue(values.HOLO_ROLLED_BACK_IMAGE);
   const image = was.startsWith(`${REPO}:`) ? was : `${REPO}:${plainValue(values.HOLO_CHANNEL) || 'stable'}`;
   if (await busy()) {
-    console.log('A studio is busy: next time');
+    console.log(`${BUSY}: next time`);
     return;
   }
   if (spawnSync('docker', ['pull', '--quiet', image], { stdio: 'inherit' }).status !== 0) {
@@ -591,7 +597,7 @@ async function tickAfterGoingBack(values) {
     runningImage() ?? imageId(PREVIOUS),
   );
   if (how === 'waiting') {
-    console.log('A studio is busy: it starts at the next look');
+    console.log(`${BUSY}: it starts at the next look`);
     return;
   }
   startEngines(true, true);
@@ -608,7 +614,7 @@ async function tick() {
     return;
   }
   if (await busy()) {
-    console.log('A studio is playing or recording: next time');
+    console.log(`${BUSY}: next time`);
     return;
   }
   // (a host set up before the engines were on by default gets them on its first look)
@@ -623,7 +629,7 @@ async function tick() {
     // (the fetch and the copy take a while: a studio may have started playing since, so it's asked again)
     const how = await startNew({ ...HERE, busy }, image, running);
     if (how === 'waiting') {
-      console.log(`New ${image}, and a studio is busy: it starts at the next look`);
+      console.log(`New ${image}, and ${BUSY.charAt(0).toLowerCase()}${BUSY.slice(1)}: it starts at the next look`);
       return;
     }
     if (how !== 'started') {

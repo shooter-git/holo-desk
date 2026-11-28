@@ -703,7 +703,9 @@ CI publishes the studio and its server as one image on every change to `main` an
 `ghcr.io/shooter-git/holo-desk:main`, `:stable` and the version, `:sha-<commit>`, for amd64 and arm64,
 each with a signed record of what built it. A host follows a channel (`pnpm run update`), and
 `pnpm run autoupdate on` keeps it current: a timer pulls every 15 minutes, starts a new image only when
-there is one, and waits while a studio is playing or recording. Each look also moves a following
+there is one, and waits while a studio is playing or recording, the host is making a bounce, or the
+agent is working on a request (`busy` in `/api/health`; a reply that only waits for the user's OK holds
+nothing up). Each look also moves a following
 checkout (on no branch, with no changes or commits of its own) forward to the code of the image it runs,
 and starts the runner again (`pnpm run runner-service on`) when it moved, so the runner always speaks
 the server's version. A branch is someone's work and is never moved by an update. An open studio asks for a reload when

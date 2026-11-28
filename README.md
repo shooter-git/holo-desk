@@ -186,7 +186,8 @@ Install sample packs from the studio's Library (**More packs → Install**; brow
 [HO[LO] Packs](https://github.com/shooter-git/holo-packs)). Every image is published by
 CI with a signed record of what built it: `stable` and the version on each release, `main` on every
 change merged, `sha-<commit>` always. The timer looks every 15 minutes and never restarts HO[LO] while a
-studio is playing or recording; an open studio offers to reload when its host has been updated. Songs
+studio is playing or recording, the host is making a bounce, or the agent is working on a request; an
+open studio offers to reload when its host has been updated. Songs
 and packs live in `./data`, outside the image, so an update never touches them. Before a new version
 starts, the songs' database is copied to `data/backups` (the last three kept, and nothing else you keep
 there is touched; with no room on the disk the update says so and goes on), and a version that doesn't

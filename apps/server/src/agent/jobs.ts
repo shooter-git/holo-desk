@@ -52,6 +52,7 @@ import {
   type AttachmentInfo,
   buildPrompt,
   contextLines,
+  eventLine,
   oneLine,
   type Permission,
   type PermissionKind,
@@ -69,8 +70,11 @@ import {
   CHOSEN_ONLY,
   HARNESSES,
   type HarnessId,
+  KEEP_CHANGES,
   type ThreadRow,
   type TurnExtra,
+  type TurnStop,
+  type UnfinishedTurn,
   type UsageSum,
 } from './store.ts';
 import { parseExtra, type Threads } from './threads.ts';
@@ -203,7 +207,18 @@ export interface AgentJob {
   previous: number | null;
   /** Its tools changed the song (an A/B of "before" and "after" plays the same song otherwise). */
   changed: boolean;
+  /** What the studio showed as it was asked (null: nothing said, or a follow-up). */
+  context: RequestContext | null;
+  /** What it was told the user did before it, as it read it. */
+  heard: string[];
+  /** What its tools changed, in order: each batch's label, and how many in a row had it. */
+  changes: [string, number][];
+  /** Why it didn't go on, when that's known for sure. */
+  stop: TurnStop | null;
 }
+
+/** What a turn that was working says when HO[LO] stopped under it (its error, and what the agent hears next). */
+export const RESTARTED = 'HO[LO] restarted while it was working';
 
 /**
  * A listen, heard as one: its notes are collected from its first part to its last, the pauses between
@@ -430,6 +445,8 @@ export interface NewRequest {
 }
 
 const LIVE: ReadonlySet<JobState> = new Set(['waiting', 'running']);
+/** What a runner says of a job it's working on (not of one that just ended). */
+const STILL_AT_IT: ReadonlySet<string> = new Set(['agent-queued', 'agent-started', 'agent-progress', 'agent-session']);
 const isLive = (job: AgentJob) => LIVE.has(job.view.state);
 const HARNESS_NAMES: Record<HarnessId, string> = {
   claude: 'Claude Code',
@@ -490,6 +507,15 @@ export class Jobs implements AgentHooks {
    * shown it.
    */
   private readonly relays = new Map<HarnessId, { event: Record<string, unknown>; runner: LiveClient; at: number }>();
+  /**
+   * Requests that were working when HO[LO] last stopped. Their runner outlived it and may run them
+   * still (nothing they do reaches a song now: their tokens went with HO[LO]), holding up their
+   * conversations' next requests: each runner is told to stop them as it comes back.
+   */
+  private readonly orphans = new Set<string>();
+  private readonly toldOrphans = new WeakSet<LiveClient>();
+  /** The batches each job's changes were noted for (`noteChange`), by id. */
+  private readonly noted = new WeakMap<AgentJob, Set<string>>();
   /** Songs a request is being started on (it waits for the studio to save first). */
   private readonly starting = new Set<string>();
   /** Told when a job ends, however it ends (its state says how). */
@@ -507,6 +533,51 @@ export class Jobs implements AgentHooks {
   constructor(options: JobsOptions) {
     this.o = options;
     this.limits = { ...LIMITS, ...options.limits };
+  }
+
+  /**
+   * As HO[LO] starts: the turns that weren't over when it stopped. One waiting for the user's click
+   * still waits (its job is made again from its turn, so the click works as before): unless its
+   * conversation was started over, its device is no longer allowed, or the turn is from before turns
+   * kept who asked. One that was working can't go on (its tools' token went with HO[LO]): it reads
+   * failed, saying why, and the agent hears so next time.
+   */
+  recover(): void {
+    const waiting = new Map<string, AgentJob>();
+    for (const row of this.o.agentStore.unfinishedTurns()) {
+      const extra = parseExtra(row.extra);
+      if (row.state !== 'awaiting') {
+        const next: TurnExtra = { ...extra, error: RESTARTED, stop: { why: 'interrupted' }, finished: Date.now() };
+        this.o.agentStore.updateTurn(row.job, { state: 'failed', extra: JSON.stringify(next) });
+        this.o.threads.addEventTo(row.thread, { action: 'failed', label: RESTARTED, at: Date.now() });
+        this.orphans.add(row.job);
+        continue;
+      }
+      const thread = this.o.threads.get(row.thread);
+      const kept =
+        thread && row.project && row.current === 1 && row.device && extra.permission && this.o.allowed(row.device)
+          ? jobFromTurn(row, extra, row.project, row.device, extra.harness ?? thread.harness)
+          : null;
+      if (!kept) {
+        this.o.agentStore.updateTurn(row.job, { state: 'cancelled' });
+        continue;
+      }
+      // (a song has one click waiting at most: its newest, as a later request passes an earlier one over)
+      const earlier = waiting.get(kept.view.project);
+      if (earlier) {
+        this.jobs.delete(earlier.view.id);
+        this.o.agentStore.updateTurn(earlier.view.id, { state: 'done' });
+      }
+      waiting.set(kept.view.project, kept);
+      this.jobs.set(kept.view.id, kept);
+    }
+  }
+
+  /** Whether a request is at work, or being started: an update of HO[LO] waits for it (`/api/health`). */
+  working(): boolean {
+    if (this.starting.size) return true;
+    for (const job of this.jobs.values()) if (isLive(job)) return true;
+    return false;
   }
 
   /** Something to do when a job ends (a measurement it started stops, or runs on for its next turn). */
@@ -702,14 +773,23 @@ export class Jobs implements AgentHooks {
     this.chosen(harness, info);
     const thread = this.o.threads.forRequest(req.project, harness);
     const request = req.preset ? presetTitle(req.preset) : req.text;
-    return this.begin(device, req.project, thread, runner, request, req.preset, req.attachments, async (now) =>
-      buildPrompt({
-        rules: readRules(this.o.repoDir),
-        since: this.since(thread.id, now),
-        context: contextLines(req.context, now, this.about(req.project)),
-        attachments,
-        request: req.preset ? presetRequest(req.preset) : req.text,
-      }),
+    return this.begin(
+      device,
+      req.project,
+      thread,
+      runner,
+      request,
+      req.preset,
+      req.attachments,
+      async (now) =>
+        buildPrompt({
+          rules: readRules(this.o.repoDir),
+          since: this.since(thread.id, now),
+          context: contextLines(req.context, now, this.about(req.project)),
+          attachments,
+          request: req.preset ? presetRequest(req.preset) : req.text,
+        }),
+      req.context ?? null,
     );
   }
 
@@ -752,6 +832,7 @@ export class Jobs implements AgentHooks {
     preset: ScanPreset | null,
     attachments: readonly string[],
     prompt: (now: Project) => Promise<string>,
+    context: RequestContext | null = null,
   ): Promise<string> {
     this.starting.add(project);
     const ceiling = preset ? this.limits.scanClockMs : this.limits.clockMs;
@@ -803,6 +884,11 @@ export class Jobs implements AgentHooks {
         versions: new Map(),
         previous,
         changed: false,
+        context,
+        // (what the prompt just told of: the thread's events, cleared below)
+        heard: this.o.threads.events(this.o.threads.get(thread.id) ?? thread).map(eventLine),
+        changes: [],
+        stop: null,
       };
       // the runner may have gone while the studio saved
       if (!this.o.live.agentRunners().includes(runner))
@@ -841,6 +927,7 @@ export class Jobs implements AgentHooks {
       state: job.view.state,
       at: job.view.started,
       extra: turnExtra(job),
+      device,
     });
     // it runs while it's heard from, up to its ceiling
     this.startClock(job);
@@ -1132,6 +1219,11 @@ export class Jobs implements AgentHooks {
       if (msg.from !== 'run') this.looked.set(client, Date.now());
       // Settings › Agent shows them as they are now
       if (client.caps?.agent) this.announce(false);
+      // (back after a restart of HO[LO]: what it may still run of before stops)
+      if (client.caps?.agent && this.orphans.size && !this.toldOrphans.has(client)) {
+        this.toldOrphans.add(client);
+        for (const job of this.orphans) this.o.live.sendTo(client, { type: 'agent-cancel', job });
+      }
       return;
     }
     if (msg.type === 'agent-harness') {
@@ -1143,6 +1235,16 @@ export class Jobs implements AgentHooks {
       return;
     }
     const job = typeof msg.job === 'string' ? this.jobs.get(msg.job) : undefined;
+    // a runner still at work on a job that's over here (it came back after its connection dropped, or
+    // HO[LO] restarted under it): it's told to stop, so the conversation's next request isn't kept waiting
+    if (
+      (!job || !isLive(job)) &&
+      typeof msg.job === 'string' &&
+      JOB_ID.test(msg.job) &&
+      client.caps?.agent &&
+      STILL_AT_IT.has(String(msg.type))
+    )
+      this.o.live.sendTo(client, { type: 'agent-cancel', job: msg.job });
     // only from the runner it was handed to, and only while it runs
     if (!job || this.assigned.get(job) !== client || !isLive(job) || job.ending) return;
     if (msg.type === 'agent-queued') {
@@ -1328,7 +1430,10 @@ export class Jobs implements AgentHooks {
     }
     for (const job of this.jobs.values()) {
       if (this.assigned.get(job) !== client || !isLive(job) || job.dropped) continue;
-      job.dropped = setTimeout(() => this.end(job, 'failed', 'The runner disconnected', false), this.limits.droppedMs);
+      job.dropped = setTimeout(() => {
+        job.stop = { why: 'interrupted' };
+        this.end(job, 'failed', 'The runner disconnected', false);
+      }, this.limits.droppedMs);
       job.dropped.unref?.();
     }
   }
@@ -1586,12 +1691,32 @@ export class Jobs implements AgentHooks {
       if (!elsewhere && (!hidden || answer.error !== NO_ANSWER)) {
         if (!answer.ok)
           throw new Refusal(answer.error === NO_ANSWER ? 504 : 400, answer.error ?? 'The studio refused the change');
+        this.noteChange(job, label, batch);
         return typeof answer.revision === 'number' ? { ok: true, revision: answer.revision } : { ok: true };
       }
       // (should it wake and apply the batch after all, its id has it go in there once)
       if (!elsewhere) this.unanswered(studio);
     }
-    return this.saveHere(job, ops, label, batch);
+    const saved = this.saveHere(job, ops, label, batch);
+    this.noteChange(job, label, batch);
+    return saved;
+  }
+
+  /**
+   * A batch went in: its label joins what the turn changed (the same label again counts with the last),
+   * kept with the turn as it goes, so what a turn got done is known however it ends.
+   */
+  private noteChange(job: AgentJob, label: string, batch: string): void {
+    // (a batch sent again went in once: its studio answers for it as before)
+    const noted = this.noted.get(job) ?? new Set<string>();
+    this.noted.set(job, noted);
+    if (noted.has(batch)) return;
+    noted.add(batch);
+    const last = job.changes.at(-1);
+    const text = oneLine(label, 80);
+    if (last && (last[0] === text || job.changes.length >= KEEP_CHANGES)) last[1]++;
+    else job.changes.push([job.changes.length === KEEP_CHANGES - 1 ? 'more changes' : text, 1]);
+    this.saveTurn(job);
   }
 
   /**
@@ -2071,8 +2196,82 @@ function turnExtra(job: AgentJob): string {
     ...(v.go ? { go: v.go } : {}),
     ...(v.error ? { error: v.error } : {}),
     ...(job.attachments.length ? { attachments: job.attachments } : {}),
+    started: v.started,
+    ...(v.finished !== undefined ? { finished: v.finished } : {}),
+    ...(v.title !== undefined ? { title: v.title } : {}),
+    harness: job.harness,
+    ...(job.model ? { model: job.model } : {}),
+    ...(job.effort ? { effort: job.effort } : {}),
+    ...(job.context ? { context: job.context } : {}),
+    ...(job.preset ? { preset: job.preset } : {}),
+    ...(job.heard.length ? { heard: job.heard } : {}),
+    ...(job.changes.length ? { changes: job.changes } : {}),
+    ...(job.stop ? { stop: job.stop } : {}),
+    ...(job.previous !== null ? { previous: job.previous } : {}),
   };
   return JSON.stringify(extra);
+}
+
+/**
+ * A job as it was when HO[LO] stopped, from its turn: what `permit` and the studios need of one that
+ * waits for a click (it has no runner, no token and no clock: its turn was over).
+ */
+function jobFromTurn(
+  row: UnfinishedTurn,
+  extra: TurnExtra,
+  project: string,
+  device: string,
+  harness: HarnessId,
+): AgentJob {
+  return {
+    view: {
+      id: row.job,
+      project,
+      device,
+      state: 'awaiting',
+      request: row.request,
+      ...(row.reply !== null ? { reply: row.reply } : {}),
+      ...(row.label !== null ? { label: row.label } : {}),
+      ...(extra.permission ? { permission: extra.permission as Permission } : {}),
+      ...(extra.brief ? { brief: extra.brief } : {}),
+      ...(extra.briefWarnings ? { briefWarnings: extra.briefWarnings } : {}),
+      ...(extra.view ? { view: extra.view } : {}),
+      ...(extra.go ? { go: extra.go } : {}),
+      started: extra.started ?? row.at,
+      ...(extra.finished !== undefined ? { finished: extra.finished } : {}),
+      ...(extra.title !== undefined ? { title: extra.title } : {}),
+    },
+    thread: row.thread,
+    harness,
+    model: extra.model ?? '',
+    effort: extra.effort ?? '',
+    tokenHash: null,
+    preset: extra.preset ?? null,
+    asked: (extra.permission as Permission | undefined) ?? null,
+    batches: new Map(),
+    away: null,
+    clock: null,
+    dropped: null,
+    quiet: null,
+    calls: 0,
+    queued: false,
+    ceiling: 0,
+    ending: false,
+    attachments: extra.attachments ?? [],
+    listen: null,
+    listenOn: false,
+    hearing: null,
+    listenOff: null,
+    doneListening: false,
+    before: extra.before ?? null,
+    versions: new Map(),
+    previous: extra.previous ?? null,
+    changed: (extra.changes?.length ?? 0) > 0,
+    context: extra.context ?? null,
+    heard: extra.heard ?? [],
+    changes: extra.changes ?? [],
+    stop: null,
+  };
 }
 
 /** What Capture would keep (the agent package's `Captured`): the operations and what to say of them, or why there are none. */

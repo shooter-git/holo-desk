@@ -1,4 +1,4 @@
-import { existsSync, lstatSync, readFileSync, readlinkSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, readFileSync, readlinkSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { refusedRequest, remember } from '../src/harness/adapter.ts';
@@ -766,7 +766,8 @@ describe('Antigravity: a sealed run', () => {
     const worker = Number(readFileSync(join(s.rec, 'worker'), 'utf8'));
     await until(() => !alive(worker));
     // without HO[LO]'s permission (and its tools by schema files): the first built-in tool stops it
-    rmSync(s.rec, { recursive: true, force: true });
+    // (the sandbox goes whole, with what the fake recorded: it may still be asked what the account has
+    // left, a moment after the run, and write that down as the folder is removed)
     s.cleanup();
     s = sandbox();
     const lazy = fake({

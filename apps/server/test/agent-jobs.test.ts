@@ -1470,6 +1470,10 @@ describe('since your last reply', () => {
       // (the song follows Settings › Agent: no choice of its own)
       choice: null,
       runsWith: { harness: 'claude', model: '', effort: '' },
+      // (nothing waits on the song)
+      queue: [],
+      held: false,
+      asks: false,
       now: expect.any(Number),
     });
 

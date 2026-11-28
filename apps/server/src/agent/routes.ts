@@ -40,7 +40,7 @@ import {
 import { Auth, bearer } from './auth.ts';
 import { type Body, bad, body, CONTROL, ID, int, isObj, line, num, type Params, text } from './check.ts';
 import { type JobHandler, type JobRouteKit, type OwnMethod, registerJobRoutes } from './job-routes/index.ts';
-import { type AgentJob, Jobs, type Limits, MODEL, PERMISSION_KINDS, Refusal } from './jobs.ts';
+import { type AgentJob, Jobs, type Limits, MODEL, PERMISSION_KINDS, QUEUED_ID, Refusal } from './jobs.ts';
 import { madePushKey, type PushKey, pushKey } from './keys.ts';
 import type { PermissionKind, RequestContext, ScanPreset } from './prompt.ts';
 import { checkSubscription, Notify } from './push.ts';
@@ -469,15 +469,39 @@ export function agentRoutes(
       const request = p ? text(b.text, 'text', 4000, true) : text(b.text, 'text', 4000);
       const ids = attachmentIds(b.attachments);
       const ctx = context(b.context);
-      const job = await theJobs.request(device, {
-        project: b.project,
-        text: request,
-        attachments: ids,
-        preset: p,
-        ...(ctx ? { context: ctx } : {}),
-      });
-      return { job };
+      // `queue: true`: sent while another works on the song, it waits its turn (`{queued}` instead of `{job}`)
+      return theJobs.ask(
+        device,
+        { project: b.project, text: request, attachments: ids, preset: p, ...(ctx ? { context: ctx } : {}) },
+        b.queue === true,
+      );
     }),
+  );
+
+  // the requests that wait on a song: one's words changed (by the device that sent it), one taken
+  // out, and Send, which lets a held queue's first go
+  const queuedId = (req: { params: unknown }) => {
+    const id = (req.params as Params).id ?? '';
+    if (!QUEUED_ID.test(id)) throw bad('id is a waiting request’s id');
+    return id;
+  };
+  app.put(
+    '/api/agent/queue/:id',
+    forDevice(async (req, _reply, device) => {
+      theJobs.editQueued(device, queuedId(req), text(body(req).text, 'text', 4000));
+      return { ok: true };
+    }),
+  );
+  app.delete(
+    '/api/agent/queue/:id',
+    forDevice(async (req) => {
+      theJobs.removeQueued(queuedId(req));
+      return { ok: true };
+    }),
+  );
+  app.post(
+    '/api/agent/queue/:id/send',
+    forDevice(async (req) => ({ job: await theJobs.sendQueued(queuedId(req)) })),
   );
 
   app.post(
@@ -599,8 +623,8 @@ export function agentRoutes(
     '/api/agent/threads/:project/reset',
     forDevice(async (req, reply) => {
       const project = (req.params as Params).project ?? '';
-      if (theJobs.running(project))
-        return reply.code(409).send({ error: 'Still working on this song', reason: 'busy' });
+      // (nor while one is being started on it: its studio saving)
+      if (theJobs.busyOn(project)) return reply.code(409).send({ error: 'Still working on this song', reason: 'busy' });
       threads.reset(project);
       // (its own choice went with it, and what waited to carry on at a time doesn't: the studios with
       // the song open read it again)

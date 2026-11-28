@@ -27,6 +27,9 @@
 //     exchange; the page's line says the song runs with Codex, a line says where it changed hands, and
 //     the host's own choice in Settings is as it was; "As in Settings" from the bar's command takes the
 //     song back to it;
+//   - the queue: two requests sent while a first works wait under it, and start by themselves in the
+//     order sent as each one before is done; behind a request that fails they're held, and Send on the
+//     first lets them go;
 //   - carry on when it resets: a request out of usage till a few seconds from now offers it; asked, the
 //     reply says when it carries on, and at that time the request does, by itself, as one exchange.
 //
@@ -307,6 +310,46 @@ const SCENARIOS = {
     await line(/^Claude Code · Opus · low/);
     if ((await api(`/api/agent/threads/${id}`, { token })).choice !== null)
       throw new Error('the song still has its own choice after going back to Settings’');
+    await page.close();
+  },
+
+  /** Requests sent while one works wait their turn, start by themselves in order, and are held behind a failure. */
+  async queue({ ctx, id, token }) {
+    const turns = async () => (await api(`/api/agent/threads/${id}`, { token })).thread?.turns ?? [];
+    const rows = (page) => page.locator('.talk-page .talk-queued');
+    const page = await open(ctx, id);
+    await ask(page, 'standin: wait 2500; track_add {"name": "Bass"}; finish Added a bass');
+    await page.locator('.talk-page .status').first().waitFor();
+    await ask(page, 'standin: track_add {"name": "Strings"}; finish Added strings');
+    await ask(page, 'standin: track_add {"name": "Pad"}; finish Added a pad');
+    await rows(page).nth(1).waitFor();
+    if ((await rows(page).count()) !== 2) throw new Error('the two requests sent meanwhile aren’t listed as waiting');
+    // each starts by itself when the one before it is done, in the order sent
+    await page.locator('.talk-page .talk.newest .reply', { hasText: 'Added a pad' }).waitFor({ timeout: 30_000 });
+    for (const name of ['Bass', 'Strings', 'Pad']) await track(page, name).waitFor();
+    if (await rows(page).count()) throw new Error('requests still show as waiting after they ran');
+    const done = (await turns()).map((t) => [t.reply, t.state]);
+    if (
+      JSON.stringify(done) !==
+      JSON.stringify([
+        ['Added a bass', 'done'],
+        ['Added strings', 'done'],
+        ['Added a pad', 'done'],
+      ])
+    )
+      throw new Error(`the requests ran as ${JSON.stringify(done)}`);
+    // behind one that fails they're held, until Send on the first
+    await ask(page, 'standin: wait 2000; fail The service is overloaded');
+    await page.locator('.talk-page .status').first().waitFor();
+    await ask(page, 'standin: track_add {"name": "Organ"}; finish Added an organ');
+    await rows(page).first().waitFor();
+    await page.locator('.talk-page .reply', { hasText: 'The service is overloaded' }).waitFor();
+    const send = page.locator('.talk-page .talk-queued button', { hasText: 'Send' });
+    await send.waitFor();
+    if ((await turns()).length !== 4) throw new Error('a held request started by itself');
+    await send.click();
+    await page.locator('.talk-page .talk.newest .reply', { hasText: 'Added an organ' }).waitFor();
+    await track(page, 'Organ').waitFor();
     await page.close();
   },
 

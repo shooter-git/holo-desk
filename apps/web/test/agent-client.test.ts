@@ -1209,7 +1209,7 @@ describe('a song’s own choice of what its conversation runs with', () => {
       if (r.path === '/api/agent/jobs/agj_00000000000a/continue') return [200, { job: 'agj_00000000000b' }];
     });
     await A.loadThread('prj_a');
-    expect(A.agent.get().thread).toEqual({ project: 'prj_a', turns: [], choice: CODEX });
+    expect(A.agent.get().thread).toMatchObject({ project: 'prj_a', turns: [], choice: CODEX });
     await A.setChoice('prj_a', null);
     expect(asked.at(-1)).toMatchObject({ method: 'PUT', body: { harness: null } });
     expect(A.agent.get().thread?.choice).toBeNull();
@@ -1269,7 +1269,7 @@ describe('a song’s own choice of what its conversation runs with', () => {
     await b;
     answer('/api/agent/threads/prj_a', CODEX);
     await a;
-    expect(A.agent.get().thread).toEqual({ project: 'prj_b', turns: [], choice: null });
+    expect(A.agent.get().thread).toMatchObject({ project: 'prj_b', turns: [], choice: null });
     // two asks about the open song, answered out of order: the later ask's answer stays
     const first = A.loadThread('prj_b');
     const firstAnswer = waiting['/api/agent/threads/prj_b'];
@@ -1283,6 +1283,155 @@ describe('a song’s own choice of what its conversation runs with', () => {
     } as Response);
     await first;
     expect(A.agent.get().thread?.choice).toEqual(CODEX);
+  });
+});
+
+describe('a request sent while another works on the song', () => {
+  const context = {
+    view: 'tracks',
+    selection: { track: null, regions: [], notes: 0 },
+    playhead: 0,
+    cycle: { on: false, start: 0, end: 0 },
+  };
+  afterEach(() => {
+    A.agent.dispatch({ type: 'info', info: OFF });
+    vi.unstubAllGlobals();
+  });
+
+  it('joins the song’s queue: nothing shows as on its way, and the page lists it from the host', async () => {
+    A.agent.dispatch({ type: 'me', id: 'dev_me' });
+    A.agent.dispatch({ type: 'info', info: ON });
+    A.agent.dispatch({ type: 'status', job: job({ state: 'running' }), barOpen: true });
+    const waits = [{ id: 'agq_00000000000a', text: 'Then a bass', device: 'dev_me', at: 5 }];
+    const asked = host((r) => {
+      if (r.path === '/api/agent/requests') return [200, { queued: 'agq_00000000000a' }];
+      if (r.path === '/api/agent/threads/prj_a')
+        return [200, { thread: { turns: [] }, job: null, queue: waits, held: false }];
+    });
+    expect(await A.ask('Then a bass', 'prj_a', context)).toBeNull();
+    expect(asked[0]).toMatchObject({ method: 'POST', body: { text: 'Then a bass', queue: true } });
+    expect(A.agent.get().sending).toBeNull();
+    expect(A.agent.get().thread).toMatchObject({ queue: waits, held: false });
+    // (the working request is still the song's newest exchange)
+    expect(exchange(A.agent.get(), 'prj_a')).toMatchObject({ working: true });
+  });
+
+  it('says why when it can’t join (the queue is full), without taking the working request’s place', async () => {
+    A.agent.dispatch({ type: 'me', id: 'dev_me' });
+    A.agent.dispatch({ type: 'info', info: ON });
+    A.agent.dispatch({ type: 'status', job: job({ state: 'running' }), barOpen: true });
+    host((r) => {
+      if (r.path === '/api/agent/requests')
+        return [409, { error: '5 requests already wait on this song: let one go first', reason: 'queue-full' }];
+    });
+    expect(await A.ask('One more', 'prj_a', context)).toBe('5 requests already wait on this song: let one go first');
+    expect(A.agent.get().refused).toBeNull();
+    expect(exchange(A.agent.get(), 'prj_a')).toMatchObject({ working: true });
+  });
+
+  it('starts at once when nothing works on the song, and joins after all when the host knows better', async () => {
+    A.agent.dispatch({ type: 'me', id: 'dev_me' });
+    A.agent.dispatch({ type: 'info', info: ON });
+    let answer: Record<string, string> = { job: 'agj_000000000777' };
+    host((r) => {
+      if (r.path === '/api/agent/requests') return [200, answer];
+      if (r.path === '/api/agent/threads/prj_a')
+        return [
+          200,
+          {
+            thread: { turns: [] },
+            job: null,
+            queue: [{ id: 'agq_00000000000b', text: 'Two', device: 'dev_x', at: 1 }],
+            held: true,
+          },
+        ];
+    });
+    expect(await A.ask('One', 'prj_a', context)).toBeNull();
+    expect(A.agent.get().jobs.agj_000000000777).toMatchObject({ request: 'One', state: 'waiting' });
+    // (another device's request was working, unknown here: the host queued it)
+    A.agent.dispatch({ type: 'status', job: job({ id: 'agj_000000000777', state: 'done' }), barOpen: true });
+    answer = { queued: 'agq_00000000000b' };
+    expect(await A.ask('Two', 'prj_a', context)).toBeNull();
+    expect(A.agent.get().sending).toBeNull();
+    expect(A.agent.get().thread).toMatchObject({ queue: [{ text: 'Two' }], held: true });
+  });
+
+  it('is sent, reworded or taken out on the host, and the conversation read again after', async () => {
+    A.agent.dispatch({ type: 'me', id: 'dev_me' });
+    A.agent.dispatch({ type: 'info', info: ON });
+    const asked = host((r) => {
+      if (r.path.startsWith('/api/agent/queue/'))
+        return r.path.endsWith('refused') ? [409, { error: 'No' }] : [200, { ok: true }];
+      if (r.path === '/api/agent/threads/prj_a')
+        return [200, { thread: { turns: [] }, job: null, queue: [], held: false }];
+    });
+    const seen = () => asked.map((r) => `${r.method} ${r.path}`);
+    await A.queued('prj_a', 'agq_00000000000a', { send: true });
+    await A.queued('prj_a', 'agq_00000000000a', { text: 'Reworded' });
+    await A.queued('prj_a', 'agq_00000000000a', { remove: true });
+    expect(seen()).toEqual([
+      'POST /api/agent/queue/agq_00000000000a/send',
+      'GET /api/agent/threads/prj_a',
+      'PUT /api/agent/queue/agq_00000000000a',
+      'GET /api/agent/threads/prj_a',
+      'DELETE /api/agent/queue/agq_00000000000a',
+      'GET /api/agent/threads/prj_a',
+    ]);
+    expect(asked[2]?.body).toEqual({ text: 'Reworded' });
+    // a refusal is the caller's to say, and the conversation is still read again
+    await expect(A.queued('prj_a', 'refused', { remove: true })).rejects.toThrow('No');
+    expect(seen().at(-1)).toBe('GET /api/agent/threads/prj_a');
+  });
+
+  it('says how what waits stands: going on, held, or behind a reply’s question', async () => {
+    const { queueTitle } = await import('../src/ui/AgentQueue.tsx');
+    expect(queueTitle({ held: false, asks: false })).toBe('Then');
+    expect(queueTitle({ held: true, asks: false })).toBe('Waiting: Send lets them go on');
+    expect(queueTitle({ held: true, asks: true })).toBe('Waiting for your answer above: or Send, to go on without it');
+    let a = on();
+    a = A.reduce(a, { type: 'thread', project: 'prj_a', turns: [], queue: [], held: true, asks: true });
+    expect(a.thread).toMatchObject({ held: true, asks: true });
+    expect(A.reduce(a, { type: 'thread', project: 'prj_a', turns: [] }).thread).toMatchObject({
+      queue: [],
+      held: false,
+      asks: false,
+    });
+  });
+
+  it('is read again when the live channel comes back: the host may hold it since', async () => {
+    A.agent.dispatch({ type: 'me', id: 'dev_me' });
+    A.agent.dispatch({ type: 'info', info: ON });
+    const waits = [{ id: 'agq_00000000000a', text: 'Two', device: 'dev_me', at: 5 }];
+    let held = false;
+    host((r) => {
+      if (r.path === '/api/agent') return [200, ON];
+      if (r.path === '/api/agent/settings') return [200, SETTINGS];
+      if (r.path === '/api/agent/devices') return [200, DEVICES];
+      if (r.path === '/api/agent/threads/prj_a') return [200, { thread: { turns: [] }, job: null, queue: waits, held }];
+    });
+    await A.loadThread('prj_a');
+    expect(A.agent.get().thread).toMatchObject({ queue: waits, held: false });
+    // the host restarted under the request that was working: what waited behind it is held
+    held = true;
+    await A.catchUp();
+    expect(A.agent.get().thread).toMatchObject({ queue: waits, held: true });
+  });
+
+  it('goes from the page with its conversation started over', () => {
+    let a = on();
+    a = A.reduce(a, {
+      type: 'thread',
+      project: 'prj_a',
+      turns: [],
+      queue: [{ id: 'agq_00000000000a', text: 'Two', device: 'dev_me', at: 1 }],
+      held: true,
+    });
+    expect(a.thread).toMatchObject({ queue: [{ text: 'Two' }], held: true });
+    expect(A.reduce(a, { type: 'reset', project: 'prj_a' }).thread).toMatchObject({ queue: [], held: false });
+    // one that joined the queue was never on its way
+    a = A.reduce(a, { type: 'sending', project: 'prj_a', request: 'Three', at: 2 });
+    expect(A.reduce(a, { type: 'unsent', project: 'prj_a' }).sending).toBeNull();
+    expect(A.reduce(a, { type: 'unsent', project: 'prj_b' }).sending).not.toBeNull();
   });
 });
 

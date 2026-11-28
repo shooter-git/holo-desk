@@ -85,6 +85,20 @@ export interface ThreadRow {
   own_effort?: string | null;
 }
 
+/** A request sent while another worked on its song: it's started when that one is done. */
+export interface QueuedRow {
+  id: string;
+  project: string;
+  /** The device that sent it: it runs as that device's, as if sent then. */
+  device: string;
+  text: string;
+  /** What the studio showed as it was sent (JSON), or null. */
+  context: string | null;
+  /** The ids of the files sent with it (JSON). */
+  attachments: string;
+  at: number;
+}
+
 /**
  * One harness's part in a song's conversation: its own session there, what it last saw of the song,
  * and the folder its runs work in. A conversation that moves to another harness keeps each one's, so
@@ -328,6 +342,18 @@ export class AgentStore {
     );
     for (const column of ['own_harness', 'own_model', 'own_effort'])
       if (!threadColumns.has(column)) this.db.exec(`ALTER TABLE agent_threads ADD COLUMN ${column} TEXT`);
+    // added with the queue: the requests sent while another worked on their song, in the order sent
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS agent_queue (
+        id TEXT PRIMARY KEY,
+        project TEXT NOT NULL,
+        device TEXT NOT NULL,
+        text TEXT NOT NULL,
+        context TEXT,
+        attachments TEXT NOT NULL,
+        at INTEGER NOT NULL
+      );
+    `);
     // added with conversations that span harnesses: each harness's own session and workspace in one.
     // The conversations there already get theirs as they were: one harness each, working in the
     // thread's own folder (its session is found there)
@@ -647,6 +673,58 @@ export class AgentStore {
       .prepare('SELECT thread, job, request, reply, label, state, at, extra, device FROM agent_turns WHERE job = ?')
       .get(job);
     return (row as unknown as TurnRow | undefined) ?? null;
+  }
+
+  // ---- the queue: requests sent while another worked on their song ----
+
+  /** A song's queued requests, in the order they were sent (as they were kept: the host's clock may step). */
+  queue(project: string): QueuedRow[] {
+    return this.db
+      .prepare('SELECT * FROM agent_queue WHERE project = ? ORDER BY rowid')
+      .all(project) as unknown as QueuedRow[];
+  }
+
+  queued(id: string): QueuedRow | null {
+    return (
+      (this.db.prepare('SELECT * FROM agent_queue WHERE id = ?').get(id) as unknown as QueuedRow | undefined) ?? null
+    );
+  }
+
+  addQueued(row: QueuedRow): void {
+    this.db
+      .prepare(
+        'INSERT INTO agent_queue (id, project, device, text, context, attachments, at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      )
+      .run(row.id, row.project, row.device, row.text, row.context, row.attachments, row.at);
+  }
+
+  setQueuedText(id: string, text: string): void {
+    this.db.prepare('UPDATE agent_queue SET text = ? WHERE id = ?').run(text, id);
+  }
+
+  removeQueued(id: string): void {
+    this.db.prepare('DELETE FROM agent_queue WHERE id = ?').run(id);
+  }
+
+  /** A song's queue, emptied (its conversation started over); every song's, with no song given (the agent off). */
+  clearQueue(project?: string): string[] {
+    const songs = (
+      project === undefined
+        ? this.db.prepare('SELECT DISTINCT project FROM agent_queue').all()
+        : this.db.prepare('SELECT DISTINCT project FROM agent_queue WHERE project = ?').all(project)
+    ) as { project: string }[];
+    if (project === undefined) this.db.exec('DELETE FROM agent_queue');
+    else this.db.prepare('DELETE FROM agent_queue WHERE project = ?').run(project);
+    return songs.map((s) => s.project);
+  }
+
+  /** What a device queued, gone with it: the songs that had some. */
+  clearQueueOf(device: string): string[] {
+    const songs = this.db.prepare('SELECT DISTINCT project FROM agent_queue WHERE device = ?').all(device) as {
+      project: string;
+    }[];
+    this.db.prepare('DELETE FROM agent_queue WHERE device = ?').run(device);
+    return songs.map((s) => s.project);
   }
 
   /** The failed turns of current conversations that wait to be carried on at a time (`extra.wait`), oldest first. */

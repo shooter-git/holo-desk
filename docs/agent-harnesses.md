@@ -1257,7 +1257,9 @@ Nothing else starts it, and a runner without those variables never sees it.
   when the limit starts again, and no Try again), a conversation moved from Claude Code to Codex and
   back (one conversation on the page; each told what it needs of it), and a request out of usage
   continued with Codex from the page's chooser (one exchange, the song's own choice from then on, the
-  host's unchanged, and back to Settings' from the bar's command), and a request out of usage for a
-  few seconds, asked to carry on when its limit starts again (it does, by itself, as one exchange). CI runs it as the `agent` job. The runner it
+  host's unchanged, and back to Settings' from the bar's command), a request out of usage for a
+  few seconds, asked to carry on when its limit starts again (it does, by itself, as one exchange),
+  and requests sent while one works (they wait, start in order, and are held behind one that fails
+  until Send). CI runs it as the `agent` job. The runner it
   starts has a home and a cache of its own and only Node's and the system's folders on its PATH, so the
   harnesses installed on the computer aren't signed in to or run.

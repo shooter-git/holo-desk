@@ -263,7 +263,7 @@ describe('where a conversation changed hands', () => {
     expect(movedLine(first as A.Exchange, second as A.Exchange)).toBe('Continued with Codex, Gpt-6.1-sol at low');
     expect(s.thread?.choice).toEqual({ harness: 'codex', model: 'gpt-6.1-sol', effort: 'low' });
     // a conversation started over follows Settings again
-    expect(A.reduce(s, { type: 'reset', project: P }).thread).toEqual({ project: P, turns: [], choice: null });
+    expect(A.reduce(s, { type: 'reset', project: P }).thread).toMatchObject({ project: P, turns: [], choice: null });
   });
 });
 

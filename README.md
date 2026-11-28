@@ -714,6 +714,6 @@ line about it.
 ## License and credits
 
 HO[LO] Desk is [MIT licensed](LICENSE). The sample libraries are their authors' work, credited in
-[CREDITS.md](CREDITS.md). HO[LO] Desk is an independent project, not affiliated with Apple or Avid.
+[CREDITS.md](CREDITS.md), with the other work HO[LO] builds on and the projects that inspired it. HO[LO] Desk is an independent project, not affiliated with Apple or Avid.
 Logic Pro and Pro Tools are trademarks of their owners and are named here only to describe familiar
 workflows.
